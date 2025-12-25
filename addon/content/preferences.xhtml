@@ -4,30 +4,221 @@
 <groupbox
   onload="Zotero.__addonInstance__.hooks.onPrefsEvent('load', { window })"
 >
-  <label><html:h2 data-l10n-id="pref-title"></html:h2></label>
-  <checkbox
-    id="zotero-prefpane-__addonRef__-enable"
-    preference="enable"
-    data-l10n-id="pref-enable"
-  />
-  <hbox>
-    <html:label
-      for="zotero-prefpane-__addonRef__-input"
-      data-l10n-id="pref-input"
-    ></html:label>
-    <html:input
-      type="text"
-      id="zotero-prefpane-__addonRef__-input"
-      preference="input"
-    ></html:input>
+
+  <!-- Main layout: Sidebar + Content -->
+  <hbox flex="1" style="min-height: 400px;">
+
+    <!-- Provider Sidebar -->
+    <vbox style="width: 140px; border-right: 1px solid #ddd; padding-right: 8px;">
+      <label><html:h3 data-l10n-id="pref-providers"></html:h3></label>
+
+      <vbox id="pref-provider-list" style="margin-top: 8px;">
+        <!-- Provider items will be populated by JS -->
+      </vbox>
+
+      <!-- Add Custom Provider Button -->
+      <button id="pref-add-provider-btn" data-l10n-id="pref-add-provider" style="margin-top: 12px;"></button>
+    </vbox>
+
+    <!-- Provider Content Panel -->
+    <vbox flex="1" style="padding-left: 16px;">
+
+      <!-- PDFAiTalk Panel (Login-based) -->
+      <vbox id="pref-panel-pdfaitalk" class="provider-panel">
+        <label><html:h3 data-l10n-id="pref-pdfaitalk-title"></html:h3></label>
+        <label data-l10n-id="pref-pdfaitalk-description" style="margin-bottom: 12px; color: #666;"></label>
+
+        <hbox id="pref-user-bar" align="center" pack="start" style="margin-bottom: 12px; padding: 12px; border-radius: 6px; border: 1px solid var(--color-border, #ddd);">
+          <vbox flex="1">
+            <label id="pref-user-status" style="font-weight: bold;"></label>
+            <label id="pref-user-balance" style="font-size: 12px; opacity: 0.8;"></label>
+            <label id="pref-user-used" style="font-size: 12px; opacity: 0.6;"></label>
+          </vbox>
+          <button id="pref-login-btn" style="margin-left: 12px;"></button>
+        </hbox>
+
+        <!-- Invitation Code -->
+        <hbox id="pref-aff-code-bar" align="center" style="margin-bottom: 12px; display: none;">
+          <label data-l10n-id="pref-aff-code-label" style="width: 70px; text-align: right;"></label>
+          <html:input
+            type="text"
+            id="pref-aff-code"
+            readonly="true"
+            style="flex: 1; margin-left: 8px; min-width: 100px; background: #f5f5f5;"
+          ></html:input>
+          <button id="pref-copy-aff-code" data-l10n-id="pref-copy-btn" style="margin-left: 8px;"></button>
+        </hbox>
+
+        <!-- Redemption Code -->
+        <hbox align="center" style="margin-bottom: 8px;">
+          <label for="pref-redeem-code" data-l10n-id="pref-redeem-label" style="width: 70px; text-align: right;"></label>
+          <html:input
+            type="text"
+            id="pref-redeem-code"
+            data-l10n-id="pref-redeem-placeholder"
+            style="flex: 1; margin: 0 8px; min-width: 120px;"
+          ></html:input>
+          <button id="pref-redeem-btn" data-l10n-id="pref-redeem-btn"></button>
+        </hbox>
+        <label id="pref-redeem-message" style="margin-left: 78px; font-size: 12px;"></label>
+
+        <!-- PDFAiTalk Model Selection -->
+        <hbox align="center" style="margin-top: 16px; margin-bottom: 8px;">
+          <label for="pref-pdfaitalk-model" data-l10n-id="pref-model" style="width: 70px; text-align: right;"></label>
+          <menulist id="pref-pdfaitalk-model" style="flex: 1; margin-left: 8px; min-width: 150px;">
+            <menupopup id="pref-pdfaitalk-model-popup">
+              <!-- Models populated by JS -->
+            </menupopup>
+          </menulist>
+          <button id="pref-pdfaitalk-refresh-models" data-l10n-id="pref-refresh-models" style="margin-left: 8px;"></button>
+        </hbox>
+
+        <!-- PDFAiTalk Max Tokens -->
+        <hbox align="center" style="margin-bottom: 8px;">
+          <label for="pref-pdfaitalk-maxtokens" data-l10n-id="pref-max-tokens" style="width: 70px; text-align: right;"></label>
+          <html:input
+            type="number"
+            id="pref-pdfaitalk-maxtokens"
+            style="width: 100px; margin-left: 8px;"
+            min="256"
+            max="128000"
+          ></html:input>
+        </hbox>
+
+        <!-- PDFAiTalk Temperature -->
+        <hbox align="center" style="margin-bottom: 8px;">
+          <label for="pref-pdfaitalk-temperature" data-l10n-id="pref-temperature" style="width: 70px; text-align: right;"></label>
+          <html:input
+            type="number"
+            id="pref-pdfaitalk-temperature"
+            style="width: 80px; margin-left: 8px;"
+            min="0"
+            max="2"
+            step="0.1"
+          ></html:input>
+        </hbox>
+
+        <!-- PDFAiTalk System Prompt -->
+        <hbox align="start" style="margin-bottom: 8px;">
+          <label for="pref-pdfaitalk-systemprompt" data-l10n-id="pref-system-prompt" style="width: 70px; text-align: right; margin-top: 4px;"></label>
+          <html:textarea
+            id="pref-pdfaitalk-systemprompt"
+            style="flex: 1; height: 60px; margin-left: 8px; min-width: 200px;"
+          ></html:textarea>
+        </hbox>
+
+        <!-- Official Website Link -->
+        <hbox align="center" style="margin-top: 16px; justify-content: center;">
+          <html:a id="pref-pdfaitalk-website" href="#" style="color: #0078d4; cursor: pointer; text-decoration: none;">
+            <label data-l10n-id="pref-official-website" style="color: #0078d4; cursor: pointer;"></label>
+          </html:a>
+        </hbox>
+      </vbox>
+
+      <!-- API Key Provider Panel Template (used for OpenAI, Claude, Gemini, etc.) -->
+      <vbox id="pref-panel-apikey" class="provider-panel" hidden="true">
+        <label id="pref-provider-title" style="font-size: 16px; font-weight: bold; margin-bottom: 8px;"></label>
+        <label id="pref-provider-description" style="margin-bottom: 12px; opacity: 0.7;"></label>
+
+        <!-- API Key -->
+        <hbox align="center" style="margin-bottom: 8px;">
+          <label for="pref-provider-apikey" data-l10n-id="pref-api-key" style="width: 70px; text-align: right;"></label>
+          <html:input
+            type="password"
+            id="pref-provider-apikey"
+            style="flex: 1; margin-left: 8px; min-width: 150px;"
+          ></html:input>
+          <button id="pref-toggle-apikey" data-l10n-id="pref-show-key" style="margin-left: 8px;"></button>
+        </hbox>
+
+        <!-- Base URL -->
+        <hbox align="center" style="margin-bottom: 8px;">
+          <label for="pref-provider-baseurl" data-l10n-id="pref-base-url" style="width: 70px; text-align: right;"></label>
+          <html:input
+            type="text"
+            id="pref-provider-baseurl"
+            style="flex: 1; margin-left: 8px; min-width: 150px;"
+          ></html:input>
+        </hbox>
+
+        <!-- Model Selection -->
+        <hbox align="center" style="margin-bottom: 8px;">
+          <label for="pref-provider-model" data-l10n-id="pref-model" style="width: 70px; text-align: right;"></label>
+          <menulist id="pref-provider-model" style="flex: 1; margin-left: 8px; min-width: 120px;">
+            <menupopup id="pref-provider-model-popup">
+              <!-- Models populated by JS -->
+            </menupopup>
+          </menulist>
+          <button id="pref-refresh-models" data-l10n-id="pref-refresh-models" style="margin-left: 8px;"></button>
+        </hbox>
+
+        <!-- Model List -->
+        <vbox style="margin-top: 12px; margin-bottom: 8px;">
+          <hbox align="center" style="margin-bottom: 8px;">
+            <label data-l10n-id="pref-model-list" style="width: 70px; text-align: right; font-weight: bold;"></label>
+            <button id="pref-add-model-btn" data-l10n-id="pref-add-model" style="margin-left: 8px;"></button>
+          </hbox>
+          <vbox id="pref-model-list" style="margin-left: 78px; max-height: 120px; overflow-y: auto; border: 1px solid var(--color-border, #ddd); border-radius: 4px; padding: 4px;">
+            <!-- Model list populated by JS -->
+          </vbox>
+        </vbox>
+
+        <!-- Max Tokens -->
+        <hbox align="center" style="margin-bottom: 8px;">
+          <label for="pref-provider-maxtokens" data-l10n-id="pref-max-tokens" style="width: 70px; text-align: right;"></label>
+          <html:input
+            type="number"
+            id="pref-provider-maxtokens"
+            style="width: 100px; margin-left: 8px;"
+            min="256"
+            max="128000"
+          ></html:input>
+        </hbox>
+
+        <!-- Temperature -->
+        <hbox align="center" style="margin-bottom: 8px;">
+          <label for="pref-provider-temperature" data-l10n-id="pref-temperature" style="width: 70px; text-align: right;"></label>
+          <html:input
+            type="number"
+            id="pref-provider-temperature"
+            style="width: 80px; margin-left: 8px;"
+            min="0"
+            max="2"
+            step="0.1"
+          ></html:input>
+        </hbox>
+
+        <!-- System Prompt -->
+        <hbox align="start" style="margin-bottom: 8px;">
+          <label for="pref-provider-systemprompt" data-l10n-id="pref-system-prompt" style="width: 70px; text-align: right; margin-top: 4px;"></label>
+          <html:textarea
+            id="pref-provider-systemprompt"
+            style="flex: 1; height: 60px; margin-left: 8px; min-width: 200px;"
+          ></html:textarea>
+        </hbox>
+
+        <!-- Test Connection & Delete -->
+        <hbox align="center" style="margin-top: 16px;">
+          <button id="pref-test-connection" data-l10n-id="pref-test-connection" style="text-align: center;"></button>
+          <label id="pref-test-result" style="margin-left: 12px;"></label>
+          <spacer flex="1" />
+          <button id="pref-delete-provider" data-l10n-id="pref-delete-provider" hidden="true" style="color: #c00;"></button>
+        </hbox>
+      </vbox>
+
+    </vbox>
   </hbox>
-  <hbox class="virtualized-table-container" flex="1" height="300px">
-    <html:div id="__addonRef__-table-container" />
-  </hbox>
+
+  <!-- Active Provider Selection -->
+  <groupbox style="margin-top: 16px;">
+    <label><html:h3 data-l10n-id="pref-active-provider"></html:h3></label>
+    <hbox align="center">
+      <label for="pref-active-provider-select" data-l10n-id="pref-current-provider" style="margin-right: 8px;"></label>
+      <menulist id="pref-active-provider-select" style="width: 200px;">
+        <menupopup id="pref-active-provider-popup">
+          <!-- Populated by JS -->
+        </menupopup>
+      </menulist>
+    </hbox>
+  </groupbox>
 </groupbox>
-<vbox>
-  <html:label
-    data-l10n-id="pref-help"
-    data-l10n-args='{"time": "__buildTime__","name": "__addonName__","version":"__buildVersion__"}'
-  ></html:label>
-</vbox>

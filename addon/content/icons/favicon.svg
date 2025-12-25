@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="24" height="24" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- 对话框主体 -->
+  <path d="M25.5 37H21L11 42V37H4V7H44V18" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  
+  <!-- 文字线条 -->
+  <path d="M12 15H15L18 15" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M12 21H18L24 21" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  
+  <!-- PDF 文字 -->
+<text x="36" y="34" font-family="Arial, sans-serif" font-size="12" font-weight="900" fill="#333" stroke="#333" stroke-width="0.5" text-anchor="middle">PDF</text>
+</svg>

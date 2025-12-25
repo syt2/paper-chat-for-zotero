@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "Bash(tree:*)",
+      "Bash(find:*)",
+      "Bash(xargs ls:*)",
+      "Bash(npm run build:*)",
+      "WebFetch(domain:docs.newapi.pro)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(cat:*)",
+      "WebSearch",
+      "WebFetch(domain:www.zotero.org)",
+      "WebFetch(domain:forums.zotero.org)",
+      "WebFetch(domain:api.github.com)",
+      "mcp__ide__getDiagnostics",
+      "Bash(wc:*)",
+      "Bash(git -C /Users/shenyutao/zoteroPlugins/pdf-ai-talk diff --no-pager src/modules/ui/index.ts)",
+      "Bash(git -C /Users/shenyutao/zoteroPlugins/pdf-ai-talk status --short)",
+      "Bash(curl:*)",
+      "Bash(grep:*)"
+    ]
+  }
+}

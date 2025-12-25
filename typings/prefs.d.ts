@@ -7,8 +7,19 @@
 declare namespace _ZoteroTypes {
   interface Prefs {
     PluginPrefsMap: {
-      "enable": boolean;
-      "input": string;
+      "apiKey": string;
+      "baseUrl": string;
+      "model": string;
+      "maxTokens": number;
+      "temperature": string;
+      "systemPrompt": string;
+      "sessionToken": string;
+      "username": string;
+      "loginPassword": string;
+      "userId": number;
+      "userQuotaJson": string;
+      "pdfaitalkModelsCache": string;
+      "pdfaitalkRatiosCache": string;
     };
   }
 }
