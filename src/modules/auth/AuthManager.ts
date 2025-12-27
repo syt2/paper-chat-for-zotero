@@ -166,22 +166,8 @@ export class AuthManager {
     if (typeof savedUserId === "number" && savedUserId > 0) {
       this.state.userId = savedUserId;
       this.authService.setUserId(savedUserId);
-    } else if (savedSessionToken) {
-      // 如果 userId 从 prefs 读取失败，尝试从 session cookie 解析
-      const parsedUserId = this.authService.parseUserIdFromSession(
-        savedSessionToken as string,
-      );
-      if (parsedUserId !== null && parsedUserId > 0) {
-        this.state.userId = parsedUserId;
-        this.authService.setUserId(parsedUserId);
-        // 保存到 prefs 以便下次直接读取
-        setPref("userId", parsedUserId);
-        ztoolkit.log(
-          "[AuthManager] userId parsed from saved session cookie:",
-          parsedUserId,
-        );
-      }
     }
+    // 注意: 如果 prefs 中没有 userId，需要用户重新登录
 
     // 获取最终的 userId 用于恢复用户信息
     const finalUserId = this.state.userId;
@@ -358,7 +344,7 @@ export class AuthManager {
         this.state.userId = userId;
       }
 
-      // 先尝试从 CookieSandbox 提取 session cookie
+      // 从 CookieSandbox 提取 session cookie
       const extractedSession = this.authService.extractSessionCookie();
       if (extractedSession) {
         this.state.sessionToken = extractedSession;
@@ -368,20 +354,6 @@ export class AuthManager {
           "[AuthManager] Session cookie extracted and saved:",
           extractedSession.substring(0, 20) + "...",
         );
-
-        // 如果 userId 还没有获取到，尝试从 session cookie 中解析
-        if (this.state.userId === null || this.state.userId === 0) {
-          const parsedUserId =
-            this.authService.parseUserIdFromSession(extractedSession);
-          if (parsedUserId !== null && parsedUserId > 0) {
-            this.state.userId = parsedUserId;
-            this.authService.setUserId(parsedUserId);
-            ztoolkit.log(
-              "[AuthManager] userId parsed from session cookie:",
-              parsedUserId,
-            );
-          }
-        }
       } else {
         // 如果从 CookieSandbox 提取失败，尝试从响应头获取
         const sessionToken = this.authService.getSessionToken();
@@ -391,19 +363,6 @@ export class AuthManager {
             "[AuthManager] Session token from response header:",
             sessionToken.substring(0, 20) + "...",
           );
-
-          if (this.state.userId === null || this.state.userId === 0) {
-            const parsedUserId =
-              this.authService.parseUserIdFromSession(sessionToken);
-            if (parsedUserId !== null && parsedUserId > 0) {
-              this.state.userId = parsedUserId;
-              this.authService.setUserId(parsedUserId);
-              ztoolkit.log(
-                "[AuthManager] userId parsed from session token:",
-                parsedUserId,
-              );
-            }
-          }
         }
       }
 
@@ -493,25 +452,11 @@ export class AuthManager {
       const extractedSession = this.authService.extractSessionCookie();
       if (extractedSession) {
         this.state.sessionToken = extractedSession;
-        this.authService.setSessionToken(extractedSession); // 设置到 AuthService
+        this.authService.setSessionToken(extractedSession);
         setPref("sessionToken", extractedSession);
         ztoolkit.log(
           "[AuthManager] New session cookie saved after auto-relogin",
         );
-
-        // 如果 userId 还没有获取到，尝试从 session cookie 中解析
-        if (this.state.userId === null || this.state.userId === 0) {
-          const parsedUserId =
-            this.authService.parseUserIdFromSession(extractedSession);
-          if (parsedUserId !== null && parsedUserId > 0) {
-            this.state.userId = parsedUserId;
-            this.authService.setUserId(parsedUserId);
-            ztoolkit.log(
-              "[AuthManager] userId parsed from session cookie in auto-relogin:",
-              parsedUserId,
-            );
-          }
-        }
       }
 
       // 确保 authService 有 userId
