@@ -83,16 +83,6 @@ export interface CreateTokenRequest {
 }
 
 /**
- * Token状态响应
- */
-export interface TokenStatus {
-  total_granted: number;
-  total_available: number;
-  total_used: number;
-  expires_at: number;
-}
-
-/**
  * 兑换码请求
  */
 export interface TopUpRequest {
@@ -109,18 +99,6 @@ export interface AuthState {
   apiKey: string | null;
   sessionToken: string | null;
   userId: number | null;
-}
-
-/**
- * 登录响应 (包含session cookie)
- */
-export interface LoginResponse {
-  success: boolean;
-  message: string;
-  data?: {
-    username: string;
-    role: number;
-  };
 }
 
 /**

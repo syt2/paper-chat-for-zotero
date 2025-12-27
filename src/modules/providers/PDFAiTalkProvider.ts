@@ -8,6 +8,7 @@ import type { AIProvider, PDFAiTalkProviderConfig, PdfAttachment } from "../../t
 import { getAuthManager } from "../auth";
 import { ApiService } from "../chat/ApiService";
 import { BUILTIN_PROVIDERS } from "./ProviderManager";
+import { getPref } from "../../utils/prefs";
 
 export class PDFAiTalkProvider implements AIProvider {
   private _config: PDFAiTalkProviderConfig;
@@ -75,16 +76,19 @@ export class PDFAiTalkProvider implements AIProvider {
   }
 
   async getAvailableModels(): Promise<string[]> {
-    // PDFAiTalk provides a wide variety of models
-    return [
-      "gpt-4o",
-      "gpt-4o-mini",
-      "gpt-4-turbo",
-      "gpt-3.5-turbo",
-      "claude-sonnet-4-20250514",
-      "claude-3-5-haiku-20241022",
-      "gemini-2.0-flash-exp",
-      "deepseek-chat",
-    ];
+    // Try to get models from cache first
+    const cachedModels = getPref("pdfaitalkModelsCache") as string;
+    if (cachedModels) {
+      try {
+        const models = JSON.parse(cachedModels) as string[];
+        if (Array.isArray(models) && models.length > 0) {
+          return models;
+        }
+      } catch {
+        // ignore parse error
+      }
+    }
+    // Fallback to builtin defaults
+    return BUILTIN_PROVIDERS.pdfaitalk.defaultModels;
   }
 }

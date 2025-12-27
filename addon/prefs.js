@@ -1,7 +1,7 @@
 // API Configuration
 pref("apiKey", "");
 pref("baseUrl", "https://oneai.tracepad.site/v1");
-pref("model", "gpt-4o");
+pref("model", "claude-haiku-4-5-20251001");
 pref("maxTokens", 0);
 pref("temperature", "0.7");
 pref("systemPrompt", "You are a helpful research assistant. Help the user understand and analyze academic papers and documents.");

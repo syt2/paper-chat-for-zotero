@@ -77,8 +77,8 @@ export interface ApiKeyProviderConfig extends BaseProviderConfig {
   apiKey: string;
   baseUrl: string;
   defaultModel: string;
-  availableModels: string[];   // Simple model ID list for backward compatibility
-  models?: ModelInfo[];        // Detailed model info (optional, for new features)
+  availableModels: string[];   // Model ID list
+  models?: ModelInfo[];        // Detailed model info (optional)
   maxTokens?: number;
   temperature?: number;
   systemPrompt?: string;
@@ -97,8 +97,8 @@ export interface ProviderMetadata {
   name: string;
   description: string;
   defaultBaseUrl: string;
-  defaultModels: string[];     // Simple model list for backward compatibility
-  defaultModelInfos: ModelInfo[];  // Detailed model info
+  defaultModels: string[];        // Model ID list
+  defaultModelInfos: ModelInfo[]; // Detailed model info
   website: string;
   type: ProviderType;
 }

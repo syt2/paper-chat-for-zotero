@@ -8,6 +8,7 @@
 import { AuthService } from "./AuthService";
 import type { UserInfo, TokenInfo, AuthState } from "../../types/auth";
 import { getPref, setPref } from "../../utils/prefs";
+import { BUILTIN_PROVIDERS, getProviderManager } from "../providers";
 
 // 简单的密码编码/解码（base64，非加密，仅混淆）
 function encodePassword(password: string): string {
@@ -352,7 +353,7 @@ export class AuthManager {
 
     if (result.success) {
       // 保存用户ID (从AuthService获取，login时已提取)
-      let userId = this.authService.getUserId();
+      const userId = this.authService.getUserId();
       if (userId !== null) {
         this.state.userId = userId;
       }
@@ -425,6 +426,9 @@ export class AuthManager {
 
       // 确保有可用的Token (需要 session cookie)
       await this.ensurePluginToken();
+
+      // 获取可用模型列表并设置默认模型
+      await this.fetchAndSetDefaultModel();
 
       // 保存状态
       this.saveState();
@@ -697,6 +701,76 @@ export class AuthManager {
           );
         }
       }
+    }
+  }
+
+  /**
+   * 获取模型列表并设置默认模型
+   * 在登录成功后调用，确保使用服务端支持的模型
+   */
+  private async fetchAndSetDefaultModel(): Promise<void> {
+    const apiKey = this.getApiKey();
+    if (!apiKey) {
+      ztoolkit.log("[AuthManager] No API key, skip fetching models");
+      return;
+    }
+
+    const url = `${BUILTIN_PROVIDERS.pdfaitalk.defaultBaseUrl}/models`;
+    ztoolkit.log("[AuthManager] Fetching models from:", url);
+
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+        },
+      });
+
+      if (!response.ok) {
+        ztoolkit.log("[AuthManager] Failed to fetch models:", response.status);
+        return;
+      }
+
+      const result = (await response.json()) as { data?: Array<{ id: string }> };
+
+      if (result.data && Array.isArray(result.data)) {
+        const models = result.data.map((m) => m.id).sort();
+        ztoolkit.log("[AuthManager] Fetched models count:", models.length);
+
+        if (models.length > 0) {
+          // 缓存模型列表
+          setPref("pdfaitalkModelsCache", JSON.stringify(models));
+
+          // 获取当前模型设置
+          const currentModel = getPref("model") as string;
+
+          // 如果当前模型不在列表中，设置默认模型
+          if (!currentModel || !models.includes(currentModel)) {
+            // 优先使用 claude-haiku-4-5-20251001，否则用第一个
+            const preferredModel = "claude-haiku-4-5-20251001";
+            const defaultModel = models.includes(preferredModel)
+              ? preferredModel
+              : models[0];
+            setPref("model", defaultModel);
+            ztoolkit.log("[AuthManager] Set default model to:", defaultModel);
+
+            // 更新 provider 配置
+            const providerManager = getProviderManager();
+            providerManager.updateProviderConfig("pdfaitalk", {
+              defaultModel: defaultModel,
+              availableModels: models,
+            });
+          } else {
+            // 只更新可用模型列表
+            const providerManager = getProviderManager();
+            providerManager.updateProviderConfig("pdfaitalk", {
+              availableModels: models,
+            });
+          }
+        }
+      }
+    } catch (e) {
+      ztoolkit.log("[AuthManager] Failed to fetch models:", e);
     }
   }
 
