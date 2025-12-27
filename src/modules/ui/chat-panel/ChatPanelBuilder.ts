@@ -4,6 +4,7 @@
 
 import { config } from "../../../../package.json";
 import { getString } from "../../../utils/locale";
+import { chatColors } from "../../../utils/colors";
 import type { ThemeColors } from "./types";
 import { HTML_NS } from "./types";
 
@@ -54,7 +55,7 @@ export function createChatContainer(doc: Document, theme: ThemeColors): HTMLElem
     alignItems: "center",
     justifyContent: "space-between",
     padding: "10px 14px",
-    background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+    background: chatColors.userBubble,
     color: "#fff",
     fontSize: "12px",
   }, { id: "chat-user-bar" });
@@ -248,7 +249,7 @@ export function createChatContainer(doc: Document, theme: ThemeColors): HTMLElem
   }, { id: "chat-message-input", rows: "2", placeholder: getString("chat-input-placeholder") }) as HTMLTextAreaElement;
 
   const sendButton = createElement(doc, "button", {
-    background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+    background: chatColors.userBubble,
     color: "#fff",
     border: "none",
     borderRadius: "10px",

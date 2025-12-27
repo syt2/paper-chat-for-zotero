@@ -4,6 +4,7 @@
 
 import type { ChatMessage, StreamCallbacks } from "../../types/chat";
 import type { AIProvider, ApiKeyProviderConfig, PdfAttachment } from "../../types/provider";
+import { parseSSEStream, type SSEFormat, type SSEParserCallbacks } from "./SSEParser";
 
 export abstract class BaseProvider implements AIProvider {
   protected _config: ApiKeyProviderConfig;
@@ -45,35 +46,14 @@ export abstract class BaseProvider implements AIProvider {
   abstract getAvailableModels(): Promise<string[]>;
 
   /**
-   * Parse SSE stream (shared utility)
+   * Parse SSE stream using unified parser
    */
-  protected async parseSSEStream(
+  protected async parseSSE(
     reader: ReadableStreamDefaultReader<Uint8Array>,
-    onData: (data: string) => void,
-    onDone: () => void,
+    format: SSEFormat,
+    callbacks: SSEParserCallbacks,
   ): Promise<void> {
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const result = await reader.read();
-      if (result.done) break;
-      const value = result.value as Uint8Array;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed === "data: [DONE]") continue;
-        if (trimmed.startsWith("data: ")) {
-          onData(trimmed.slice(6));
-        }
-      }
-    }
-    onDone();
+    return parseSSEStream(reader, format, callbacks);
   }
 
   /**

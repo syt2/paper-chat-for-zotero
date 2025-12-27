@@ -16,6 +16,7 @@ import type {
   StreamCallbacks,
 } from "../../types/chat";
 import type { PdfAttachment } from "../../types/provider";
+import { parseSSEStream } from "../providers/SSEParser";
 
 export class ApiService {
   private config: ApiConfig;
@@ -135,42 +136,20 @@ export class ApiService {
         throw new Error("Response body is not readable");
       }
 
-      const decoder = new TextDecoder();
       let fullContent = "";
 
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        // @ts-expect-error - Zotero's type definitions may differ
-        const result = await reader.read();
-        if (result.done) break;
-        const value = result.value as Uint8Array;
-
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split("\n").filter((line) => line.trim() !== "");
-
-        for (let line of lines) {
-          // 移除 'data:' 前缀
-          line = line.replace(/^data:\s*/, "");
-
-          if (line === "[DONE]") {
-            continue;
-          }
-
-          try {
-            const data = JSON.parse(line);
-            const content = data.choices?.[0]?.delta?.content || "";
-
-            if (content) {
-              fullContent += content;
-              onChunk(content);
-            }
-          } catch {
-            // 忽略JSON解析错误（对于不完整的块）
-          }
-        }
-      }
-
-      onComplete(fullContent);
+      await parseSSEStream(
+        reader as ReadableStreamDefaultReader<Uint8Array>,
+        "openai",
+        {
+          onText: (text) => {
+            fullContent += text;
+            onChunk(text);
+          },
+          onDone: () => onComplete(fullContent),
+          onError,
+        },
+      );
     } catch (error) {
       onError(error instanceof Error ? error : new Error(String(error)));
     }

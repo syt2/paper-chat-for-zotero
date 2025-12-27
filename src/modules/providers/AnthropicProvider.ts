@@ -56,71 +56,18 @@ export class AnthropicProvider extends BaseProvider {
 
       let fullContent = "";
 
-      await this.parseAnthropicSSE(
+      await this.parseSSE(
         reader as ReadableStreamDefaultReader<Uint8Array>,
-        (text) => {
-          fullContent += text;
-          onChunk(text);
+        "anthropic",
+        {
+          onText: (text) => {
+            fullContent += text;
+            onChunk(text);
+          },
+          onDone: () => onComplete(fullContent),
+          onError,
         },
-        () => onComplete(fullContent),
-        onError,
       );
-    } catch (error) {
-      onError(error instanceof Error ? error : new Error(String(error)));
-    }
-  }
-
-  /**
-   * Parse Anthropic SSE stream (different format than OpenAI)
-   */
-  private async parseAnthropicSSE(
-    reader: ReadableStreamDefaultReader<Uint8Array>,
-    onText: (text: string) => void,
-    onDone: () => void,
-    onError: (error: Error) => void,
-  ): Promise<void> {
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    try {
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        const result = await reader.read();
-        if (result.done) break;
-        const value = result.value as Uint8Array;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || !trimmed.startsWith("data: ")) continue;
-
-          const data = trimmed.slice(6);
-          if (data === "[DONE]") continue;
-
-          try {
-            const parsed = JSON.parse(data);
-
-            // Anthropic events: content_block_delta contains text
-            if (parsed.type === "content_block_delta") {
-              const text = parsed.delta?.text || "";
-              if (text) {
-                onText(text);
-              }
-            }
-            // Handle errors
-            else if (parsed.type === "error") {
-              onError(new Error(parsed.error?.message || "Unknown error"));
-              return;
-            }
-          } catch {
-            // Ignore parse errors
-          }
-        }
-      }
-      onDone();
     } catch (error) {
       onError(error instanceof Error ? error : new Error(String(error)));
     }

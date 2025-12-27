@@ -18,7 +18,13 @@
       "Bash(git -C /Users/shenyutao/zoteroPlugins/pdf-ai-talk diff --no-pager src/modules/ui/index.ts)",
       "Bash(git -C /Users/shenyutao/zoteroPlugins/pdf-ai-talk status --short)",
       "Bash(curl:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(npm run lint:*)",
+      "Bash(git -C /Users/shenyutao/zoteroPlugins/pdf-ai-talk diff --stat HEAD)",
+      "Bash(npx tsc:*)",
+      "Bash(npx eslint:*)",
+      "Bash(npm ls:*)",
+      "Bash(npm install:*)"
     ]
   }
 }

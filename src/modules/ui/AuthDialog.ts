@@ -4,9 +4,9 @@
  * 提供用户登录和注册界面
  */
 
-import { config } from "../../../package.json";
 import { getString } from "../../utils/locale";
-import { getAuthManager, AuthService } from "../auth";
+import { authColors, colors } from "../../utils/colors";
+import { getAuthManager } from "../auth";
 
 type DialogMode = "login" | "register";
 
@@ -135,7 +135,7 @@ export async function showAuthDialog(initialMode: DialogMode = "login"): Promise
                   "data-bind": "username",
                   placeholder: getString("auth-username-placeholder"),
                 },
-                styles: { padding: "8px", borderRadius: "4px", border: "1px solid #ccc" },
+                styles: { padding: "8px", borderRadius: "4px", border: `1px solid ${authColors.inputBorder}` },
               },
             ],
           },
@@ -157,7 +157,7 @@ export async function showAuthDialog(initialMode: DialogMode = "login"): Promise
                   "data-bind": "email",
                   placeholder: getString("auth-email-placeholder"),
                 },
-                styles: { padding: "8px", borderRadius: "4px", border: "1px solid #ccc" },
+                styles: { padding: "8px", borderRadius: "4px", border: `1px solid ${authColors.inputBorder}` },
               },
             ],
           },
@@ -183,7 +183,7 @@ export async function showAuthDialog(initialMode: DialogMode = "login"): Promise
                       "data-bind": "verificationCode",
                       placeholder: getString("auth-verification-placeholder"),
                     },
-                    styles: { flex: "1", padding: "8px", borderRadius: "4px", border: "1px solid #ccc" },
+                    styles: { flex: "1", padding: "8px", borderRadius: "4px", border: `1px solid ${authColors.inputBorder}` },
                   },
                   {
                     tag: "button",
@@ -220,7 +220,7 @@ export async function showAuthDialog(initialMode: DialogMode = "login"): Promise
                   "data-bind": "password",
                   placeholder: getString("auth-password-placeholder"),
                 },
-                styles: { padding: "8px", borderRadius: "4px", border: "1px solid #ccc" },
+                styles: { padding: "8px", borderRadius: "4px", border: `1px solid ${authColors.inputBorder}` },
               },
             ],
           },
@@ -235,7 +235,7 @@ export async function showAuthDialog(initialMode: DialogMode = "login"): Promise
                 id: "forgot-password-link",
                 properties: { textContent: getString("auth-forgot-password") },
                 styles: {
-                  color: "#0078d4",
+                  color: authColors.link,
                   cursor: "pointer",
                   fontSize: "13px",
                   textDecoration: "none",
@@ -261,7 +261,7 @@ export async function showAuthDialog(initialMode: DialogMode = "login"): Promise
                   "data-bind": "confirmPassword",
                   placeholder: getString("auth-confirm-password-placeholder"),
                 },
-                styles: { padding: "8px", borderRadius: "4px", border: "1px solid #ccc" },
+                styles: { padding: "8px", borderRadius: "4px", border: `1px solid ${authColors.inputBorder}` },
               },
             ],
           },
@@ -283,7 +283,7 @@ export async function showAuthDialog(initialMode: DialogMode = "login"): Promise
                   "data-bind": "affCode",
                   placeholder: getString("auth-aff-code-placeholder"),
                 },
-                styles: { padding: "8px", borderRadius: "4px", border: "1px solid #ccc" },
+                styles: { padding: "8px", borderRadius: "4px", border: `1px solid ${authColors.inputBorder}` },
               },
             ],
           },
@@ -305,8 +305,8 @@ export async function showAuthDialog(initialMode: DialogMode = "login"): Promise
                   padding: "8px 16px",
                   cursor: "pointer",
                   borderRadius: "4px",
-                  border: "1px solid #ccc",
-                  background: "#f5f5f5",
+                  border: `1px solid ${authColors.buttonSecondaryBorder}`,
+                  background: authColors.buttonSecondary,
                 },
               },
               {
@@ -318,8 +318,8 @@ export async function showAuthDialog(initialMode: DialogMode = "login"): Promise
                   cursor: "pointer",
                   borderRadius: "4px",
                   border: "none",
-                  background: "#0078d4",
-                  color: "white",
+                  background: authColors.buttonPrimary,
+                  color: authColors.buttonPrimaryText,
                 },
               },
             ],
@@ -367,6 +367,7 @@ export async function showAuthDialog(initialMode: DialogMode = "login"): Promise
       const submitBtn = doc.getElementById("auth-submit-btn") as HTMLButtonElement;
       const cancelBtn = doc.getElementById("auth-cancel-btn") as HTMLButtonElement;
       const messageDiv = doc.getElementById("auth-message") as HTMLElement;
+      const passwordField = doc.querySelector("#auth-password")?.parentElement as HTMLElement;
 
       const usernameInput = doc.getElementById("auth-username") as HTMLInputElement;
       const emailInput = doc.getElementById("auth-email") as HTMLInputElement;
@@ -384,16 +385,15 @@ export async function showAuthDialog(initialMode: DialogMode = "login"): Promise
 
         // 标签样式
         tabLogin.style.fontWeight = isRegister ? "normal" : "bold";
-        tabLogin.style.borderBottom = isRegister ? "2px solid transparent" : "2px solid #0078d4";
+        tabLogin.style.borderBottom = isRegister ? "2px solid transparent" : `2px solid ${authColors.tabActive}`;
         tabLogin.style.opacity = isRegister ? "0.6" : "1";
         tabRegister.style.fontWeight = isRegister ? "bold" : "normal";
-        tabRegister.style.borderBottom = isRegister ? "2px solid #0078d4" : "2px solid transparent";
+        tabRegister.style.borderBottom = isRegister ? `2px solid ${authColors.tabActive}` : "2px solid transparent";
         tabRegister.style.opacity = isRegister ? "1" : "0.6";
 
         // 字段显示
-        // 登录模式：显示用户名字段和忘记密码，隐藏注册相关字段
-        // 注册模式：显示用户名、邮箱、验证码等字段，隐藏忘记密码
-        usernameField.style.display = "flex"; // 两种模式都显示
+        usernameField.style.display = "flex";
+        passwordField.style.display = "flex";
         forgotPasswordField.style.display = isRegister ? "none" : "flex";
         emailField.style.display = isRegister ? "flex" : "none";
         verificationField.style.display = isRegister ? "flex" : "none";
@@ -404,7 +404,7 @@ export async function showAuthDialog(initialMode: DialogMode = "login"): Promise
         setTimeout(() => {
           if (dialogWin) {
             const loginHeight = 360;
-            const registerHeight = 620; // 增加高度，因为多了用户名字段
+            const registerHeight = 620;
             const targetHeight = isRegister ? registerHeight : loginHeight;
             dialogWin.resizeTo(dialogWin.outerWidth, targetHeight);
           }
@@ -415,9 +415,9 @@ export async function showAuthDialog(initialMode: DialogMode = "login"): Promise
       function showMessage(message: string, isError: boolean) {
         messageDiv.textContent = message;
         messageDiv.style.display = "block";
-        messageDiv.style.backgroundColor = isError ? "#fee" : "#efe";
-        messageDiv.style.color = isError ? "#c00" : "#060";
-        messageDiv.style.border = `1px solid ${isError ? "#fcc" : "#cfc"}`;
+        messageDiv.style.backgroundColor = isError ? authColors.errorBg : authColors.successBg;
+        messageDiv.style.color = isError ? authColors.errorText : authColors.successText;
+        messageDiv.style.border = `1px solid ${isError ? authColors.errorBorder : authColors.successBorder}`;
       }
 
       // 隐藏消息

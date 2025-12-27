@@ -3,6 +3,7 @@
  */
 
 import { getString } from "../../../utils/locale";
+import { chatColors } from "../../../utils/colors";
 import type { ThemeColors, SessionInfo } from "./types";
 import { createElement } from "./ChatPanelBuilder";
 
@@ -132,7 +133,7 @@ export function renderMoreSessions(
     const loadMoreBtn = createElement(doc, "div", {
       padding: "12px 14px",
       textAlign: "center",
-      color: "#667eea",
+      color: chatColors.historyAccent,
       cursor: "pointer",
       fontWeight: "500",
       fontSize: "13px",
@@ -145,7 +146,7 @@ export function renderMoreSessions(
       renderMoreSessions(container, doc, state, theme, onSelect);
     });
     loadMoreBtn.addEventListener("mouseenter", () => {
-      loadMoreBtn.style.background = "#f0f4ff";
+      loadMoreBtn.style.background = chatColors.loadMoreBg;
     });
     loadMoreBtn.addEventListener("mouseleave", () => {
       loadMoreBtn.style.background = "transparent";
@@ -176,7 +177,7 @@ export function populateHistoryDropdown(
     const emptyMsg = createElement(doc, "div", {
       padding: "20px",
       textAlign: "center",
-      color: "#999",
+      color: chatColors.emptyText,
       fontSize: "13px",
     });
     emptyMsg.textContent = getString("chat-no-history");

@@ -15,16 +15,16 @@ import type {
   TopUpRequest,
   PaginatedResponse,
 } from "../../types/auth";
+import { BUILTIN_PROVIDERS } from "../providers/ProviderManager";
 
-// API基础URL - 从配置读取或使用默认值
-const DEFAULT_API_BASE = "https://oneai.tracepad.site";
+// API基础URL - 从ProviderManager获取
+const DEFAULT_API_BASE = BUILTIN_PROVIDERS.pdfaitalk.website!;
 
 export class AuthService {
   private baseUrl: string;
   private sessionToken: string | null = null;
   private userId: number | null = null;
   private accessToken: string | null = null;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private _cookieSandbox: any = null;
 
   constructor(baseUrl?: string) {
@@ -88,6 +88,127 @@ export class AuthService {
   }
 
   /**
+   * 从 Gorilla securecookie 格式的 session 中解析用户ID
+   * Session 格式: 整个 cookie 是 base64 编码的，解码后为 timestamp|gob_data|signature
+   * GOB data 包含 map[string]interface{} 结构，其中 "id" 字段是用户ID
+   */
+  parseUserIdFromSession(sessionValue: string): number | null {
+    try {
+      // 整个 cookie 是 base64 编码的，需要先解码
+      // 使用 atob 解码 base64 (需要处理 URL-safe base64)
+      const normalizedBase64 = sessionValue.replace(/-/g, "+").replace(/_/g, "/");
+      // 添加填充
+      const padded = normalizedBase64 + "=".repeat((4 - normalizedBase64.length % 4) % 4);
+
+      let fullDecoded: string;
+      try {
+        fullDecoded = atob(padded);
+      } catch {
+        ztoolkit.log("[AuthService] Failed to decode base64 session cookie");
+        return null;
+      }
+
+      ztoolkit.log("[AuthService] Decoded session length:", fullDecoded.length);
+
+      // 解码后的格式: timestamp|gob_data|signature
+      const parts = fullDecoded.split("|");
+      ztoolkit.log("[AuthService] Session parts count:", parts.length);
+
+      if (parts.length < 2) {
+        ztoolkit.log("[AuthService] Invalid session format after decode - not enough parts");
+        return null;
+      }
+
+      // 第二部分是 GOB 编码的数据（可能还有一层 base64）
+      let gobData = parts[1];
+
+      // 尝试再次 base64 解码 GOB 数据
+      try {
+        const normalizedGob = gobData.replace(/-/g, "+").replace(/_/g, "/");
+        const paddedGob = normalizedGob + "=".repeat((4 - normalizedGob.length % 4) % 4);
+        gobData = atob(paddedGob);
+        ztoolkit.log("[AuthService] GOB data decoded, length:", gobData.length);
+      } catch {
+        // GOB 数据可能不是 base64 编码的，直接使用
+        ztoolkit.log("[AuthService] GOB data is not base64, using raw");
+      }
+
+      // 在 GOB 数据中查找 "id" 字段
+      // GOB map 中的 string key 格式: 长度字节 + 字符串内容
+      // 查找 "\x02id" (长度2 + "id") 模式
+
+      // 方法1: 查找 "\x02id" 后面的整数值
+      const idIndex = gobData.indexOf("\x02id");
+      if (idIndex !== -1) {
+        ztoolkit.log("[AuthService] Found 'id' field at index:", idIndex);
+        // "id" 后面应该是类型标记和值
+        // 跳过 "\x02id" (3字节) 后找整数
+        const afterId = idIndex + 3;
+        // GOB int 格式: 类型标记 + 值
+        // 对于小整数，通常是 \x03int\x04\x02\x00\x?? 格式
+        for (let i = afterId; i < Math.min(afterId + 15, gobData.length); i++) {
+          const byte = gobData.charCodeAt(i);
+          // 查找合理的用户 ID 值 (通常是 1-1000000)
+          if (byte >= 2 && byte <= 127) {
+            const nextByte = gobData.charCodeAt(i + 1);
+            // 检查下一个字节是否是字符串长度标记 (8=username, 4=role, 6=status, 5=group)
+            if (nextByte >= 4 && nextByte <= 20) {
+              ztoolkit.log("[AuthService] Parsed userId from session:", byte);
+              return byte;
+            }
+          }
+        }
+      }
+
+      // 方法2: 查找 pending_user_id 字段
+      const pendingIndex = gobData.indexOf("pending_user_id");
+      if (pendingIndex !== -1) {
+        ztoolkit.log("[AuthService] Found 'pending_user_id' field at index:", pendingIndex);
+        const afterPending = pendingIndex + 15;
+        for (let i = afterPending; i < Math.min(afterPending + 15, gobData.length); i++) {
+          const byte = gobData.charCodeAt(i);
+          if (byte >= 2 && byte <= 127) {
+            const nextByte = gobData.charCodeAt(i + 1);
+            if (nextByte >= 2 && nextByte <= 20) {
+              ztoolkit.log("[AuthService] Parsed userId from pending_user_id:", byte);
+              return byte;
+            }
+          }
+        }
+      }
+
+      // 方法3: 在整个数据中搜索可能的 userId 模式
+      // 格式通常是: ...string...\x02id\x03int\x04\x02\x00VALUE\x08username...
+      for (let offset = 0; offset < gobData.length - 10; offset++) {
+        // 查找 "id" 字符串 (不带长度前缀)
+        if (gobData.charAt(offset) === "i" && gobData.charAt(offset + 1) === "d") {
+          // 检查前一个字节是否是长度 2
+          if (offset > 0 && gobData.charCodeAt(offset - 1) === 2) {
+            // 找到了 "\x02id"
+            for (let i = offset + 2; i < Math.min(offset + 15, gobData.length); i++) {
+              const byte = gobData.charCodeAt(i);
+              if (byte >= 1 && byte <= 127) {
+                const nextByte = gobData.charCodeAt(i + 1);
+                // 检查是否是合理的下一个字段长度
+                if (nextByte >= 4 && nextByte <= 20) {
+                  ztoolkit.log("[AuthService] Parsed userId (method 3):", byte);
+                  return byte;
+                }
+              }
+            }
+          }
+        }
+      }
+
+      ztoolkit.log("[AuthService] Could not parse userId from session cookie");
+      return null;
+    } catch (e) {
+      ztoolkit.log("[AuthService] Error parsing session cookie:", e);
+      return null;
+    }
+  }
+
+  /**
    * 从 CookieSandbox 提取 session cookie
    * 用于在登录后保存 cookie 到 prefs
    */
@@ -96,7 +217,6 @@ export class AuthService {
 
     try {
       // 访问 CookieSandbox 内部的 _cookies 存储
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const cookies = (this._cookieSandbox as any)._cookies;
       if (!cookies) return null;
 
@@ -144,7 +264,6 @@ export class AuthService {
     try {
       const host = new URL(this.baseUrl).hostname;
       // 使用 setCookie 方法设置 cookie
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const sandbox = this._cookieSandbox as any;
       if (typeof sandbox.setCookie === "function") {
         sandbox.setCookie(`session=${sessionValue}`, host, "/", false, false);
@@ -408,9 +527,18 @@ export class AuthService {
       };
     }
 
+    // 检查是否需要 2FA - 不支持，返回错误
+    const responseData = result.data as ApiResponse & { data?: { id?: number; require_2fa?: boolean } };
+    if (responseData.data?.require_2fa) {
+      ztoolkit.log("[AuthService] 2FA required but not supported");
+      return {
+        success: false,
+        message: "此账号启用了两步验证，插件暂不支持两步验证登录，请在网页端关闭两步验证后重试",
+      };
+    }
+
     // 从响应中提取用户ID并保存
     // 响应格式: { data: { id: number, username: string, ... }, success: true }
-    const responseData = result.data as ApiResponse & { data?: { id?: number } };
     if (responseData.data?.id) {
       this.userId = responseData.data.id;
       ztoolkit.log("[AuthService] User ID extracted:", this.userId);

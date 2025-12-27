@@ -4,6 +4,7 @@
 
 import type { ImageAttachment, FileAttachment } from "../../../types/chat";
 import type { ChatPanelContext, AttachmentState, SessionInfo } from "./types";
+import { chatColors } from "../../../utils/colors";
 import { createElement, copyToClipboard } from "./ChatPanelBuilder";
 import { getCurrentTheme } from "./ChatPanelTheme";
 import {
@@ -19,6 +20,9 @@ import { getProviderManager } from "../../providers";
 // Import getActiveReaderItem from the manager module to avoid circular dependency
 // This is set by ChatPanelManager during initialization
 let getActiveReaderItemFn: (() => Zotero.Item | null) | null = null;
+
+// State to track if a message is being sent (prevents duplicate sends)
+let isSending = false;
 
 /**
  * Set the getActiveReaderItem function reference
@@ -80,10 +84,15 @@ export function setupEventHandlers(context: ChatPanelContext): void {
     await sendMessage(context, messageInput, sendButton, attachPdfCheckbox, attachmentsPreview);
   });
 
-  // Input keydown - Enter to send
+  // Input keydown - Enter to send (blocked while sending)
   messageInput?.addEventListener("keydown", (e: KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      // Block Enter key while sending
+      if (isSending) {
+        ztoolkit.log("Enter key blocked - message is being sent");
+        return;
+      }
       ztoolkit.log("Enter key pressed to send");
       ztoolkit.log("[Send] attachPdfCheckbox element:", attachPdfCheckbox);
       ztoolkit.log("[Send] attachPdfCheckbox.checked:", attachPdfCheckbox?.checked);
@@ -243,20 +252,31 @@ export function setupEventHandlers(context: ChatPanelContext): void {
 
         const loadedSession = await chatManager.loadSessionForItem(session.itemId);
         if (loadedSession) {
+          let itemForSession: Zotero.Item | null = null;
+
           if (session.itemId === 0) {
-            context.setCurrentItem({ id: 0 } as Zotero.Item);
+            // Global chat - use fake item with id 0
+            itemForSession = { id: 0 } as Zotero.Item;
           } else {
             try {
               const item = await Zotero.Items.getAsync(session.itemId);
               if (item) {
-                context.setCurrentItem(item as Zotero.Item);
+                itemForSession = item as Zotero.Item;
+              } else {
+                // Item was deleted - treat as global chat
+                ztoolkit.log("Item not found, treating as global chat:", session.itemId);
+                itemForSession = { id: 0 } as Zotero.Item;
               }
             } catch {
-              context.setCurrentItem({ id: session.itemId } as Zotero.Item);
+              // Error fetching item - treat as global chat
+              ztoolkit.log("Error fetching item, treating as global chat:", session.itemId);
+              itemForSession = { id: 0 } as Zotero.Item;
             }
           }
-          const currentItem = context.getCurrentItem();
-          context.updatePdfCheckboxVisibility(currentItem);
+
+          // Always set the current item
+          context.setCurrentItem(itemForSession);
+          context.updatePdfCheckboxVisibility(itemForSession);
           context.renderMessages(loadedSession.messages);
         }
       },
@@ -295,12 +315,12 @@ export function updateAttachmentsPreviewDisplay(
       display: "inline-flex",
       alignItems: "center",
       gap: "4px",
-      background: "#fff",
-      border: "1px solid #d0d7ff",
+      background: chatColors.attachmentBg,
+      border: `1px solid ${chatColors.attachmentBorder}`,
       borderRadius: "12px",
       padding: "4px 12px",
       fontSize: "11px",
-      color: "#555",
+      color: chatColors.attachmentText,
     });
     span.textContent = tag.text;
     attachmentsPreview.appendChild(span);
@@ -317,95 +337,102 @@ async function sendMessage(
   messageInput: HTMLTextAreaElement | null,
   sendButton: HTMLButtonElement | null,
   attachPdfCheckbox: HTMLInputElement | null,
-  attachmentsPreview: HTMLElement | null,
+  _attachmentsPreview: HTMLElement | null,
 ): Promise<void> {
-  ztoolkit.log("sendMessage function called");
+  // Prevent duplicate sends
+  if (isSending) return;
+
   const content = messageInput?.value?.trim();
-  if (!content) {
-    ztoolkit.log("No content to send");
-    return;
-  }
-  ztoolkit.log("Message content:", content.substring(0, 50) + "...");
+  if (!content) return;
 
   const { chatManager, authManager } = context;
 
-  // Use current item or get from reader
+  // Get active reader item first (used for PDF attachment)
+  const activeReaderItem = getActiveReaderItem();
+
+  // Use current item or fall back to active reader
   let item = context.getCurrentItem();
   if (!item) {
-    item = getActiveReaderItem();
+    item = activeReaderItem;
     if (item) {
       context.setCurrentItem(item);
-      context.updatePdfCheckboxVisibility(item);
     }
   }
-  ztoolkit.log("Item for message:", item?.id ?? "global chat");
 
-  // Only require PDFAiTalk login if using PDFAiTalk provider
+  // Check provider authentication/readiness
   const providerManager = getProviderManager();
   const activeProviderId = providerManager.getActiveProviderId();
   const activeProvider = providerManager.getActiveProvider();
 
   if (activeProviderId === "pdfaitalk") {
-    // PDFAiTalk requires login
     if (!authManager.isLoggedIn()) {
-      ztoolkit.log("User not logged in, showing auth dialog");
       const success = await showAuthDialog("login");
       if (!success) return;
       context.updateUserBar();
     }
-  } else {
-    // Other providers require the provider to be ready (API key configured)
-    if (!activeProvider || !activeProvider.isReady()) {
-      ztoolkit.log("Provider not ready:", activeProviderId);
-      // Could show an error message here
-      return;
-    }
+  } else if (!activeProvider?.isReady()) {
+    ztoolkit.log("Provider not ready:", activeProviderId);
+    return;
   }
 
-  ztoolkit.log("Disabling input, calling manager.sendMessage...");
-  ztoolkit.log("[Debug] attachPdfCheckbox exists:", !!attachPdfCheckbox);
-  ztoolkit.log("[Debug] attachPdfCheckbox.checked:", attachPdfCheckbox?.checked);
-  if (sendButton) sendButton.disabled = true;
-  if (messageInput) messageInput.disabled = true;
+  // Set sending state and disable send button
+  isSending = true;
+  if (sendButton) {
+    sendButton.disabled = true;
+    sendButton.style.opacity = "0.5";
+    sendButton.style.cursor = "not-allowed";
+  }
+
+  // Get attachment state before clearing
+  const attachmentState = context.getAttachmentState();
+  const shouldAttachPdf = attachPdfCheckbox?.checked && activeReaderItem !== null;
+
+  // Clear input immediately after getting the content
+  if (messageInput) {
+    messageInput.value = "";
+    messageInput.style.height = "auto";
+  }
+  context.clearAttachments();
+  context.updateAttachmentsPreview();
+
+  // Build attachment options (shared between global and item chat)
+  const attachmentOptions = {
+    images: attachmentState.pendingImages.length > 0 ? attachmentState.pendingImages : undefined,
+    files: attachmentState.pendingFiles.length > 0 ? attachmentState.pendingFiles : undefined,
+    selectedText: attachmentState.pendingSelectedText || undefined,
+  };
 
   try {
-    const attachmentState = context.getAttachmentState();
+    // Determine target item: use active reader if attaching PDF, otherwise use chat context
+    let targetItem = item;
+    if (shouldAttachPdf) {
+      targetItem = activeReaderItem;
+      context.setCurrentItem(activeReaderItem!);
+    }
 
-    // If no item or global chat (id = 0), use global chat mode
-    if (!item || item.id === 0) {
-      ztoolkit.log("Using global chat mode - PDF attach checkbox is ignored in this mode");
-      const currentItem = context.getCurrentItem();
-      if (!currentItem) {
+    // Send message
+    if (!targetItem || targetItem.id === 0) {
+      // Global chat mode
+      if (!context.getCurrentItem()) {
         context.setCurrentItem({ id: 0 } as Zotero.Item);
       }
-      await chatManager.sendMessageGlobal(content, {
-        images: attachmentState.pendingImages.length > 0 ? attachmentState.pendingImages : undefined,
-        files: attachmentState.pendingFiles.length > 0 ? attachmentState.pendingFiles : undefined,
-        selectedText: attachmentState.pendingSelectedText || undefined,
-      });
+      await chatManager.sendMessageGlobal(content, attachmentOptions);
     } else {
-      ztoolkit.log("Calling manager.sendMessage for item:", item.id);
-      await chatManager.sendMessage(item, content, {
-        attachPdf: attachPdfCheckbox?.checked,
-        images: attachmentState.pendingImages.length > 0 ? attachmentState.pendingImages : undefined,
-        files: attachmentState.pendingFiles.length > 0 ? attachmentState.pendingFiles : undefined,
-        selectedText: attachmentState.pendingSelectedText || undefined,
+      await chatManager.sendMessage(targetItem, content, {
+        attachPdf: shouldAttachPdf,
+        ...attachmentOptions,
       });
     }
-    ztoolkit.log("manager.sendMessage completed");
-
-    if (messageInput) {
-      messageInput.value = "";
-      messageInput.style.height = "auto";
-    }
-
-    context.clearAttachments();
-    context.updateAttachmentsPreview();
   } catch (error) {
     ztoolkit.log("Error in sendMessage:", error);
   } finally {
-    if (sendButton) sendButton.disabled = false;
-    if (messageInput) messageInput.disabled = false;
+    // Re-enable send button and reset sending state
+    isSending = false;
+    if (sendButton) {
+      sendButton.disabled = false;
+      sendButton.style.opacity = "1";
+      sendButton.style.cursor = "pointer";
+    }
     messageInput?.focus();
   }
 }
@@ -446,25 +473,31 @@ export function updateUserBarDisplay(container: HTMLElement, authManager: { isLo
 }
 
 /**
- * Update PDF checkbox visibility based on item
+ * Update PDF checkbox visibility based on ACTIVE READER state
+ * Checkbox is only visible when user is viewing a PDF in reader
+ * This is independent of the current chat context/history
  */
 export async function updatePdfCheckboxVisibilityForItem(
   container: HTMLElement,
-  item: Zotero.Item | null,
+  _item: Zotero.Item | null, // Ignored - we always check active reader
   chatManager: { hasPdfAttachment(item: Zotero.Item): Promise<boolean> },
 ): Promise<void> {
   const pdfLabel = container.querySelector("#chat-pdf-label") as HTMLElement;
   if (!pdfLabel) return;
 
-  if (!item || item.id === 0) {
-    // Global chat mode - hide PDF checkbox
+  // Always check the active reader item, not the chat context
+  const activeReaderItem = getActiveReaderItem();
+
+  if (!activeReaderItem) {
+    // No reader active - hide checkbox
     pdfLabel.style.display = "none";
+    ztoolkit.log("PDF checkbox hidden: no active reader");
     return;
   }
 
-  const hasPdf = await chatManager.hasPdfAttachment(item);
+  const hasPdf = await chatManager.hasPdfAttachment(activeReaderItem);
   pdfLabel.style.display = hasPdf ? "flex" : "none";
-  ztoolkit.log("Updated PDF checkbox visibility:", hasPdf ? "visible" : "hidden");
+  ztoolkit.log("PDF checkbox visibility based on active reader:", hasPdf ? "visible" : "hidden");
 }
 
 /**

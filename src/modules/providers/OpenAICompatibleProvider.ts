@@ -67,21 +67,17 @@ export class OpenAICompatibleProvider extends BaseProvider {
 
       let fullContent = "";
 
-      await this.parseSSEStream(
+      await this.parseSSE(
         reader as ReadableStreamDefaultReader<Uint8Array>,
-        (data) => {
-          try {
-            const parsed = JSON.parse(data);
-            const content = parsed.choices?.[0]?.delta?.content || "";
-            if (content) {
-              fullContent += content;
-              onChunk(content);
-            }
-          } catch {
-            // Ignore parse errors for incomplete chunks
-          }
+        "openai",
+        {
+          onText: (text) => {
+            fullContent += text;
+            onChunk(text);
+          },
+          onDone: () => onComplete(fullContent),
+          onError,
         },
-        () => onComplete(fullContent),
       );
     } catch (error) {
       onError(error instanceof Error ? error : new Error(String(error)));

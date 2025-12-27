@@ -65,69 +65,18 @@ export class GeminiProvider extends BaseProvider {
 
       let fullContent = "";
 
-      await this.parseGeminiSSE(
+      await this.parseSSE(
         reader as ReadableStreamDefaultReader<Uint8Array>,
-        (text) => {
-          fullContent += text;
-          onChunk(text);
+        "gemini",
+        {
+          onText: (text) => {
+            fullContent += text;
+            onChunk(text);
+          },
+          onDone: () => onComplete(fullContent),
+          onError,
         },
-        () => onComplete(fullContent),
-        onError,
       );
-    } catch (error) {
-      onError(error instanceof Error ? error : new Error(String(error)));
-    }
-  }
-
-  /**
-   * Parse Gemini SSE stream
-   */
-  private async parseGeminiSSE(
-    reader: ReadableStreamDefaultReader<Uint8Array>,
-    onText: (text: string) => void,
-    onDone: () => void,
-    onError: (error: Error) => void,
-  ): Promise<void> {
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    try {
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        const result = await reader.read();
-        if (result.done) break;
-        const value = result.value as Uint8Array;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || !trimmed.startsWith("data: ")) continue;
-
-          const data = trimmed.slice(6);
-
-          try {
-            const parsed = JSON.parse(data);
-
-            // Gemini response format
-            const text = parsed.candidates?.[0]?.content?.parts?.[0]?.text || "";
-            if (text) {
-              onText(text);
-            }
-
-            // Check for errors
-            if (parsed.error) {
-              onError(new Error(parsed.error.message || "Unknown error"));
-              return;
-            }
-          } catch {
-            // Ignore parse errors
-          }
-        }
-      }
-      onDone();
     } catch (error) {
       onError(error instanceof Error ? error : new Error(String(error)));
     }

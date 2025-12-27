@@ -9,10 +9,12 @@ import type { ImageAttachment, FileAttachment } from "../../../types/chat";
 import { getAuthManager } from "../../auth";
 import { getProviderManager } from "../../providers";
 
-import type { ThemeColors, AttachmentState, ChatPanelContext } from "./types";
-import { getTheme, getCurrentTheme, updateCurrentTheme, applyThemeToContainer, setupThemeListener } from "./ChatPanelTheme";
+import type { ChatPanelContext } from "./types";
+import { chatColors } from "../../../utils/colors";
+import { getCurrentTheme, updateCurrentTheme, applyThemeToContainer, setupThemeListener } from "./ChatPanelTheme";
 import { createChatContainer } from "./ChatPanelBuilder";
-import { createMessageElement, renderMessages as renderMessageElements } from "./MessageRenderer";
+import { renderMessages as renderMessageElements } from "./MessageRenderer";
+import { renderMarkdownToElement } from "./MarkdownRenderer";
 import { setupEventHandlers, updateAttachmentsPreviewDisplay, updateUserBarDisplay, updatePdfCheckboxVisibilityForItem, focusInput, setActiveReaderItemFn } from "./ChatPanelEvents";
 
 // Initialize the events module with the getActiveReaderItem function reference
@@ -499,7 +501,7 @@ function createContext(): ChatPanelContext {
 
           const bubble = doc.createElement("div");
           bubble.className = "message-bubble error-bubble";
-          bubble.style.cssText = "background: #ffebee; border: 1px solid #f44336; color: #c62828; padding: 12px; border-radius: 8px; margin: 8px 0;";
+          bubble.style.cssText = `background: ${chatColors.errorBubbleBg}; border: 1px solid ${chatColors.errorBubbleBorder}; color: ${chatColors.errorBubbleText}; padding: 12px; border-radius: 8px; margin: 8px 0;`;
 
           const content = doc.createElement("div");
           content.className = "message-content";
@@ -557,7 +559,6 @@ async function initializeChatContent(): Promise<void> {
       if (moduleCurrentItem && itemId === moduleCurrentItem.id && chatContainer) {
         const streamingEl = chatContainer.querySelector("#chat-streaming-content");
         if (streamingEl) {
-          const { renderMarkdownToElement } = require("./MarkdownRenderer");
           renderMarkdownToElement(streamingEl as HTMLElement, content);
         }
       }
@@ -587,25 +588,22 @@ async function initializeChatContent(): Promise<void> {
     },
   });
 
-  // Get current item
+  // Get current item - prefer active reader, fall back to previous item
   const activeItem = getActiveReaderItem();
-  moduleCurrentItem = activeItem;
-
-  if (!activeItem) {
-    const pdfLabel = chatContainer.querySelector("#chat-pdf-label") as HTMLElement;
-    if (pdfLabel) {
-      pdfLabel.style.display = "none";
-    }
-    focusInput(chatContainer);
-    return;
+  if (activeItem) {
+    moduleCurrentItem = activeItem;
+  }
+  // If no active reader and no previous item, use global chat
+  if (!moduleCurrentItem) {
+    moduleCurrentItem = { id: 0 } as Zotero.Item;
   }
 
-  // Load session and render
-  const session = await manager.getSession(activeItem);
-  manager.setActiveItem(activeItem.id);
+  // Update PDF checkbox visibility for current item
+  await context.updatePdfCheckboxVisibility(moduleCurrentItem);
 
-  // Update PDF checkbox visibility
-  await context.updatePdfCheckboxVisibility(activeItem);
+  // Load session and render
+  const session = await manager.getSession(moduleCurrentItem);
+  manager.setActiveItem(moduleCurrentItem.id);
 
   // Render existing messages
   ztoolkit.log("Initial render, messages count:", session.messages.length);
@@ -620,42 +618,34 @@ async function initializeChatContent(): Promise<void> {
 async function refreshChatForCurrentItem(): Promise<void> {
   if (!chatContainer) return;
 
+  // Prefer active reader item, but keep current item if no reader is active
   const activeItem = getActiveReaderItem();
-  moduleCurrentItem = activeItem;
-
-  if (!activeItem) {
-    const pdfLabel = chatContainer.querySelector("#chat-pdf-label") as HTMLElement;
-    if (pdfLabel) {
-      pdfLabel.style.display = "none";
-    }
-    return;
+  if (activeItem) {
+    moduleCurrentItem = activeItem;
   }
 
+  const itemToUse = moduleCurrentItem;
   const manager = getChatManager();
-  const session = await manager.getSession(activeItem);
-  manager.setActiveItem(activeItem.id);
 
   // Get DOM elements
   const chatHistory = chatContainer.querySelector("#chat-history") as HTMLElement;
   const emptyState = chatContainer.querySelector("#chat-empty-state") as HTMLElement;
-  const attachPdfCheckbox = chatContainer.querySelector("#chat-attach-pdf") as HTMLInputElement;
-  const pdfStatus = chatContainer.querySelector("#chat-pdf-status") as HTMLElement;
   const messageInput = chatContainer.querySelector("#chat-message-input") as HTMLTextAreaElement;
 
-  // Check PDF status and show/hide checkbox
-  const hasPdf = await manager.hasPdfAttachment(activeItem);
-  const pdfLabel = chatContainer.querySelector("#chat-pdf-label") as HTMLElement;
-  if (pdfLabel) {
-    pdfLabel.style.display = hasPdf ? "flex" : "none";
-  }
-  if (pdfStatus) {
-    pdfStatus.textContent = "";
-  }
+  // Update PDF checkbox visibility (based on active reader, not chat context)
+  await updatePdfCheckboxVisibilityForItem(chatContainer, null, manager);
+
+  // Reset checkbox state
+  const attachPdfCheckbox = chatContainer.querySelector("#chat-attach-pdf") as HTMLInputElement;
   if (attachPdfCheckbox) {
     attachPdfCheckbox.checked = false;
   }
 
-  // Render messages
+  // Load and render session
+  const sessionItem = (!itemToUse || itemToUse.id === 0) ? { id: 0 } as Zotero.Item : itemToUse;
+  const session = await manager.getSession(sessionItem);
+  manager.setActiveItem(sessionItem.id);
+
   if (chatHistory) {
     renderMessageElements(chatHistory, emptyState, session.messages, getCurrentTheme());
   }

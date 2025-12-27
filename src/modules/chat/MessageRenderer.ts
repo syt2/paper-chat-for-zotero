@@ -212,7 +212,7 @@ export class MessageRenderer {
 
     // 转义剩余的 < 和 > (非Markdown引用)
     text = text.replace(/<(?![a-zA-Z/])/g, "&lt;");
-    text = text.replace(/(?<![a-zA-Z\"])>/g, "&gt;");
+    text = text.replace(/(?<![a-zA-Z"])>/g, "&gt;");
 
     // 恢复代码块
     text = text.replace(/__CODE_BLOCK_(\d+)__/g, (_, index) => codeBlocks[parseInt(index)]);

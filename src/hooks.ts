@@ -1,5 +1,5 @@
 import { getString, initLocale } from "./utils/locale";
-import { registerPrefsScripts } from "./modules/preferenceScript";
+import { registerPrefsScripts } from "./modules/preferences";
 import { createZToolkit } from "./utils/ztoolkit";
 import {
   registerToolbarButton,

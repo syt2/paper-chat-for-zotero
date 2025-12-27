@@ -3,6 +3,7 @@
  */
 
 import type { ChatMessage } from "../../chat";
+import { chatColors } from "../../../utils/colors";
 import type { ThemeColors } from "./types";
 import { HTML_NS } from "./types";
 import { renderMarkdownToElement } from "./MarkdownRenderer";
@@ -27,15 +28,15 @@ export function createMessageElement(
   let bubbleStyle: Record<string, string>;
   if (msg.role === "user") {
     bubbleStyle = {
-      background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-      color: "#fff",
+      background: chatColors.userBubble,
+      color: chatColors.userBubbleText,
       borderBottomRightRadius: "4px",
     };
   } else if (msg.role === "error") {
     bubbleStyle = {
-      background: "#ffebee",
-      color: "#c62828",
-      border: "1px solid #f44336",
+      background: chatColors.errorBubbleBg,
+      color: chatColors.errorBubbleText,
+      border: `1px solid ${chatColors.errorBubbleBorder}`,
       borderBottomLeftRadius: "4px",
     };
   } else {
