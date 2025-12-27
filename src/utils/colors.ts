@@ -97,6 +97,7 @@ export const authColors = {
   buttonPrimary: colors.linkHover,
   buttonPrimaryText: "#ffffff",
   buttonSecondary: colors.bgLight,
+  buttonSecondaryText: colors.textPrimary,
   buttonSecondaryBorder: colors.inputBorder,
 
   // Links

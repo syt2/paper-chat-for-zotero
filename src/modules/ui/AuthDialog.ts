@@ -336,6 +336,7 @@ export async function showAuthDialog(
                   borderRadius: "4px",
                   border: `1px solid ${authColors.buttonSecondaryBorder}`,
                   background: authColors.buttonSecondary,
+                  color: authColors.buttonSecondaryText,
                 },
               },
               {

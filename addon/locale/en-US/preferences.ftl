@@ -9,6 +9,10 @@ pref-redeem-label = Redemption Code
 pref-redeem-placeholder =
     .placeholder = Enter redemption code
 pref-redeem-btn = Redeem
+pref-get-redeem-code = Get Code
+pref-get-redeem-code-title = Get Redemption Code
+pref-get-redeem-code-link = Purchase Link
+pref-get-redeem-code-scan = Scan with Taobao app to purchase
 
 # API Settings
 pref-api-settings = API Settings

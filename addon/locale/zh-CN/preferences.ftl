@@ -9,6 +9,10 @@ pref-redeem-label = 兑换码
 pref-redeem-placeholder =
     .placeholder = 输入兑换码
 pref-redeem-btn = 兑换
+pref-get-redeem-code = 获取兑换码
+pref-get-redeem-code-title = 获取兑换码
+pref-get-redeem-code-link = 购买链接
+pref-get-redeem-code-scan = 手机淘宝扫码前往获取
 
 # API Settings
 pref-api-settings = API 设置

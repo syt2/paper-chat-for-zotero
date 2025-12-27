@@ -2,6 +2,7 @@
  * UserAuthUI - User authentication status display and events
  */
 
+import { config } from "../../../package.json";
 import { getString } from "../../utils/locale";
 import { prefColors } from "../../utils/colors";
 import { getAuthManager } from "../auth";
@@ -21,6 +22,7 @@ export function updateUserDisplay(doc: Document, authManager: AuthManagerType): 
   const loginBtn = doc.getElementById("pref-login-btn") as HTMLElement | null;
   const affCodeBar = doc.getElementById("pref-aff-code-bar") as HTMLElement | null;
   const affCodeEl = doc.getElementById("pref-aff-code") as HTMLElement | null;
+  const getRedeemCodeBtn = doc.getElementById("pref-get-redeem-code-btn") as HTMLElement | null;
 
   if (authManager.isLoggedIn()) {
     const user = authManager.getUser();
@@ -42,6 +44,10 @@ export function updateUserDisplay(doc: Document, authManager: AuthManagerType): 
       affCodeBar.style.display = "flex";
       affCodeEl.setAttribute("value", user.aff_code);
     }
+    // Show get redeem code button
+    if (getRedeemCodeBtn) {
+      getRedeemCodeBtn.style.display = "inline-block";
+    }
   } else {
     if (userStatusEl) {
       userStatusEl.setAttribute("value", getString("user-panel-not-logged-in"));
@@ -59,6 +65,10 @@ export function updateUserDisplay(doc: Document, authManager: AuthManagerType): 
     // Hide invitation code
     if (affCodeBar) {
       affCodeBar.style.display = "none";
+    }
+    // Hide get redeem code button
+    if (getRedeemCodeBtn) {
+      getRedeemCodeBtn.style.display = "none";
     }
   }
 }
@@ -132,12 +142,18 @@ export function bindUserAuthEvents(
     }
   });
 
+  // Get redemption code button - show QR code dialog
+  const getRedeemCodeBtn = doc.getElementById("pref-get-redeem-code-btn");
+  getRedeemCodeBtn?.addEventListener("click", () => {
+    showRedeemCodeDialog();
+  });
+
   // Official website link
   const websiteLink = doc.getElementById("pref-pdfaitalk-website");
   websiteLink?.addEventListener("click", (e: Event) => {
     e.preventDefault();
     // Open the console page
-    Zotero.launchURL(`${BUILTIN_PROVIDERS.pdfaitalk.website}/console`);
+    Zotero.launchURL(`${BUILTIN_PROVIDERS.pdfaitalk.website}`);
   });
 
   // Auth callbacks - refresh provider list on login status change
@@ -149,4 +165,139 @@ export function bindUserAuthEvents(
       onProviderListRefresh();
     },
   });
+}
+
+// Singleton: track current redeem code dialog
+let redeemDialogWindow: Window | null = null;
+
+/**
+ * Show dialog with QR code for getting redemption code
+ */
+function showRedeemCodeDialog(): void {
+  // If dialog already open, focus it
+  if (redeemDialogWindow && !redeemDialogWindow.closed) {
+    redeemDialogWindow.focus();
+    return;
+  }
+
+  const purchaseUrl = "https://m.tb.cn/h.75M7wID";
+  const qrCodeUrl = `chrome://${config.addonRef}/content/icons/tb_qrcode.png`;
+
+  const dialogHelper = new ztoolkit.Dialog(1, 1)
+    .addCell(0, 0, {
+      tag: "div",
+      styles: {
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        padding: "20px",
+        gap: "16px",
+        minWidth: "280px",
+      },
+      children: [
+        // QR Code image
+        {
+          tag: "img",
+          attributes: {
+            src: qrCodeUrl,
+          },
+          styles: {
+            width: "200px",
+            height: "200px",
+            borderRadius: "8px",
+          },
+        },
+        // Scan instruction text
+        {
+          tag: "div",
+          properties: {
+            textContent: getString("pref-get-redeem-code-scan"),
+          },
+          styles: {
+            fontSize: "14px",
+            color: "#666",
+            textAlign: "center",
+          },
+        },
+        // Purchase link
+        {
+          tag: "div",
+          styles: {
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+          },
+          children: [
+            {
+              tag: "span",
+              properties: {
+                textContent: `${getString("pref-get-redeem-code-link")}: `,
+              },
+              styles: {
+                fontSize: "13px",
+              },
+            },
+            {
+              tag: "a",
+              id: "redeem-purchase-link",
+              properties: {
+                textContent: purchaseUrl,
+              },
+              styles: {
+                color: "#0078d4",
+                cursor: "pointer",
+                fontSize: "13px",
+                textDecoration: "underline",
+              },
+            },
+          ],
+        },
+      ],
+    })
+    .addButton(getString("pref-copy-btn"), "copy")
+    .addButton(getString("auth-cancel"), "cancel");
+
+  dialogHelper.open(getString("pref-get-redeem-code-title"), {
+    resizable: false,
+    centerscreen: true,
+    fitContent: true,
+  });
+
+  // Bind events after dialog opens
+  setTimeout(() => {
+    const dialogWin = dialogHelper.window;
+    if (!dialogWin) {
+      redeemDialogWindow = null;
+      return;
+    }
+
+    // Save window reference
+    redeemDialogWindow = dialogWin;
+
+    // Clear reference when dialog closes
+    dialogWin.addEventListener("unload", () => {
+      redeemDialogWindow = null;
+    });
+
+    const doc = dialogWin.document;
+
+    // Click on link opens URL
+    const linkEl = doc.getElementById("redeem-purchase-link");
+    linkEl?.addEventListener("click", (e: Event) => {
+      e.preventDefault();
+      Zotero.launchURL(purchaseUrl);
+    });
+
+    // Copy button copies URL
+    const buttons = doc.querySelectorAll("button");
+    buttons.forEach((btn) => {
+      if (btn.textContent === getString("pref-copy-btn")) {
+        btn.addEventListener("click", (e: Event) => {
+          e.preventDefault();
+          new ztoolkit.Clipboard().addText(purchaseUrl, "text/plain").copy();
+          dialogWin.close();
+        });
+      }
+    });
+  }, 100);
 }
