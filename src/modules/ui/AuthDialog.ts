@@ -17,7 +17,9 @@ let currentDialogPromise: Promise<boolean> | null = null;
 /**
  * 显示登录/注册对话框（单例模式）
  */
-export async function showAuthDialog(initialMode: DialogMode = "login"): Promise<boolean> {
+export async function showAuthDialog(
+  initialMode: DialogMode = "login",
+): Promise<boolean> {
   // 如果已有窗口打开，聚焦到现有窗口并返回现有的 Promise
   if (currentDialogWindow && !currentDialogWindow.closed) {
     currentDialogWindow.focus();
@@ -135,7 +137,11 @@ export async function showAuthDialog(initialMode: DialogMode = "login"): Promise
                   "data-bind": "username",
                   placeholder: getString("auth-username-placeholder"),
                 },
-                styles: { padding: "8px", borderRadius: "4px", border: `1px solid ${authColors.inputBorder}` },
+                styles: {
+                  padding: "8px",
+                  borderRadius: "4px",
+                  border: `1px solid ${authColors.inputBorder}`,
+                },
               },
             ],
           },
@@ -157,7 +163,11 @@ export async function showAuthDialog(initialMode: DialogMode = "login"): Promise
                   "data-bind": "email",
                   placeholder: getString("auth-email-placeholder"),
                 },
-                styles: { padding: "8px", borderRadius: "4px", border: `1px solid ${authColors.inputBorder}` },
+                styles: {
+                  padding: "8px",
+                  borderRadius: "4px",
+                  border: `1px solid ${authColors.inputBorder}`,
+                },
               },
             ],
           },
@@ -169,7 +179,9 @@ export async function showAuthDialog(initialMode: DialogMode = "login"): Promise
             children: [
               {
                 tag: "label",
-                properties: { textContent: getString("auth-verification-code") },
+                properties: {
+                  textContent: getString("auth-verification-code"),
+                },
               },
               {
                 tag: "div",
@@ -183,7 +195,12 @@ export async function showAuthDialog(initialMode: DialogMode = "login"): Promise
                       "data-bind": "verificationCode",
                       placeholder: getString("auth-verification-placeholder"),
                     },
-                    styles: { flex: "1", padding: "8px", borderRadius: "4px", border: `1px solid ${authColors.inputBorder}` },
+                    styles: {
+                      flex: "1",
+                      padding: "8px",
+                      borderRadius: "4px",
+                      border: `1px solid ${authColors.inputBorder}`,
+                    },
                   },
                   {
                     tag: "button",
@@ -220,7 +237,11 @@ export async function showAuthDialog(initialMode: DialogMode = "login"): Promise
                   "data-bind": "password",
                   placeholder: getString("auth-password-placeholder"),
                 },
-                styles: { padding: "8px", borderRadius: "4px", border: `1px solid ${authColors.inputBorder}` },
+                styles: {
+                  padding: "8px",
+                  borderRadius: "4px",
+                  border: `1px solid ${authColors.inputBorder}`,
+                },
               },
             ],
           },
@@ -261,7 +282,11 @@ export async function showAuthDialog(initialMode: DialogMode = "login"): Promise
                   "data-bind": "confirmPassword",
                   placeholder: getString("auth-confirm-password-placeholder"),
                 },
-                styles: { padding: "8px", borderRadius: "4px", border: `1px solid ${authColors.inputBorder}` },
+                styles: {
+                  padding: "8px",
+                  borderRadius: "4px",
+                  border: `1px solid ${authColors.inputBorder}`,
+                },
               },
             ],
           },
@@ -283,7 +308,11 @@ export async function showAuthDialog(initialMode: DialogMode = "login"): Promise
                   "data-bind": "affCode",
                   placeholder: getString("auth-aff-code-placeholder"),
                 },
-                styles: { padding: "8px", borderRadius: "4px", border: `1px solid ${authColors.inputBorder}` },
+                styles: {
+                  padding: "8px",
+                  borderRadius: "4px",
+                  border: `1px solid ${authColors.inputBorder}`,
+                },
               },
             ],
           },
@@ -355,26 +384,53 @@ export async function showAuthDialog(initialMode: DialogMode = "login"): Promise
 
       // 获取元素
       const tabLogin = doc.getElementById("tab-login") as HTMLButtonElement;
-      const tabRegister = doc.getElementById("tab-register") as HTMLButtonElement;
+      const tabRegister = doc.getElementById(
+        "tab-register",
+      ) as HTMLButtonElement;
       const usernameField = doc.getElementById("username-field") as HTMLElement;
       const emailField = doc.getElementById("email-field") as HTMLElement;
-      const verificationField = doc.getElementById("verification-field") as HTMLElement;
-      const confirmPasswordField = doc.getElementById("confirm-password-field") as HTMLElement;
+      const verificationField = doc.getElementById(
+        "verification-field",
+      ) as HTMLElement;
+      const confirmPasswordField = doc.getElementById(
+        "confirm-password-field",
+      ) as HTMLElement;
       const affCodeField = doc.getElementById("aff-code-field") as HTMLElement;
-      const forgotPasswordField = doc.getElementById("forgot-password-field") as HTMLElement;
-      const forgotPasswordLink = doc.getElementById("forgot-password-link") as HTMLElement;
-      const sendCodeBtn = doc.getElementById("send-code-btn") as HTMLButtonElement;
-      const submitBtn = doc.getElementById("auth-submit-btn") as HTMLButtonElement;
-      const cancelBtn = doc.getElementById("auth-cancel-btn") as HTMLButtonElement;
+      const forgotPasswordField = doc.getElementById(
+        "forgot-password-field",
+      ) as HTMLElement;
+      const forgotPasswordLink = doc.getElementById(
+        "forgot-password-link",
+      ) as HTMLElement;
+      const sendCodeBtn = doc.getElementById(
+        "send-code-btn",
+      ) as HTMLButtonElement;
+      const submitBtn = doc.getElementById(
+        "auth-submit-btn",
+      ) as HTMLButtonElement;
+      const cancelBtn = doc.getElementById(
+        "auth-cancel-btn",
+      ) as HTMLButtonElement;
       const messageDiv = doc.getElementById("auth-message") as HTMLElement;
-      const passwordField = doc.querySelector("#auth-password")?.parentElement as HTMLElement;
+      const passwordField = doc.querySelector("#auth-password")
+        ?.parentElement as HTMLElement;
 
-      const usernameInput = doc.getElementById("auth-username") as HTMLInputElement;
+      const usernameInput = doc.getElementById(
+        "auth-username",
+      ) as HTMLInputElement;
       const emailInput = doc.getElementById("auth-email") as HTMLInputElement;
-      const verificationInput = doc.getElementById("auth-verification-code") as HTMLInputElement;
-      const passwordInput = doc.getElementById("auth-password") as HTMLInputElement;
-      const confirmPasswordInput = doc.getElementById("auth-confirm-password") as HTMLInputElement;
-      const affCodeInput = doc.getElementById("auth-aff-code") as HTMLInputElement;
+      const verificationInput = doc.getElementById(
+        "auth-verification-code",
+      ) as HTMLInputElement;
+      const passwordInput = doc.getElementById(
+        "auth-password",
+      ) as HTMLInputElement;
+      const confirmPasswordInput = doc.getElementById(
+        "auth-confirm-password",
+      ) as HTMLInputElement;
+      const affCodeInput = doc.getElementById(
+        "auth-aff-code",
+      ) as HTMLInputElement;
 
       let currentMode: DialogMode = initialMode;
       let countdownTimer: ReturnType<typeof setInterval> | null = null;
@@ -385,10 +441,14 @@ export async function showAuthDialog(initialMode: DialogMode = "login"): Promise
 
         // 标签样式
         tabLogin.style.fontWeight = isRegister ? "normal" : "bold";
-        tabLogin.style.borderBottom = isRegister ? "2px solid transparent" : `2px solid ${authColors.tabActive}`;
+        tabLogin.style.borderBottom = isRegister
+          ? "2px solid transparent"
+          : `2px solid ${authColors.tabActive}`;
         tabLogin.style.opacity = isRegister ? "0.6" : "1";
         tabRegister.style.fontWeight = isRegister ? "bold" : "normal";
-        tabRegister.style.borderBottom = isRegister ? `2px solid ${authColors.tabActive}` : "2px solid transparent";
+        tabRegister.style.borderBottom = isRegister
+          ? `2px solid ${authColors.tabActive}`
+          : "2px solid transparent";
         tabRegister.style.opacity = isRegister ? "1" : "0.6";
 
         // 字段显示
@@ -415,8 +475,12 @@ export async function showAuthDialog(initialMode: DialogMode = "login"): Promise
       function showMessage(message: string, isError: boolean) {
         messageDiv.textContent = message;
         messageDiv.style.display = "block";
-        messageDiv.style.backgroundColor = isError ? authColors.errorBg : authColors.successBg;
-        messageDiv.style.color = isError ? authColors.errorText : authColors.successText;
+        messageDiv.style.backgroundColor = isError
+          ? authColors.errorBg
+          : authColors.successBg;
+        messageDiv.style.color = isError
+          ? authColors.errorText
+          : authColors.successText;
         messageDiv.style.border = `1px solid ${isError ? authColors.errorBorder : authColors.successBorder}`;
       }
 
@@ -562,7 +626,13 @@ export async function showAuthDialog(initialMode: DialogMode = "login"): Promise
             result = await authManager.login(username, password);
           } else {
             // 注册模式：使用用户名和邮箱
-            result = await authManager.register(username, password, email, verificationCode, affCode);
+            result = await authManager.register(
+              username,
+              password,
+              email,
+              verificationCode,
+              affCode,
+            );
           }
 
           if (result.success) {
@@ -579,7 +649,12 @@ export async function showAuthDialog(initialMode: DialogMode = "login"): Promise
             buttons.forEach((btn: HTMLButtonElement) => (btn.disabled = false));
           }
         } catch (error) {
-          showMessage(error instanceof Error ? error.message : getString("auth-error-unknown"), true);
+          showMessage(
+            error instanceof Error
+              ? error.message
+              : getString("auth-error-unknown"),
+            true,
+          );
           buttons.forEach((btn: HTMLButtonElement) => (btn.disabled = false));
         }
       };
@@ -595,7 +670,12 @@ export async function showAuthDialog(initialMode: DialogMode = "login"): Promise
       });
 
       // 回车提交
-      [usernameInput, passwordInput, confirmPasswordInput, verificationInput].forEach((input) => {
+      [
+        usernameInput,
+        passwordInput,
+        confirmPasswordInput,
+        verificationInput,
+      ].forEach((input) => {
         input?.addEventListener("keypress", (e: KeyboardEvent) => {
           if (e.key === "Enter") {
             handleSubmit();

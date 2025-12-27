@@ -24,7 +24,8 @@
       "Bash(npx tsc:*)",
       "Bash(npx eslint:*)",
       "Bash(npm ls:*)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Bash(npx prettier:*)"
     ]
   }
 }

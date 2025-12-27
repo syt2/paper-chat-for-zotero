@@ -96,9 +96,12 @@ export class AuthService {
     try {
       // 整个 cookie 是 base64 编码的，需要先解码
       // 使用 atob 解码 base64 (需要处理 URL-safe base64)
-      const normalizedBase64 = sessionValue.replace(/-/g, "+").replace(/_/g, "/");
+      const normalizedBase64 = sessionValue
+        .replace(/-/g, "+")
+        .replace(/_/g, "/");
       // 添加填充
-      const padded = normalizedBase64 + "=".repeat((4 - normalizedBase64.length % 4) % 4);
+      const padded =
+        normalizedBase64 + "=".repeat((4 - (normalizedBase64.length % 4)) % 4);
 
       let fullDecoded: string;
       try {
@@ -115,7 +118,9 @@ export class AuthService {
       ztoolkit.log("[AuthService] Session parts count:", parts.length);
 
       if (parts.length < 2) {
-        ztoolkit.log("[AuthService] Invalid session format after decode - not enough parts");
+        ztoolkit.log(
+          "[AuthService] Invalid session format after decode - not enough parts",
+        );
         return null;
       }
 
@@ -125,7 +130,8 @@ export class AuthService {
       // 尝试再次 base64 解码 GOB 数据
       try {
         const normalizedGob = gobData.replace(/-/g, "+").replace(/_/g, "/");
-        const paddedGob = normalizedGob + "=".repeat((4 - normalizedGob.length % 4) % 4);
+        const paddedGob =
+          normalizedGob + "=".repeat((4 - (normalizedGob.length % 4)) % 4);
         gobData = atob(paddedGob);
         ztoolkit.log("[AuthService] GOB data decoded, length:", gobData.length);
       } catch {
@@ -163,14 +169,24 @@ export class AuthService {
       // 方法2: 查找 pending_user_id 字段
       const pendingIndex = gobData.indexOf("pending_user_id");
       if (pendingIndex !== -1) {
-        ztoolkit.log("[AuthService] Found 'pending_user_id' field at index:", pendingIndex);
+        ztoolkit.log(
+          "[AuthService] Found 'pending_user_id' field at index:",
+          pendingIndex,
+        );
         const afterPending = pendingIndex + 15;
-        for (let i = afterPending; i < Math.min(afterPending + 15, gobData.length); i++) {
+        for (
+          let i = afterPending;
+          i < Math.min(afterPending + 15, gobData.length);
+          i++
+        ) {
           const byte = gobData.charCodeAt(i);
           if (byte >= 2 && byte <= 127) {
             const nextByte = gobData.charCodeAt(i + 1);
             if (nextByte >= 2 && nextByte <= 20) {
-              ztoolkit.log("[AuthService] Parsed userId from pending_user_id:", byte);
+              ztoolkit.log(
+                "[AuthService] Parsed userId from pending_user_id:",
+                byte,
+              );
               return byte;
             }
           }
@@ -181,11 +197,18 @@ export class AuthService {
       // 格式通常是: ...string...\x02id\x03int\x04\x02\x00VALUE\x08username...
       for (let offset = 0; offset < gobData.length - 10; offset++) {
         // 查找 "id" 字符串 (不带长度前缀)
-        if (gobData.charAt(offset) === "i" && gobData.charAt(offset + 1) === "d") {
+        if (
+          gobData.charAt(offset) === "i" &&
+          gobData.charAt(offset + 1) === "d"
+        ) {
           // 检查前一个字节是否是长度 2
           if (offset > 0 && gobData.charCodeAt(offset - 1) === 2) {
             // 找到了 "\x02id"
-            for (let i = offset + 2; i < Math.min(offset + 15, gobData.length); i++) {
+            for (
+              let i = offset + 2;
+              i < Math.min(offset + 15, gobData.length);
+              i++
+            ) {
               const byte = gobData.charCodeAt(i);
               if (byte >= 1 && byte <= 127) {
                 const nextByte = gobData.charCodeAt(i + 1);
@@ -220,7 +243,10 @@ export class AuthService {
       const cookies = (this._cookieSandbox as any)._cookies;
       if (!cookies) return null;
 
-      ztoolkit.log("[AuthService] CookieSandbox _cookies:", JSON.stringify(cookies));
+      ztoolkit.log(
+        "[AuthService] CookieSandbox _cookies:",
+        JSON.stringify(cookies),
+      );
 
       // 查找 session cookie
       // _cookies 结构: { "host": { "path": { "cookieName": { value: "...", secure: bool, hostOnly: bool } } } }
@@ -230,7 +256,10 @@ export class AuthService {
         for (const path of Object.keys(hostCookies)) {
           const pathCookies = hostCookies[path];
           if (pathCookies && pathCookies.session) {
-            ztoolkit.log("[AuthService] Found session cookie:", pathCookies.session);
+            ztoolkit.log(
+              "[AuthService] Found session cookie:",
+              pathCookies.session,
+            );
             // cookie 可能是对象 { value, secure, hostOnly } 或字符串
             const sessionCookie = pathCookies.session;
             if (typeof sessionCookie === "object" && sessionCookie.value) {
@@ -274,7 +303,9 @@ export class AuthService {
         if (!sandbox._cookies[host]) sandbox._cookies[host] = {};
         if (!sandbox._cookies[host]["/"]) sandbox._cookies[host]["/"] = {};
         sandbox._cookies[host]["/"].session = sessionValue;
-        ztoolkit.log("[AuthService] Session cookie restored directly to _cookies");
+        ztoolkit.log(
+          "[AuthService] Session cookie restored directly to _cookies",
+        );
       }
     } catch (e) {
       ztoolkit.log("[AuthService] Failed to restore session cookie:", e);
@@ -285,14 +316,25 @@ export class AuthService {
    * 通用请求日志
    */
   private logRequest(method: string, url: string, body?: unknown): void {
-    ztoolkit.log(`[AuthService] ${method} ${url}`, body ? JSON.stringify(body) : "");
+    ztoolkit.log(
+      `[AuthService] ${method} ${url}`,
+      body ? JSON.stringify(body) : "",
+    );
   }
 
   /**
    * 通用响应日志
    */
-  private logResponse(method: string, url: string, status: number, data: unknown): void {
-    ztoolkit.log(`[AuthService] ${method} ${url} -> ${status}`, JSON.stringify(data));
+  private logResponse(
+    method: string,
+    url: string,
+    status: number,
+    data: unknown,
+  ): void {
+    ztoolkit.log(
+      `[AuthService] ${method} ${url} -> ${status}`,
+      JSON.stringify(data),
+    );
   }
 
   /**
@@ -324,21 +366,30 @@ export class AuthService {
   private extractSessionFromResponse(xhr: XMLHttpRequest): void {
     try {
       // 尝试多种方式获取 Set-Cookie
-      const setCookie = xhr.getResponseHeader("Set-Cookie") ||
-                        xhr.getResponseHeader("set-cookie");
+      const setCookie =
+        xhr.getResponseHeader("Set-Cookie") ||
+        xhr.getResponseHeader("set-cookie");
 
       ztoolkit.log("[AuthService] Trying to extract session from response");
-      ztoolkit.log("[AuthService] All response headers:", xhr.getAllResponseHeaders());
+      ztoolkit.log(
+        "[AuthService] All response headers:",
+        xhr.getAllResponseHeaders(),
+      );
 
       if (setCookie) {
         ztoolkit.log("[AuthService] Set-Cookie header found:", setCookie);
         const sessionMatch = setCookie.match(/session=([^;]+)/);
         if (sessionMatch) {
           this.sessionToken = sessionMatch[1];
-          ztoolkit.log("[AuthService] Session token extracted:", this.sessionToken);
+          ztoolkit.log(
+            "[AuthService] Session token extracted:",
+            this.sessionToken,
+          );
         }
       } else {
-        ztoolkit.log("[AuthService] Set-Cookie header not accessible (browser security restriction)");
+        ztoolkit.log(
+          "[AuthService] Set-Cookie header not accessible (browser security restriction)",
+        );
         // 由于浏览器安全限制，Set-Cookie 头通常无法通过 JavaScript 读取
         // 但 CookieSandbox 应该会自动处理 cookie 的存储和发送
         // 问题是 Zotero 重启后 CookieSandbox 会丢失
@@ -358,7 +409,7 @@ export class AuthService {
       body?: unknown;
       headers?: Record<string, string>;
       extractSession?: boolean;
-    } = {}
+    } = {},
   ): Promise<{ status: number; data: T | null; error?: string }> {
     const fullUrl = url.startsWith("http") ? url : `${this.baseUrl}${url}`;
     this.logRequest(method, fullUrl, options.body);
@@ -387,7 +438,10 @@ export class AuthService {
       // Zotero重启后CookieSandbox丢失，需要手动恢复session cookie
       if (this.sessionToken) {
         headers["Cookie"] = `session=${this.sessionToken}`;
-        ztoolkit.log("[AuthService] Adding session cookie to request:", this.sessionToken.substring(0, 20) + "...");
+        ztoolkit.log(
+          "[AuthService] Adding session cookie to request:",
+          this.sessionToken.substring(0, 20) + "...",
+        );
       } else {
         ztoolkit.log("[AuthService] No session token available for request");
       }
@@ -451,7 +505,10 @@ export class AuthService {
     if (result.status >= 400 || !result.data?.success) {
       return {
         success: false,
-        message: this.parseErrorMessage(result.data, `请求失败: ${result.status}`),
+        message: this.parseErrorMessage(
+          result.data,
+          `请求失败: ${result.status}`,
+        ),
       };
     }
 
@@ -473,7 +530,10 @@ export class AuthService {
     if (result.status >= 400 || !result.data?.success) {
       return {
         success: false,
-        message: this.parseErrorMessage(result.data, `请求失败: ${result.status}`),
+        message: this.parseErrorMessage(
+          result.data,
+          `请求失败: ${result.status}`,
+        ),
       };
     }
 
@@ -498,7 +558,10 @@ export class AuthService {
     if (result.status >= 400 || !result.data?.success) {
       return {
         success: false,
-        message: this.parseErrorMessage(result.data, `注册失败: ${result.status}`),
+        message: this.parseErrorMessage(
+          result.data,
+          `注册失败: ${result.status}`,
+        ),
       };
     }
 
@@ -523,17 +586,23 @@ export class AuthService {
     if (result.status >= 400 || !result.data?.success) {
       return {
         success: false,
-        message: this.parseErrorMessage(result.data, `登录失败: ${result.status}`),
+        message: this.parseErrorMessage(
+          result.data,
+          `登录失败: ${result.status}`,
+        ),
       };
     }
 
     // 检查是否需要 2FA - 不支持，返回错误
-    const responseData = result.data as ApiResponse & { data?: { id?: number; require_2fa?: boolean } };
+    const responseData = result.data as ApiResponse & {
+      data?: { id?: number; require_2fa?: boolean };
+    };
     if (responseData.data?.require_2fa) {
       ztoolkit.log("[AuthService] 2FA required but not supported");
       return {
         success: false,
-        message: "此账号启用了两步验证，插件暂不支持两步验证登录，请在网页端关闭两步验证后重试",
+        message:
+          "此账号启用了两步验证，插件暂不支持两步验证登录，请在网页端关闭两步验证后重试",
       };
     }
 
@@ -564,7 +633,10 @@ export class AuthService {
     if (result.status >= 400 || !result.data?.success) {
       return {
         success: false,
-        message: this.parseErrorMessage(result.data, `登出失败: ${result.status}`),
+        message: this.parseErrorMessage(
+          result.data,
+          `登出失败: ${result.status}`,
+        ),
       };
     }
 
@@ -586,7 +658,10 @@ export class AuthService {
     if (result.status >= 400 || !result.data?.success) {
       return {
         success: false,
-        message: this.parseErrorMessage(result.data, `获取用户信息失败: ${result.status}`),
+        message: this.parseErrorMessage(
+          result.data,
+          `获取用户信息失败: ${result.status}`,
+        ),
       };
     }
 
@@ -596,10 +671,15 @@ export class AuthService {
   /**
    * 获取用户的所有Token
    */
-  async getTokens(page: number = 0, pageSize: number = 10): Promise<ApiResponse<PaginatedResponse<TokenInfo>>> {
+  async getTokens(
+    page: number = 0,
+    pageSize: number = 10,
+  ): Promise<ApiResponse<PaginatedResponse<TokenInfo>>> {
     const url = `${this.baseUrl}/api/token/?p=${page}&page_size=${pageSize}`;
 
-    const result = await this.request<ApiResponse<PaginatedResponse<TokenInfo>>>("GET", url);
+    const result = await this.request<
+      ApiResponse<PaginatedResponse<TokenInfo>>
+    >("GET", url);
 
     if (result.error) {
       return { success: false, message: result.error };
@@ -608,7 +688,10 @@ export class AuthService {
     if (result.status >= 400 || !result.data?.success) {
       return {
         success: false,
-        message: this.parseErrorMessage(result.data, `获取Token列表失败: ${result.status}`),
+        message: this.parseErrorMessage(
+          result.data,
+          `获取Token列表失败: ${result.status}`,
+        ),
       };
     }
 
@@ -632,7 +715,10 @@ export class AuthService {
     if (result.status >= 400 || !result.data?.success) {
       return {
         success: false,
-        message: this.parseErrorMessage(result.data, `创建Token失败: ${result.status}`),
+        message: this.parseErrorMessage(
+          result.data,
+          `创建Token失败: ${result.status}`,
+        ),
       };
     }
 
@@ -654,7 +740,10 @@ export class AuthService {
     if (result.status >= 400 || !result.data?.success) {
       return {
         success: false,
-        message: this.parseErrorMessage(result.data, `删除Token失败: ${result.status}`),
+        message: this.parseErrorMessage(
+          result.data,
+          `删除Token失败: ${result.status}`,
+        ),
       };
     }
 
@@ -678,7 +767,10 @@ export class AuthService {
     if (result.status >= 400 || !result.data?.success) {
       return {
         success: false,
-        message: this.parseErrorMessage(result.data, `兑换失败: ${result.status}`),
+        message: this.parseErrorMessage(
+          result.data,
+          `兑换失败: ${result.status}`,
+        ),
       };
     }
 
