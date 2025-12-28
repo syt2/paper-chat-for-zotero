@@ -19,7 +19,6 @@ class Addon {
     dialog?: DialogHelper;
   };
   public hooks: typeof hooks;
-  public api: object;
 
   constructor() {
     this.data = {
@@ -30,7 +29,6 @@ class Addon {
       ztoolkit: createZToolkit(),
     };
     this.hooks = hooks;
-    this.api = {};
   }
 }
 

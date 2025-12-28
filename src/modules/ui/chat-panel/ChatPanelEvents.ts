@@ -410,19 +410,19 @@ async function sendMessage(
       context.setCurrentItem(activeReaderItem!);
     }
 
-    // Send message
+    // Set current item for global chat if needed
     if (!targetItem || targetItem.id === 0) {
-      // Global chat mode
       if (!context.getCurrentItem()) {
         context.setCurrentItem({ id: 0 } as Zotero.Item);
       }
-      await chatManager.sendMessageGlobal(content, attachmentOptions);
-    } else {
-      await chatManager.sendMessage(targetItem, content, {
-        attachPdf: shouldAttachPdf,
-        ...attachmentOptions,
-      });
     }
+
+    // Send message (unified API handles both global and item-bound chat)
+    await chatManager.sendMessage(content, {
+      item: targetItem,
+      attachPdf: shouldAttachPdf,
+      ...attachmentOptions,
+    });
   } catch (error) {
     ztoolkit.log("Error in sendMessage:", error);
   } finally {

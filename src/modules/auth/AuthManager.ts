@@ -117,6 +117,34 @@ export class AuthManager {
   }
 
   /**
+   * 检查是否为 session 失效错误
+   */
+  private isSessionInvalidError(message: string): boolean {
+    return message.includes("token") && (message.includes("无效") || message.includes("invalid"));
+  }
+
+  /**
+   * 带 session 失效重试的 API 调用包装器
+   * 如果 API 返回 session 失效错误，自动尝试重新登录并重试
+   */
+  private async withSessionRetry<T extends { success: boolean; message?: string }>(
+    operation: () => Promise<T>,
+    operationName: string,
+  ): Promise<T> {
+    let result = await operation();
+
+    if (!result.success && this.isSessionInvalidError(result.message || "")) {
+      ztoolkit.log(`[AuthManager] Session invalid for ${operationName}, attempting auto-relogin`);
+      const reloginSuccess = await this.autoRelogin();
+      if (reloginSuccess) {
+        result = await operation();
+      }
+    }
+
+    return result;
+  }
+
+  /**
    * 从偏好设置恢复状态
    */
   private restoreState(): void {
@@ -512,23 +540,10 @@ export class AuthManager {
    * 刷新用户信息
    */
   async refreshUserInfo(): Promise<void> {
-    let result = await this.authService.getUserInfo();
-
-    // 如果 session 失效，尝试自动重新登录
-    if (!result.success) {
-      const errorMsg = result.message || "";
-      if (
-        errorMsg.includes("token") &&
-        (errorMsg.includes("无效") || errorMsg.includes("invalid"))
-      ) {
-        ztoolkit.log("[AuthManager] Session invalid, attempting auto-relogin");
-        const reloginSuccess = await this.autoRelogin();
-        if (reloginSuccess) {
-          // 重新尝试获取用户信息
-          result = await this.authService.getUserInfo();
-        }
-      }
-    }
+    const result = await this.withSessionRetry(
+      () => this.authService.getUserInfo(),
+      "getUserInfo",
+    );
 
     if (result.success && result.data) {
       this.state.user = result.data;
@@ -567,24 +582,10 @@ export class AuthManager {
    */
   private async ensurePluginToken(): Promise<void> {
     // 先检查是否已有插件Token
-    let tokensResult = await this.authService.getTokens(0, 100);
-
-    // 如果 session 失效，尝试自动重新登录
-    if (!tokensResult.success) {
-      const errorMsg = tokensResult.message || "";
-      if (
-        errorMsg.includes("token") &&
-        (errorMsg.includes("无效") || errorMsg.includes("invalid"))
-      ) {
-        ztoolkit.log(
-          "[AuthManager] Session invalid for getTokens, attempting auto-relogin",
-        );
-        const reloginSuccess = await this.autoRelogin();
-        if (reloginSuccess) {
-          tokensResult = await this.authService.getTokens(0, 100);
-        }
-      }
-    }
+    const tokensResult = await this.withSessionRetry(
+      () => this.authService.getTokens(0, 100),
+      "getTokens",
+    );
 
     if (tokensResult.success && tokensResult.data) {
       const existingToken = tokensResult.data.items?.find(
@@ -600,32 +601,15 @@ export class AuthManager {
     }
 
     // 创建新Token
-    let createResult = await this.authService.createToken({
-      name: PLUGIN_TOKEN_NAME,
-      unlimited_quota: true,
-      expired_time: -1, // 永不过期
-    });
-
-    // 如果 session 失效，尝试自动重新登录
-    if (!createResult.success) {
-      const errorMsg = createResult.message || "";
-      if (
-        errorMsg.includes("token") &&
-        (errorMsg.includes("无效") || errorMsg.includes("invalid"))
-      ) {
-        ztoolkit.log(
-          "[AuthManager] Session invalid for createToken, attempting auto-relogin",
-        );
-        const reloginSuccess = await this.autoRelogin();
-        if (reloginSuccess) {
-          createResult = await this.authService.createToken({
-            name: PLUGIN_TOKEN_NAME,
-            unlimited_quota: true,
-            expired_time: -1,
-          });
-        }
-      }
-    }
+    const createResult = await this.withSessionRetry(
+      () =>
+        this.authService.createToken({
+          name: PLUGIN_TOKEN_NAME,
+          unlimited_quota: true,
+          expired_time: -1, // 永不过期
+        }),
+      "createToken",
+    );
 
     if (createResult.success) {
       // 重新获取Token列表以获取完整信息（createToken API 不返回 data）
@@ -727,25 +711,10 @@ export class AuthManager {
   ): Promise<{ success: boolean; message: string; addedQuota?: number }> {
     const beforeQuota = this.state.user?.quota || 0;
 
-    let result = await this.authService.redeemCode(code);
-
-    // 如果 session 失效，尝试自动重新登录后重试
-    if (!result.success) {
-      const errorMsg = result.message || "";
-      if (
-        errorMsg.includes("token") &&
-        (errorMsg.includes("无效") || errorMsg.includes("invalid"))
-      ) {
-        ztoolkit.log(
-          "[AuthManager] Session invalid for redeemCode, attempting auto-relogin",
-        );
-        const reloginSuccess = await this.autoRelogin();
-        if (reloginSuccess) {
-          // 重新尝试兑换
-          result = await this.authService.redeemCode(code);
-        }
-      }
-    }
+    const result = await this.withSessionRetry(
+      () => this.authService.redeemCode(code),
+      "redeemCode",
+    );
 
     if (result.success) {
       // 刷新用户信息以获取新余额

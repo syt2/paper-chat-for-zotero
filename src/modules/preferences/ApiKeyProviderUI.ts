@@ -302,24 +302,7 @@ export function bindApiKeyEvents(
 
   // Refresh models button
   const refreshModelsBtn = doc.getElementById("pref-refresh-models");
-  refreshModelsBtn?.addEventListener("click", async () => {
-    const currentProviderId = getCurrentProviderId();
-    const provider = providerManager.getProvider(currentProviderId);
-    if (provider) {
-      try {
-        const models = await provider.getAvailableModels();
-        const config = providerManager.getProviderConfig(currentProviderId) as ApiKeyProviderConfig;
-        if (config && models.length > 0) {
-          providerManager.updateProviderConfig(currentProviderId, { availableModels: models });
-          // Refresh panel
-          const metadata = providerManager.getProviderMetadata(currentProviderId);
-          populateApiKeyPanel(doc, { ...config, availableModels: models }, metadata);
-        }
-      } catch (e) {
-        showTestResult(doc, getString("pref-refresh-failed"), true);
-      }
-    }
-  });
+  refreshModelsBtn?.addEventListener("click", () => autoFetchModels(doc, getCurrentProviderId()));
 
   // Test connection button
   const testConnectionBtn = doc.getElementById("pref-test-connection");

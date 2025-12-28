@@ -1,40 +1,47 @@
 /**
- * PDFAiTalkProvider - Wrapper for existing AuthManager/ApiService
- * Delegates to existing implementation for login-based authentication
+ * PDFAiTalkProvider - Login-based authentication provider
+ * Uses composition with OpenAICompatibleProvider for API calls
  */
 
 import type { ChatMessage, StreamCallbacks } from "../../types/chat";
-import type { AIProvider, PDFAiTalkProviderConfig, PdfAttachment } from "../../types/provider";
+import type { AIProvider, ApiKeyProviderConfig, PDFAiTalkProviderConfig, PdfAttachment } from "../../types/provider";
 import { getAuthManager } from "../auth";
-import { ApiService } from "../chat/ApiService";
+import { OpenAICompatibleProvider } from "./OpenAICompatibleProvider";
 import { BUILTIN_PROVIDERS } from "./ProviderManager";
 import { getPref } from "../../utils/prefs";
 
 export class PDFAiTalkProvider implements AIProvider {
   private _config: PDFAiTalkProviderConfig;
-  private apiService: ApiService;
+  private _delegate: OpenAICompatibleProvider;
 
   constructor(config: PDFAiTalkProviderConfig) {
     this._config = config;
-    this.apiService = new ApiService(this.getApiConfig());
+    this._delegate = new OpenAICompatibleProvider(this.createDelegateConfig());
   }
 
-  get config(): PDFAiTalkProviderConfig {
-    return this._config;
-  }
-
-  private getApiConfig() {
+  private createDelegateConfig(): ApiKeyProviderConfig {
     const authManager = getAuthManager();
     const defaultModel = BUILTIN_PROVIDERS.pdfaitalk.defaultModels[0];
 
     return {
+      id: this._config.id,
+      name: this._config.name,
+      type: "openai-compatible",
+      enabled: this._config.enabled,
+      isBuiltin: this._config.isBuiltin,
+      order: this._config.order,
       apiKey: authManager.getApiKey() || "",
       baseUrl: BUILTIN_PROVIDERS.pdfaitalk.defaultBaseUrl,
-      model: this._config.defaultModel || defaultModel,
+      defaultModel: this._config.defaultModel || defaultModel,
+      availableModels: this._config.availableModels || BUILTIN_PROVIDERS.pdfaitalk.defaultModels,
       maxTokens: this._config.maxTokens || 4096,
       temperature: this._config.temperature ?? 0.7,
       systemPrompt: this._config.systemPrompt || "",
     };
+  }
+
+  get config(): PDFAiTalkProviderConfig {
+    return this._config;
   }
 
   getName(): string {
@@ -48,7 +55,7 @@ export class PDFAiTalkProvider implements AIProvider {
 
   updateConfig(config: Partial<PDFAiTalkProviderConfig>): void {
     this._config = { ...this._config, ...config };
-    this.apiService.updateConfig(this.getApiConfig());
+    this._delegate.updateConfig(this.createDelegateConfig());
   }
 
   supportsPdfUpload(): boolean {
@@ -60,23 +67,22 @@ export class PDFAiTalkProvider implements AIProvider {
     callbacks: StreamCallbacks,
     pdfAttachment?: PdfAttachment,
   ): Promise<void> {
-    // Refresh API config before each call
-    this.apiService.updateConfig(this.getApiConfig());
-    return this.apiService.streamChatCompletion(messages, callbacks, pdfAttachment);
+    // Refresh config before each call (API key may have changed)
+    this._delegate.updateConfig(this.createDelegateConfig());
+    return this._delegate.streamChatCompletion(messages, callbacks, pdfAttachment);
   }
 
   async chatCompletion(messages: ChatMessage[]): Promise<string> {
-    this.apiService.updateConfig(this.getApiConfig());
-    return this.apiService.chatCompletion(messages);
+    this._delegate.updateConfig(this.createDelegateConfig());
+    return this._delegate.chatCompletion(messages);
   }
 
   async testConnection(): Promise<boolean> {
-    this.apiService.updateConfig(this.getApiConfig());
-    return this.apiService.testConnection();
+    this._delegate.updateConfig(this.createDelegateConfig());
+    return this._delegate.testConnection();
   }
 
   async getAvailableModels(): Promise<string[]> {
-    // Try to get models from cache first
     const cachedModels = getPref("pdfaitalkModelsCache") as string;
     if (cachedModels) {
       try {
@@ -88,7 +94,6 @@ export class PDFAiTalkProvider implements AIProvider {
         // ignore parse error
       }
     }
-    // Fallback to builtin defaults
     return BUILTIN_PROVIDERS.pdfaitalk.defaultModels;
   }
 }

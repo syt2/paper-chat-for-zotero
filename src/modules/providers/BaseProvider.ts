@@ -2,8 +2,21 @@
  * BaseProvider - Abstract base class with shared functionality
  */
 
-import type { ChatMessage, StreamCallbacks } from "../../types/chat";
-import type { AIProvider, ApiKeyProviderConfig, PdfAttachment } from "../../types/provider";
+import type {
+  ChatMessage,
+  StreamCallbacks,
+  OpenAIMessage,
+  OpenAIMessageContent,
+} from "../../types/chat";
+import type {
+  AIProvider,
+  ApiKeyProviderConfig,
+  PdfAttachment,
+  AnthropicMessage,
+  AnthropicContentBlock,
+  GeminiContent,
+  GeminiPart,
+} from "../../types/provider";
 import { parseSSEStream, type SSEFormat, type SSEParserCallbacks } from "./SSEParser";
 
 export abstract class BaseProvider implements AIProvider {
@@ -57,18 +70,212 @@ export abstract class BaseProvider implements AIProvider {
   }
 
   /**
+   * Validate fetch response and throw error if not ok
+   */
+  protected async validateResponse(response: Response): Promise<void> {
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`API Error: ${response.status} - ${errorText}`);
+    }
+  }
+
+  /**
+   * Get readable stream reader from response, throws if unavailable
+   */
+  protected getResponseReader(response: Response): ReadableStreamDefaultReader<Uint8Array> {
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("Response body is not readable");
+    return reader as ReadableStreamDefaultReader<Uint8Array>;
+  }
+
+  /**
+   * Stream SSE response with content accumulation
+   * Handles the common pattern of accumulating content and calling callbacks
+   */
+  protected async streamWithCallbacks(
+    response: Response,
+    format: SSEFormat,
+    callbacks: StreamCallbacks,
+  ): Promise<void> {
+    const { onChunk, onComplete, onError } = callbacks;
+    const reader = this.getResponseReader(response);
+    let fullContent = "";
+
+    await this.parseSSE(reader, format, {
+      onText: (text) => {
+        fullContent += text;
+        onChunk(text);
+      },
+      onDone: () => onComplete(fullContent),
+      onError,
+    });
+  }
+
+  /**
+   * Wrap unknown error as Error instance
+   */
+  protected wrapError(error: unknown): Error {
+    return error instanceof Error ? error : new Error(String(error));
+  }
+
+  /**
    * Filter messages - remove empty content and error messages
    */
   protected filterMessages(messages: ChatMessage[]): ChatMessage[] {
-    return messages
-      // Filter out error messages (not sent to API)
-      .filter((msg) => msg.role !== "error")
-      .filter((msg, index, arr) => {
-        // Allow last assistant message to be empty (placeholder)
-        if (index === arr.length - 1 && msg.role === "assistant") {
-          return msg.content.trim() !== "";
+    const nonErrorMessages = messages.filter((msg) => msg.role !== "error");
+    const lastIndex = nonErrorMessages.length - 1;
+
+    return nonErrorMessages.filter((msg, index) => {
+      // Allow empty content for last assistant message (streaming placeholder)
+      if (index === lastIndex && msg.role === "assistant") {
+        return msg.content.trim() !== "";
+      }
+      return msg.content && msg.content.trim() !== "";
+    });
+  }
+
+  /**
+   * Format messages for OpenAI-compatible API (OpenAI, DeepSeek, Mistral, etc.)
+   * Supports Vision API format for images and optional PDF attachment
+   */
+  protected formatOpenAIMessages(
+    messages: ChatMessage[],
+    pdfAttachment?: PdfAttachment,
+  ): OpenAIMessage[] {
+    const filtered = this.filterMessages(messages);
+    const firstUserIndex = filtered.findIndex((m) => m.role === "user");
+
+    return filtered.map((msg, index) => {
+      const shouldAttachPdf = pdfAttachment && msg.role === "user" && index === firstUserIndex;
+      const hasImages = msg.images && msg.images.length > 0;
+
+      // Use multimodal format if has images or PDF
+      if (hasImages || shouldAttachPdf) {
+        const content: OpenAIMessageContent[] = [];
+
+        // Add PDF as document (Anthropic format, supported by new-api)
+        if (shouldAttachPdf) {
+          content.push({
+            type: "document",
+            source: {
+              type: "base64",
+              media_type: pdfAttachment.mimeType,
+              data: pdfAttachment.data,
+            },
+          });
         }
-        return msg.content && msg.content.trim() !== "";
+
+        // Add text
+        content.push({ type: "text", text: msg.content });
+
+        // Add images
+        if (msg.images) {
+          for (const image of msg.images) {
+            content.push({
+              type: "image_url",
+              image_url: {
+                url: image.type === "base64"
+                  ? `data:${image.mimeType};base64,${image.data}`
+                  : image.data,
+                detail: "auto",
+              },
+            });
+          }
+        }
+
+        return { role: msg.role as "user" | "assistant" | "system", content };
+      }
+
+      // Plain text message
+      return { role: msg.role as "user" | "assistant" | "system", content: msg.content };
+    });
+  }
+
+  /**
+   * Format messages for Anthropic API (Claude)
+   * Supports PDF and image attachments in Anthropic format
+   */
+  protected formatAnthropicMessages(
+    messages: ChatMessage[],
+    pdfAttachment?: PdfAttachment,
+  ): AnthropicMessage[] {
+    const filtered = this.filterMessages(messages).filter((msg) => msg.role !== "system");
+    const firstUserIndex = filtered.findIndex((m) => m.role === "user");
+
+    return filtered.map((msg, index) => {
+      const shouldAttachPdf = pdfAttachment && msg.role === "user" && index === firstUserIndex;
+      const hasImages = msg.images && msg.images.length > 0;
+
+      // Use multimodal format if has images or PDF
+      if (hasImages || shouldAttachPdf) {
+        const content: AnthropicContentBlock[] = [];
+
+        // Add PDF document first
+        if (shouldAttachPdf) {
+          content.push({
+            type: "document",
+            source: {
+              type: "base64",
+              media_type: pdfAttachment.mimeType,
+              data: pdfAttachment.data,
+            },
+          });
+        }
+
+        // Add images
+        if (msg.images) {
+          for (const img of msg.images) {
+            content.push({
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: img.mimeType,
+                data: img.data,
+              },
+            });
+          }
+        }
+
+        // Add text
+        content.push({ type: "text", text: msg.content });
+
+        return { role: msg.role as "user" | "assistant", content };
+      }
+
+      // Plain text message
+      return { role: msg.role as "user" | "assistant", content: msg.content };
+    });
+  }
+
+  /**
+   * Format messages for Gemini API
+   * Supports image attachments in Gemini format
+   */
+  protected formatGeminiMessages(messages: ChatMessage[]): GeminiContent[] {
+    return this.filterMessages(messages)
+      .filter((msg) => msg.role !== "system")
+      .map((msg) => {
+        const parts: GeminiPart[] = [];
+
+        // Add images first
+        if (msg.images && msg.images.length > 0) {
+          for (const img of msg.images) {
+            parts.push({
+              inline_data: {
+                mime_type: img.mimeType,
+                data: img.data,
+              },
+            });
+          }
+        }
+
+        // Add text
+        parts.push({ text: msg.content });
+
+        return {
+          role: msg.role === "assistant" ? "model" : "user",
+          parts,
+        };
       });
   }
 }

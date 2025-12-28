@@ -4,37 +4,40 @@
 
 export class PdfExtractor {
   /**
+   * 查找Item的PDF附件
+   * 统一的PDF附件查找逻辑，避免重复代码
+   */
+  private async findPdfAttachment(item: Zotero.Item): Promise<Zotero.Item | null> {
+    // Check if the item itself is a PDF attachment
+    if (item.isAttachment() && item.attachmentContentType === "application/pdf") {
+      return item;
+    }
+
+    // Otherwise, look for PDF attachments on the item
+    const attachments = item.getAttachments();
+    for (const attachmentID of attachments) {
+      const attachment = await Zotero.Items.getAsync(attachmentID);
+      if (attachment?.attachmentContentType === "application/pdf") {
+        return attachment;
+      }
+    }
+
+    return null;
+  }
+
+  /**
    * 获取Item的PDF附件文本
    */
   async extractPdfText(item: Zotero.Item): Promise<string | null> {
     try {
-      // Check if the item itself is a PDF attachment
-      if (item.isAttachment() && item.attachmentContentType === "application/pdf") {
-        const text = await item.attachmentText;
-        if (text) {
-          ztoolkit.log("PDF text extracted from attachment item, length:", text.length);
-          return text;
-        }
-        return null;
+      const pdfAttachment = await this.findPdfAttachment(item);
+      if (!pdfAttachment) return null;
+
+      const text = await pdfAttachment.attachmentText;
+      if (text) {
+        ztoolkit.log("PDF text extracted, length:", text.length);
+        return text;
       }
-
-      // Otherwise, look for PDF attachments on the item
-      const attachments = item.getAttachments();
-
-      for (const attachmentID of attachments) {
-        const attachment = await Zotero.Items.getAsync(attachmentID);
-        if (
-          attachment &&
-          attachment.attachmentContentType === "application/pdf"
-        ) {
-          const text = await attachment.attachmentText;
-          if (text) {
-            ztoolkit.log("PDF text extracted, length:", text.length);
-            return text;
-          }
-        }
-      }
-
       return null;
     } catch (error) {
       ztoolkit.log("Error extracting PDF:", error);
@@ -47,25 +50,8 @@ export class PdfExtractor {
    */
   async hasPdfAttachment(item: Zotero.Item): Promise<boolean> {
     try {
-      // Check if the item itself is a PDF attachment
-      if (item.isAttachment() && item.attachmentContentType === "application/pdf") {
-        return true;
-      }
-
-      // Otherwise, look for PDF attachments on the item
-      const attachments = item.getAttachments();
-
-      for (const attachmentID of attachments) {
-        const attachment = await Zotero.Items.getAsync(attachmentID);
-        if (
-          attachment &&
-          attachment.attachmentContentType === "application/pdf"
-        ) {
-          return true;
-        }
-      }
-
-      return false;
+      const pdfAttachment = await this.findPdfAttachment(item);
+      return pdfAttachment !== null;
     } catch (error) {
       ztoolkit.log("Error checking PDF attachment:", error);
       return false;
@@ -79,40 +65,17 @@ export class PdfExtractor {
     item: Zotero.Item,
   ): Promise<{ name: string; size: number } | null> {
     try {
-      // Check if the item itself is a PDF attachment
-      if (item.isAttachment() && item.attachmentContentType === "application/pdf") {
-        const path = await item.getFilePathAsync();
-        if (path) {
-          const info = await IOUtils.stat(path);
-          return {
-            name: item.attachmentFilename || "document.pdf",
-            size: info.size ?? 0,
-          };
-        }
-        return null;
-      }
+      const pdfAttachment = await this.findPdfAttachment(item);
+      if (!pdfAttachment) return null;
 
-      // Otherwise, look for PDF attachments on the item
-      const attachments = item.getAttachments();
+      const path = await pdfAttachment.getFilePathAsync();
+      if (!path) return null;
 
-      for (const attachmentID of attachments) {
-        const attachment = await Zotero.Items.getAsync(attachmentID);
-        if (
-          attachment &&
-          attachment.attachmentContentType === "application/pdf"
-        ) {
-          const path = await attachment.getFilePathAsync();
-          if (path) {
-            const info = await IOUtils.stat(path);
-            return {
-              name: attachment.attachmentFilename || "document.pdf",
-              size: info.size ?? 0,
-            };
-          }
-        }
-      }
-
-      return null;
+      const info = await IOUtils.stat(path);
+      return {
+        name: pdfAttachment.attachmentFilename || "document.pdf",
+        size: info.size ?? 0,
+      };
     } catch (error) {
       ztoolkit.log("Error getting PDF info:", error);
       return null;
@@ -199,44 +162,19 @@ export class PdfExtractor {
     item: Zotero.Item,
   ): Promise<{ data: string; mimeType: string; name: string } | null> {
     try {
-      // Check if the item itself is a PDF attachment
-      if (item.isAttachment() && item.attachmentContentType === "application/pdf") {
-        const path = await item.getFilePathAsync();
-        if (path) {
-          const data = await IOUtils.read(path);
-          const base64 = this.arrayBufferToBase64(data);
-          return {
-            data: base64,
-            mimeType: "application/pdf",
-            name: item.attachmentFilename || "document.pdf",
-          };
-        }
-        return null;
-      }
+      const pdfAttachment = await this.findPdfAttachment(item);
+      if (!pdfAttachment) return null;
 
-      // Otherwise, look for PDF attachments on the item
-      const attachments = item.getAttachments();
+      const path = await pdfAttachment.getFilePathAsync();
+      if (!path) return null;
 
-      for (const attachmentID of attachments) {
-        const attachment = await Zotero.Items.getAsync(attachmentID);
-        if (
-          attachment &&
-          attachment.attachmentContentType === "application/pdf"
-        ) {
-          const path = await attachment.getFilePathAsync();
-          if (path) {
-            const data = await IOUtils.read(path);
-            const base64 = this.arrayBufferToBase64(data);
-            return {
-              data: base64,
-              mimeType: "application/pdf",
-              name: attachment.attachmentFilename || "document.pdf",
-            };
-          }
-        }
-      }
-
-      return null;
+      const data = await IOUtils.read(path);
+      const base64 = this.arrayBufferToBase64(data);
+      return {
+        data: base64,
+        mimeType: "application/pdf",
+        name: pdfAttachment.attachmentFilename || "document.pdf",
+      };
     } catch (error) {
       ztoolkit.log("Error getting PDF base64:", error);
       return null;

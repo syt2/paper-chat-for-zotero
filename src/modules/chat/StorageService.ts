@@ -84,22 +84,29 @@ export class StorageService {
 
   /**
    * 重建索引（从所有session文件）
+   * 使用并行读取提升性能
    */
   private async rebuildIndex(): Promise<void> {
     const children = await IOUtils.getChildren(this.storagePath);
-    this.indexCache = [];
 
-    for (const filePath of children) {
-      if (filePath.endsWith(".json") && !filePath.endsWith("_index.json")) {
-        try {
-          const data = (await IOUtils.readJSON(filePath)) as ChatSession;
-          const meta = await this.buildSessionMeta(data);
-          this.indexCache.push(meta);
-        } catch {
-          // 忽略无效的JSON文件
-        }
+    // 过滤出session文件（排除索引文件）
+    const sessionFiles = children.filter(
+      (f) => f.endsWith(".json") && !f.endsWith("_index.json"),
+    );
+
+    // 并行读取所有session文件
+    const metaPromises = sessionFiles.map(async (filePath) => {
+      try {
+        const data = (await IOUtils.readJSON(filePath)) as ChatSession;
+        return await this.buildSessionMeta(data);
+      } catch {
+        // 忽略无效的JSON文件
+        return null;
       }
-    }
+    });
+
+    const results = await Promise.all(metaPromises);
+    this.indexCache = results.filter((meta): meta is StoredSessionMeta => meta !== null);
 
     await this.saveIndex();
     ztoolkit.log("Index rebuilt, sessions count:", this.indexCache.length);

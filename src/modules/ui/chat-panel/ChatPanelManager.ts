@@ -103,6 +103,34 @@ function getSplitter(): HTMLElement | null {
 }
 
 /**
+ * Expand the sidebar (set collapsed to false)
+ */
+function expandSidebar(): void {
+  const sidebar = getSidebar();
+  if (sidebar?.getAttribute("collapsed") === "true") {
+    sidebar.setAttribute("collapsed", "false");
+    const splitter = getSplitter();
+    if (splitter) {
+      splitter.setAttribute("state", "");
+    }
+  }
+}
+
+/**
+ * Collapse the sidebar (set collapsed to true)
+ */
+function collapseSidebar(): void {
+  const sidebar = getSidebar();
+  if (sidebar && sidebar.getAttribute("collapsed") !== "true") {
+    sidebar.setAttribute("collapsed", "true");
+    const splitter = getSplitter();
+    if (splitter) {
+      splitter.setAttribute("state", "collapsed");
+    }
+  }
+}
+
+/**
  * Update container size to match sidebar
  */
 function updateContainerSize(): void {
@@ -146,14 +174,7 @@ export function showPanel(): void {
   }
 
   // Ensure sidebar is visible
-  const sidebar = getSidebar();
-  if (sidebar?.getAttribute("collapsed") === "true") {
-    sidebar.setAttribute("collapsed", "false");
-    const splitter = getSplitter();
-    if (splitter) {
-      splitter.setAttribute("state", "");
-    }
-  }
+  expandSidebar();
 
   // Update size
   updateContainerSize();
@@ -176,6 +197,7 @@ export function showPanel(): void {
   // Add sidebar observer
   const mainWin = win as unknown as { MutationObserver?: typeof MutationObserver };
   const MutationObserverClass = mainWin.MutationObserver;
+  const sidebar = getSidebar();
   if (!sidebarObserver && MutationObserverClass && sidebar) {
     sidebarObserver = new MutationObserverClass(() => updateContainerSize());
     sidebarObserver.observe(sidebar, {
@@ -225,14 +247,7 @@ export function hidePanel(): void {
   }
 
   // Collapse the current page's sidebar
-  const sidebar = getSidebar();
-  if (sidebar) {
-    sidebar.setAttribute("collapsed", "true");
-    const splitter = getSplitter();
-    if (splitter) {
-      splitter.setAttribute("state", "collapsed");
-    }
-  }
+  collapseSidebar();
 
   // Clean up listeners
   if (resizeHandler) {
@@ -277,27 +292,14 @@ function updateToolbarButtonState(pressed: boolean): void {
  * Sync sidebar state based on panel visibility
  */
 function syncSidebarState(): void {
-  const sidebar = getSidebar();
-  const splitter = getSplitter();
-
   if (isPanelShown()) {
     // Panel is open - ensure sidebar is expanded
-    if (sidebar?.getAttribute("collapsed") === "true") {
-      sidebar.setAttribute("collapsed", "false");
-      if (splitter) {
-        splitter.setAttribute("state", "");
-      }
-    }
+    expandSidebar();
     updateContainerSize();
     refreshChatForCurrentItem();
   } else {
     // Panel is closed - collapse sidebar
-    if (sidebar && sidebar.getAttribute("collapsed") !== "true") {
-      sidebar.setAttribute("collapsed", "true");
-      if (splitter) {
-        splitter.setAttribute("state", "collapsed");
-      }
-    }
+    collapseSidebar();
   }
 }
 
