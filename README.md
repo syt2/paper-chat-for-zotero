@@ -1,4 +1,4 @@
-# PDF AI Talk
+<h1><img src="addon/content/icons/favicon.svg" width="32" height="32" style="vertical-align: middle;"> PDF AI Talk</h1>
 
 [![Zotero](https://img.shields.io/badge/Zotero-7+-green?style=flat-square&logo=zotero&logoColor=CC2936)](https://www.zotero.org)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg?style=flat-square)](https://www.gnu.org/licenses/agpl-3.0)
