@@ -358,6 +358,13 @@ export class ProviderManager {
   }
 
   /**
+   * Get all configured (enabled) provider instances
+   */
+  getConfiguredProviders(): AIProvider[] {
+    return Array.from(this.providers.values());
+  }
+
+  /**
    * Get provider config by ID
    */
   getProviderConfig(providerId: string): ProviderConfig | null {

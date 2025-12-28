@@ -19,6 +19,20 @@ export function getModelRatios(): Record<string, number> {
 }
 
 /**
+ * Format model label with ratio if available (for PDFAiTalk models)
+ * @param model Model ID
+ * @param providerId Provider ID (only shows ratio for pdfaitalk)
+ * @returns Formatted label like "model-name (2x)" or just "model-name"
+ */
+export function formatModelLabel(model: string, providerId?: string): string {
+  if (providerId !== "pdfaitalk") {
+    return model;
+  }
+  const ratio = pdfaitalkModelRatios[model];
+  return ratio !== undefined ? `${model} (${ratio}x)` : model;
+}
+
+/**
  * Load cached ratios from prefs
  */
 export function loadCachedRatios(): void {

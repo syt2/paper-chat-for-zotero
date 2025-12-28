@@ -223,47 +223,137 @@ export function createChatContainer(doc: Document, theme: ThemeColors): HTMLElem
     borderTop: `1px solid ${theme.borderColor}`,
   }, { id: "chat-attachments-preview" });
 
-  // Input Area
+  // Input Area - ChatBox style with vertical layout
   const inputArea = createElement(doc, "div", {
     display: "flex",
-    alignItems: "flex-end",
-    gap: "10px",
+    flexDirection: "column",
     padding: "14px",
     background: theme.inputAreaBg,
     borderTop: `1px solid ${theme.borderColor}`,
   });
 
+  // Input wrapper - contains textarea
+  const inputWrapper = createElement(doc, "div", {
+    display: "flex",
+    border: `1px solid ${theme.inputBorderColor}`,
+    borderRadius: "12px",
+    background: theme.inputBg,
+    overflow: "hidden",
+  }, { id: "chat-input-wrapper" });
+
   const messageInput = createElement(doc, "textarea", {
     flex: "1",
-    minHeight: "44px",
+    minHeight: "60px",
     maxHeight: "140px",
-    padding: "10px 14px",
-    border: `1px solid ${theme.inputBorderColor}`,
-    borderRadius: "10px",
+    padding: "12px 14px",
+    border: "none",
     fontFamily: "inherit",
     fontSize: "14px",
     resize: "none",
     outline: "none",
-    background: theme.inputBg,
+    background: "transparent",
     color: theme.textPrimary,
-  }, { id: "chat-message-input", rows: "2", placeholder: getString("chat-input-placeholder") }) as HTMLTextAreaElement;
+  }, { id: "chat-message-input", rows: "3", placeholder: getString("chat-input-placeholder") }) as HTMLTextAreaElement;
 
+  inputWrapper.appendChild(messageInput);
+
+  // Bottom bar - model selector on left, send button on right
+  const inputBottomBar = createElement(doc, "div", {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: "10px",
+  });
+
+  // Model selector container
+  const modelSelectorContainer = createElement(doc, "div", {
+    position: "relative",
+  });
+
+  // Model selector button
+  const modelSelectorBtn = createElement(doc, "button", {
+    display: "flex",
+    alignItems: "center",
+    gap: "6px",
+    padding: "6px 12px",
+    background: theme.buttonBg,
+    border: `1px solid ${theme.inputBorderColor}`,
+    borderRadius: "8px",
+    cursor: "pointer",
+    fontSize: "12px",
+    color: theme.textSecondary,
+    maxWidth: "200px",
+  }, { id: "chat-model-selector-btn" });
+
+  const modelSelectorText = createElement(doc, "span", {
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  }, { id: "chat-model-selector-text" });
+  modelSelectorText.textContent = "选择模型";
+
+  const modelSelectorArrow = createElement(doc, "span", {
+    fontSize: "10px",
+    opacity: "0.6",
+  });
+  modelSelectorArrow.textContent = "▼";
+
+  modelSelectorBtn.appendChild(modelSelectorText);
+  modelSelectorBtn.appendChild(modelSelectorArrow);
+
+  // Model dropdown
+  const modelDropdown = createElement(doc, "div", {
+    display: "none",
+    position: "absolute",
+    bottom: "100%",
+    left: "0",
+    marginBottom: "4px",
+    minWidth: "220px",
+    maxWidth: "300px",
+    maxHeight: "300px",
+    overflowY: "auto",
+    background: theme.dropdownBg,
+    border: `1px solid ${theme.borderColor}`,
+    borderRadius: "8px",
+    boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+    zIndex: "10002",
+  }, { id: "chat-model-dropdown" });
+
+  modelSelectorContainer.appendChild(modelSelectorBtn);
+  modelSelectorContainer.appendChild(modelDropdown);
+
+  // Send button
   const sendButton = createElement(doc, "button", {
+    width: "32px",
+    height: "32px",
     background: chatColors.userBubble,
     color: "#fff",
     border: "none",
-    borderRadius: "10px",
-    padding: "0 20px",
-    height: "44px",
-    fontSize: "14px",
-    fontWeight: "500",
+    borderRadius: "50%",
     cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
     flexShrink: "0",
+    padding: "0",
   }, { id: "chat-send-button" });
-  sendButton.textContent = getString("chat-send");
 
-  inputArea.appendChild(messageInput);
-  inputArea.appendChild(sendButton);
+  // Arrow up icon
+  const sendIcon = createElement(doc, "span", {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: "16px",
+    fontWeight: "bold",
+  });
+  sendIcon.textContent = "↑";
+  sendButton.appendChild(sendIcon);
+
+  inputBottomBar.appendChild(modelSelectorContainer);
+  inputBottomBar.appendChild(sendButton);
+
+  inputArea.appendChild(inputWrapper);
+  inputArea.appendChild(inputBottomBar);
 
   // History dropdown panel - append to container for proper positioning
   const historyDropdown = createElement(doc, "div", {

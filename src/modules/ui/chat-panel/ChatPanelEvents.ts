@@ -16,6 +16,8 @@ import {
 import { showAuthDialog } from "../AuthDialog";
 import { getString } from "../../../utils/locale";
 import { getProviderManager } from "../../providers";
+import { getPref, setPref } from "../../../utils/prefs";
+import { formatModelLabel } from "../../preferences/ModelsFetcher";
 
 // Import getActiveReaderItem from the manager module to avoid circular dependency
 // This is set by ChatPanelManager during initialization
@@ -288,6 +290,34 @@ export function setupEventHandlers(context: ChatPanelContext): void {
     setupClickOutsideHandler(container, historyDropdown, historyBtn);
   }
 
+  // Model selector
+  const modelSelectorBtn = container.querySelector("#chat-model-selector-btn") as HTMLButtonElement;
+  const modelDropdown = container.querySelector("#chat-model-dropdown") as HTMLElement;
+
+  if (modelSelectorBtn && modelDropdown) {
+    // Initialize model selector text
+    updateModelSelectorDisplay(container);
+
+    // Toggle model dropdown
+    modelSelectorBtn.addEventListener("click", () => {
+      const isVisible = modelDropdown.style.display === "block";
+      if (isVisible) {
+        modelDropdown.style.display = "none";
+      } else {
+        populateModelDropdown(container, modelDropdown, context);
+        modelDropdown.style.display = "block";
+      }
+    });
+
+    // Close model dropdown when clicking outside
+    container.ownerDocument?.addEventListener("click", (e: Event) => {
+      const target = e.target as HTMLElement;
+      if (!modelSelectorBtn.contains(target) && !modelDropdown.contains(target)) {
+        modelDropdown.style.display = "none";
+      }
+    });
+  }
+
   ztoolkit.log("Event listeners attached to buttons");
 }
 
@@ -506,4 +536,161 @@ export async function updatePdfCheckboxVisibilityForItem(
 export function focusInput(container: HTMLElement): void {
   const messageInput = container.querySelector("#chat-message-input") as HTMLTextAreaElement;
   messageInput?.focus();
+}
+
+/**
+ * Update model selector display with current model
+ */
+export function updateModelSelectorDisplay(container: HTMLElement): void {
+  const modelSelectorText = container.querySelector("#chat-model-selector-text") as HTMLElement;
+  if (!modelSelectorText) return;
+
+  const providerManager = getProviderManager();
+  const activeProvider = providerManager.getActiveProvider();
+  const currentModel = getPref("model") as string;
+
+  if (activeProvider && currentModel) {
+    // Show provider name + model (truncated)
+    const providerName = activeProvider.getName();
+    const modelShort = currentModel.length > 20 ? currentModel.substring(0, 18) + "..." : currentModel;
+    modelSelectorText.textContent = `${providerName}: ${modelShort}`;
+  } else if (activeProvider) {
+    modelSelectorText.textContent = activeProvider.getName();
+  } else {
+    modelSelectorText.textContent = "选择模型";
+  }
+}
+
+/**
+ * Populate model dropdown with providers and their models
+ */
+function populateModelDropdown(
+  container: HTMLElement,
+  dropdown: HTMLElement,
+  context: ChatPanelContext,
+): void {
+  const doc = container.ownerDocument!;
+  const theme = getCurrentTheme();
+  dropdown.textContent = "";
+
+  const providerManager = getProviderManager();
+  const providers = providerManager.getConfiguredProviders();
+  const activeProviderId = providerManager.getActiveProviderId();
+  const currentModel = getPref("model") as string;
+
+  for (const provider of providers) {
+    // Provider section header
+    const sectionHeader = createElement(doc, "div", {
+      padding: "8px 12px",
+      fontSize: "11px",
+      fontWeight: "600",
+      color: theme.textMuted,
+      background: theme.buttonBg,
+      borderBottom: `1px solid ${theme.borderColor}`,
+      textTransform: "uppercase",
+      letterSpacing: "0.5px",
+    });
+    sectionHeader.textContent = provider.getName();
+    dropdown.appendChild(sectionHeader);
+
+    // Get models for this provider
+    const config = provider.config;
+    const models = config.availableModels || [];
+    const isActiveProvider = config.id === activeProviderId;
+
+    if (models.length === 0) {
+      // No models - show placeholder
+      const noModels = createElement(doc, "div", {
+        padding: "8px 12px",
+        fontSize: "12px",
+        color: theme.textMuted,
+        fontStyle: "italic",
+      });
+      noModels.textContent = "暂无可用模型";
+      dropdown.appendChild(noModels);
+    } else {
+      // List models
+      for (const model of models) {
+        const isCurrentModel = isActiveProvider && model === currentModel;
+
+        const modelItem = createElement(doc, "div", {
+          padding: "8px 12px",
+          fontSize: "12px",
+          color: isCurrentModel ? chatColors.userBubble : theme.textPrimary,
+          cursor: "pointer",
+          background: isCurrentModel ? theme.dropdownItemHoverBg : "transparent",
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+        });
+
+        // Checkmark for current model
+        if (isCurrentModel) {
+          const check = createElement(doc, "span", {
+            color: chatColors.userBubble,
+            fontWeight: "bold",
+          });
+          check.textContent = "✓";
+          modelItem.appendChild(check);
+        }
+
+        const modelName = createElement(doc, "span", {
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        });
+        modelName.textContent = formatModelLabel(model, config.id);
+        modelItem.appendChild(modelName);
+
+        // Hover effect
+        modelItem.addEventListener("mouseenter", () => {
+          if (!isCurrentModel) {
+            modelItem.style.background = theme.dropdownItemHoverBg;
+          }
+        });
+        modelItem.addEventListener("mouseleave", () => {
+          if (!isCurrentModel) {
+            modelItem.style.background = "transparent";
+          }
+        });
+
+        // Click to select model
+        modelItem.addEventListener("click", () => {
+          // Switch provider if needed
+          if (!isActiveProvider) {
+            providerManager.setActiveProvider(config.id);
+          }
+
+          // Set model
+          setPref("model", model);
+
+          // Update provider config
+          providerManager.updateProviderConfig(config.id, { defaultModel: model });
+
+          // Update display and close dropdown
+          updateModelSelectorDisplay(container);
+          dropdown.style.display = "none";
+
+          // Update user bar (provider might have changed)
+          context.updateUserBar();
+
+          ztoolkit.log(`Model switched to: ${config.id}/${model}`);
+        });
+
+        dropdown.appendChild(modelItem);
+      }
+    }
+  }
+
+  // If no providers configured
+  if (providers.length === 0) {
+    const noProviders = createElement(doc, "div", {
+      padding: "12px",
+      fontSize: "12px",
+      color: theme.textMuted,
+      textAlign: "center",
+    });
+    noProviders.textContent = "请先在设置中配置服务商";
+    dropdown.appendChild(noProviders);
+  }
 }

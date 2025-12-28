@@ -15,7 +15,8 @@ import { getCurrentTheme, updateCurrentTheme, applyThemeToContainer, setupThemeL
 import { createChatContainer } from "./ChatPanelBuilder";
 import { renderMessages as renderMessageElements } from "./MessageRenderer";
 import { renderMarkdownToElement } from "./MarkdownRenderer";
-import { setupEventHandlers, updateAttachmentsPreviewDisplay, updateUserBarDisplay, updatePdfCheckboxVisibilityForItem, focusInput, setActiveReaderItemFn } from "./ChatPanelEvents";
+import { setupEventHandlers, updateAttachmentsPreviewDisplay, updateUserBarDisplay, updatePdfCheckboxVisibilityForItem, focusInput, setActiveReaderItemFn, updateModelSelectorDisplay } from "./ChatPanelEvents";
+import { loadCachedRatios } from "../../preferences/ModelsFetcher";
 
 // Initialize the events module with the getActiveReaderItem function reference
 // This is done immediately to avoid issues with early calls
@@ -528,6 +529,9 @@ async function initializeChatContent(): Promise<void> {
 
   const authManager = getAuthManager();
   const context = createContext();
+
+  // Load cached model ratios for PDFAiTalk
+  loadCachedRatios();
 
   // Initialize auth
   await authManager.initialize();

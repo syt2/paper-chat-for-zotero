@@ -145,19 +145,38 @@ export function applyThemeToContainer(container: HTMLElement): void {
     attachmentsPreview.style.borderTopColor = theme.borderColor;
   }
 
-  // Input area
-  const inputArea = container.querySelector("#chat-message-input")?.parentElement as HTMLElement;
-  if (inputArea) {
-    inputArea.style.background = theme.inputAreaBg;
-    inputArea.style.borderTopColor = theme.borderColor;
+  // Input area (parent of input wrapper)
+  const inputWrapper = container.querySelector("#chat-input-wrapper") as HTMLElement;
+  if (inputWrapper) {
+    const inputArea = inputWrapper.parentElement as HTMLElement;
+    if (inputArea) {
+      inputArea.style.background = theme.inputAreaBg;
+      inputArea.style.borderTopColor = theme.borderColor;
+    }
+    // Input wrapper background and border
+    inputWrapper.style.background = theme.inputBg;
+    inputWrapper.style.borderColor = theme.inputBorderColor;
   }
 
   // Message input
   const messageInput = container.querySelector("#chat-message-input") as HTMLElement;
   if (messageInput) {
-    messageInput.style.background = theme.inputBg;
-    messageInput.style.borderColor = theme.inputBorderColor;
     messageInput.style.color = theme.textPrimary;
+  }
+
+  // Model selector button
+  const modelSelectorBtn = container.querySelector("#chat-model-selector-btn") as HTMLElement;
+  if (modelSelectorBtn) {
+    modelSelectorBtn.style.background = theme.buttonBg;
+    modelSelectorBtn.style.borderColor = theme.inputBorderColor;
+    modelSelectorBtn.style.color = theme.textSecondary;
+  }
+
+  // Model dropdown
+  const modelDropdown = container.querySelector("#chat-model-dropdown") as HTMLElement;
+  if (modelDropdown) {
+    modelDropdown.style.background = theme.dropdownBg;
+    modelDropdown.style.borderColor = theme.borderColor;
   }
 
   // History dropdown

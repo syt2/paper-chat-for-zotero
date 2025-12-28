@@ -5,7 +5,7 @@
 import { getPref, setPref } from "../../utils/prefs";
 import { getProviderManager, BUILTIN_PROVIDERS } from "../providers";
 import type { PDFAiTalkProviderConfig } from "../../types/provider";
-import { getModelRatios } from "./ModelsFetcher";
+import { formatModelLabel } from "./ModelsFetcher";
 import { clearElement } from "./utils";
 
 /**
@@ -73,13 +73,9 @@ export function populatePdfaitalkModels(doc: Document, models?: string[], saveTo
     providerManager.updateProviderConfig("pdfaitalk", { availableModels: models });
   }
 
-  const pdfaitalkModelRatios = getModelRatios();
   modelList.forEach((model) => {
     const menuitem = doc.createXULElement("menuitem");
-    // Display ratio if available
-    const ratio = pdfaitalkModelRatios[model];
-    const label = ratio !== undefined ? `${model} (${ratio}x)` : model;
-    menuitem.setAttribute("label", label);
+    menuitem.setAttribute("label", formatModelLabel(model, "pdfaitalk"));
     menuitem.setAttribute("value", model);
     modelPopup.appendChild(menuitem);
   });
