@@ -428,10 +428,33 @@ async function sendMessage(
   const activeProvider = providerManager.getActiveProvider();
 
   if (activeProviderId === "pdfaitalk") {
+    // For PDFAiTalk, prompt login if not logged in
     if (!authManager.isLoggedIn()) {
       const success = await showAuthDialog("login");
       if (!success) return;
       context.updateUserBar();
+    }
+    // After login, ensure API key is available
+    if (!activeProvider?.isReady()) {
+      // Try to refresh the plugin token
+      await authManager.ensurePluginToken(true);
+      if (!activeProvider?.isReady()) {
+        ztoolkit.log("PDFAiTalk provider still not ready after token refresh, forcing logout");
+        // Session is invalid and auto-relogin failed, force logout
+        await authManager.logout();
+        context.updateUserBar();
+        // Show error in chat
+        chatManager.showErrorMessage(getString("chat-error-session-expired"));
+        // Prompt login again
+        const success = await showAuthDialog("login");
+        if (!success) return;
+        context.updateUserBar();
+        // Check again after re-login
+        if (!activeProvider?.isReady()) {
+          chatManager.showErrorMessage(getString("chat-error-no-provider"));
+          return;
+        }
+      }
     }
   } else if (!activeProvider?.isReady()) {
     ztoolkit.log("Provider not ready:", activeProviderId);

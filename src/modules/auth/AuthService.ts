@@ -98,49 +98,11 @@ export class AuthService {
   }
 
   /**
-   * 从 CookieSandbox 提取 session cookie
+   * 获取当前的 session cookie
    * 用于在登录后保存 cookie 到 prefs
    */
   extractSessionCookie(): string | null {
-    if (!this._cookieSandbox) return null;
-
-    try {
-      // 访问 CookieSandbox 内部的 _cookies 存储
-      const cookies = (this._cookieSandbox as any)._cookies;
-      if (!cookies) return null;
-
-      ztoolkit.log(
-        "[AuthService] CookieSandbox _cookies:",
-        JSON.stringify(cookies),
-      );
-
-      // 查找 session cookie
-      // _cookies 结构: { "host": { "path": { "cookieName": { value: "...", secure: bool, hostOnly: bool } } } }
-      const host = new URL(this.baseUrl).hostname;
-      const hostCookies = cookies[host] || cookies[`.${host}`];
-      if (hostCookies) {
-        for (const path of Object.keys(hostCookies)) {
-          const pathCookies = hostCookies[path];
-          if (pathCookies && pathCookies.session) {
-            ztoolkit.log(
-              "[AuthService] Found session cookie:",
-              pathCookies.session,
-            );
-            // cookie 可能是对象 { value, secure, hostOnly } 或字符串
-            const sessionCookie = pathCookies.session;
-            if (typeof sessionCookie === "object" && sessionCookie.value) {
-              return sessionCookie.value;
-            }
-            return sessionCookie;
-          }
-        }
-      }
-
-      return null;
-    } catch (e) {
-      ztoolkit.log("[AuthService] Failed to extract session cookie:", e);
-      return null;
-    }
+    return this.sessionToken;
   }
 
   /**
@@ -227,46 +189,19 @@ export class AuthService {
   }
 
   /**
-   * 从响应头提取session token
-   */
-  private extractSessionFromResponse(xhr: XMLHttpRequest): void {
-    try {
-      // 尝试多种方式获取 Set-Cookie
-      const setCookie =
-        xhr.getResponseHeader("Set-Cookie") ||
-        xhr.getResponseHeader("set-cookie");
-
-      ztoolkit.log("[AuthService] Trying to extract session from response");
-      ztoolkit.log(
-        "[AuthService] All response headers:",
-        xhr.getAllResponseHeaders(),
-      );
-
-      if (setCookie) {
-        ztoolkit.log("[AuthService] Set-Cookie header found:", setCookie);
-        const sessionMatch = setCookie.match(/session=([^;]+)/);
-        if (sessionMatch) {
-          this.sessionToken = sessionMatch[1];
-          ztoolkit.log(
-            "[AuthService] Session token extracted:",
-            this.sessionToken,
-          );
-        }
-      } else {
-        ztoolkit.log(
-          "[AuthService] Set-Cookie header not accessible (browser security restriction)",
-        );
-        // 由于浏览器安全限制，Set-Cookie 头通常无法通过 JavaScript 读取
-        // 但 CookieSandbox 应该会自动处理 cookie 的存储和发送
-        // 问题是 Zotero 重启后 CookieSandbox 会丢失
-      }
-    } catch (e) {
-      ztoolkit.log("[AuthService] Error reading Set-Cookie header:", e);
-    }
-  }
-
-  /**
-   * 通用HTTP请求方法 - 使用Zotero.HTTP.request
+   * 通用HTTP请求方法 - 使用 Zotero.HTTP.request
+   *
+   * ⚠️ CRITICAL: 不要重构此方法！
+   * 此方法的实现方式是经过反复测试确定的，用于解决跨域 cookie 认证问题。
+   *
+   * 关键点：
+   * 1. 必须使用 Zotero.HTTP.request + CookieSandbox（不能用 XMLHttpRequest）
+   * 2. 必须手动添加 Cookie header（因为 SameSite=Strict 导致浏览器不会自动发送）
+   * 3. 必须从 CookieSandbox._cookies 提取 session（不能从 Services.cookies）
+   *
+   * 背景：NewAPI 服务器的 session cookie 设置了 SameSite=Strict，
+   * 这导致从 Zotero 插件发起的跨域请求无法自动携带/存储 cookie。
+   * 解决方案是使用 CookieSandbox 来接收 cookie，并手动通过 Cookie header 发送。
    */
   private async request<T>(
     method: string,
@@ -299,9 +234,9 @@ export class AuthService {
         headers["Authorization"] = `Bearer ${this.accessToken}`;
       }
 
-      // 手动添加session cookie (用于用户管理API)
-      // NewAPI的用户管理API需要session cookie认证，不接受API Key
-      // Zotero重启后CookieSandbox丢失，需要手动恢复session cookie
+      // ⚠️ CRITICAL: 手动添加 session cookie
+      // 不要删除此代码！由于 SameSite=Strict，浏览器不会自动发送 cookie，
+      // 必须通过 Cookie header 手动添加，否则所有认证请求都会失败 (401)
       if (this.sessionToken) {
         headers["Cookie"] = `session=${this.sessionToken}`;
         ztoolkit.log(
@@ -312,8 +247,8 @@ export class AuthService {
         ztoolkit.log("[AuthService] No session token available for request");
       }
 
-      // 使用Zotero的CookieSandbox来处理cookie
-      // 这允许跨域请求自动携带cookie
+      // ⚠️ CRITICAL: 必须使用 CookieSandbox
+      // 不要删除或改用其他方式！这是从服务器响应中获取 session cookie 的唯一可靠方式
       if (!this._cookieSandbox) {
         // @ts-expect-error - CookieSandbox exists in Zotero but not in types
         this._cookieSandbox = new Zotero.CookieSandbox(null, this.baseUrl);
@@ -323,14 +258,13 @@ export class AuthService {
         headers,
         body: options.body ? JSON.stringify(options.body) : undefined,
         responseType: "json",
-        // 允许处理非2xx响应
         successCodes: false as const,
         cookieSandbox: this._cookieSandbox,
       });
 
-      // 尝试从响应头提取session
+      // 尝试从 CookieSandbox 提取 session
       if (options.extractSession) {
-        this.extractSessionFromResponse(response);
+        this.extractSessionFromCookieSandbox();
       }
 
       const data = response.response as T;
@@ -340,7 +274,6 @@ export class AuthService {
     } catch (error: unknown) {
       this.logError(method, fullUrl, error);
 
-      // Zotero.HTTP.request 在非2xx状态码时可能抛出异常
       if (error && typeof error === "object" && "status" in error) {
         const httpError = error as { status: number; response?: unknown };
         const data = httpError.response as T;
@@ -353,6 +286,47 @@ export class AuthService {
         data: null,
         error: error instanceof Error ? error.message : "网络错误",
       };
+    }
+  }
+
+  /**
+   * 从 CookieSandbox 提取 session cookie
+   *
+   * ⚠️ CRITICAL: 不要重构此方法！
+   * 必须从 CookieSandbox._cookies 提取，不能使用 Services.cookies 或其他方式。
+   * 这是因为 SameSite=Strict 的 cookie 不会被存储到浏览器的 cookie store，
+   * 但 CookieSandbox 可以正确接收和存储它。
+   */
+  private extractSessionFromCookieSandbox(): void {
+    if (!this._cookieSandbox) return;
+
+    try {
+      const cookies = (this._cookieSandbox as any)._cookies;
+      ztoolkit.log("[AuthService] CookieSandbox _cookies:", JSON.stringify(cookies));
+
+      if (!cookies) return;
+
+      const host = new URL(this.baseUrl).hostname;
+      const hostCookies = cookies[host] || cookies[`.${host}`];
+      if (hostCookies) {
+        for (const path of Object.keys(hostCookies)) {
+          const pathCookies = hostCookies[path];
+          if (pathCookies && pathCookies.session) {
+            const sessionCookie = pathCookies.session;
+            const value = typeof sessionCookie === "object" && sessionCookie.value
+              ? sessionCookie.value
+              : sessionCookie;
+            if (value) {
+              this.sessionToken = value;
+              ztoolkit.log("[AuthService] Session extracted from CookieSandbox:", value.substring(0, 20) + "...");
+              return;
+            }
+          }
+        }
+      }
+      ztoolkit.log("[AuthService] No session cookie in CookieSandbox");
+    } catch (e) {
+      ztoolkit.log("[AuthService] Error extracting from CookieSandbox:", e);
     }
   }
 
@@ -473,7 +447,6 @@ export class AuthService {
     }
 
     // 从响应中提取用户ID并保存
-    // 响应格式: { data: { id: number, username: string, ... }, success: true }
     if (responseData.data?.id) {
       this.userId = responseData.data.id;
       ztoolkit.log("[AuthService] User ID extracted:", this.userId);

@@ -54,6 +54,7 @@ pdfaitalk-sidebar-login-required = 请先登录
 # Chat Panel
 pdfaitalk-chat-toolbar-button-tooltip = 打开AI聊天面板
 pdfaitalk-chat-error-no-provider = ⚠️ 没有可用的 AI 服务商，请在设置中配置。
+pdfaitalk-chat-error-session-expired = ⚠️ 登录已过期，请重新登录。
 pdfaitalk-chat-start-conversation = 开始对话
 pdfaitalk-chat-attach-pdf = 附加PDF
 pdfaitalk-chat-new-chat = 新对话

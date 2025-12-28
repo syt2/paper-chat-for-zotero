@@ -36,6 +36,7 @@ export type FluentMessageId =
   | 'pdfaitalk-auth-verification-placeholder'
   | 'pdfaitalk-chat-attach-pdf'
   | 'pdfaitalk-chat-error-no-provider'
+  | 'pdfaitalk-chat-error-session-expired'
   | 'pdfaitalk-chat-history'
   | 'pdfaitalk-chat-input-placeholder'
   | 'pdfaitalk-chat-message-count'

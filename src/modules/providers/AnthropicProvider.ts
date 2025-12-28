@@ -106,12 +106,7 @@ export class AnthropicProvider extends BaseProvider {
   }
 
   async getAvailableModels(): Promise<string[]> {
-    return this._config.availableModels || [
-      "claude-haiku-4-5-20251001",
-      "claude-sonnet-4-5-20250929",
-      "claude-opus-4-5-20251101",
-      "claude-3-5-haiku-20241022",
-      "claude-3-haiku-20240307",
-    ];
+    // Anthropic doesn't have a public models API, use config
+    return this._config.availableModels || [];
   }
 }

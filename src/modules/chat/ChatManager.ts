@@ -119,6 +119,22 @@ export class ChatManager {
   }
 
   /**
+   * 显示错误消息到聊天界面
+   */
+  async showErrorMessage(content: string): Promise<void> {
+    const itemId = this.activeItemId ?? 0;
+    const session = await this.getOrCreateSession(itemId);
+    const errorMessage: ChatMessage = {
+      id: this.generateId(),
+      role: "assistant",
+      content,
+      timestamp: Date.now(),
+    };
+    session.messages.push(errorMessage);
+    this.onMessageUpdate?.(itemId, session.messages);
+  }
+
+  /**
    * 发送消息（统一方法，支持全局聊天和绑定 Item 的聊天）
    * @param content 消息内容
    * @param options 选项，包含可选的 item（为 null 或 item.id === 0 时为全局聊天）

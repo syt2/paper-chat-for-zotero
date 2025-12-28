@@ -54,6 +54,7 @@ pdfaitalk-sidebar-login-required = Please login first
 # Chat Panel
 pdfaitalk-chat-toolbar-button-tooltip = Open AI Chat Panel
 pdfaitalk-chat-error-no-provider = ⚠️ No AI provider available. Please configure a provider in Settings.
+pdfaitalk-chat-error-session-expired = ⚠️ Session expired. Please log in again.
 pdfaitalk-chat-start-conversation = Start a conversation
 pdfaitalk-chat-attach-pdf = Attach PDF
 pdfaitalk-chat-new-chat = New Chat

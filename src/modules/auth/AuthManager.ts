@@ -120,7 +120,15 @@ export class AuthManager {
    * 检查是否为 session 失效错误
    */
   private isSessionInvalidError(message: string): boolean {
-    return message.includes("token") && (message.includes("无效") || message.includes("invalid"));
+    // 检查 token 无效
+    if (message.includes("token") && (message.includes("无效") || message.includes("invalid"))) {
+      return true;
+    }
+    // 检查未登录/无权操作
+    if (message.includes("未登录") || message.includes("无权")) {
+      return true;
+    }
+    return false;
   }
 
   /**
