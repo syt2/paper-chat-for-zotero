@@ -26,7 +26,8 @@
       "Bash(npm ls:*)",
       "Bash(npm install:*)",
       "Bash(npx prettier:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(npx zotero-plugin build)"
     ]
   }
 }

@@ -1,4 +1,4 @@
-prefs-title = PDF AI Talk
+pdfaitalk-prefs-title = PDF AI Talk
 
 # Auth Dialog
 pdfaitalk-auth-dialog-title = User Login
@@ -54,19 +54,14 @@ pdfaitalk-sidebar-login-required = Please login first
 # Chat Panel
 pdfaitalk-chat-toolbar-button-tooltip = Open AI Chat Panel
 pdfaitalk-chat-error-no-provider = ⚠️ No AI provider available. Please configure a provider in Settings.
-
-# Preferences (used by getString in preferenceScript.ts)
-pdfaitalk-pref-show-key = Show
-pdfaitalk-pref-hide-key = Hide
-pdfaitalk-pref-testing = Testing...
-pdfaitalk-pref-test-success = Connection successful!
-pdfaitalk-pref-test-failed = Connection failed
-pdfaitalk-pref-provider-not-ready = Provider not configured
-pdfaitalk-pref-refresh-failed = Failed to refresh models
-pdfaitalk-pref-fetching-models = Fetching models...
-pdfaitalk-pref-models-loaded = Loaded { $count } models
-pdfaitalk-pref-fetch-models-failed = Failed to fetch models
-pdfaitalk-pref-enter-provider-name = Enter provider name:
-pdfaitalk-pref-enter-model-id = Enter model ID:
-pdfaitalk-pref-model-exists = Model already exists
-pdfaitalk-pref-model-custom = Custom
+pdfaitalk-chat-start-conversation = Start a conversation
+pdfaitalk-chat-attach-pdf = Attach PDF
+pdfaitalk-chat-new-chat = New Chat
+pdfaitalk-chat-upload-file = Upload File
+pdfaitalk-chat-history = Chat History
+pdfaitalk-chat-input-placeholder = Ask a question about the PDF...
+pdfaitalk-chat-send = Send
+pdfaitalk-chat-no-messages = (no messages)
+pdfaitalk-chat-message-count = { $count } messages
+pdfaitalk-chat-show-more = Show more ({ $count } remaining)
+pdfaitalk-chat-no-history = No chat history

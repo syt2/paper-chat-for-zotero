@@ -16,3 +16,6 @@ pref("userQuotaJson", "");
 // Cache
 pref("pdfaitalkModelsCache", "");
 pref("pdfaitalkRatiosCache", "");
+
+// PDF Settings
+pref("uploadRawPdfOnFailure", false);

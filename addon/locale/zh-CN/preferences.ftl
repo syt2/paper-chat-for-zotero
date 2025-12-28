@@ -64,3 +64,9 @@ pref-model-list = 模型列表
 pref-add-model = + 添加模型
 pref-enter-model-id = 请输入模型ID:
 pref-model-custom = 自定义
+pref-model-exists = 该模型已存在
+
+# PDF Settings
+pref-pdf-settings = PDF 设置
+pref-upload-raw-pdf = 文本提取失败时上传原始 PDF
+pref-upload-raw-pdf-desc = 启用后，若文本提取失败将上传原始 PDF 给 AI，这可能会消耗大量 token。

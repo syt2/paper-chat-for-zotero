@@ -1,7 +1,9 @@
 import { config } from "../../package.json";
-import { FluentMessageId } from "../../typings/i10n";
 
 export { initLocale, getString, getLocaleID };
+
+// getString accepts unprefixed key names and adds the addonRef prefix automatically
+type LocaleKey = string;
 
 /**
  * Initialize locale data
@@ -44,10 +46,10 @@ function initLocale() {
  * getString("addon-dynamic-example", { args: { count: 2 } }); // I have 2 apples
  * ```
  */
-function getString(localString: FluentMessageId): string;
-function getString(localString: FluentMessageId, branch: string): string;
+function getString(localString: LocaleKey): string;
+function getString(localString: LocaleKey, branch: string): string;
 function getString(
-  localeString: FluentMessageId,
+  localeString: LocaleKey,
   options: { branch?: string | undefined; args?: Record<string, unknown> },
 ): string;
 function getString(...inputs: any[]) {
@@ -73,7 +75,7 @@ interface Pattern {
 }
 
 function _getString(
-  localeString: FluentMessageId,
+  localeString: LocaleKey,
   options: { branch?: string | undefined; args?: Record<string, unknown> } = {},
 ): string {
   const localStringWithPrefix = `${config.addonRef}-${localeString}`;
@@ -95,6 +97,6 @@ function _getString(
   }
 }
 
-function getLocaleID(id: FluentMessageId) {
+function getLocaleID(id: LocaleKey) {
   return `${config.addonRef}-${id}`;
 }

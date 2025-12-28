@@ -1,4 +1,4 @@
-prefs-title = PDF AI Talk
+pdfaitalk-prefs-title = PDF AI Talk
 
 # Auth Dialog
 pdfaitalk-auth-dialog-title = 用户登录
@@ -54,19 +54,14 @@ pdfaitalk-sidebar-login-required = 请先登录
 # Chat Panel
 pdfaitalk-chat-toolbar-button-tooltip = 打开AI聊天面板
 pdfaitalk-chat-error-no-provider = ⚠️ 没有可用的 AI 服务商，请在设置中配置。
-
-# Preferences (used by getString in preferenceScript.ts)
-pdfaitalk-pref-show-key = 显示
-pdfaitalk-pref-hide-key = 隐藏
-pdfaitalk-pref-testing = 测试中...
-pdfaitalk-pref-test-success = 连接成功！
-pdfaitalk-pref-test-failed = 连接失败
-pdfaitalk-pref-provider-not-ready = 提供商未配置
-pdfaitalk-pref-refresh-failed = 刷新模型列表失败
-pdfaitalk-pref-fetching-models = 正在获取模型列表...
-pdfaitalk-pref-models-loaded = 已加载 { $count } 个模型
-pdfaitalk-pref-fetch-models-failed = 获取模型列表失败
-pdfaitalk-pref-enter-provider-name = 请输入提供商名称:
-pdfaitalk-pref-enter-model-id = 请输入模型ID:
-pdfaitalk-pref-model-exists = 该模型已存在
-pdfaitalk-pref-model-custom = 自定义
+pdfaitalk-chat-start-conversation = 开始对话
+pdfaitalk-chat-attach-pdf = 附加PDF
+pdfaitalk-chat-new-chat = 新对话
+pdfaitalk-chat-upload-file = 上传文件
+pdfaitalk-chat-history = 聊天记录
+pdfaitalk-chat-input-placeholder = 询问关于PDF的问题...
+pdfaitalk-chat-send = 发送
+pdfaitalk-chat-no-messages = (无消息)
+pdfaitalk-chat-message-count = { $count } 条消息
+pdfaitalk-chat-show-more = 显示更多 (剩余 { $count } 条)
+pdfaitalk-chat-no-history = 暂无聊天记录

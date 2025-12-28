@@ -20,6 +20,7 @@ declare namespace _ZoteroTypes {
       "userQuotaJson": string;
       "pdfaitalkModelsCache": string;
       "pdfaitalkRatiosCache": string;
+      "uploadRawPdfOnFailure": boolean;
     };
   }
 }

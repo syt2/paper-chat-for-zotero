@@ -15,6 +15,7 @@ import {
   bindProviderListClickEvents,
   bindActiveProviderEvent,
 } from "./ProviderListUI";
+import { getPref, setPref } from "../../utils/prefs";
 
 // Current selected provider ID
 let currentProviderId: string = "pdfaitalk";
@@ -64,6 +65,19 @@ export async function initializePrefsUI(): Promise<void> {
 
   // Populate PDFAiTalk model dropdown
   populatePdfaitalkModels(doc);
+
+  // Initialize PDF settings checkbox
+  initPdfSettingsCheckbox(doc);
+}
+
+/**
+ * Initialize PDF settings checkbox
+ */
+function initPdfSettingsCheckbox(doc: Document): void {
+  const checkbox = doc.getElementById("pref-upload-raw-pdf-checkbox") as XUL.Checkbox | null;
+  if (checkbox) {
+    checkbox.checked = getPref("uploadRawPdfOnFailure") as boolean;
+  }
 }
 
 /**
@@ -102,4 +116,19 @@ export function bindPrefEvents(): void {
 
   // Bind active provider selection event
   bindActiveProviderEvent(doc);
+
+  // Bind PDF settings checkbox event
+  bindPdfSettingsEvent(doc);
+}
+
+/**
+ * Bind PDF settings checkbox event
+ */
+function bindPdfSettingsEvent(doc: Document): void {
+  const checkbox = doc.getElementById("pref-upload-raw-pdf-checkbox") as XUL.Checkbox | null;
+  if (checkbox) {
+    checkbox.addEventListener("command", () => {
+      setPref("uploadRawPdfOnFailure", checkbox.checked);
+    });
+  }
 }

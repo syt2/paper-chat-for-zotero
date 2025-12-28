@@ -18,6 +18,7 @@ import { StorageService } from "./StorageService";
 import { PdfExtractor } from "./PdfExtractor";
 import { getProviderManager } from "../providers";
 import { getString } from "../../utils/locale";
+import { getPref } from "../../utils/prefs";
 
 export class ChatManager {
   private sessions: Map<number, ChatSession> = new Map();
@@ -154,8 +155,8 @@ export class ChatManager {
         pdfWasAttached = true;
         ztoolkit.log("[PDF Attach] PDF text extracted successfully, text length:", pdfText.length);
         finalContent = `[PDF Content]:\n${pdfText.substring(0, 50000)}\n\n[Question]:\n${content}`;
-      } else if (provider.supportsPdfUpload()) {
-        // 文本提取失败，尝试 PDF 文件上传
+      } else if (provider.supportsPdfUpload() && getPref("uploadRawPdfOnFailure")) {
+        // 文本提取失败，且用户允许上传原始 PDF，尝试 PDF 文件上传
         ztoolkit.log("[PDF Attach] Text extraction failed, trying PDF file upload");
         const pdfBase64 = await this.pdfExtractor.getPdfBase64(item);
         if (pdfBase64) {
@@ -164,6 +165,8 @@ export class ChatManager {
           pdfWasAttached = true;
           ztoolkit.log("[PDF Attach] PDF file ready for upload:", pdfBase64.name);
         }
+      } else if (!pdfText) {
+        ztoolkit.log("[PDF Attach] Text extraction failed and raw PDF upload is disabled");
       }
     }
 

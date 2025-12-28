@@ -64,3 +64,9 @@ pref-model-list = Model List
 pref-add-model = + Add Model
 pref-enter-model-id = Enter model ID:
 pref-model-custom = Custom
+pref-model-exists = Model already exists
+
+# PDF Settings
+pref-pdf-settings = PDF Settings
+pref-upload-raw-pdf = Upload raw PDF on text extraction failure
+pref-upload-raw-pdf-desc = When enabled, uploads original PDF to AI if text extraction fails. This may consume significantly more tokens.
