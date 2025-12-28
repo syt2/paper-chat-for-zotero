@@ -59,7 +59,7 @@ export async function initializePrefsUI(): Promise<void> {
   currentProviderId = providerManager.getActiveProviderId();
   selectProvider(doc, currentProviderId, setCurrentProviderId);
 
-  // Update OneAI user status display
+  // Update pdfaitalk user status display
   updateUserDisplay(doc, authManager);
 
   // Populate PDFAiTalk model dropdown

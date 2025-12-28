@@ -27,7 +27,7 @@ export const BUILTIN_PROVIDERS: Record<BuiltinProviderId, ProviderMetadata> = {
     id: "pdfaitalk",
     name: "PDFAiTalk",
     description: "Login-based AI service with multi-model support",
-    defaultBaseUrl: "https://oneai.tracepad.site/v1",
+    defaultBaseUrl: "https://pdfaitalk.zotero.store/v1",
     defaultModels: [
       // claude-haiku-4-5-20251001 作为首选默认模型
       "claude-haiku-4-5-20251001",
@@ -57,7 +57,7 @@ export const BUILTIN_PROVIDERS: Record<BuiltinProviderId, ProviderMetadata> = {
       { modelId: "Pro/moonshotai/Kimi-K2-Instruct-0905", contextWindow: 128000, maxOutput: 8192, capabilities: ["tool_use"] },
       { modelId: "claude-opus-4-5-20251101", contextWindow: 200000, maxOutput: 32000, capabilities: ["vision", "reasoning", "tool_use"] },
     ],
-    website: "https://oneai.tracepad.site",
+    website: "https://pdfaitalk.zotero.store",
     type: "pdfaitalk",
   },
   openai: {
