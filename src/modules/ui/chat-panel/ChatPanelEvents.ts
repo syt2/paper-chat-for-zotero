@@ -333,6 +333,24 @@ export function setupEventHandlers(context: ChatPanelContext): void {
     });
   }
 
+  // Settings button - open preferences
+  const settingsBtn = container.querySelector("#chat-settings-btn") as HTMLButtonElement;
+  if (settingsBtn) {
+    settingsBtn.addEventListener("click", () => {
+      ztoolkit.log("Settings button clicked");
+      // Open preferences and navigate to this plugin's pane
+      Zotero.Utilities.Internal.openPreferences("pdfaitalk-prefpane");
+    });
+
+    // Hover effect
+    settingsBtn.addEventListener("mouseenter", () => {
+      settingsBtn.style.background = getCurrentTheme().dropdownItemHoverBg;
+    });
+    settingsBtn.addEventListener("mouseleave", () => {
+      settingsBtn.style.background = "transparent";
+    });
+  }
+
   ztoolkit.log("Event listeners attached to buttons");
 }
 

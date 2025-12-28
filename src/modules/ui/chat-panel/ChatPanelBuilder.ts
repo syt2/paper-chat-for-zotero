@@ -257,12 +257,19 @@ export function createChatContainer(doc: Document, theme: ThemeColors): HTMLElem
 
   inputWrapper.appendChild(messageInput);
 
-  // Bottom bar - model selector on left, send button on right
+  // Bottom bar - model selector + settings on left, send button on right
   const inputBottomBar = createElement(doc, "div", {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
     marginTop: "10px",
+  });
+
+  // Left side container (model selector + settings button)
+  const leftContainer = createElement(doc, "div", {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
   });
 
   // Model selector container
@@ -322,6 +329,33 @@ export function createChatContainer(doc: Document, theme: ThemeColors): HTMLElem
   modelSelectorContainer.appendChild(modelSelectorBtn);
   modelSelectorContainer.appendChild(modelDropdown);
 
+  // Settings button (gear icon)
+  const settingsBtn = createElement(doc, "button", {
+    width: "28px",
+    height: "28px",
+    background: "transparent",
+    border: "none",
+    borderRadius: "6px",
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "0",
+  }, { id: "chat-settings-btn" });
+  settingsBtn.title = "打开设置";
+
+  // Settings icon (SVG)
+  const settingsIcon = createElement(doc, "img", {
+    width: "16px",
+    height: "16px",
+    opacity: "0.6",
+  });
+  (settingsIcon as HTMLImageElement).src = `chrome://${config.addonRef}/content/icons/setting.svg`;
+  settingsBtn.appendChild(settingsIcon);
+
+  leftContainer.appendChild(modelSelectorContainer);
+  leftContainer.appendChild(settingsBtn);
+
   // Send button
   const sendButton = createElement(doc, "button", {
     width: "32px",
@@ -349,7 +383,7 @@ export function createChatContainer(doc: Document, theme: ThemeColors): HTMLElem
   sendIcon.textContent = "↑";
   sendButton.appendChild(sendIcon);
 
-  inputBottomBar.appendChild(modelSelectorContainer);
+  inputBottomBar.appendChild(leftContainer);
   inputBottomBar.appendChild(sendButton);
 
   inputArea.appendChild(inputWrapper);
