@@ -18,20 +18,67 @@ export function createSessionItem(
   session: SessionInfo,
   theme: ThemeColors,
   onSelect: (session: SessionInfo) => void,
+  onDelete?: (session: SessionInfo) => void,
 ): HTMLElement {
   const sessionItem = createElement(doc, "div", {
     padding: "12px 14px",
     borderBottom: `1px solid ${theme.borderColor}`,
     cursor: "pointer",
     transition: "background 0.2s",
+    position: "relative",
   });
+
+  // Delete button (hidden by default, shown on hover)
+  const deleteBtn = createElement(doc, "button", {
+    position: "absolute",
+    right: "8px",
+    top: "50%",
+    transform: "translateY(-50%)",
+    width: "24px",
+    height: "24px",
+    background: "transparent",
+    border: "none",
+    borderRadius: "4px",
+    cursor: "pointer",
+    display: "none",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: "14px",
+    color: theme.textMuted,
+    padding: "0",
+  });
+  deleteBtn.textContent = "×";
+  deleteBtn.title = "删除";
 
   // Hover effects
   sessionItem.addEventListener("mouseenter", () => {
     sessionItem.style.background = theme.dropdownItemHoverBg;
+    deleteBtn.style.display = "flex";
   });
   sessionItem.addEventListener("mouseleave", () => {
     sessionItem.style.background = "transparent";
+    deleteBtn.style.display = "none";
+  });
+
+  // Delete button hover
+  deleteBtn.addEventListener("mouseenter", () => {
+    deleteBtn.style.background = "rgba(255, 0, 0, 0.1)";
+    deleteBtn.style.color = "#e53935";
+  });
+  deleteBtn.addEventListener("mouseleave", () => {
+    deleteBtn.style.background = "transparent";
+    deleteBtn.style.color = theme.textMuted;
+  });
+
+  // Delete button click
+  deleteBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    onDelete?.(session);
+  });
+
+  // Content wrapper (to keep content away from delete button)
+  const contentWrapper = createElement(doc, "div", {
+    paddingRight: "30px",
   });
 
   // Item name
@@ -69,14 +116,27 @@ export function createSessionItem(
   msgCount.textContent = getString("chat-message-count", { args: { count: session.messageCount } });
 
   const timeEl = createElement(doc, "span", {});
-  timeEl.textContent = new Date(session.lastUpdated).toLocaleDateString();
+  const date = new Date(session.lastUpdated);
+  // 格式化为 "MM/DD HH:mm" 或 "YYYY/MM/DD HH:mm"（如果不是今年）
+  const now = new Date();
+  const isThisYear = date.getFullYear() === now.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  timeEl.textContent = isThisYear
+    ? `${month}/${day} ${hours}:${minutes}`
+    : `${date.getFullYear()}/${month}/${day} ${hours}:${minutes}`;
 
   metaEl.appendChild(msgCount);
   metaEl.appendChild(timeEl);
 
-  sessionItem.appendChild(nameEl);
-  sessionItem.appendChild(previewEl);
-  sessionItem.appendChild(metaEl);
+  contentWrapper.appendChild(nameEl);
+  contentWrapper.appendChild(previewEl);
+  contentWrapper.appendChild(metaEl);
+
+  sessionItem.appendChild(contentWrapper);
+  sessionItem.appendChild(deleteBtn);
 
   // Click handler
   sessionItem.addEventListener("click", () => {
@@ -113,6 +173,7 @@ export function renderMoreSessions(
   state: HistoryDropdownState,
   theme: ThemeColors,
   onSelect: (session: SessionInfo) => void,
+  onDelete?: (session: SessionInfo) => void,
 ): void {
   const endIndex = Math.min(state.displayedCount + SESSIONS_PER_PAGE, state.allSessions.length);
 
@@ -124,7 +185,7 @@ export function renderMoreSessions(
 
   // Add session items
   for (let i = state.displayedCount; i < endIndex; i++) {
-    container.appendChild(createSessionItem(doc, state.allSessions[i], theme, onSelect));
+    container.appendChild(createSessionItem(doc, state.allSessions[i], theme, onSelect, onDelete));
   }
   state.displayedCount = endIndex;
 
@@ -143,7 +204,7 @@ export function renderMoreSessions(
 
     loadMoreBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      renderMoreSessions(container, doc, state, theme, onSelect);
+      renderMoreSessions(container, doc, state, theme, onSelect, onDelete);
     });
     loadMoreBtn.addEventListener("mouseenter", () => {
       loadMoreBtn.style.background = chatColors.loadMoreBg;
@@ -166,6 +227,7 @@ export function populateHistoryDropdown(
   state: HistoryDropdownState,
   theme: ThemeColors,
   onSelect: (session: SessionInfo) => void,
+  onDelete?: (session: SessionInfo) => void,
 ): void {
   // Reset state
   state.allSessions = sessions;
@@ -184,7 +246,7 @@ export function populateHistoryDropdown(
     dropdown.appendChild(emptyMsg);
   } else {
     // Render first page
-    renderMoreSessions(dropdown, doc, state, theme, onSelect);
+    renderMoreSessions(dropdown, doc, state, theme, onSelect, onDelete);
   }
 }
 

@@ -239,6 +239,13 @@ export function setupEventHandlers(context: ChatPanelContext): void {
     if (!isNowVisible) return;
 
     // Populate history dropdown
+    await refreshHistoryDropdown();
+  });
+
+  // Helper function to refresh history dropdown
+  const refreshHistoryDropdown = async () => {
+    if (!historyDropdown) return;
+
     const sessions = await chatManager.getAllSessions();
     const theme = getCurrentTheme();
 
@@ -248,6 +255,7 @@ export function setupEventHandlers(context: ChatPanelContext): void {
       sessions,
       historyState,
       theme,
+      // onSelect callback
       async (session: SessionInfo) => {
         ztoolkit.log("Loading session for item:", session.itemId);
         historyDropdown.style.display = "none";
@@ -282,8 +290,15 @@ export function setupEventHandlers(context: ChatPanelContext): void {
           context.renderMessages(loadedSession.messages);
         }
       },
+      // onDelete callback
+      async (session: SessionInfo) => {
+        ztoolkit.log("Deleting session for item:", session.itemId);
+        await chatManager.clearSession(session.itemId);
+        // Refresh the dropdown to reflect the deletion
+        await refreshHistoryDropdown();
+      },
     );
-  });
+  };
 
   // Close dropdown when clicking outside
   if (historyDropdown && historyBtn) {

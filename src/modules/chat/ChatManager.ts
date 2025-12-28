@@ -358,19 +358,22 @@ export class ChatManager {
   }
 
   /**
-   * 清空会话
+   * 清空会话（同时删除本地存储）
    */
   async clearSession(itemId: number): Promise<void> {
+    // 清空内存中的会话（如果存在）
     const session = this.sessions.get(itemId);
     if (session) {
       session.messages = [];
       session.pdfAttached = false;
       session.pdfContent = undefined;
       session.updatedAt = Date.now();
-
-      await this.storageService.deleteSession(itemId);
       this.onMessageUpdate?.(itemId, session.messages);
     }
+
+    // 无论内存中是否存在，都尝试删除本地存储
+    await this.storageService.deleteSession(itemId);
+    ztoolkit.log("Session cleared and deleted from storage:", itemId);
   }
 
   /**
