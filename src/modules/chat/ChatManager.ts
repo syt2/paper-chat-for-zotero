@@ -17,6 +17,7 @@ import type {
 import { StorageService } from "./StorageService";
 import { PdfExtractor } from "./PdfExtractor";
 import { getProviderManager } from "../providers";
+import { getAuthManager } from "../auth";
 import { getString } from "../../utils/locale";
 import { getPref } from "../../utils/prefs";
 
@@ -43,6 +44,37 @@ export class ChatManager {
    */
   private getActiveProvider() {
     return getProviderManager().getActiveProvider();
+  }
+
+  /**
+   * 检查错误是否为认证错误 (401/403 或令牌相关错误)
+   */
+  private isAuthError(error: Error): boolean {
+    const message = error.message || "";
+    return (
+      // HTTP 状态码
+      message.includes("API Error: 401") ||
+      message.includes("API Error: 403") ||
+      // 英文错误消息
+      message.includes("Unauthorized") ||
+      message.includes("Invalid API key") ||
+      message.includes("authentication") ||
+      message.includes("invalid_api_key") ||
+      // 中文错误消息 (NewAPI)
+      message.includes("无效的令牌") ||
+      message.includes("未提供令牌") ||
+      message.includes("令牌状态不可用") ||
+      message.includes("令牌已过期") ||
+      message.includes("令牌额度不足")
+    );
+  }
+
+  /**
+   * 检查当前 provider 是否为 PDFAiTalk (支持 token 刷新)
+   */
+  private isPdfAiTalkProvider(): boolean {
+    const provider = this.getActiveProvider();
+    return provider?.getName() === "PDFAiTalk";
   }
 
   /**
@@ -211,49 +243,88 @@ export class ChatManager {
     session.messages.push(assistantMessage);
     this.onMessageUpdate?.(itemId, session.messages);
 
-    // 调用 API
-    const callbacks: StreamCallbacks = {
-      onChunk: (chunk: string) => {
-        assistantMessage.content += chunk;
-        this.onStreamingUpdate?.(itemId, assistantMessage.content);
-      },
-      onComplete: async (fullContent: string) => {
-        assistantMessage.content = fullContent;
-        assistantMessage.timestamp = Date.now();
-        session.updatedAt = Date.now();
-
-        await this.storageService.saveSession(session);
-        this.onMessageUpdate?.(itemId, session.messages);
-
-        if (pdfWasAttached) {
-          this.onPdfAttached?.();
-        }
-        this.onMessageComplete?.();
-      },
-      onError: (error: Error) => {
-        ztoolkit.log("[API Error]", error.message);
-        session.messages.pop();
-
-        const errorMessage: ChatMessage = {
-          id: this.generateId(),
-          role: "error",
-          content: error.message,
-          timestamp: Date.now(),
-        };
-        session.messages.push(errorMessage);
-
-        this.onError?.(error);
-        this.onMessageUpdate?.(itemId, session.messages);
-      },
-    };
-
     // Log API request info
     ztoolkit.log("[API Request] Sending to provider:", provider.getName());
     ztoolkit.log("[API Request] Message count:", session.messages.length - 1);
     ztoolkit.log("[API Request] Has images:", options.images?.length || 0);
     ztoolkit.log("[API Request] Has PDF attachment:", pdfAttachment ? "yes" : "no");
 
-    await provider.streamChatCompletion(session.messages.slice(0, -1), callbacks, pdfAttachment);
+    // 调用 API with retry on auth error
+    let hasRetried = false;
+
+    const attemptRequest = async (): Promise<void> => {
+      return new Promise((resolve) => {
+        const callbacks: StreamCallbacks = {
+          onChunk: (chunk: string) => {
+            assistantMessage.content += chunk;
+            this.onStreamingUpdate?.(itemId, assistantMessage.content);
+          },
+          onComplete: async (fullContent: string) => {
+            assistantMessage.content = fullContent;
+            assistantMessage.timestamp = Date.now();
+            session.updatedAt = Date.now();
+
+            await this.storageService.saveSession(session);
+            this.onMessageUpdate?.(itemId, session.messages);
+
+            if (pdfWasAttached) {
+              this.onPdfAttached?.();
+            }
+            this.onMessageComplete?.();
+            resolve();
+          },
+          onError: async (error: Error) => {
+            ztoolkit.log("[API Error]", error.message);
+
+            // 检查是否为认证错误，且可以重试
+            if (!hasRetried && this.isAuthError(error) && this.isPdfAiTalkProvider()) {
+              ztoolkit.log("[API Error] Auth error detected, attempting to refresh API key...");
+              hasRetried = true;
+
+              try {
+                // 刷新 API key
+                const authManager = getAuthManager();
+                await authManager.ensurePluginToken(true); // forceRefresh
+
+                // 重置 assistant message 内容
+                assistantMessage.content = "";
+                ztoolkit.log("[API Retry] API key refreshed, retrying request...");
+
+                // 重新获取 provider (它会使用新的 API key)
+                const newProvider = this.getActiveProvider();
+                if (newProvider && newProvider.isReady()) {
+                  // 递归重试
+                  await attemptRequest();
+                  resolve();
+                  return;
+                }
+              } catch (retryError) {
+                ztoolkit.log("[API Retry] Failed to refresh API key:", retryError);
+              }
+            }
+
+            // 显示错误消息
+            session.messages.pop();
+
+            const errorMessage: ChatMessage = {
+              id: this.generateId(),
+              role: "error",
+              content: error.message,
+              timestamp: Date.now(),
+            };
+            session.messages.push(errorMessage);
+
+            this.onError?.(error);
+            this.onMessageUpdate?.(itemId, session.messages);
+            resolve();
+          },
+        };
+
+        provider.streamChatCompletion(session.messages.slice(0, -1), callbacks, pdfAttachment);
+      });
+    };
+
+    await attemptRequest();
   }
 
   /**

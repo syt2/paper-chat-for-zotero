@@ -579,8 +579,10 @@ export class AuthManager {
 
   /**
    * 确保存在插件专用Token
+   * 公开方法，允许在 API key 失效时刷新
+   * @param forceRefresh 是否强制刷新（删除旧 token 并创建新的）
    */
-  private async ensurePluginToken(): Promise<void> {
+  async ensurePluginToken(forceRefresh: boolean = false): Promise<void> {
     // 先检查是否已有插件Token
     const tokensResult = await this.withSessionRetry(
       () => this.authService.getTokens(0, 100),
@@ -592,11 +594,26 @@ export class AuthManager {
         (t) => t.name === PLUGIN_TOKEN_NAME && t.status === 1,
       );
 
-      if (existingToken) {
+      if (existingToken && !forceRefresh) {
         this.state.token = existingToken;
         this.state.apiKey = `sk-${existingToken.key}`;
         setPref("apiKey", this.state.apiKey);
+        // 同时更新 authService 的 accessToken
+        this.authService.setAccessToken(this.state.apiKey);
+        ztoolkit.log(
+          "[AuthManager] Using existing plugin token:",
+          this.state.apiKey.substring(0, 10) + "...",
+        );
         return;
+      }
+
+      // forceRefresh 时，如果有旧 token 则删除它
+      if (existingToken && forceRefresh) {
+        ztoolkit.log("[AuthManager] Force refresh: deleting old token");
+        await this.withSessionRetry(
+          () => this.authService.deleteToken(existingToken.id),
+          "deleteOldToken",
+        );
       }
     }
 
