@@ -22,3 +22,7 @@ pref("uploadRawPdfOnFailure", false);
 
 // UI Settings
 pref("panelMode", "sidebar");
+
+// Guide Settings
+pref("firstInstalledVersion", "");
+pref("guideStatus", 0);

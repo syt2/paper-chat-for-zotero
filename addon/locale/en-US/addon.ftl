@@ -66,3 +66,8 @@ paperchat-chat-no-messages = (no messages)
 paperchat-chat-message-count = { $count } messages
 paperchat-chat-show-more = Show more ({ $count } remaining)
 paperchat-chat-no-history = No chat history
+
+# Guide
+paperchat-guide-toolbar-title = Start Chatting with AI
+paperchat-guide-toolbar-description = Click here to open the AI chat panel and discuss your PDF documents with AI
+paperchat-guide-got-it = Got it

@@ -18,6 +18,7 @@ import { renderMessages as renderMessageElements } from "./MessageRenderer";
 import { renderMarkdownToElement } from "./MarkdownRenderer";
 import { setupEventHandlers, updateAttachmentsPreviewDisplay, updateUserBarDisplay, updatePdfCheckboxVisibilityForItem, focusInput, setActiveReaderItemFn, setTogglePanelModeFn, updatePanelModeButtonIcon } from "./ChatPanelEvents";
 import { loadCachedRatios } from "../../preferences/ModelsFetcher";
+import { Guide } from "../Guide";
 
 // Panel display mode: 'sidebar' or 'floating'
 export type PanelMode = "sidebar" | "floating";
@@ -825,6 +826,12 @@ export function registerToolbarButton(): void {
 
   // Register global tab notifier for sidebar sync across tabs
   registerGlobalTabNotifier();
+
+  // Initialize guide prefs and show guide if needed
+  Guide.initPrefs();
+  setTimeout(() => {
+    Guide.showToolbarGuideIfNeed(Zotero.getMainWindow());
+  }, 500);
 
   ztoolkit.log("Toolbar button registered", button);
 }
