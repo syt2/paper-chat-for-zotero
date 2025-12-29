@@ -26,7 +26,7 @@ Chat with AI about your PDF documents directly in Zotero. Supports OpenAI, Claud
 
 ## Installation
 
-1. Download `.xpi` from [Releases](https://github.com/syt2/pdf-ai-talk/releases)
+1. Download `.xpi` from [Releases](https://github.com/syt2/paper-chat-for-zotero/releases)
 2. Zotero → `Tools` → `Add-ons` → ⚙️ → `Install Add-on From File...`
 
 ## Quick Start

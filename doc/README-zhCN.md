@@ -26,7 +26,7 @@
 
 ## 安装
 
-1. 从 [Releases](https://github.com/syt2/pdf-ai-talk/releases) 下载 `.xpi` 文件
+1. 从 [Releases](https://github.com/syt2/paper-chat-for-zotero/releases) 下载 `.xpi` 文件
 2. Zotero → `工具` → `附加组件` → ⚙️ → `从文件安装附加组件...`
 
 ## 快速开始
