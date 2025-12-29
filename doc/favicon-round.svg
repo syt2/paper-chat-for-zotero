@@ -9,15 +9,25 @@
     }
   </style>
   
-  <g transform="translate(6, 6) scale(0.75)">
+  <!-- 整体缩小并居中 -->
+  <g transform="translate(24, 24) scale(0.8) translate(-24, -24)">
     <!-- 对话框主体 -->
     <path d="M25.5 37H21L11 42V37H4V7H44V18" class="icon-stroke" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
 
     <!-- 文字线条 -->
-    <path d="M12 15H15L18 15" class="icon-stroke" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M12 21H18L24 21" class="icon-stroke" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M12 15H15L18 15" class="icon-stroke" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M12 21H18L24 21" class="icon-stroke" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
 
-    <!-- PDF 文字 -->
-    <text x="36" y="34" font-family="Arial, sans-serif" font-size="12" font-weight="900" class="icon-fill" stroke-width="0.5" text-anchor="middle">PDF</text>
+    <!-- 文档图标 -->
+    <g transform="translate(27, 20) scale(0.45)">
+      <path d="M22 44L21 36" class="icon-stroke" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M42 44V12H26L27 20L28 28L29 36L22 44H42Z" fill="none" class="icon-stroke" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M28 28H33" class="icon-stroke" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M27 20H33" class="icon-stroke" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M6 4H25L26 12L27 20L28 28L29 36H21H6V4Z" fill="none" class="icon-stroke" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M12 12H19" class="icon-stroke" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M12 20H20" class="icon-stroke" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M12 28H21" class="icon-stroke" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
   </g>
 </svg>
