@@ -37,7 +37,7 @@ paperchat-auth-reset-email-sent = 重置密码邮件已发送，请查收邮箱
 paperchat-user-panel-title = 用户信息
 paperchat-user-panel-logged-in = 已登录: { $username }
 paperchat-user-panel-not-logged-in = 未登录
-paperchat-user-panel-balance = 余额
+paperchat-user-panel-balance = Token余额
 paperchat-user-panel-used = 已用
 paperchat-user-panel-login-btn = 登录/注册
 paperchat-user-panel-logout-btn = 退出登录
@@ -48,7 +48,7 @@ paperchat-user-panel-redeem-success = 兑换成功
 paperchat-user-panel-redeem-error = 兑换失败
 
 # Balance display in sidebar
-paperchat-sidebar-balance = 余额: { $balance }
+paperchat-sidebar-balance = Token余额: { $balance }
 paperchat-sidebar-login-required = 请先登录
 
 # Chat Panel

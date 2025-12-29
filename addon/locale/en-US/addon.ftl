@@ -37,7 +37,7 @@ paperchat-auth-reset-email-sent = Password reset email has been sent
 paperchat-user-panel-title = User Info
 paperchat-user-panel-logged-in = Logged in: { $username }
 paperchat-user-panel-not-logged-in = Not logged in
-paperchat-user-panel-balance = Balance
+paperchat-user-panel-balance = Token Balance
 paperchat-user-panel-used = Used
 paperchat-user-panel-login-btn = Login/Register
 paperchat-user-panel-logout-btn = Logout
@@ -48,7 +48,7 @@ paperchat-user-panel-redeem-success = Redeemed successfully
 paperchat-user-panel-redeem-error = Redemption failed
 
 # Balance display in sidebar
-paperchat-sidebar-balance = Balance: { $balance }
+paperchat-sidebar-balance = Token Balance: { $balance }
 paperchat-sidebar-login-required = Please login first
 
 # Chat Panel
