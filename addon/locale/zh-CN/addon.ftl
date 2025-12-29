@@ -69,5 +69,5 @@ paperchat-chat-no-history = 暂无聊天记录
 
 # Guide
 paperchat-guide-toolbar-title = 开始与 AI 对话
-paperchat-guide-toolbar-description = 点击这里打开 AI 聊天面板，与 AI 讨论你的 PDF 文献内容
+paperchat-guide-toolbar-description = 点击这里打开 AI 聊天面板，与 AI 讨论你的文献内容
 paperchat-guide-got-it = 知道了
