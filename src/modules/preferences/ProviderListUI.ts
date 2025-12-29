@@ -8,7 +8,7 @@ import { getProviderManager } from "../providers";
 import { getAuthManager } from "../auth";
 import type { ProviderConfig, ApiKeyProviderConfig } from "../../types/provider";
 import { clearElement } from "./utils";
-import { populatePdfaitalkPanel } from "./PdfaitalkProviderUI";
+import { populatePaperchatPanel } from "./PaperchatProviderUI";
 import { populateApiKeyPanel } from "./ApiKeyProviderUI";
 
 /**
@@ -107,8 +107,8 @@ function createProviderListItem(doc: Document, config: ProviderConfig): Element 
  * Check if a provider is configured and ready to use
  */
 function isProviderConfigured(config: ProviderConfig): boolean {
-  if (config.id === "pdfaitalk") {
-    // PDFAiTalk is configured if user is logged in
+  if (config.id === "paperchat") {
+    // PaperChat is configured if user is logged in
     const authManager = getAuthManager();
     return authManager.isLoggedIn();
   } else {
@@ -141,16 +141,16 @@ export function selectProvider(doc: Document, providerId: string, setCurrentProv
   });
 
   // Show appropriate panel
-  const pdfaitalkPanel = doc.getElementById("pref-panel-pdfaitalk");
+  const paperchatPanel = doc.getElementById("pref-panel-paperchat");
   const apikeyPanel = doc.getElementById("pref-panel-apikey");
 
-  if (providerId === "pdfaitalk") {
-    pdfaitalkPanel?.removeAttribute("hidden");
+  if (providerId === "paperchat") {
+    paperchatPanel?.removeAttribute("hidden");
     apikeyPanel?.setAttribute("hidden", "true");
-    // Load PDFAiTalk settings
-    populatePdfaitalkPanel(doc);
+    // Load PaperChat settings
+    populatePaperchatPanel(doc);
   } else {
-    pdfaitalkPanel?.setAttribute("hidden", "true");
+    paperchatPanel?.setAttribute("hidden", "true");
     apikeyPanel?.removeAttribute("hidden");
 
     // Populate API key panel with provider data
@@ -178,7 +178,7 @@ export function populateActiveProviderDropdown(doc: Document): void {
   clearElement(popup);
 
   // Add enabled providers
-  configs.filter((c) => c.enabled || c.id === "pdfaitalk").forEach((config) => {
+  configs.filter((c) => c.enabled || c.id === "paperchat").forEach((config) => {
     const menuitem = doc.createXULElement("menuitem");
     menuitem.setAttribute("label", config.name);
     menuitem.setAttribute("value", config.id);

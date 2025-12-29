@@ -23,10 +23,10 @@
     <!-- Provider Content Panel -->
     <vbox flex="1" style="padding-left: 16px;">
 
-      <!-- PDFAiTalk Panel (Login-based) -->
-      <vbox id="pref-panel-pdfaitalk" class="provider-panel">
-        <label><html:h3 data-l10n-id="pref-pdfaitalk-title"></html:h3></label>
-        <label data-l10n-id="pref-pdfaitalk-description" style="margin-bottom: 12px; color: #666;"></label>
+      <!-- PaperChat Panel (Login-based) -->
+      <vbox id="pref-panel-paperchat" class="provider-panel">
+        <label><html:h3 data-l10n-id="pref-paperchat-title"></html:h3></label>
+        <label data-l10n-id="pref-paperchat-description" style="margin-bottom: 12px; color: #666;"></label>
 
         <hbox id="pref-user-bar" align="center" pack="start" style="margin-bottom: 12px; padding: 12px; border-radius: 6px; border: 1px solid var(--color-border, #ddd);">
           <vbox flex="1">
@@ -58,35 +58,35 @@
         </hbox>
         <label id="pref-redeem-message" style="margin-left: 78px; font-size: 12px;"></label>
 
-        <!-- PDFAiTalk Model Selection -->
+        <!-- PaperChat Model Selection -->
         <hbox align="center" style="margin-top: 16px; margin-bottom: 8px;">
-          <label for="pref-pdfaitalk-model" data-l10n-id="pref-model" style="width: 70px; text-align: right;"></label>
-          <menulist id="pref-pdfaitalk-model" style="flex: 1; margin-left: 8px; min-width: 150px;">
-            <menupopup id="pref-pdfaitalk-model-popup">
+          <label for="pref-paperchat-model" data-l10n-id="pref-model" style="width: 70px; text-align: right;"></label>
+          <menulist id="pref-paperchat-model" style="flex: 1; margin-left: 8px; min-width: 150px;">
+            <menupopup id="pref-paperchat-model-popup">
               <!-- Models populated by JS -->
             </menupopup>
           </menulist>
-          <button id="pref-pdfaitalk-refresh-models" data-l10n-id="pref-refresh-models" style="margin-left: 8px;"></button>
+          <button id="pref-paperchat-refresh-models" data-l10n-id="pref-refresh-models" style="margin-left: 8px;"></button>
         </hbox>
 
-        <!-- PDFAiTalk Max Tokens -->
+        <!-- PaperChat Max Tokens -->
         <hbox align="center" style="margin-bottom: 8px;">
-          <label for="pref-pdfaitalk-maxtokens" data-l10n-id="pref-max-tokens" style="width: 70px; text-align: right;"></label>
+          <label for="pref-paperchat-maxtokens" data-l10n-id="pref-max-tokens" style="width: 70px; text-align: right;"></label>
           <html:input
             type="number"
-            id="pref-pdfaitalk-maxtokens"
+            id="pref-paperchat-maxtokens"
             style="width: 100px; margin-left: 8px;"
             min="256"
             max="128000"
           ></html:input>
         </hbox>
 
-        <!-- PDFAiTalk Temperature -->
+        <!-- PaperChat Temperature -->
         <hbox align="center" style="margin-bottom: 8px;">
-          <label for="pref-pdfaitalk-temperature" data-l10n-id="pref-temperature" style="width: 70px; text-align: right;"></label>
+          <label for="pref-paperchat-temperature" data-l10n-id="pref-temperature" style="width: 70px; text-align: right;"></label>
           <html:input
             type="number"
-            id="pref-pdfaitalk-temperature"
+            id="pref-paperchat-temperature"
             style="width: 80px; margin-left: 8px;"
             min="0"
             max="2"
@@ -94,18 +94,18 @@
           ></html:input>
         </hbox>
 
-        <!-- PDFAiTalk System Prompt -->
+        <!-- PaperChat System Prompt -->
         <hbox align="start" style="margin-bottom: 8px;">
-          <label for="pref-pdfaitalk-systemprompt" data-l10n-id="pref-system-prompt" style="width: 70px; text-align: right; margin-top: 4px;"></label>
+          <label for="pref-paperchat-systemprompt" data-l10n-id="pref-system-prompt" style="width: 70px; text-align: right; margin-top: 4px;"></label>
           <html:textarea
-            id="pref-pdfaitalk-systemprompt"
+            id="pref-paperchat-systemprompt"
             style="flex: 1; height: 60px; margin-left: 8px; min-width: 200px;"
           ></html:textarea>
         </hbox>
 
         <!-- Official Website Link -->
         <hbox align="center" style="margin-top: 16px; justify-content: center;">
-          <html:a id="pref-pdfaitalk-website" href="#" style="color: #0078d4; cursor: pointer; text-decoration: none;">
+          <html:a id="pref-paperchat-website" href="#" style="color: #0078d4; cursor: pointer; text-decoration: none;">
             <label data-l10n-id="pref-official-website" style="color: #0078d4; cursor: pointer;"></label>
           </html:a>
         </hbox>

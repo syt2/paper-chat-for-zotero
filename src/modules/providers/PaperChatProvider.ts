@@ -1,27 +1,27 @@
 /**
- * PDFAiTalkProvider - Login-based authentication provider
+ * PaperChatProvider - Login-based authentication provider
  * Uses composition with OpenAICompatibleProvider for API calls
  */
 
 import type { ChatMessage, StreamCallbacks } from "../../types/chat";
-import type { AIProvider, ApiKeyProviderConfig, PDFAiTalkProviderConfig, PdfAttachment } from "../../types/provider";
+import type { AIProvider, ApiKeyProviderConfig, PaperChatProviderConfig, PdfAttachment } from "../../types/provider";
 import { getAuthManager } from "../auth";
 import { OpenAICompatibleProvider } from "./OpenAICompatibleProvider";
 import { BUILTIN_PROVIDERS } from "./ProviderManager";
 import { getPref } from "../../utils/prefs";
 
-export class PDFAiTalkProvider implements AIProvider {
-  private _config: PDFAiTalkProviderConfig;
+export class PaperChatProvider implements AIProvider {
+  private _config: PaperChatProviderConfig;
   private _delegate: OpenAICompatibleProvider;
 
-  constructor(config: PDFAiTalkProviderConfig) {
+  constructor(config: PaperChatProviderConfig) {
     this._config = config;
     this._delegate = new OpenAICompatibleProvider(this.createDelegateConfig());
   }
 
   private createDelegateConfig(): ApiKeyProviderConfig {
     const authManager = getAuthManager();
-    const defaultModel = BUILTIN_PROVIDERS.pdfaitalk.defaultModels[0];
+    const defaultModel = BUILTIN_PROVIDERS.paperchat.defaultModels[0];
 
     return {
       id: this._config.id,
@@ -31,21 +31,21 @@ export class PDFAiTalkProvider implements AIProvider {
       isBuiltin: this._config.isBuiltin,
       order: this._config.order,
       apiKey: authManager.getApiKey() || "",
-      baseUrl: BUILTIN_PROVIDERS.pdfaitalk.defaultBaseUrl,
+      baseUrl: BUILTIN_PROVIDERS.paperchat.defaultBaseUrl,
       defaultModel: this._config.defaultModel || defaultModel,
-      availableModels: this._config.availableModels || BUILTIN_PROVIDERS.pdfaitalk.defaultModels,
+      availableModels: this._config.availableModels || BUILTIN_PROVIDERS.paperchat.defaultModels,
       maxTokens: this._config.maxTokens || 4096,
       temperature: this._config.temperature ?? 0.7,
       systemPrompt: this._config.systemPrompt || "",
     };
   }
 
-  get config(): PDFAiTalkProviderConfig {
+  get config(): PaperChatProviderConfig {
     return this._config;
   }
 
   getName(): string {
-    return "PDFAiTalk";
+    return "PaperChat";
   }
 
   isReady(): boolean {
@@ -53,7 +53,7 @@ export class PDFAiTalkProvider implements AIProvider {
     return authManager.isLoggedIn() && !!authManager.getApiKey();
   }
 
-  updateConfig(config: Partial<PDFAiTalkProviderConfig>): void {
+  updateConfig(config: Partial<PaperChatProviderConfig>): void {
     this._config = { ...this._config, ...config };
     this._delegate.updateConfig(this.createDelegateConfig());
   }
@@ -83,7 +83,7 @@ export class PDFAiTalkProvider implements AIProvider {
   }
 
   async getAvailableModels(): Promise<string[]> {
-    const cachedModels = getPref("pdfaitalkModelsCache") as string;
+    const cachedModels = getPref("paperchatModelsCache") as string;
     if (cachedModels) {
       try {
         const models = JSON.parse(cachedModels) as string[];
@@ -94,6 +94,6 @@ export class PDFAiTalkProvider implements AIProvider {
         // ignore parse error
       }
     }
-    return BUILTIN_PROVIDERS.pdfaitalk.defaultModels;
+    return BUILTIN_PROVIDERS.paperchat.defaultModels;
   }
 }

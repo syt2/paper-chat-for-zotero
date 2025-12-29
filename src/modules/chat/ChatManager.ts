@@ -70,11 +70,11 @@ export class ChatManager {
   }
 
   /**
-   * 检查当前 provider 是否为 PDFAiTalk (支持 token 刷新)
+   * 检查当前 provider 是否为 PaperChat (支持 token 刷新)
    */
-  private isPdfAiTalkProvider(): boolean {
+  private isPaperChatProvider(): boolean {
     const provider = this.getActiveProvider();
-    return provider?.getName() === "PDFAiTalk";
+    return provider?.getName() === "PaperChat";
   }
 
   /**
@@ -293,7 +293,7 @@ export class ChatManager {
             ztoolkit.log("[API Error]", error.message);
 
             // 检查是否为认证错误，且可以重试
-            if (!hasRetried && this.isAuthError(error) && this.isPdfAiTalkProvider()) {
+            if (!hasRetried && this.isAuthError(error) && this.isPaperChatProvider()) {
               ztoolkit.log("[API Error] Auth error detected, attempting to refresh API key...");
               hasRetried = true;
 

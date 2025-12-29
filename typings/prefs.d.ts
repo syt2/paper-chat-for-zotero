@@ -18,8 +18,8 @@ declare namespace _ZoteroTypes {
       "loginPassword": string;
       "userId": number;
       "userQuotaJson": string;
-      "pdfaitalkModelsCache": string;
-      "pdfaitalkRatiosCache": string;
+      "paperchatModelsCache": string;
+      "paperchatRatiosCache": string;
       "uploadRawPdfOnFailure": boolean;
     };
   }

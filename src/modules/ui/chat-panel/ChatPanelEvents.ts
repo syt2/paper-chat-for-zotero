@@ -339,7 +339,7 @@ export function setupEventHandlers(context: ChatPanelContext): void {
     settingsBtn.addEventListener("click", () => {
       ztoolkit.log("Settings button clicked");
       // Open preferences and navigate to this plugin's pane
-      Zotero.Utilities.Internal.openPreferences("pdfaitalk-prefpane");
+      Zotero.Utilities.Internal.openPreferences("paperchat-prefpane");
     });
 
     // Hover effect
@@ -427,8 +427,8 @@ async function sendMessage(
   const activeProviderId = providerManager.getActiveProviderId();
   const activeProvider = providerManager.getActiveProvider();
 
-  if (activeProviderId === "pdfaitalk") {
-    // For PDFAiTalk, prompt login if not logged in
+  if (activeProviderId === "paperchat") {
+    // For PaperChat, prompt login if not logged in
     if (!authManager.isLoggedIn()) {
       const success = await showAuthDialog("login");
       if (!success) return;
@@ -439,7 +439,7 @@ async function sendMessage(
       // Try to refresh the plugin token
       await authManager.ensurePluginToken(true);
       if (!activeProvider?.isReady()) {
-        ztoolkit.log("PDFAiTalk provider still not ready after token refresh, forcing logout");
+        ztoolkit.log("PaperChat provider still not ready after token refresh, forcing logout");
         // Session is invalid and auto-relogin failed, force logout
         await authManager.logout();
         context.updateUserBar();
@@ -525,7 +525,7 @@ async function sendMessage(
 
 /**
  * Update user bar display
- * Only shows user bar when PDFAiTalk provider is active
+ * Only shows user bar when PaperChat provider is active
  */
 export function updateUserBarDisplay(container: HTMLElement, authManager: { isLoggedIn(): boolean; getUser(): { username: string } | null; formatBalance(): string }): void {
   const userBar = container.querySelector("#chat-user-bar") as HTMLElement;
@@ -535,11 +535,11 @@ export function updateUserBarDisplay(container: HTMLElement, authManager: { isLo
 
   if (!userBar || !userNameEl || !userBalanceEl || !userActionBtn) return;
 
-  // Only show user bar when PDFAiTalk provider is active
+  // Only show user bar when PaperChat provider is active
   const providerManager = getProviderManager();
   const activeProviderId = providerManager.getActiveProviderId();
 
-  if (activeProviderId !== "pdfaitalk") {
+  if (activeProviderId !== "paperchat") {
     userBar.style.display = "none";
     return;
   }

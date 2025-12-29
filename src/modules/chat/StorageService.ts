@@ -13,7 +13,7 @@ export class StorageService {
   private indexCache: StoredSessionMeta[] | null = null;
 
   constructor() {
-    // 存储路径: Zotero Profile/pdf-ai-talk/conversations/
+    // 存储路径: Zotero Profile/paper-chat-for-zotero/conversations/
     this.storagePath = "";
   }
 
@@ -28,7 +28,7 @@ export class StorageService {
       const dataDir = Zotero.DataDirectory.dir;
       this.storagePath = PathUtils.join(
         dataDir,
-        "pdf-ai-talk",
+        "paper-chat",
         "conversations",
       );
 

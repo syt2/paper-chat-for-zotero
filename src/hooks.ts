@@ -20,7 +20,7 @@ async function onStartup() {
   // Register preference pane
   Zotero.PreferencePanes.register({
     pluginID: addon.data.config.addonID,
-    id: "pdfaitalk-prefpane",
+    id: "paperchat-prefpane",
     src: rootURI + "content/preferences.xhtml",
     label: getString("prefs-title"),
     image: `chrome://${addon.data.config.addonRef}/content/icons/favicon.svg`,

@@ -4,9 +4,9 @@
 
 import { getAuthManager } from "../auth";
 import { getProviderManager } from "../providers";
-import { loadCachedRatios, fetchPdfaitalkModels } from "./ModelsFetcher";
+import { loadCachedRatios, fetchPaperchatModels } from "./ModelsFetcher";
 import { updateUserDisplay, bindUserAuthEvents } from "./UserAuthUI";
-import { populatePdfaitalkModels, bindPdfaitalkEvents } from "./PdfaitalkProviderUI";
+import { populatePaperchatModels, bindPaperchatEvents } from "./PaperchatProviderUI";
 import { bindApiKeyEvents } from "./ApiKeyProviderUI";
 import {
   populateProviderList,
@@ -18,7 +18,7 @@ import {
 import { getPref, setPref } from "../../utils/prefs";
 
 // Current selected provider ID
-let currentProviderId: string = "pdfaitalk";
+let currentProviderId: string = "paperchat";
 
 /**
  * Get current provider ID
@@ -60,11 +60,11 @@ export async function initializePrefsUI(): Promise<void> {
   currentProviderId = providerManager.getActiveProviderId();
   selectProvider(doc, currentProviderId, setCurrentProviderId);
 
-  // Update pdfaitalk user status display
+  // Update paperchat user status display
   updateUserDisplay(doc, authManager);
 
-  // Populate PDFAiTalk model dropdown
-  populatePdfaitalkModels(doc);
+  // Populate PaperChat model dropdown
+  populatePaperchatModels(doc);
 
   // Initialize PDF settings checkbox
   initPdfSettingsCheckbox(doc);
@@ -96,10 +96,10 @@ export function bindPrefEvents(): void {
   // Bind user auth events
   bindUserAuthEvents(doc, authManager, refreshProviderList);
 
-  // Bind PDFAiTalk events
-  bindPdfaitalkEvents(doc, async () => {
-    await fetchPdfaitalkModels(doc, (models) => {
-      populatePdfaitalkModels(doc, models, true);
+  // Bind PaperChat events
+  bindPaperchatEvents(doc, async () => {
+    await fetchPaperchatModels(doc, (models) => {
+      populatePaperchatModels(doc, models, true);
     });
   });
 

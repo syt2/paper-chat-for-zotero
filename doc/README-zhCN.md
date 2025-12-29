@@ -1,4 +1,4 @@
-<h1><img src="../addon/content/icons/favicon.svg" width="32" height="32" style="vertical-align: middle;"> PDF AI Talk</h1>
+<h1><img src="../addon/content/icons/favicon.svg" width="32" height="32" style="vertical-align: middle;"> Paper Chat</h1>
 
 [![Zotero](https://img.shields.io/badge/Zotero-7+-green?style=flat-square&logo=zotero&logoColor=CC2936)](https://www.zotero.org)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg?style=flat-square)](https://www.gnu.org/licenses/agpl-3.0)
@@ -38,9 +38,9 @@
 
 ## 配置
 
-进入 `设置` → `PDF AI Talk`：
+进入 `设置` → `Paper Chat`：
 - 选择 AI 服务商和模型
-- 输入 API Key（或使用内置 PDFAiTalk 服务）
+- 输入 API Key（或使用内置 PaperChat 服务）
 - 调整温度、最大 Token 数、系统提示词
 
 ## 许可证

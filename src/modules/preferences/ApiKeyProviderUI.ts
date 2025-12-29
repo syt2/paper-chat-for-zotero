@@ -176,7 +176,7 @@ export function populateModelList(doc: Document, config: ApiKeyProviderConfig): 
  * Save current API key provider config
  */
 export function saveCurrentProviderConfig(doc: Document, currentProviderId: string): void {
-  if (currentProviderId === "pdfaitalk") return;
+  if (currentProviderId === "paperchat") return;
 
   const providerManager = getProviderManager();
 
@@ -354,7 +354,7 @@ export function bindApiKeyEvents(
   const addModelBtn = doc.getElementById("pref-add-model-btn");
   addModelBtn?.addEventListener("click", () => {
     const currentProviderId = getCurrentProviderId();
-    if (currentProviderId === "pdfaitalk") return;
+    if (currentProviderId === "paperchat") return;
 
     const modelId = addon.data.prefs?.window?.prompt(getString("pref-enter-model-id"));
     if (modelId && modelId.trim()) {

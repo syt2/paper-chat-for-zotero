@@ -149,11 +149,11 @@ export function bindUserAuthEvents(
   });
 
   // Official website link
-  const websiteLink = doc.getElementById("pref-pdfaitalk-website");
+  const websiteLink = doc.getElementById("pref-paperchat-website");
   websiteLink?.addEventListener("click", (e: Event) => {
     e.preventDefault();
     // Open the console page
-    Zotero.launchURL(`${BUILTIN_PROVIDERS.pdfaitalk.website}`);
+    Zotero.launchURL(`${BUILTIN_PROVIDERS.paperchat.website}`);
   });
 
   // Auth callbacks - refresh provider list on login status change

@@ -1,4 +1,4 @@
-<h1><img src="addon/content/icons/favicon.svg" width="32" height="32" style="vertical-align: middle;"> PDF AI Talk</h1>
+<h1><img src="addon/content/icons/favicon.svg" width="32" height="32" style="vertical-align: middle;"> Paper Chat</h1>
 
 [![Zotero](https://img.shields.io/badge/Zotero-7+-green?style=flat-square&logo=zotero&logoColor=CC2936)](https://www.zotero.org)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg?style=flat-square)](https://www.gnu.org/licenses/agpl-3.0)
@@ -38,9 +38,9 @@ Chat with AI about your PDF documents directly in Zotero. Supports OpenAI, Claud
 
 ## Configuration
 
-Go to `Settings` → `PDF AI Talk` to:
+Go to `Settings` → `Paper Chat` to:
 - Select AI provider and model
-- Enter API key (or use built-in PDFAiTalk service)
+- Enter API key (or use built-in PaperChat service)
 - Adjust temperature, max tokens, system prompt
 
 ## License

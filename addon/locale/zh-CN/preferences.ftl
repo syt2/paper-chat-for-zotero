@@ -1,4 +1,4 @@
-pref-title = PDF AI Talk 设置
+pref-title = Paper Chat 设置
 
 # Account Settings
 pref-account-settings = 账户设置
@@ -28,8 +28,8 @@ pref-system-prompt-placeholder =
 # Provider Settings
 pref-providers = 服务提供商
 pref-add-provider = + 添加自定义
-pref-pdfaitalk-title = PDFAiTalk 服务
-pref-pdfaitalk-description = 基于登录的 AI 服务，支持多种模型。无需 API 密钥。
+pref-paperchat-title = PaperChat 服务
+pref-paperchat-description = 基于登录的 AI 服务，支持多种模型。无需 API 密钥。
 pref-official-website = 访问官网
 
 # Provider Configuration

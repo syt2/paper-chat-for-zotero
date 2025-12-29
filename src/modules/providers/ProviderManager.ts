@@ -9,13 +9,13 @@ import type {
   ProviderStorageData,
   BuiltinProviderId,
   ApiKeyProviderConfig,
-  PDFAiTalkProviderConfig,
+  PaperChatProviderConfig,
   ModelInfo,
 } from "../../types/provider";
 import { OpenAICompatibleProvider } from "./OpenAICompatibleProvider";
 import { AnthropicProvider } from "./AnthropicProvider";
 import { GeminiProvider } from "./GeminiProvider";
-import { PDFAiTalkProvider } from "./PDFAiTalkProvider";
+import { PaperChatProvider } from "./PaperChatProvider";
 import { config } from "../../../package.json";
 
 /**
@@ -23,11 +23,11 @@ import { config } from "../../../package.json";
  * Based on chatbox project (https://github.com/chatboxai/chatbox)
  */
 export const BUILTIN_PROVIDERS: Record<BuiltinProviderId, ProviderMetadata> = {
-  pdfaitalk: {
-    id: "pdfaitalk",
-    name: "PDFAiTalk",
+  paperchat: {
+    id: "paperchat",
+    name: "PaperChat",
     description: "Login-based AI service with multi-model support",
-    defaultBaseUrl: "https://pdfaitalk.zotero.store/v1",
+    defaultBaseUrl: "https://paperchat.zotero.store/v1",
     defaultModels: [
       // claude-haiku-4-5-20251001 作为首选默认模型
       "claude-haiku-4-5-20251001",
@@ -57,8 +57,8 @@ export const BUILTIN_PROVIDERS: Record<BuiltinProviderId, ProviderMetadata> = {
       { modelId: "Pro/moonshotai/Kimi-K2-Instruct-0905", contextWindow: 128000, maxOutput: 8192, capabilities: ["tool_use"] },
       { modelId: "claude-opus-4-5-20251101", contextWindow: 200000, maxOutput: 64000, capabilities: ["vision", "reasoning", "tool_use"] },
     ],
-    website: "https://pdfaitalk.zotero.store",
-    type: "pdfaitalk",
+    website: "https://paperchat.zotero.store",
+    type: "paperchat",
   },
   openai: {
     id: "openai",
@@ -179,7 +179,7 @@ const PREFS_KEY = `${config.prefsPrefix}.providersConfig`;
 
 export class ProviderManager {
   private providers: Map<string, AIProvider> = new Map();
-  private activeProviderId: string = "pdfaitalk";
+  private activeProviderId: string = "paperchat";
   private configs: ProviderConfig[] = [];
   private onProviderChangeCallback?: (providerId: string) => void;
 
@@ -209,18 +209,18 @@ export class ProviderManager {
         ztoolkit.log("[ProviderManager] Parsed providers:", providers.map(p => p.id));
         ztoolkit.log("[ProviderManager] Active provider ID:", data.activeProviderId);
 
-        // Check if config is valid (has pdfaitalk provider)
-        const hasPdfaitalk = providers.some((p) => p.id === "pdfaitalk");
-        if (!hasPdfaitalk) {
-          ztoolkit.log("[ProviderManager] No pdfaitalk found, resetting to defaults");
+        // Check if config is valid (has paperchat provider)
+        const hasPaperchat = providers.some((p) => p.id === "paperchat");
+        if (!hasPaperchat) {
+          ztoolkit.log("[ProviderManager] No paperchat found, resetting to defaults");
           // Invalid config, reset to defaults
           this.configs = this.getDefaultConfigs();
-          this.activeProviderId = "pdfaitalk";
+          this.activeProviderId = "paperchat";
           this.saveToPrefs();
           return;
         }
 
-        this.activeProviderId = data.activeProviderId || "pdfaitalk";
+        this.activeProviderId = data.activeProviderId || "paperchat";
         this.configs = providers;
         ztoolkit.log("[ProviderManager] Loaded configs:", this.configs.map(c => ({ id: c.id, enabled: c.enabled })));
       } else {
@@ -250,18 +250,18 @@ export class ProviderManager {
   private getDefaultConfigs(): ProviderConfig[] {
     const configs: ProviderConfig[] = [
       {
-        id: "pdfaitalk",
-        name: "PDFAiTalk",
-        type: "pdfaitalk",
+        id: "paperchat",
+        name: "PaperChat",
+        type: "paperchat",
         enabled: true,
         isBuiltin: true,
         order: 0,
-        defaultModel: BUILTIN_PROVIDERS.pdfaitalk.defaultModels[0],
-        availableModels: BUILTIN_PROVIDERS.pdfaitalk.defaultModels,
+        defaultModel: BUILTIN_PROVIDERS.paperchat.defaultModels[0],
+        availableModels: BUILTIN_PROVIDERS.paperchat.defaultModels,
         maxTokens: 4096,
         temperature: 0.7,
         systemPrompt: "",
-      } as PDFAiTalkProviderConfig,
+      } as PaperChatProviderConfig,
     ];
 
     // Add API key providers
@@ -309,8 +309,8 @@ export class ProviderManager {
    */
   private createProvider(config: ProviderConfig): AIProvider | null {
     switch (config.type) {
-      case "pdfaitalk":
-        return new PDFAiTalkProvider(config as PDFAiTalkProviderConfig);
+      case "paperchat":
+        return new PaperChatProvider(config as PaperChatProviderConfig);
       case "anthropic":
         return new AnthropicProvider(config as ApiKeyProviderConfig);
       case "gemini":
@@ -423,7 +423,7 @@ export class ProviderManager {
     if (index >= 0) {
       this.configs.splice(index, 1);
       if (this.activeProviderId === providerId) {
-        this.activeProviderId = "pdfaitalk";
+        this.activeProviderId = "paperchat";
       }
       this.saveToPrefs();
       this.initializeProviders();
@@ -450,7 +450,7 @@ export class ProviderManager {
    * Add custom model to a provider
    */
   addCustomModel(providerId: string, modelId: string): boolean {
-    if (providerId === "pdfaitalk") return false;
+    if (providerId === "paperchat") return false;
     const config = this.getProviderConfig(providerId) as ApiKeyProviderConfig | null;
     if (!config) return false;
 
@@ -475,7 +475,7 @@ export class ProviderManager {
    * Remove custom model from a provider
    */
   removeCustomModel(providerId: string, modelId: string): boolean {
-    if (providerId === "pdfaitalk") return false;
+    if (providerId === "paperchat") return false;
     const config = this.getProviderConfig(providerId) as ApiKeyProviderConfig | null;
     if (!config) return false;
 

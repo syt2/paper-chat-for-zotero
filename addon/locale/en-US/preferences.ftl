@@ -1,4 +1,4 @@
-pref-title = PDF AI Talk Settings
+pref-title = Paper Chat Settings
 
 # Account Settings
 pref-account-settings = Account Settings
@@ -28,8 +28,8 @@ pref-system-prompt-placeholder =
 # Provider Settings
 pref-providers = Providers
 pref-add-provider = + Add Custom
-pref-pdfaitalk-title = PDFAiTalk Service
-pref-pdfaitalk-description = Login-based AI service with multi-model support. No API key required.
+pref-paperchat-title = PaperChat Service
+pref-paperchat-description = Login-based AI service with multi-model support. No API key required.
 pref-official-website = Visit Official Website
 
 # Provider Configuration

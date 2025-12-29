@@ -15,7 +15,7 @@ export { BaseProvider } from "./BaseProvider";
 export { OpenAICompatibleProvider } from "./OpenAICompatibleProvider";
 export { AnthropicProvider } from "./AnthropicProvider";
 export { GeminiProvider } from "./GeminiProvider";
-export { PDFAiTalkProvider } from "./PDFAiTalkProvider";
+export { PaperChatProvider } from "./PaperChatProvider";
 
 // Re-export types
 export type {
@@ -27,7 +27,7 @@ export type {
   BuiltinProviderId,
   BaseProviderConfig,
   ApiKeyProviderConfig,
-  PDFAiTalkProviderConfig,
+  PaperChatProviderConfig,
   ModelInfo,
   ModelCapability,
 } from "../../types/provider";

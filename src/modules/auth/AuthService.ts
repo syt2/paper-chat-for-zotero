@@ -18,7 +18,7 @@ import type {
 import { BUILTIN_PROVIDERS } from "../providers/ProviderManager";
 
 // API基础URL - 从ProviderManager获取
-const DEFAULT_API_BASE = BUILTIN_PROVIDERS.pdfaitalk.website!;
+const DEFAULT_API_BASE = BUILTIN_PROVIDERS.paperchat.website!;
 
 export class AuthService {
   private baseUrl: string;

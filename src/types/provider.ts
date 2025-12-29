@@ -25,7 +25,7 @@ export interface ModelInfo {
  * Supported provider types
  */
 export type ProviderType =
-  | "pdfaitalk"         // PDFAiTalk login-based system
+  | "paperchat"         // PaperChat login-based system
   | "openai"            // Native OpenAI API
   | "anthropic"         // Anthropic Claude API (different format)
   | "gemini"            // Google Gemini API (different format)
@@ -36,7 +36,7 @@ export type ProviderType =
  * Provider identifier for built-in providers
  */
 export type BuiltinProviderId =
-  | "pdfaitalk"
+  | "paperchat"
   | "openai"
   | "claude"
   | "gemini"
@@ -58,10 +58,10 @@ export interface BaseProviderConfig {
 }
 
 /**
- * Configuration for PDFAiTalk (login-based) provider
+ * Configuration for PaperChat (login-based) provider
  */
-export interface PDFAiTalkProviderConfig extends BaseProviderConfig {
-  type: "pdfaitalk";
+export interface PaperChatProviderConfig extends BaseProviderConfig {
+  type: "paperchat";
   defaultModel?: string;
   availableModels?: string[];
   maxTokens?: number;
@@ -87,7 +87,7 @@ export interface ApiKeyProviderConfig extends BaseProviderConfig {
 /**
  * Union type for all provider configs
  */
-export type ProviderConfig = PDFAiTalkProviderConfig | ApiKeyProviderConfig;
+export type ProviderConfig = PaperChatProviderConfig | ApiKeyProviderConfig;
 
 /**
  * Provider metadata for display and defaults

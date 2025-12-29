@@ -44,7 +44,7 @@ type CallbackListeners = {
 };
 
 // 插件专用Token名称
-const PLUGIN_TOKEN_NAME = "PDF-AI-Talk-Plugin";
+const PLUGIN_TOKEN_NAME = "Paper-Chat-Plugin";
 
 export class AuthManager {
   private authService: AuthService;
@@ -669,7 +669,7 @@ export class AuthManager {
       return;
     }
 
-    const url = `${BUILTIN_PROVIDERS.pdfaitalk.defaultBaseUrl}/models`;
+    const url = `${BUILTIN_PROVIDERS.paperchat.defaultBaseUrl}/models`;
     ztoolkit.log("[AuthManager] Fetching models from:", url);
 
     try {
@@ -693,7 +693,7 @@ export class AuthManager {
 
         if (models.length > 0) {
           // 缓存模型列表
-          setPref("pdfaitalkModelsCache", JSON.stringify(models));
+          setPref("paperchatModelsCache", JSON.stringify(models));
 
           // 获取当前模型设置
           const currentModel = getPref("model") as string;
@@ -710,14 +710,14 @@ export class AuthManager {
 
             // 更新 provider 配置
             const providerManager = getProviderManager();
-            providerManager.updateProviderConfig("pdfaitalk", {
+            providerManager.updateProviderConfig("paperchat", {
               defaultModel: defaultModel,
               availableModels: models,
             });
           } else {
             // 只更新可用模型列表
             const providerManager = getProviderManager();
-            providerManager.updateProviderConfig("pdfaitalk", {
+            providerManager.updateProviderConfig("paperchat", {
               availableModels: models,
             });
           }

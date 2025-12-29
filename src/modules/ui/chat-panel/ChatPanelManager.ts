@@ -530,7 +530,7 @@ async function initializeChatContent(): Promise<void> {
   const authManager = getAuthManager();
   const context = createContext();
 
-  // Load cached model ratios for PDFAiTalk
+  // Load cached model ratios for PaperChat
   loadCachedRatios();
 
   // Initialize auth
@@ -584,9 +584,9 @@ async function initializeChatContent(): Promise<void> {
       }
     },
     onMessageComplete: async () => {
-      // 消息完成后刷新余额（仅PDFAiTalk provider）
+      // 消息完成后刷新余额（仅PaperChat provider）
       const providerManager = getProviderManager();
-      if (providerManager.getActiveProviderId() === "pdfaitalk") {
+      if (providerManager.getActiveProviderId() === "paperchat") {
         ztoolkit.log("[Balance] Refreshing balance after message completion");
         await authManager.refreshUserInfo();
         context.updateUserBar();
