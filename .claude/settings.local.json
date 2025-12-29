@@ -29,7 +29,8 @@
       "Bash(git commit:*)",
       "Bash(npx zotero-plugin build)",
       "Bash(git add:*)",
-      "Bash(git show:*)"
+      "Bash(git show:*)",
+      "Bash(git -C /Users/shenyutao/zoteroPlugins/pdf-ai-talk diff HEAD~1 --stat)"
     ]
   }
 }

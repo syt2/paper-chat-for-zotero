@@ -2,7 +2,7 @@
  * ChatPanelEvents - Event handlers for the chat panel
  */
 
-import type { ImageAttachment, FileAttachment } from "../../../types/chat";
+import { config } from "../../../../package.json";
 import type { ChatPanelContext, AttachmentState, SessionInfo } from "./types";
 import { chatColors } from "../../../utils/colors";
 import { createElement, copyToClipboard } from "./ChatPanelBuilder";
@@ -18,10 +18,14 @@ import { getString } from "../../../utils/locale";
 import { getProviderManager } from "../../providers";
 import { getPref, setPref } from "../../../utils/prefs";
 import { formatModelLabel } from "../../preferences/ModelsFetcher";
+import type { PanelMode } from "./ChatPanelManager";
 
 // Import getActiveReaderItem from the manager module to avoid circular dependency
 // This is set by ChatPanelManager during initialization
 let getActiveReaderItemFn: (() => Zotero.Item | null) | null = null;
+
+// Toggle panel mode function reference (set by ChatPanelManager)
+let togglePanelModeFn: (() => void) | null = null;
 
 // State to track if a message is being sent (prevents duplicate sends)
 let isSending = false;
@@ -32,6 +36,30 @@ let isSending = false;
  */
 export function setActiveReaderItemFn(fn: () => Zotero.Item | null): void {
   getActiveReaderItemFn = fn;
+}
+
+/**
+ * Set the togglePanelMode function reference
+ * Called by ChatPanelManager to avoid circular imports
+ */
+export function setTogglePanelModeFn(fn: () => void): void {
+  togglePanelModeFn = fn;
+}
+
+/**
+ * Update panel mode button icon based on current mode
+ */
+export function updatePanelModeButtonIcon(container: HTMLElement, mode: PanelMode): void {
+  const panelModeIcon = container.querySelector("#chat-panel-mode-icon") as HTMLImageElement;
+  const panelModeBtn = container.querySelector("#chat-panel-mode-btn") as HTMLButtonElement;
+  if (panelModeIcon && panelModeBtn) {
+    // split.svg for sidebar mode (click to switch to floating)
+    // right-bar.svg for floating mode (click to switch to sidebar)
+    panelModeIcon.src = mode === "sidebar"
+      ? `chrome://${config.addonRef}/content/icons/split.svg`
+      : `chrome://${config.addonRef}/content/icons/right-bar.svg`;
+    panelModeBtn.title = mode === "sidebar" ? "切换为悬浮窗模式" : "切换为侧边栏模式";
+  }
 }
 
 /**
@@ -348,6 +376,25 @@ export function setupEventHandlers(context: ChatPanelContext): void {
     });
     settingsBtn.addEventListener("mouseleave", () => {
       settingsBtn.style.background = "transparent";
+    });
+  }
+
+  // Panel mode toggle button - switch between sidebar and floating mode
+  const panelModeBtn = container.querySelector("#chat-panel-mode-btn") as HTMLButtonElement;
+  if (panelModeBtn) {
+    panelModeBtn.addEventListener("click", () => {
+      ztoolkit.log("Panel mode toggle button clicked");
+      if (togglePanelModeFn) {
+        togglePanelModeFn();
+      }
+    });
+
+    // Hover effect
+    panelModeBtn.addEventListener("mouseenter", () => {
+      panelModeBtn.style.background = getCurrentTheme().dropdownItemHoverBg;
+    });
+    panelModeBtn.addEventListener("mouseleave", () => {
+      panelModeBtn.style.background = "transparent";
     });
   }
 

@@ -49,6 +49,45 @@ export function createChatContainer(doc: Document, theme: ThemeColors): HTMLElem
     height: "100%",
   }, { class: "chat-panel-root" });
 
+  // Drag bar (only visible in floating mode)
+  const dragBar = createElement(doc, "div", {
+    display: "none",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: "8px 12px",
+    background: theme.toolbarBg,
+    borderBottom: `1px solid ${theme.borderColor}`,
+    cursor: "move",
+    userSelect: "none",
+  }, { id: "chat-drag-bar" });
+
+  const dragTitle = createElement(doc, "span", {
+    fontSize: "13px",
+    fontWeight: "600",
+    color: theme.textPrimary,
+    pointerEvents: "none",
+  });
+  dragTitle.textContent = "Paper Chat";
+
+  const closeBtn = createElement(doc, "button", {
+    width: "20px",
+    height: "20px",
+    background: "transparent",
+    border: "none",
+    borderRadius: "4px",
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "0",
+    fontSize: "14px",
+    color: theme.textMuted,
+  }, { id: "chat-close-btn", title: "关闭" });
+  closeBtn.textContent = "✕";
+
+  dragBar.appendChild(dragTitle);
+  dragBar.appendChild(closeBtn);
+
   // User Bar
   const userBar = createElement(doc, "div", {
     display: "flex",
@@ -350,11 +389,37 @@ export function createChatContainer(doc: Document, theme: ThemeColors): HTMLElem
     height: "16px",
     opacity: "0.6",
   });
-  (settingsIcon as HTMLImageElement).src = `chrome://${config.addonRef}/content/icons/setting.svg`;
+  (settingsIcon as HTMLImageElement).src = `chrome://${config.addonRef}/content/icons/config.svg`;
   settingsBtn.appendChild(settingsIcon);
+
+  // Panel mode toggle button (sidebar/floating)
+  const panelModeBtn = createElement(doc, "button", {
+    width: "28px",
+    height: "28px",
+    background: "transparent",
+    border: "none",
+    borderRadius: "6px",
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "0",
+  }, { id: "chat-panel-mode-btn" });
+  panelModeBtn.title = "切换侧边栏/悬浮窗模式";
+
+  // Panel mode icon (SVG image)
+  const panelModeIcon = createElement(doc, "img", {
+    width: "16px",
+    height: "16px",
+    opacity: "0.6",
+  }, { id: "chat-panel-mode-icon" });
+  // Default: sidebar mode, show split icon (click to switch to floating)
+  (panelModeIcon as HTMLImageElement).src = `chrome://${config.addonRef}/content/icons/split.svg`;
+  panelModeBtn.appendChild(panelModeIcon);
 
   leftContainer.appendChild(modelSelectorContainer);
   leftContainer.appendChild(settingsBtn);
+  leftContainer.appendChild(panelModeBtn);
 
   // Send button
   const sendButton = createElement(doc, "button", {
@@ -406,6 +471,7 @@ export function createChatContainer(doc: Document, theme: ThemeColors): HTMLElem
   }, { id: "chat-history-dropdown" });
 
   // Assemble
+  root.appendChild(dragBar);
   root.appendChild(userBar);
   root.appendChild(chatHistory);
   root.appendChild(toolbar);

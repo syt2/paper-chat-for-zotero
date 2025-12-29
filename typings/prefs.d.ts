@@ -21,6 +21,7 @@ declare namespace _ZoteroTypes {
       "paperchatModelsCache": string;
       "paperchatRatiosCache": string;
       "uploadRawPdfOnFailure": boolean;
+      "panelMode": string;
     };
   }
 }

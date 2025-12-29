@@ -19,3 +19,6 @@ pref("paperchatRatiosCache", "");
 
 // PDF Settings
 pref("uploadRawPdfOnFailure", false);
+
+// UI Settings
+pref("panelMode", "sidebar");
