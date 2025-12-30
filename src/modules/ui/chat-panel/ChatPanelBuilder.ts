@@ -99,6 +99,29 @@ export function createChatContainer(doc: Document, theme: ThemeColors): HTMLElem
     fontSize: "12px",
   }, { id: "chat-user-bar" });
 
+  // Settings button in user bar (visible when not logged in)
+  const userBarSettingsBtn = createElement(doc, "button", {
+    background: "rgba(255, 255, 255, 0.2)",
+    border: "1px solid rgba(255, 255, 255, 0.3)",
+    borderRadius: "4px",
+    padding: "6px",
+    cursor: "pointer",
+    display: "none",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: "0",
+  }, { id: "chat-user-bar-settings-btn" });
+  userBarSettingsBtn.title = "打开设置";
+
+  const userBarSettingsIcon = createElement(doc, "img", {
+    width: "16px",
+    height: "16px",
+    opacity: "0.9",
+    filter: "brightness(0) invert(1)",
+  });
+  (userBarSettingsIcon as HTMLImageElement).src = `chrome://${config.addonRef}/content/icons/config.svg`;
+  userBarSettingsBtn.appendChild(userBarSettingsIcon);
+
   const userInfo = createElement(doc, "div", {
     display: "flex",
     flexDirection: "column",
@@ -128,8 +151,18 @@ export function createChatContainer(doc: Document, theme: ThemeColors): HTMLElem
     cursor: "pointer",
   }, { id: "chat-user-action-btn" });
 
+  // Right side container for settings button + action button
+  const userBarRight = createElement(doc, "div", {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+  });
+
+  userBarRight.appendChild(userActionBtn);
+  userBarRight.appendChild(userBarSettingsBtn);
+
   userBar.appendChild(userInfo);
-  userBar.appendChild(userActionBtn);
+  userBar.appendChild(userBarRight);
 
   // Chat History
   const chatHistory = createElement(doc, "div", {

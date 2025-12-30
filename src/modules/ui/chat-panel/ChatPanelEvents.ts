@@ -379,6 +379,23 @@ export function setupEventHandlers(context: ChatPanelContext): void {
     });
   }
 
+  // User bar settings button (visible when not logged in) - open preferences
+  const userBarSettingsBtn = container.querySelector("#chat-user-bar-settings-btn") as HTMLButtonElement;
+  if (userBarSettingsBtn) {
+    userBarSettingsBtn.addEventListener("click", () => {
+      ztoolkit.log("User bar settings button clicked");
+      Zotero.Utilities.Internal.openPreferences("paperchat-prefpane");
+    });
+
+    // Hover effect
+    userBarSettingsBtn.addEventListener("mouseenter", () => {
+      userBarSettingsBtn.style.background = "rgba(255, 255, 255, 0.3)";
+    });
+    userBarSettingsBtn.addEventListener("mouseleave", () => {
+      userBarSettingsBtn.style.background = "rgba(255, 255, 255, 0.15)";
+    });
+  }
+
   // Panel mode toggle button - switch between sidebar and floating mode
   const panelModeBtn = container.querySelector("#chat-panel-mode-btn") as HTMLButtonElement;
   if (panelModeBtn) {
@@ -579,6 +596,7 @@ export function updateUserBarDisplay(container: HTMLElement, authManager: { isLo
   const userNameEl = container.querySelector("#chat-user-name") as HTMLElement;
   const userBalanceEl = container.querySelector("#chat-user-balance") as HTMLElement;
   const userActionBtn = container.querySelector("#chat-user-action-btn") as HTMLButtonElement;
+  const userBarSettingsBtn = container.querySelector("#chat-user-bar-settings-btn") as HTMLButtonElement;
 
   if (!userBar || !userNameEl || !userBalanceEl || !userActionBtn) return;
 
@@ -598,10 +616,18 @@ export function updateUserBarDisplay(container: HTMLElement, authManager: { isLo
     userNameEl.textContent = user?.username || "";
     userBalanceEl.textContent = `${getString("user-panel-balance")}: ${authManager.formatBalance()}`;
     userActionBtn.textContent = getString("user-panel-logout-btn");
+    // Hide settings button when logged in
+    if (userBarSettingsBtn) {
+      userBarSettingsBtn.style.display = "none";
+    }
   } else {
     userNameEl.textContent = getString("user-panel-not-logged-in");
     userBalanceEl.textContent = "";
     userActionBtn.textContent = getString("user-panel-login-btn");
+    // Show settings button when not logged in
+    if (userBarSettingsBtn) {
+      userBarSettingsBtn.style.display = "flex";
+    }
   }
 }
 
