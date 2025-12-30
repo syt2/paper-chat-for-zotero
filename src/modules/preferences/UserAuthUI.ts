@@ -157,7 +157,7 @@ export function bindUserAuthEvents(
   });
 
   // Auth callbacks - refresh provider list on login status change
-  authManager.setCallbacks({
+  authManager.addListener({
     onBalanceUpdate: () => updateUserDisplay(doc, authManager),
     onLoginStatusChange: () => {
       updateUserDisplay(doc, authManager);

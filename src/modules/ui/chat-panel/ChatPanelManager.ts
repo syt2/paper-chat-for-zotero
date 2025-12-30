@@ -244,7 +244,7 @@ function updateSidebarContainerPosition(): void {
 }
 
 /**
- * Legacy alias for backward compatibility
+ * Update container size based on current panel mode
  */
 function updateContainerSize(): void {
   if (currentPanelMode === "sidebar") {
@@ -371,7 +371,7 @@ async function initializeChatContentCommon(container: HTMLElement): Promise<void
   context.updateUserBar();
 
   // Set auth callbacks
-  authManager.setCallbacks({
+  authManager.addListener({
     onBalanceUpdate: () => context.updateUserBar(),
     onLoginStatusChange: () => context.updateUserBar(),
   });

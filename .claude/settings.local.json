@@ -15,12 +15,9 @@
       "WebFetch(domain:api.github.com)",
       "mcp__ide__getDiagnostics",
       "Bash(wc:*)",
-      "Bash(git -C /Users/shenyutao/zoteroPlugins/paper-chat diff --no-pager src/modules/ui/index.ts)",
-      "Bash(git -C /Users/shenyutao/zoteroPlugins/paper-chat status --short)",
       "Bash(curl:*)",
       "Bash(grep:*)",
       "Bash(npm run lint:*)",
-      "Bash(git -C /Users/shenyutao/zoteroPlugins/paper-chat diff --stat HEAD)",
       "Bash(npx tsc:*)",
       "Bash(npx eslint:*)",
       "Bash(npm ls:*)",
@@ -30,7 +27,10 @@
       "Bash(npx zotero-plugin build)",
       "Bash(git add:*)",
       "Bash(git show:*)",
-      "Bash(git -C /Users/shenyutao/zoteroPlugins/pdf-ai-talk diff HEAD~1 --stat)"
+      "Bash(git diff:*)",
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      "Bash(git -C:*)"
     ]
   }
 }

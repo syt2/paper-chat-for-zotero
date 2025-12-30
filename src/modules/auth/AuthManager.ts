@@ -50,7 +50,6 @@ const PLUGIN_TOKEN_NAME = "Paper-Chat-Plugin";
 export class AuthManager {
   private authService: AuthService;
   private state: AuthState;
-  private callbacks: AuthCallbacks = {};
   private listeners: CallbackListeners = {
     onLoginStatusChange: [],
     onUserInfoUpdate: [],
@@ -58,6 +57,7 @@ export class AuthManager {
     onError: [],
   };
   private balanceRefreshInterval: ReturnType<typeof setInterval> | null = null;
+  private isAutoReloginInProgress = false; // 防止无限循环
 
   constructor() {
     this.authService = new AuthService();
@@ -75,13 +75,9 @@ export class AuthManager {
   }
 
   /**
-   * 设置回调函数（添加到监听器列表，支持多个组件同时监听）
+   * 添加回调监听器（支持多个组件同时监听）
    */
-  setCallbacks(callbacks: AuthCallbacks): void {
-    // 保留旧的 callbacks 引用用于兼容
-    this.callbacks = callbacks;
-
-    // 添加到监听器列表
+  addListener(callbacks: AuthCallbacks): void {
     if (callbacks.onLoginStatusChange) {
       this.listeners.onLoginStatusChange.push(callbacks.onLoginStatusChange);
     }
@@ -451,6 +447,12 @@ export class AuthManager {
    * 当 session 过期时调用，作为 cookie 恢复失败的兜底方案
    */
   async autoRelogin(): Promise<boolean> {
+    // 防止无限循环
+    if (this.isAutoReloginInProgress) {
+      ztoolkit.log("[AuthManager] Auto-relogin already in progress, skipping");
+      return false;
+    }
+
     const savedUsername = getPref("username") as string;
     const savedPasswordEncoded = getPref("loginPassword") as string;
 
@@ -467,45 +469,51 @@ export class AuthManager {
       savedUsername,
     );
 
-    // 清除旧的 CookieSandbox，确保使用新的 session
-    this.authService.resetCookieSandbox();
+    this.isAutoReloginInProgress = true;
 
-    const result = await this.authService.login({
-      username: savedUsername,
-      password: savedPassword,
-    });
+    try {
+      // 清除旧的 CookieSandbox，确保使用新的 session
+      this.authService.resetCookieSandbox();
 
-    if (result.success) {
-      ztoolkit.log("[AuthManager] Auto-relogin successful");
+      const result = await this.authService.login({
+        username: savedUsername,
+        password: savedPassword,
+      });
 
-      // 更新用户ID
-      const userId = this.authService.getUserId();
-      if (userId !== null) {
-        this.state.userId = userId;
-        this.authService.setUserId(userId);
+      if (result.success) {
+        ztoolkit.log("[AuthManager] Auto-relogin successful");
+
+        // 更新用户ID
+        const userId = this.authService.getUserId();
+        if (userId !== null) {
+          this.state.userId = userId;
+          this.authService.setUserId(userId);
+        }
+
+        // 尝试提取并保存新的 session cookie
+        const extractedSession = this.authService.extractSessionCookie();
+        if (extractedSession) {
+          this.state.sessionToken = extractedSession;
+          this.authService.setSessionToken(extractedSession);
+          setPref("sessionToken", extractedSession);
+          ztoolkit.log(
+            "[AuthManager] New session cookie saved after auto-relogin",
+          );
+        }
+
+        // 确保 authService 有 userId
+        if (this.state.userId !== null && this.state.userId > 0) {
+          this.authService.setUserId(this.state.userId);
+        }
+
+        return true;
       }
 
-      // 尝试提取并保存新的 session cookie
-      const extractedSession = this.authService.extractSessionCookie();
-      if (extractedSession) {
-        this.state.sessionToken = extractedSession;
-        this.authService.setSessionToken(extractedSession);
-        setPref("sessionToken", extractedSession);
-        ztoolkit.log(
-          "[AuthManager] New session cookie saved after auto-relogin",
-        );
-      }
-
-      // 确保 authService 有 userId
-      if (this.state.userId !== null && this.state.userId > 0) {
-        this.authService.setUserId(this.state.userId);
-      }
-
-      return true;
+      ztoolkit.log("[AuthManager] Auto-relogin failed:", result.message);
+      return false;
+    } finally {
+      this.isAutoReloginInProgress = false;
     }
-
-    ztoolkit.log("[AuthManager] Auto-relogin failed:", result.message);
-    return false;
   }
 
   /**
