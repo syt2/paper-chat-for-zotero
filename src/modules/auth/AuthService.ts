@@ -83,10 +83,6 @@ export class AuthService {
     }
   }
 
-  setSessionToken(token: string | null): void {
-    this.sessionToken = token;
-  }
-
   getSessionToken(): string | null {
     return this.sessionToken;
   }
@@ -104,26 +100,37 @@ export class AuthService {
   }
 
   /**
-   * 清除 session
+   * 清除 session（包括浏览器 cookie jar）
    */
   clearSessionCookie(): void {
     this.sessionToken = null;
     pendingSessionCookie = null;
+
+    // 从浏览器 cookie jar 中删除
+    try {
+      const host = new URL(this.baseUrl).hostname;
+      Services.cookies.remove(host, "session", "/", {});
+    } catch {
+      // 忽略错误
+    }
   }
 
   /**
-   * 获取当前 session
+   * 从浏览器 cookie jar 恢复 session（用于重启后恢复会话）
    */
-  extractSessionCookie(): string | null {
-    return this.sessionToken;
-  }
+  restoreSessionFromCookieJar(): void {
+    try {
+      const host = new URL(this.baseUrl).hostname;
+      const cookies = Services.cookies.getCookiesFromHost(host, {});
 
-  /**
-   * 恢复 session（用于重启后恢复会话）
-   */
-  restoreSessionCookie(sessionValue: string): void {
-    if (sessionValue) {
-      this.sessionToken = sessionValue;
+      for (const cookie of cookies) {
+        if (cookie.name === "session") {
+          this.sessionToken = cookie.value;
+          return;
+        }
+      }
+    } catch {
+      // 忽略错误
     }
   }
 

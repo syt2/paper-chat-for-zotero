@@ -154,7 +154,6 @@ export class AuthManager {
    */
   private restoreState(): void {
     const savedApiKey = getPref("apiKey");
-    const savedSessionToken = getPref("sessionToken");
     const savedUserId = getPref("userId");
     const savedUsername = getPref("username");
     // quota 值可能超过 32 位整数，存为 JSON 字符串
@@ -173,9 +172,16 @@ export class AuthManager {
       // ignore parse error
     }
 
+    // 从浏览器 cookie jar 恢复 session（浏览器会自动持久化）
+    this.authService.restoreSessionFromCookieJar();
+    const restoredSession = this.authService.getSessionToken();
+    if (restoredSession) {
+      this.state.sessionToken = restoredSession;
+    }
+
     ztoolkit.log("[AuthManager] restoreState - read from prefs:", {
       savedApiKey: savedApiKey ? "exists" : "empty",
-      savedSessionToken: savedSessionToken ? "exists" : "empty",
+      sessionFromCookieJar: restoredSession ? "exists" : "empty",
       savedUserId,
       savedUsername,
       savedQuota,
@@ -184,15 +190,7 @@ export class AuthManager {
 
     if (savedApiKey) {
       this.state.apiKey = savedApiKey as string;
-      // 设置访问令牌用于Authorization header验证
       this.authService.setAccessToken(savedApiKey as string);
-    }
-
-    if (savedSessionToken) {
-      this.state.sessionToken = savedSessionToken as string;
-      this.authService.setSessionToken(savedSessionToken as string);
-      // 恢复 session cookie 到 CookieSandbox
-      this.authService.restoreSessionCookie(savedSessionToken as string);
     }
 
     // userId 可能是0，需要检查是否为有效数字
@@ -232,12 +230,9 @@ export class AuthManager {
   private saveState(): void {
     if (this.state.apiKey) {
       setPref("apiKey", this.state.apiKey);
-      // 同时更新authService的accessToken
       this.authService.setAccessToken(this.state.apiKey);
     }
-    if (this.state.sessionToken) {
-      setPref("sessionToken", this.state.sessionToken);
-    }
+    // sessionToken 由浏览器 cookie jar 自动持久化，不需要存 prefs
     if (this.state.userId !== null && this.state.userId > 0) {
       setPref("userId", this.state.userId);
     }
@@ -365,7 +360,6 @@ export class AuthManager {
     this.state.isLoggedIn = false;
     this.authService.setUserId(null);
     this.authService.setAccessToken(null);
-    this.authService.setSessionToken(null);
     this.authService.clearSessionCookie();
 
     const result = await this.authService.login({ username, password });
@@ -377,26 +371,10 @@ export class AuthManager {
         this.state.userId = userId;
       }
 
-      // 从 CookieSandbox 提取 session cookie
-      const extractedSession = this.authService.extractSessionCookie();
-      if (extractedSession) {
-        this.state.sessionToken = extractedSession;
-        this.authService.setSessionToken(extractedSession);
-        setPref("sessionToken", extractedSession);
-        ztoolkit.log(
-          "[AuthManager] Session cookie extracted and saved:",
-          extractedSession.substring(0, 20) + "...",
-        );
-      } else {
-        // 如果从 CookieSandbox 提取失败，尝试从响应头获取
-        const sessionToken = this.authService.getSessionToken();
-        if (sessionToken) {
-          this.state.sessionToken = sessionToken;
-          ztoolkit.log(
-            "[AuthManager] Session token from response header:",
-            sessionToken.substring(0, 20) + "...",
-          );
-        }
+      // 从 HTTP Observer 捕获的 session 更新状态
+      const sessionToken = this.authService.getSessionToken();
+      if (sessionToken) {
+        this.state.sessionToken = sessionToken;
       }
 
       // 确保 authService 也有 userId 用于后续 API 调用
@@ -490,15 +468,10 @@ export class AuthManager {
           this.authService.setUserId(userId);
         }
 
-        // 尝试提取并保存新的 session cookie
-        const extractedSession = this.authService.extractSessionCookie();
-        if (extractedSession) {
-          this.state.sessionToken = extractedSession;
-          this.authService.setSessionToken(extractedSession);
-          setPref("sessionToken", extractedSession);
-          ztoolkit.log(
-            "[AuthManager] New session cookie saved after auto-relogin",
-          );
+        // 从 HTTP Observer 捕获的 session 更新状态
+        const sessionToken = this.authService.getSessionToken();
+        if (sessionToken) {
+          this.state.sessionToken = sessionToken;
         }
 
         // 确保 authService 有 userId
@@ -535,16 +508,14 @@ export class AuthManager {
     // 清除 AuthService 状态
     this.authService.setUserId(null);
     this.authService.setAccessToken(null);
-    this.authService.setSessionToken(null);
     this.authService.clearSessionCookie();
 
-    // 清除偏好设置
+    // 清除偏好设置（sessionToken 由浏览器 cookie jar 管理）
     setPref("apiKey", "");
-    setPref("sessionToken", "");
     setPref("userId", 0);
     setPref("username", "");
     setPref("userQuotaJson", "");
-    setPref("loginPassword", ""); // 清除保存的密码
+    setPref("loginPassword", "");
 
     // 停止余额刷新
     this.stopBalanceRefresh();

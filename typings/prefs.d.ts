@@ -13,7 +13,6 @@ declare namespace _ZoteroTypes {
       "maxTokens": number;
       "temperature": string;
       "systemPrompt": string;
-      "sessionToken": string;
       "username": string;
       "loginPassword": string;
       "userId": number;
