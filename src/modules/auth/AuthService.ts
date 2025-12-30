@@ -16,6 +16,7 @@ import type {
   PaginatedResponse,
 } from "../../types/auth";
 import { BUILTIN_PROVIDERS } from "../providers/ProviderManager";
+import { getString } from "../../utils/locale";
 
 // API基础URL - 从ProviderManager获取
 const DEFAULT_API_BASE = BUILTIN_PROVIDERS.paperchat.website!;
@@ -284,7 +285,7 @@ export class AuthService {
       return {
         status: 0,
         data: null,
-        error: error instanceof Error ? error.message : "网络错误",
+        error: error instanceof Error ? error.message : getString("api-error-network"),
       };
     }
   }
@@ -347,7 +348,7 @@ export class AuthService {
         success: false,
         message: this.parseErrorMessage(
           result.data,
-          `请求失败: ${result.status}`,
+          getString("api-error-request-failed", { args: { status: result.status } }),
         ),
       };
     }
@@ -372,7 +373,7 @@ export class AuthService {
         success: false,
         message: this.parseErrorMessage(
           result.data,
-          `请求失败: ${result.status}`,
+          getString("api-error-request-failed", { args: { status: result.status } }),
         ),
       };
     }
@@ -400,7 +401,7 @@ export class AuthService {
         success: false,
         message: this.parseErrorMessage(
           result.data,
-          `注册失败: ${result.status}`,
+          getString("api-error-register-failed", { args: { status: result.status } }),
         ),
       };
     }
@@ -428,7 +429,7 @@ export class AuthService {
         success: false,
         message: this.parseErrorMessage(
           result.data,
-          `登录失败: ${result.status}`,
+          getString("api-error-login-failed", { args: { status: result.status } }),
         ),
       };
     }
@@ -441,8 +442,7 @@ export class AuthService {
       ztoolkit.log("[AuthService] 2FA required but not supported");
       return {
         success: false,
-        message:
-          "此账号启用了两步验证，插件暂不支持两步验证登录，请在网页端关闭两步验证后重试",
+        message: getString("api-error-2fa-not-supported"),
       };
     }
 
@@ -474,7 +474,7 @@ export class AuthService {
         success: false,
         message: this.parseErrorMessage(
           result.data,
-          `登出失败: ${result.status}`,
+          getString("api-error-logout-failed", { args: { status: result.status } }),
         ),
       };
     }
@@ -499,7 +499,7 @@ export class AuthService {
         success: false,
         message: this.parseErrorMessage(
           result.data,
-          `获取用户信息失败: ${result.status}`,
+          getString("api-error-get-user-failed", { args: { status: result.status } }),
         ),
       };
     }
@@ -529,7 +529,7 @@ export class AuthService {
         success: false,
         message: this.parseErrorMessage(
           result.data,
-          `获取Token列表失败: ${result.status}`,
+          getString("api-error-get-tokens-failed", { args: { status: result.status } }),
         ),
       };
     }
@@ -556,7 +556,7 @@ export class AuthService {
         success: false,
         message: this.parseErrorMessage(
           result.data,
-          `创建Token失败: ${result.status}`,
+          getString("api-error-create-token-failed", { args: { status: result.status } }),
         ),
       };
     }
@@ -581,7 +581,7 @@ export class AuthService {
         success: false,
         message: this.parseErrorMessage(
           result.data,
-          `删除Token失败: ${result.status}`,
+          getString("api-error-delete-token-failed", { args: { status: result.status } }),
         ),
       };
     }
@@ -608,7 +608,7 @@ export class AuthService {
         success: false,
         message: this.parseErrorMessage(
           result.data,
-          `兑换失败: ${result.status}`,
+          getString("api-error-redeem-failed", { args: { status: result.status } }),
         ),
       };
     }

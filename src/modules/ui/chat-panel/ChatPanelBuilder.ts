@@ -82,7 +82,7 @@ export function createChatContainer(doc: Document, theme: ThemeColors): HTMLElem
     padding: "0",
     fontSize: "14px",
     color: theme.textMuted,
-  }, { id: "chat-close-btn", title: "关闭" });
+  }, { id: "chat-close-btn", title: getString("chat-close") });
   closeBtn.textContent = "✕";
 
   dragBar.appendChild(dragTitle);
@@ -111,7 +111,7 @@ export function createChatContainer(doc: Document, theme: ThemeColors): HTMLElem
     justifyContent: "center",
     flexShrink: "0",
   }, { id: "chat-user-bar-settings-btn" });
-  userBarSettingsBtn.title = "打开设置";
+  userBarSettingsBtn.title = getString("chat-open-settings");
 
   const userBarSettingsIcon = createElement(doc, "img", {
     width: "16px",
@@ -369,7 +369,7 @@ export function createChatContainer(doc: Document, theme: ThemeColors): HTMLElem
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   }, { id: "chat-model-selector-text" });
-  modelSelectorText.textContent = "选择模型";
+  modelSelectorText.textContent = getString("chat-select-model");
 
   const modelSelectorArrow = createElement(doc, "span", {
     fontSize: "10px",
@@ -414,7 +414,7 @@ export function createChatContainer(doc: Document, theme: ThemeColors): HTMLElem
     justifyContent: "center",
     padding: "0",
   }, { id: "chat-settings-btn" });
-  settingsBtn.title = "打开设置";
+  settingsBtn.title = getString("chat-open-settings");
 
   // Settings icon (SVG)
   const settingsIcon = createElement(doc, "img", {
@@ -438,7 +438,7 @@ export function createChatContainer(doc: Document, theme: ThemeColors): HTMLElem
     justifyContent: "center",
     padding: "0",
   }, { id: "chat-panel-mode-btn" });
-  panelModeBtn.title = "切换侧边栏/悬浮窗模式";
+  panelModeBtn.title = getString("chat-toggle-panel-mode");
 
   // Panel mode icon (SVG image)
   const panelModeIcon = createElement(doc, "img", {

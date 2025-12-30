@@ -48,7 +48,7 @@ export function createSessionItem(
     padding: "0",
   });
   deleteBtn.textContent = "×";
-  deleteBtn.title = "删除";
+  deleteBtn.title = getString("chat-delete");
 
   // Hover effects
   sessionItem.addEventListener("mouseenter", () => {

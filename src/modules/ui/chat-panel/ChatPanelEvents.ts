@@ -58,7 +58,7 @@ export function updatePanelModeButtonIcon(container: HTMLElement, mode: PanelMod
     panelModeIcon.src = mode === "sidebar"
       ? `chrome://${config.addonRef}/content/icons/split.svg`
       : `chrome://${config.addonRef}/content/icons/right-bar.svg`;
-    panelModeBtn.title = mode === "sidebar" ? "切换为悬浮窗模式" : "切换为侧边栏模式";
+    panelModeBtn.title = mode === "sidebar" ? getString("chat-switch-to-floating") : getString("chat-switch-to-sidebar");
   }
 }
 
@@ -686,7 +686,7 @@ export function updateModelSelectorDisplay(container: HTMLElement): void {
   } else if (activeProvider) {
     modelSelectorText.textContent = activeProvider.getName();
   } else {
-    modelSelectorText.textContent = "选择模型";
+    modelSelectorText.textContent = getString("chat-select-model");
   }
 }
 
@@ -735,7 +735,7 @@ function populateModelDropdown(
         color: theme.textMuted,
         fontStyle: "italic",
       });
-      noModels.textContent = "暂无可用模型";
+      noModels.textContent = getString("chat-no-models");
       dropdown.appendChild(noModels);
     } else {
       // List models
@@ -819,7 +819,7 @@ function populateModelDropdown(
       color: theme.textMuted,
       textAlign: "center",
     });
-    noProviders.textContent = "请先在设置中配置服务商";
+    noProviders.textContent = getString("chat-configure-provider");
     dropdown.appendChild(noProviders);
   }
 }

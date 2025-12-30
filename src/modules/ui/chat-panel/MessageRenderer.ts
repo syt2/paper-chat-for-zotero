@@ -8,6 +8,7 @@ import type { ThemeColors } from "./types";
 import { HTML_NS } from "./types";
 import { renderMarkdownToElement } from "./MarkdownRenderer";
 import { createElement, copyToClipboard } from "./ChatPanelBuilder";
+import { getString } from "../../../utils/locale";
 
 /**
  * Create a message element for display in chat history
@@ -138,7 +139,7 @@ export function createCopyButton(
     cursor: "pointer",
     opacity: "0",
     transition: "opacity 0.2s",
-  }, { class: "copy-btn", title: "Copy" });
+  }, { class: "copy-btn", title: getString("chat-copy") });
   copyBtn.textContent = "\uD83D\uDCCB"; // 📋
 
   copyBtn.addEventListener("click", (e) => {

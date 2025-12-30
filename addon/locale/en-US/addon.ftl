@@ -33,6 +33,22 @@ paperchat-auth-forgot-password = Forgot password?
 paperchat-auth-error-email-required-reset = Please enter username/email first
 paperchat-auth-reset-email-sent = Password reset email has been sent
 
+# API Errors
+paperchat-api-error-network = Network error
+paperchat-api-error-request-failed = Request failed: { $status }
+paperchat-api-error-register-failed = Registration failed: { $status }
+paperchat-api-error-login-failed = Login failed: { $status }
+paperchat-api-error-2fa-not-supported = This account has 2FA enabled. The plugin does not support 2FA login. Please disable 2FA on the website and try again.
+paperchat-api-error-logout-failed = Logout failed: { $status }
+paperchat-api-error-get-user-failed = Failed to get user info: { $status }
+paperchat-api-error-get-tokens-failed = Failed to get token list: { $status }
+paperchat-api-error-create-token-failed = Failed to create token: { $status }
+paperchat-api-error-delete-token-failed = Failed to delete token: { $status }
+paperchat-api-error-redeem-failed = Redemption failed: { $status }
+paperchat-api-error-parse-user-failed = Login failed: unable to parse user info, please try again
+paperchat-api-success-login = Login successful
+paperchat-api-success-redeem = Redemption successful! Added balance: { $amount }
+
 # User Panel
 paperchat-user-panel-title = User Info
 paperchat-user-panel-logged-in = Logged in: { $username }
@@ -66,6 +82,16 @@ paperchat-chat-no-messages = (no messages)
 paperchat-chat-message-count = { $count } messages
 paperchat-chat-show-more = Show more ({ $count } remaining)
 paperchat-chat-no-history = No chat history
+paperchat-chat-close = Close
+paperchat-chat-open-settings = Open Settings
+paperchat-chat-select-model = Select Model
+paperchat-chat-toggle-panel-mode = Toggle sidebar/floating mode
+paperchat-chat-switch-to-floating = Switch to floating mode
+paperchat-chat-switch-to-sidebar = Switch to sidebar mode
+paperchat-chat-no-models = No models available
+paperchat-chat-configure-provider = Please configure a provider in Settings first
+paperchat-chat-delete = Delete
+paperchat-chat-copy = Copy
 
 # Guide
 paperchat-guide-toolbar-title = Start Chatting with AI

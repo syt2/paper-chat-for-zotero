@@ -33,6 +33,22 @@ paperchat-auth-forgot-password = 忘记密码？
 paperchat-auth-error-email-required-reset = 请先输入用户名/邮箱
 paperchat-auth-reset-email-sent = 重置密码邮件已发送，请查收邮箱
 
+# API Errors
+paperchat-api-error-network = 网络错误
+paperchat-api-error-request-failed = 请求失败: { $status }
+paperchat-api-error-register-failed = 注册失败: { $status }
+paperchat-api-error-login-failed = 登录失败: { $status }
+paperchat-api-error-2fa-not-supported = 此账号启用了两步验证，插件暂不支持两步验证登录，请在网页端关闭两步验证后重试
+paperchat-api-error-logout-failed = 登出失败: { $status }
+paperchat-api-error-get-user-failed = 获取用户信息失败: { $status }
+paperchat-api-error-get-tokens-failed = 获取Token列表失败: { $status }
+paperchat-api-error-create-token-failed = 创建Token失败: { $status }
+paperchat-api-error-delete-token-failed = 删除Token失败: { $status }
+paperchat-api-error-redeem-failed = 兑换失败: { $status }
+paperchat-api-error-parse-user-failed = 登录失败：无法解析用户信息，请重试
+paperchat-api-success-login = 登录成功
+paperchat-api-success-redeem = 兑换成功! 增加余额: { $amount }
+
 # User Panel
 paperchat-user-panel-title = 用户信息
 paperchat-user-panel-logged-in = 已登录: { $username }
@@ -66,6 +82,16 @@ paperchat-chat-no-messages = (无消息)
 paperchat-chat-message-count = { $count } 条消息
 paperchat-chat-show-more = 显示更多 (剩余 { $count } 条)
 paperchat-chat-no-history = 暂无聊天记录
+paperchat-chat-close = 关闭
+paperchat-chat-open-settings = 打开设置
+paperchat-chat-select-model = 选择模型
+paperchat-chat-toggle-panel-mode = 切换侧边栏/悬浮窗模式
+paperchat-chat-switch-to-floating = 切换为悬浮窗模式
+paperchat-chat-switch-to-sidebar = 切换为侧边栏模式
+paperchat-chat-no-models = 暂无可用模型
+paperchat-chat-configure-provider = 请先在设置中配置服务商
+paperchat-chat-delete = 删除
+paperchat-chat-copy = 复制
 
 # Guide
 paperchat-guide-toolbar-title = 开始与 AI 对话

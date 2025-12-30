@@ -9,6 +9,7 @@ import { AuthService } from "./AuthService";
 import type { UserInfo, TokenInfo, AuthState } from "../../types/auth";
 import { getPref, setPref } from "../../utils/prefs";
 import { BUILTIN_PROVIDERS, getProviderManager } from "../providers";
+import { getString } from "../../utils/locale";
 
 // 简单的密码编码/解码（base64，非加密，仅混淆）
 function encodePassword(password: string): string {
@@ -412,7 +413,7 @@ export class AuthManager {
         );
         return {
           success: false,
-          message: "登录失败：无法解析用户信息，请重试",
+          message: getString("api-error-parse-user-failed"),
         };
       }
 
@@ -436,12 +437,12 @@ export class AuthManager {
       this.state.isLoggedIn = true;
       this.notifyLoginStatusChange(true);
 
-      return { success: true, message: "登录成功" };
+      return { success: true, message: getString("api-success-login") };
     }
 
     return {
       success: false,
-      message: result.message || "登录失败",
+      message: result.message || getString("api-error-login-failed", { args: { status: "" } }),
     };
   }
 
@@ -750,14 +751,14 @@ export class AuthManager {
 
       return {
         success: true,
-        message: `兑换成功! 增加余额: ${AuthService.formatQuota(addedQuota)}`,
+        message: getString("api-success-redeem", { args: { amount: AuthService.formatQuota(addedQuota) } }),
         addedQuota,
       };
     }
 
     return {
       success: false,
-      message: result.message || "兑换失败",
+      message: result.message || getString("api-error-redeem-failed", { args: { status: "" } }),
     };
   }
 
