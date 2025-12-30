@@ -366,7 +366,7 @@ export class AuthManager {
     this.authService.setUserId(null);
     this.authService.setAccessToken(null);
     this.authService.setSessionToken(null);
-    this.authService.resetCookieSandbox();
+    this.authService.clearSessionCookie();
 
     const result = await this.authService.login({ username, password });
 
@@ -473,7 +473,7 @@ export class AuthManager {
 
     try {
       // 清除旧的 CookieSandbox，确保使用新的 session
-      this.authService.resetCookieSandbox();
+      this.authService.clearSessionCookie();
 
       const result = await this.authService.login({
         username: savedUsername,
@@ -536,7 +536,7 @@ export class AuthManager {
     this.authService.setUserId(null);
     this.authService.setAccessToken(null);
     this.authService.setSessionToken(null);
-    this.authService.resetCookieSandbox();
+    this.authService.clearSessionCookie();
 
     // 清除偏好设置
     setPref("apiKey", "");
