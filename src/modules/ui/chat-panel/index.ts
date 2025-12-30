@@ -16,7 +16,7 @@ export {
 } from "./ChatPanelManager";
 
 // Theme utilities
-export { getTheme, getCurrentTheme, isDarkMode } from "./ChatPanelTheme";
+export { getCurrentTheme, isDarkMode } from "./ChatPanelTheme";
 
 // Types
 export type { ThemeColors, ChatPanelContext, SessionInfo, AttachmentState } from "./types";

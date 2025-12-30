@@ -525,6 +525,22 @@ function showSidebarPanel(): void {
         applyThemeToContainer(floatingContainer);
       }
     });
+
+    // 延迟重新检测主题，因为启动时窗口可能还没完全应用暗黑模式
+    // 使用多次检测确保主题正确应用
+    const reapplyTheme = () => {
+      updateCurrentTheme();
+      if (chatContainer) {
+        applyThemeToContainer(chatContainer);
+      }
+      if (floatingContainer) {
+        applyThemeToContainer(floatingContainer);
+      }
+    };
+    // 多次延迟检测，确保在窗口完全加载后正确应用主题
+    setTimeout(reapplyTheme, 0);
+    setTimeout(reapplyTheme, 100);
+    setTimeout(reapplyTheme, 500);
   }
 
   // Add sidebar observer

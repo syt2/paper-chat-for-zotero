@@ -65,19 +65,13 @@ let currentTheme: ThemeColors = lightTheme;
 
 /**
  * Check if dark mode is enabled
+ * 使用多种方法检测，因为 matchMedia 在启动时可能不准确
  */
 export function isDarkMode(): boolean {
   const win = Zotero.getMainWindow();
   if (!win) return false;
   const mediaQuery = win.matchMedia?.("(prefers-color-scheme: dark)");
   return mediaQuery?.matches ?? false;
-}
-
-/**
- * Get current theme colors
- */
-export function getTheme(): ThemeColors {
-  return isDarkMode() ? darkTheme : lightTheme;
 }
 
 /**
@@ -91,7 +85,7 @@ export function getCurrentTheme(): ThemeColors {
  * Update the cached theme
  */
 export function updateCurrentTheme(): ThemeColors {
-  currentTheme = getTheme();
+  currentTheme = isDarkMode() ? darkTheme : lightTheme;
   return currentTheme;
 }
 

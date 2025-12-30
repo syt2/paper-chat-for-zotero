@@ -32,6 +32,7 @@ export type FluentMessageId =
   | 'paperchat-auth-error-password-mismatch'
   | 'paperchat-auth-error-password-required'
   | 'paperchat-auth-error-password-too-short'
+  | 'paperchat-auth-error-redeem-code-required'
   | 'paperchat-auth-error-unknown'
   | 'paperchat-auth-error-username-required'
   | 'paperchat-auth-forgot-password'

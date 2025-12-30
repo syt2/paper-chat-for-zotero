@@ -26,6 +26,7 @@ paperchat-auth-error-username-required = Username is required
 paperchat-auth-error-password-required = Password is required
 paperchat-auth-error-email-required = Email is required
 paperchat-auth-error-code-required = Verification code is required
+paperchat-auth-error-redeem-code-required = Redemption code is required
 paperchat-auth-error-password-mismatch = Passwords do not match
 paperchat-auth-error-password-too-short = Password must be at least 8 characters
 paperchat-auth-error-unknown = Unknown error

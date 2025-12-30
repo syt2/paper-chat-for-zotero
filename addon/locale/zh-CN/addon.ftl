@@ -26,6 +26,7 @@ paperchat-auth-error-username-required = 请输入用户名
 paperchat-auth-error-password-required = 请输入密码
 paperchat-auth-error-email-required = 请输入邮箱
 paperchat-auth-error-code-required = 请输入验证码
+paperchat-auth-error-redeem-code-required = 请输入兑换码
 paperchat-auth-error-password-mismatch = 两次密码输入不一致
 paperchat-auth-error-password-too-short = 密码长度至少8位
 paperchat-auth-error-unknown = 未知错误

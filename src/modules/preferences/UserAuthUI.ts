@@ -104,7 +104,7 @@ export function bindUserAuthEvents(
   redeemBtn?.addEventListener("click", async () => {
     const code = redeemInput?.value?.trim();
     if (!code) {
-      showMessage(doc, getString("auth-error-code-required"), true);
+      showMessage(doc, getString("auth-error-redeem-code-required"), true);
       return;
     }
 
