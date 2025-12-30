@@ -11,9 +11,9 @@ Chat with AI about your PDF documents directly in Zotero. Supports OpenAI, Claud
 
 ## Screenshots
 
-| Chat Panel | Settings |
+| Chat Panel & Settings | Float Chat Window |
 |:----------:|:--------:|
-| ![Chat](doc/screenshots/screenshot_talk.png) | ![Settings](doc/screenshots/screenshot_pref.png) |
+| ![Chat](doc/screenshots/screenshot_total.png) | ![Settings](doc/screenshots/screenshot_split.png) |
 
 ## Features
 

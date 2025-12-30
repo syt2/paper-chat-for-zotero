@@ -11,9 +11,9 @@
 
 ## 截图
 
-| 聊天面板 | 设置页面 |
+| 边栏与设置窗口 | 浮动窗口 |
 |:-------:|:-------:|
-| ![聊天](screenshots/screenshot_talk.png) | ![设置](screenshots/screenshot_pref.png) |
+| ![聊天](screenshots/screenshot_total.png) | ![设置](screenshots/screenshot_total.png) |
 
 ## 功能特性
 
