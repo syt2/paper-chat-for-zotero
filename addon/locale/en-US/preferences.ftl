@@ -2,12 +2,11 @@ pref-title = Paper Chat Settings
 
 # Account Settings
 pref-account-settings = Account Settings
-pref-aff-code-label = Invite Code
 pref-copy-btn = Copy
 pref-copied = Copied!
-pref-redeem-label = Redemption Code
+pref-redeem-label = Token Redemption Code
 pref-redeem-placeholder =
-    .placeholder = Enter redemption code
+    .placeholder = Enter token redemption code
 pref-redeem-btn = Redeem
 pref-get-redeem-code = Get Code
 pref-get-redeem-code-title = Get Redemption Code

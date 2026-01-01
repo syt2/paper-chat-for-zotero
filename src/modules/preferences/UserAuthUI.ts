@@ -20,8 +20,6 @@ export function updateUserDisplay(doc: Document, authManager: AuthManagerType): 
   const userBalanceEl = doc.getElementById("pref-user-balance") as HTMLElement | null;
   const userUsedEl = doc.getElementById("pref-user-used") as HTMLElement | null;
   const loginBtn = doc.getElementById("pref-login-btn") as HTMLElement | null;
-  const affCodeBar = doc.getElementById("pref-aff-code-bar") as HTMLElement | null;
-  const affCodeEl = doc.getElementById("pref-aff-code") as HTMLElement | null;
   const getRedeemCodeBtn = doc.getElementById("pref-get-redeem-code-btn") as HTMLElement | null;
 
   if (authManager.isLoggedIn()) {
@@ -38,11 +36,6 @@ export function updateUserDisplay(doc: Document, authManager: AuthManagerType): 
     }
     if (loginBtn) {
       loginBtn.setAttribute("label", getString("user-panel-logout-btn"));
-    }
-    // Show invitation code
-    if (affCodeBar && affCodeEl && user?.aff_code) {
-      affCodeBar.style.display = "flex";
-      affCodeEl.setAttribute("value", user.aff_code);
     }
     // Show get redeem code button
     if (getRedeemCodeBtn) {
@@ -61,10 +54,6 @@ export function updateUserDisplay(doc: Document, authManager: AuthManagerType): 
     }
     if (loginBtn) {
       loginBtn.setAttribute("label", getString("user-panel-login-btn"));
-    }
-    // Hide invitation code
-    if (affCodeBar) {
-      affCodeBar.style.display = "none";
     }
     // Hide get redeem code button
     if (getRedeemCodeBtn) {
@@ -126,19 +115,6 @@ export function bindUserAuthEvents(
       }
     } finally {
       (redeemBtn as HTMLButtonElement).disabled = false;
-    }
-  });
-
-  // Copy invitation code button
-  const copyAffCodeBtn = doc.getElementById("pref-copy-aff-code");
-  const affCodeEl = doc.getElementById("pref-aff-code") as HTMLElement;
-  copyAffCodeBtn?.addEventListener("click", () => {
-    const affCode = affCodeEl?.getAttribute("value");
-    if (affCode) {
-      // Copy to clipboard using Zotero's copyTextToClipboard
-      new ztoolkit.Clipboard().addText(affCode, "text/plain").copy();
-      // Show feedback
-      showMessage(doc, getString("pref-copied"), false);
     }
   });
 

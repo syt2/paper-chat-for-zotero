@@ -2,12 +2,11 @@ pref-title = Paper Chat 设置
 
 # Account Settings
 pref-account-settings = 账户设置
-pref-aff-code-label = 邀请码
 pref-copy-btn = 复制
 pref-copied = 已复制!
-pref-redeem-label = 兑换码
+pref-redeem-label = Token 兑换码
 pref-redeem-placeholder =
-    .placeholder = 输入兑换码
+    .placeholder = 输入Token兑换码
 pref-redeem-btn = 兑换
 pref-get-redeem-code = 获取兑换码
 pref-get-redeem-code-title = 获取兑换码

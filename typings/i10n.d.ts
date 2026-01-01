@@ -95,7 +95,6 @@ export type FluentMessageId =
   | 'pref-active-provider'
   | 'pref-add-model'
   | 'pref-add-provider'
-  | 'pref-aff-code-label'
   | 'pref-api-key'
   | 'pref-api-settings'
   | 'pref-base-url'
