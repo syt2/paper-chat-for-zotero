@@ -62,39 +62,44 @@
           <button id="pref-paperchat-refresh-models" data-l10n-id="pref-refresh-models" style="margin-left: 8px;"></button>
         </hbox>
 
-        <!-- PaperChat Max Tokens -->
-        <hbox align="center" style="margin-bottom: 8px;">
-          <label for="pref-paperchat-maxtokens" data-l10n-id="pref-max-tokens" style="width: 70px; text-align: right;"></label>
-          <html:input
-            type="number"
-            id="pref-paperchat-maxtokens"
-            style="width: 100px; margin-left: 8px;"
-            min="256"
-            max="128000"
-          ></html:input>
-        </hbox>
+        <!-- Advanced Options (Collapsible) -->
+        <html:details style="margin-top: 12px; margin-bottom: 12px;">
+          <html:summary data-l10n-id="pref-advanced-options" style="cursor: pointer; font-weight: bold; margin-bottom: 8px;"></html:summary>
 
-        <!-- PaperChat Temperature -->
-        <hbox align="center" style="margin-bottom: 8px;">
-          <label for="pref-paperchat-temperature" data-l10n-id="pref-temperature" style="width: 70px; text-align: right;"></label>
-          <html:input
-            type="number"
-            id="pref-paperchat-temperature"
-            style="width: 80px; margin-left: 8px;"
-            min="0"
-            max="2"
-            step="0.1"
-          ></html:input>
-        </hbox>
+          <!-- PaperChat Max Tokens -->
+          <hbox align="center" style="margin-bottom: 8px; margin-left: 12px;">
+            <label for="pref-paperchat-maxtokens" data-l10n-id="pref-max-tokens" style="width: 70px; text-align: right;"></label>
+            <html:input
+              type="number"
+              id="pref-paperchat-maxtokens"
+              style="width: 100px; margin-left: 8px;"
+              min="256"
+              max="128000"
+            ></html:input>
+          </hbox>
 
-        <!-- PaperChat System Prompt -->
-        <hbox align="start" style="margin-bottom: 8px;">
-          <label for="pref-paperchat-systemprompt" data-l10n-id="pref-system-prompt" style="width: 70px; text-align: right; margin-top: 4px;"></label>
-          <html:textarea
-            id="pref-paperchat-systemprompt"
-            style="flex: 1; height: 60px; margin-left: 8px; min-width: 200px;"
-          ></html:textarea>
-        </hbox>
+          <!-- PaperChat Temperature -->
+          <hbox align="center" style="margin-bottom: 8px; margin-left: 12px;">
+            <label for="pref-paperchat-temperature" data-l10n-id="pref-temperature" style="width: 70px; text-align: right;"></label>
+            <html:input
+              type="number"
+              id="pref-paperchat-temperature"
+              style="width: 80px; margin-left: 8px;"
+              min="0"
+              max="2"
+              step="0.1"
+            ></html:input>
+          </hbox>
+
+          <!-- PaperChat System Prompt -->
+          <hbox align="start" style="margin-bottom: 8px; margin-left: 12px;">
+            <label for="pref-paperchat-systemprompt" data-l10n-id="pref-system-prompt" style="width: 70px; text-align: right; margin-top: 4px;"></label>
+            <html:textarea
+              id="pref-paperchat-systemprompt"
+              style="flex: 1; height: 60px; margin-left: 8px; min-width: 200px;"
+            ></html:textarea>
+          </hbox>
+        </html:details>
 
         <!-- Official Website Link -->
         <hbox align="center" style="margin-top: 16px; justify-content: center;">
@@ -152,39 +157,44 @@
           </vbox>
         </vbox>
 
-        <!-- Max Tokens -->
-        <hbox align="center" style="margin-bottom: 8px;">
-          <label for="pref-provider-maxtokens" data-l10n-id="pref-max-tokens" style="width: 70px; text-align: right;"></label>
-          <html:input
-            type="number"
-            id="pref-provider-maxtokens"
-            style="width: 100px; margin-left: 8px;"
-            min="256"
-            max="128000"
-          ></html:input>
-        </hbox>
+        <!-- Advanced Options (Collapsible) -->
+        <html:details style="margin-top: 12px; margin-bottom: 12px;">
+          <html:summary data-l10n-id="pref-advanced-options" style="cursor: pointer; font-weight: bold; margin-bottom: 8px;"></html:summary>
 
-        <!-- Temperature -->
-        <hbox align="center" style="margin-bottom: 8px;">
-          <label for="pref-provider-temperature" data-l10n-id="pref-temperature" style="width: 70px; text-align: right;"></label>
-          <html:input
-            type="number"
-            id="pref-provider-temperature"
-            style="width: 80px; margin-left: 8px;"
-            min="0"
-            max="2"
-            step="0.1"
-          ></html:input>
-        </hbox>
+          <!-- Max Tokens -->
+          <hbox align="center" style="margin-bottom: 8px; margin-left: 12px;">
+            <label for="pref-provider-maxtokens" data-l10n-id="pref-max-tokens" style="width: 70px; text-align: right;"></label>
+            <html:input
+              type="number"
+              id="pref-provider-maxtokens"
+              style="width: 100px; margin-left: 8px;"
+              min="256"
+              max="128000"
+            ></html:input>
+          </hbox>
 
-        <!-- System Prompt -->
-        <hbox align="start" style="margin-bottom: 8px;">
-          <label for="pref-provider-systemprompt" data-l10n-id="pref-system-prompt" style="width: 70px; text-align: right; margin-top: 4px;"></label>
-          <html:textarea
-            id="pref-provider-systemprompt"
-            style="flex: 1; height: 60px; margin-left: 8px; min-width: 200px;"
-          ></html:textarea>
-        </hbox>
+          <!-- Temperature -->
+          <hbox align="center" style="margin-bottom: 8px; margin-left: 12px;">
+            <label for="pref-provider-temperature" data-l10n-id="pref-temperature" style="width: 70px; text-align: right;"></label>
+            <html:input
+              type="number"
+              id="pref-provider-temperature"
+              style="width: 80px; margin-left: 8px;"
+              min="0"
+              max="2"
+              step="0.1"
+            ></html:input>
+          </hbox>
+
+          <!-- System Prompt -->
+          <hbox align="start" style="margin-bottom: 8px; margin-left: 12px;">
+            <label for="pref-provider-systemprompt" data-l10n-id="pref-system-prompt" style="width: 70px; text-align: right; margin-top: 4px;"></label>
+            <html:textarea
+              id="pref-provider-systemprompt"
+              style="flex: 1; height: 60px; margin-left: 8px; min-width: 200px;"
+            ></html:textarea>
+          </hbox>
+        </html:details>
 
         <!-- Test Connection & Delete -->
         <hbox align="center" style="margin-top: 16px;">

@@ -18,6 +18,7 @@ pref-api-settings = API 设置
 pref-model = 模型
 pref-model-placeholder =
     .placeholder = gpt-4o
+pref-advanced-options = 高级选项
 pref-max-tokens = 最大Token数
 pref-temperature = 温度
 pref-system-prompt = 系统提示词

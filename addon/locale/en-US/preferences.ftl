@@ -18,6 +18,7 @@ pref-api-settings = API Settings
 pref-model = Model
 pref-model-placeholder =
     .placeholder = gpt-4o
+pref-advanced-options = Advanced Options
 pref-max-tokens = Max Tokens
 pref-temperature = Temperature
 pref-system-prompt = System Prompt

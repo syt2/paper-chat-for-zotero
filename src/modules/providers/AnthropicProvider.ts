@@ -94,7 +94,7 @@ export class AnthropicProvider extends BaseProvider {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: this._config.defaultModel || "claude-3-5-haiku-20241022",
+          model: this._config.defaultModel || "claude-haiku-4-5-20251001",
           max_tokens: 10,
           messages: [{ role: "user", content: "Hi" }],
         }),

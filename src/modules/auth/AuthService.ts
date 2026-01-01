@@ -42,7 +42,6 @@ export class AuthService {
   private setupHttpObserver(): void {
     if (this.httpObserver) return;
 
-    const self = this;
     this.httpObserver = {
       observe(subject: any, topic: string, _data: string) {
         if (topic !== "http-on-examine-response") return;
@@ -159,7 +158,7 @@ export class AuthService {
         false,          // isSession (false = persistent)
         expiry,         // expiry
         {},             // originAttributes
-        Ci.nsICookie.SAMESITE_LAX, // sameSite
+        Ci.nsICookie.SAMESITE_LAX as number, // sameSite
         Ci.nsICookie.SCHEME_HTTPS, // schemeMap
       );
       ztoolkit.log("[AuthService] Session saved to cookie jar");
