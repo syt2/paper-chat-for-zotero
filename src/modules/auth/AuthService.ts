@@ -126,11 +126,45 @@ export class AuthService {
       for (const cookie of cookies) {
         if (cookie.name === "session") {
           this.sessionToken = cookie.value;
+          ztoolkit.log("[AuthService] Session restored from cookie jar");
           return;
         }
       }
-    } catch {
-      // 忽略错误
+      ztoolkit.log("[AuthService] No session cookie found in cookie jar");
+    } catch (e) {
+      ztoolkit.log("[AuthService] Failed to restore session from cookie jar:", e);
+    }
+  }
+
+  /**
+   * 保存 session 到浏览器 cookie jar（用于持久化）
+   */
+  saveSessionToCookieJar(): void {
+    if (!this.sessionToken) return;
+
+    try {
+      const url = new URL(this.baseUrl);
+      const host = url.hostname;
+      const isSecure = url.protocol === "https:";
+      // 设置过期时间为 30 天后
+      const expiry = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60;
+
+      Services.cookies.add(
+        host,           // domain
+        "/",            // path
+        "session",      // name
+        this.sessionToken, // value
+        isSecure,       // isSecure
+        true,           // isHttpOnly
+        false,          // isSession (false = persistent)
+        expiry,         // expiry
+        {},             // originAttributes
+        Ci.nsICookie.SAMESITE_LAX, // sameSite
+        Ci.nsICookie.SCHEME_HTTPS, // schemeMap
+      );
+      ztoolkit.log("[AuthService] Session saved to cookie jar");
+    } catch (e) {
+      ztoolkit.log("[AuthService] Failed to save session to cookie jar:", e);
     }
   }
 
@@ -165,6 +199,7 @@ export class AuthService {
       body?: unknown;
       headers?: Record<string, string>;
       extractSession?: boolean;
+      skipAccessToken?: boolean; // 跳过 Authorization header（用于 session-only 接口）
     } = {},
   ): Promise<{ status: number; data: T | null; error?: string }> {
     const fullUrl = url.startsWith("http") ? url : `${this.baseUrl}${url}`;
@@ -181,7 +216,8 @@ export class AuthService {
         headers["New-Api-User"] = String(this.userId);
       }
 
-      if (this.accessToken) {
+      // 只有在不跳过的情况下才发送 accessToken
+      if (this.accessToken && !options.skipAccessToken) {
         headers["Authorization"] = `Bearer ${this.accessToken}`;
       }
 
@@ -225,12 +261,14 @@ export class AuthService {
   }
 
   /**
-   * 从 HTTP Observer 提取 session cookie
+   * 从 HTTP Observer 提取 session cookie 并保存到 cookie jar
    */
   private extractSessionFromObserver(): void {
     if (pendingSessionCookie) {
       this.sessionToken = pendingSessionCookie;
       pendingSessionCookie = null;
+      // 保存到 cookie jar 以便重启后恢复
+      this.saveSessionToCookieJar();
     }
   }
 
@@ -366,7 +404,8 @@ export class AuthService {
 
   async getUserInfo(): Promise<ApiResponse<UserInfo>> {
     const url = `${this.baseUrl}/api/user/self`;
-    const result = await this.request<ApiResponse<UserInfo>>("GET", url);
+    // 这个接口只接受 session cookie 认证，不需要 accessToken
+    const result = await this.request<ApiResponse<UserInfo>>("GET", url, { skipAccessToken: true });
 
     if (result.error) {
       return { success: false, message: result.error };

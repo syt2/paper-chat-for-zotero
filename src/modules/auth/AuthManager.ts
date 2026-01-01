@@ -56,7 +56,6 @@ export class AuthManager {
     onBalanceUpdate: [],
     onError: [],
   };
-  private balanceRefreshInterval: ReturnType<typeof setInterval> | null = null;
   private isAutoReloginInProgress = false; // 防止无限循环
 
   constructor() {
@@ -405,9 +404,6 @@ export class AuthManager {
       setPref("loginPassword", encodePassword(password));
       setPref("username", username);
 
-      // 启动余额刷新
-      this.startBalanceRefresh();
-
       this.state.isLoggedIn = true;
       this.notifyLoginStatusChange(true);
 
@@ -516,9 +512,6 @@ export class AuthManager {
     setPref("username", "");
     setPref("userQuotaJson", "");
     setPref("loginPassword", "");
-
-    // 停止余额刷新
-    this.stopBalanceRefresh();
 
     this.notifyLoginStatusChange(false);
     this.notifyUserInfoUpdate(null);
@@ -759,51 +752,26 @@ export class AuthManager {
       this.state.userId !== null &&
       this.state.userId > 0
     ) {
-      // 如果本地已有用户信息（从prefs恢复的），直接使用，不调用API
-      // 因为/api/user/self只接受session认证，重启后session cookie丢失
+      // 先用本地缓存通知UI，然后异步刷新最新数据
       if (this.state.user && this.state.isLoggedIn) {
-        ztoolkit.log("[AuthManager] Using locally cached user info");
-        // 通知UI更新
+        ztoolkit.log("[AuthManager] Using locally cached user info first");
+        // 通知UI更新（先用缓存数据）
         this.notifyLoginStatusChange(true);
         this.notifyUserInfoUpdate(this.state.user);
         this.notifyBalanceUpdate(
           this.state.user.quota,
           this.state.user.used_quota,
         );
-        // 启动余额刷新 - 但不会真的刷新因为API不接受token
-        // this.startBalanceRefresh();
-        ztoolkit.log("[AuthManager] Session restored from local cache");
-      } else {
-        // 没有本地用户信息，尝试API调用（可能在同一session内）
-        await this.refreshUserInfo();
-        if (this.state.isLoggedIn) {
-          await this.ensurePluginToken();
-          this.startBalanceRefresh();
-          ztoolkit.log("[AuthManager] Session restored via API");
-        } else {
-          ztoolkit.log("[AuthManager] Failed to restore session");
-        }
       }
-    }
-  }
 
-  /**
-   * 启动余额定时刷新 (每60秒)
-   */
-  private startBalanceRefresh(): void {
-    this.stopBalanceRefresh();
-    this.balanceRefreshInterval = setInterval(() => {
-      this.refreshUserInfo();
-    }, 60000);
-  }
-
-  /**
-   * 停止余额刷新
-   */
-  private stopBalanceRefresh(): void {
-    if (this.balanceRefreshInterval) {
-      clearInterval(this.balanceRefreshInterval);
-      this.balanceRefreshInterval = null;
+      // 尝试从API刷新最新用户信息（session cookie 由 Services.cookies 管理）
+      await this.refreshUserInfo();
+      if (this.state.isLoggedIn) {
+        await this.ensurePluginToken();
+        ztoolkit.log("[AuthManager] Session restored and refreshed via API");
+      } else {
+        ztoolkit.log("[AuthManager] Failed to restore session from API");
+      }
     }
   }
 
@@ -838,7 +806,7 @@ export class AuthManager {
    * 销毁
    */
   destroy(): void {
-    this.stopBalanceRefresh();
+    // Nothing to clean up
   }
 }
 
