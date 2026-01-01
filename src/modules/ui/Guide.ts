@@ -38,7 +38,9 @@ export class Guide {
       return;
     }
 
-    const toolbarButton = win.document.getElementById(`${config.addonRef}-toolbar-button`);
+    const toolbarButton = win.document.getElementById(
+      `${config.addonRef}-toolbar-button`,
+    );
     if (!toolbarButton) {
       return;
     }
@@ -58,7 +60,8 @@ export class Guide {
     // 标记引导已完成
     setPref(
       "guideStatus",
-      ((getPref("guideStatus") as number) ?? 0) | GuideStatus.toolbarButtonGuide,
+      ((getPref("guideStatus") as number) ?? 0) |
+        GuideStatus.toolbarButtonGuide,
     );
   }
 

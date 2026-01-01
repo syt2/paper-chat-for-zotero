@@ -106,7 +106,9 @@ export function applyThemeToContainer(container: HTMLElement): void {
   }
 
   // Empty state
-  const emptyState = container.querySelector("#chat-empty-state") as HTMLElement;
+  const emptyState = container.querySelector(
+    "#chat-empty-state",
+  ) as HTMLElement;
   if (emptyState) {
     emptyState.style.color = theme.textMuted;
   }
@@ -125,22 +127,28 @@ export function applyThemeToContainer(container: HTMLElement): void {
   }
 
   // Toolbar buttons
-  container.querySelectorAll("#chat-new, #chat-upload-file, #chat-history-btn").forEach((btn: Element) => {
-    const el = btn as HTMLElement;
-    el.style.background = theme.buttonBg;
-    el.style.borderColor = theme.inputBorderColor;
-    el.style.color = theme.textPrimary;
-  });
+  container
+    .querySelectorAll("#chat-new, #chat-upload-file, #chat-history-btn")
+    .forEach((btn: Element) => {
+      const el = btn as HTMLElement;
+      el.style.background = theme.buttonBg;
+      el.style.borderColor = theme.inputBorderColor;
+      el.style.color = theme.textPrimary;
+    });
 
   // Attachments preview
-  const attachmentsPreview = container.querySelector("#chat-attachments-preview") as HTMLElement;
+  const attachmentsPreview = container.querySelector(
+    "#chat-attachments-preview",
+  ) as HTMLElement;
   if (attachmentsPreview) {
     attachmentsPreview.style.background = theme.attachmentPreviewBg;
     attachmentsPreview.style.borderTopColor = theme.borderColor;
   }
 
   // Input area (parent of input wrapper)
-  const inputWrapper = container.querySelector("#chat-input-wrapper") as HTMLElement;
+  const inputWrapper = container.querySelector(
+    "#chat-input-wrapper",
+  ) as HTMLElement;
   if (inputWrapper) {
     const inputArea = inputWrapper.parentElement as HTMLElement;
     if (inputArea) {
@@ -153,13 +161,17 @@ export function applyThemeToContainer(container: HTMLElement): void {
   }
 
   // Message input
-  const messageInput = container.querySelector("#chat-message-input") as HTMLElement;
+  const messageInput = container.querySelector(
+    "#chat-message-input",
+  ) as HTMLElement;
   if (messageInput) {
     messageInput.style.color = theme.textPrimary;
   }
 
   // Model selector button
-  const modelSelectorBtn = container.querySelector("#chat-model-selector-btn") as HTMLElement;
+  const modelSelectorBtn = container.querySelector(
+    "#chat-model-selector-btn",
+  ) as HTMLElement;
   if (modelSelectorBtn) {
     modelSelectorBtn.style.background = theme.buttonBg;
     modelSelectorBtn.style.borderColor = theme.inputBorderColor;
@@ -167,26 +179,32 @@ export function applyThemeToContainer(container: HTMLElement): void {
   }
 
   // Model dropdown
-  const modelDropdown = container.querySelector("#chat-model-dropdown") as HTMLElement;
+  const modelDropdown = container.querySelector(
+    "#chat-model-dropdown",
+  ) as HTMLElement;
   if (modelDropdown) {
     modelDropdown.style.background = theme.dropdownBg;
     modelDropdown.style.borderColor = theme.borderColor;
   }
 
   // History dropdown
-  const historyDropdown = container.querySelector("#chat-history-dropdown") as HTMLElement;
+  const historyDropdown = container.querySelector(
+    "#chat-history-dropdown",
+  ) as HTMLElement;
   if (historyDropdown) {
     historyDropdown.style.background = theme.dropdownBg;
     historyDropdown.style.borderColor = theme.borderColor;
   }
 
   // Update existing message bubbles
-  container.querySelectorAll(".assistant-message .chat-bubble").forEach((bubble: Element) => {
-    const el = bubble as HTMLElement;
-    el.style.background = theme.assistantBubbleBg;
-    el.style.color = theme.textPrimary;
-    el.style.borderColor = theme.borderColor;
-  });
+  container
+    .querySelectorAll(".assistant-message .chat-bubble")
+    .forEach((bubble: Element) => {
+      const el = bubble as HTMLElement;
+      el.style.background = theme.assistantBubbleBg;
+      el.style.color = theme.textPrimary;
+      el.style.borderColor = theme.borderColor;
+    });
 
   // Update copy buttons
   container.querySelectorAll(".copy-btn").forEach((btn: Element) => {

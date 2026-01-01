@@ -26,15 +26,13 @@ export class StorageService {
     try {
       // 获取Zotero数据目录
       const dataDir = Zotero.DataDirectory.dir;
-      this.storagePath = PathUtils.join(
-        dataDir,
-        "paper-chat",
-        "conversations",
-      );
+      this.storagePath = PathUtils.join(dataDir, "paper-chat", "conversations");
 
       // 确保目录存在
       if (!(await IOUtils.exists(this.storagePath))) {
-        await IOUtils.makeDirectory(this.storagePath, { createAncestors: true });
+        await IOUtils.makeDirectory(this.storagePath, {
+          createAncestors: true,
+        });
       }
 
       // 加载或重建索引
@@ -70,7 +68,9 @@ export class StorageService {
 
     try {
       if (await IOUtils.exists(indexPath)) {
-        this.indexCache = (await IOUtils.readJSON(indexPath)) as StoredSessionMeta[];
+        this.indexCache = (await IOUtils.readJSON(
+          indexPath,
+        )) as StoredSessionMeta[];
         ztoolkit.log("Index loaded, sessions count:", this.indexCache.length);
         return;
       }
@@ -106,7 +106,9 @@ export class StorageService {
     });
 
     const results = await Promise.all(metaPromises);
-    this.indexCache = results.filter((meta): meta is StoredSessionMeta => meta !== null);
+    this.indexCache = results.filter(
+      (meta): meta is StoredSessionMeta => meta !== null,
+    );
 
     await this.saveIndex();
     ztoolkit.log("Index rebuilt, sessions count:", this.indexCache.length);
@@ -124,7 +126,9 @@ export class StorageService {
   /**
    * 构建session元数据
    */
-  private async buildSessionMeta(session: ChatSession): Promise<StoredSessionMeta> {
+  private async buildSessionMeta(
+    session: ChatSession,
+  ): Promise<StoredSessionMeta> {
     // 获取item名称
     let itemName = "Global Chat";
     if (session.itemId !== 0) {
@@ -135,7 +139,10 @@ export class StorageService {
             const parentId = item.parentItemID;
             if (parentId) {
               const parent = await Zotero.Items.getAsync(parentId);
-              itemName = parent?.getDisplayTitle() || item.attachmentFilename || `Item ${session.itemId}`;
+              itemName =
+                parent?.getDisplayTitle() ||
+                item.attachmentFilename ||
+                `Item ${session.itemId}`;
             } else {
               itemName = item.attachmentFilename || `Item ${session.itemId}`;
             }
@@ -154,7 +161,8 @@ export class StorageService {
     let lastMessagePreview = "";
     if (session.messages && session.messages.length > 0) {
       const last = session.messages[session.messages.length - 1];
-      lastMessagePreview = last.content.substring(0, 50) + (last.content.length > 50 ? "..." : "");
+      lastMessagePreview =
+        last.content.substring(0, 50) + (last.content.length > 50 ? "..." : "");
     }
 
     return {
@@ -177,7 +185,9 @@ export class StorageService {
     const meta = await this.buildSessionMeta(session);
 
     // 查找并更新或添加
-    const existingIndex = this.indexCache.findIndex((m) => m.itemId === session.itemId);
+    const existingIndex = this.indexCache.findIndex(
+      (m) => m.itemId === session.itemId,
+    );
     if (existingIndex >= 0) {
       this.indexCache[existingIndex] = meta;
     } else {
@@ -229,12 +239,12 @@ export class StorageService {
       const filePath = this.getSessionPath(itemId);
 
       if (await IOUtils.exists(filePath)) {
-        const data = await IOUtils.readJSON(filePath) as ChatSession;
+        const data = (await IOUtils.readJSON(filePath)) as ChatSession;
 
         // 过滤掉空内容的消息（修复历史数据问题）
         if (data.messages) {
           data.messages = data.messages.filter(
-            (msg) => msg.content && msg.content.trim() !== ""
+            (msg) => msg.content && msg.content.trim() !== "",
           );
         }
 

@@ -117,7 +117,10 @@ export class AuthManager {
    */
   private isSessionInvalidError(message: string): boolean {
     // 检查 token 无效
-    if (message.includes("token") && (message.includes("无效") || message.includes("invalid"))) {
+    if (
+      message.includes("token") &&
+      (message.includes("无效") || message.includes("invalid"))
+    ) {
       return true;
     }
     // 检查未登录/无权操作
@@ -131,14 +134,15 @@ export class AuthManager {
    * 带 session 失效重试的 API 调用包装器
    * 如果 API 返回 session 失效错误，自动尝试重新登录并重试
    */
-  private async withSessionRetry<T extends { success: boolean; message?: string }>(
-    operation: () => Promise<T>,
-    operationName: string,
-  ): Promise<T> {
+  private async withSessionRetry<
+    T extends { success: boolean; message?: string },
+  >(operation: () => Promise<T>, operationName: string): Promise<T> {
     let result = await operation();
 
     if (!result.success && this.isSessionInvalidError(result.message || "")) {
-      ztoolkit.log(`[AuthManager] Session invalid for ${operationName}, attempting auto-relogin`);
+      ztoolkit.log(
+        `[AuthManager] Session invalid for ${operationName}, attempting auto-relogin`,
+      );
       const reloginSuccess = await this.autoRelogin();
       if (reloginSuccess) {
         result = await operation();
@@ -412,7 +416,9 @@ export class AuthManager {
 
     return {
       success: false,
-      message: result.message || getString("api-error-login-failed", { args: { status: "" } }),
+      message:
+        result.message ||
+        getString("api-error-login-failed", { args: { status: "" } }),
     };
   }
 
@@ -658,7 +664,9 @@ export class AuthManager {
         return;
       }
 
-      const result = (await response.json()) as { data?: Array<{ id: string }> };
+      const result = (await response.json()) as {
+        data?: Array<{ id: string }>;
+      };
 
       if (result.data && Array.isArray(result.data)) {
         const models = result.data.map((m) => m.id).sort();
@@ -723,14 +731,18 @@ export class AuthManager {
 
       return {
         success: true,
-        message: getString("api-success-redeem", { args: { amount: AuthService.formatQuota(addedQuota) } }),
+        message: getString("api-success-redeem", {
+          args: { amount: AuthService.formatQuota(addedQuota) },
+        }),
         addedQuota,
       };
     }
 
     return {
       success: false,
-      message: result.message || getString("api-error-redeem-failed", { args: { status: "" } }),
+      message:
+        result.message ||
+        getString("api-error-redeem-failed", { args: { status: "" } }),
     };
   }
 

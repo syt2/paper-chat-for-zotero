@@ -77,7 +77,10 @@ export class AuthService {
    */
   destroy(): void {
     if (this.httpObserver) {
-      Services.obs.removeObserver(this.httpObserver, "http-on-examine-response");
+      Services.obs.removeObserver(
+        this.httpObserver,
+        "http-on-examine-response",
+      );
       this.httpObserver = null;
     }
   }
@@ -131,7 +134,10 @@ export class AuthService {
       }
       ztoolkit.log("[AuthService] No session cookie found in cookie jar");
     } catch (e) {
-      ztoolkit.log("[AuthService] Failed to restore session from cookie jar:", e);
+      ztoolkit.log(
+        "[AuthService] Failed to restore session from cookie jar:",
+        e,
+      );
     }
   }
 
@@ -149,15 +155,15 @@ export class AuthService {
       const expiry = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60;
 
       Services.cookies.add(
-        host,           // domain
-        "/",            // path
-        "session",      // name
+        host, // domain
+        "/", // path
+        "session", // name
         this.sessionToken, // value
-        isSecure,       // isSecure
-        true,           // isHttpOnly
-        false,          // isSession (false = persistent)
-        expiry,         // expiry
-        {},             // originAttributes
+        isSecure, // isSecure
+        true, // isHttpOnly
+        false, // isSession (false = persistent)
+        expiry, // expiry
+        {}, // originAttributes
         Ci.nsICookie.SAMESITE_LAX as number, // sameSite
         Ci.nsICookie.SCHEME_HTTPS, // schemeMap
       );
@@ -168,11 +174,22 @@ export class AuthService {
   }
 
   private logRequest(method: string, url: string, body?: unknown): void {
-    ztoolkit.log(`[AuthService] ${method} ${url}`, body ? JSON.stringify(body) : "");
+    ztoolkit.log(
+      `[AuthService] ${method} ${url}`,
+      body ? JSON.stringify(body) : "",
+    );
   }
 
-  private logResponse(method: string, url: string, status: number, data: unknown): void {
-    ztoolkit.log(`[AuthService] ${method} ${url} -> ${status}`, JSON.stringify(data));
+  private logResponse(
+    method: string,
+    url: string,
+    status: number,
+    data: unknown,
+  ): void {
+    ztoolkit.log(
+      `[AuthService] ${method} ${url} -> ${status}`,
+      JSON.stringify(data),
+    );
   }
 
   private logError(method: string, url: string, error: unknown): void {
@@ -254,7 +271,10 @@ export class AuthService {
       return {
         status: 0,
         data: null,
-        error: error instanceof Error ? error.message : getString("api-error-network"),
+        error:
+          error instanceof Error
+            ? error.message
+            : getString("api-error-network"),
       };
     }
   }
@@ -284,7 +304,9 @@ export class AuthService {
         success: false,
         message: this.parseErrorMessage(
           result.data,
-          getString("api-error-request-failed", { args: { status: result.status } }),
+          getString("api-error-request-failed", {
+            args: { status: result.status },
+          }),
         ),
       };
     }
@@ -305,7 +327,9 @@ export class AuthService {
         success: false,
         message: this.parseErrorMessage(
           result.data,
-          getString("api-error-request-failed", { args: { status: result.status } }),
+          getString("api-error-request-failed", {
+            args: { status: result.status },
+          }),
         ),
       };
     }
@@ -329,7 +353,9 @@ export class AuthService {
         success: false,
         message: this.parseErrorMessage(
           result.data,
-          getString("api-error-register-failed", { args: { status: result.status } }),
+          getString("api-error-register-failed", {
+            args: { status: result.status },
+          }),
         ),
       };
     }
@@ -353,7 +379,9 @@ export class AuthService {
         success: false,
         message: this.parseErrorMessage(
           result.data,
-          getString("api-error-login-failed", { args: { status: result.status } }),
+          getString("api-error-login-failed", {
+            args: { status: result.status },
+          }),
         ),
       };
     }
@@ -393,7 +421,9 @@ export class AuthService {
         success: false,
         message: this.parseErrorMessage(
           result.data,
-          getString("api-error-logout-failed", { args: { status: result.status } }),
+          getString("api-error-logout-failed", {
+            args: { status: result.status },
+          }),
         ),
       };
     }
@@ -404,7 +434,9 @@ export class AuthService {
   async getUserInfo(): Promise<ApiResponse<UserInfo>> {
     const url = `${this.baseUrl}/api/user/self`;
     // 这个接口只接受 session cookie 认证，不需要 accessToken
-    const result = await this.request<ApiResponse<UserInfo>>("GET", url, { skipAccessToken: true });
+    const result = await this.request<ApiResponse<UserInfo>>("GET", url, {
+      skipAccessToken: true,
+    });
 
     if (result.error) {
       return { success: false, message: result.error };
@@ -415,7 +447,9 @@ export class AuthService {
         success: false,
         message: this.parseErrorMessage(
           result.data,
-          getString("api-error-get-user-failed", { args: { status: result.status } }),
+          getString("api-error-get-user-failed", {
+            args: { status: result.status },
+          }),
         ),
       };
     }
@@ -428,7 +462,9 @@ export class AuthService {
     pageSize: number = 10,
   ): Promise<ApiResponse<PaginatedResponse<TokenInfo>>> {
     const url = `${this.baseUrl}/api/token/?p=${page}&page_size=${pageSize}`;
-    const result = await this.request<ApiResponse<PaginatedResponse<TokenInfo>>>("GET", url);
+    const result = await this.request<
+      ApiResponse<PaginatedResponse<TokenInfo>>
+    >("GET", url);
 
     if (result.error) {
       return { success: false, message: result.error };
@@ -439,7 +475,9 @@ export class AuthService {
         success: false,
         message: this.parseErrorMessage(
           result.data,
-          getString("api-error-get-tokens-failed", { args: { status: result.status } }),
+          getString("api-error-get-tokens-failed", {
+            args: { status: result.status },
+          }),
         ),
       };
     }
@@ -449,7 +487,9 @@ export class AuthService {
 
   async createToken(request: CreateTokenRequest): Promise<ApiResponse<string>> {
     const url = `${this.baseUrl}/api/token/`;
-    const result = await this.request<ApiResponse<string>>("POST", url, { body: request });
+    const result = await this.request<ApiResponse<string>>("POST", url, {
+      body: request,
+    });
 
     if (result.error) {
       return { success: false, message: result.error };
@@ -460,7 +500,9 @@ export class AuthService {
         success: false,
         message: this.parseErrorMessage(
           result.data,
-          getString("api-error-create-token-failed", { args: { status: result.status } }),
+          getString("api-error-create-token-failed", {
+            args: { status: result.status },
+          }),
         ),
       };
     }
@@ -481,7 +523,9 @@ export class AuthService {
         success: false,
         message: this.parseErrorMessage(
           result.data,
-          getString("api-error-delete-token-failed", { args: { status: result.status } }),
+          getString("api-error-delete-token-failed", {
+            args: { status: result.status },
+          }),
         ),
       };
     }
@@ -504,7 +548,9 @@ export class AuthService {
         success: false,
         message: this.parseErrorMessage(
           result.data,
-          getString("api-error-redeem-failed", { args: { status: result.status } }),
+          getString("api-error-redeem-failed", {
+            args: { status: result.status },
+          }),
         ),
       };
     }

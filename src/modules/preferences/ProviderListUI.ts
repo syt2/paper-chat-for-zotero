@@ -6,7 +6,10 @@ import { getString } from "../../utils/locale";
 import { prefColors } from "../../utils/colors";
 import { getProviderManager } from "../providers";
 import { getAuthManager } from "../auth";
-import type { ProviderConfig, ApiKeyProviderConfig } from "../../types/provider";
+import type {
+  ProviderConfig,
+  ApiKeyProviderConfig,
+} from "../../types/provider";
 import { clearElement } from "./utils";
 import { populatePaperchatPanel } from "./PaperchatProviderUI";
 import { populateApiKeyPanel } from "./ApiKeyProviderUI";
@@ -34,11 +37,17 @@ export function populateProviderList(doc: Document): void {
 /**
  * Create a provider list item element
  */
-function createProviderListItem(doc: Document, config: ProviderConfig): Element {
+function createProviderListItem(
+  doc: Document,
+  config: ProviderConfig,
+): Element {
   const providerManager = getProviderManager();
   const activeProviderId = providerManager.getActiveProviderId();
 
-  const item = doc.createElementNS("http://www.w3.org/1999/xhtml", "div") as HTMLDivElement;
+  const item = doc.createElementNS(
+    "http://www.w3.org/1999/xhtml",
+    "div",
+  ) as HTMLDivElement;
   item.className = "provider-list-item";
   item.setAttribute("data-provider-id", config.id);
   item.style.cssText = `
@@ -52,18 +61,28 @@ function createProviderListItem(doc: Document, config: ProviderConfig): Element 
   `;
 
   // Left side: name
-  const nameSpan = doc.createElementNS("http://www.w3.org/1999/xhtml", "span") as HTMLSpanElement;
+  const nameSpan = doc.createElementNS(
+    "http://www.w3.org/1999/xhtml",
+    "span",
+  ) as HTMLSpanElement;
   nameSpan.textContent = config.name;
   item.appendChild(nameSpan);
 
   // Right side: status indicators container
-  const statusContainer = doc.createElementNS("http://www.w3.org/1999/xhtml", "div") as HTMLDivElement;
-  statusContainer.style.cssText = "display: flex; align-items: center; gap: 4px;";
+  const statusContainer = doc.createElementNS(
+    "http://www.w3.org/1999/xhtml",
+    "div",
+  ) as HTMLDivElement;
+  statusContainer.style.cssText =
+    "display: flex; align-items: center; gap: 4px;";
 
   // Green dot indicator for configured providers
   const isConfigured = isProviderConfigured(config);
   if (isConfigured) {
-    const statusDot = doc.createElementNS("http://www.w3.org/1999/xhtml", "span") as HTMLSpanElement;
+    const statusDot = doc.createElementNS(
+      "http://www.w3.org/1999/xhtml",
+      "span",
+    ) as HTMLSpanElement;
     statusDot.className = "provider-status-dot";
     statusDot.style.cssText = `
       width: 8px;
@@ -72,13 +91,17 @@ function createProviderListItem(doc: Document, config: ProviderConfig): Element 
       background-color: ${prefColors.statusDot};
       flex-shrink: 0;
     `;
-    statusDot.title = getString("pref-provider-configured" as any) || "Configured";
+    statusDot.title =
+      getString("pref-provider-configured" as any) || "Configured";
     statusContainer.appendChild(statusDot);
   }
 
   // Checkmark for active provider
   if (config.id === activeProviderId) {
-    const activeCheck = doc.createElementNS("http://www.w3.org/1999/xhtml", "span") as HTMLSpanElement;
+    const activeCheck = doc.createElementNS(
+      "http://www.w3.org/1999/xhtml",
+      "span",
+    ) as HTMLSpanElement;
     activeCheck.className = "provider-active-check";
     activeCheck.textContent = "✅";
     activeCheck.style.cssText = "font-size: 12px; flex-shrink: 0;";
@@ -121,7 +144,11 @@ function isProviderConfigured(config: ProviderConfig): boolean {
 /**
  * Select a provider and show its settings panel
  */
-export function selectProvider(doc: Document, providerId: string, setCurrentProviderId: (id: string) => void): void {
+export function selectProvider(
+  doc: Document,
+  providerId: string,
+  setCurrentProviderId: (id: string) => void,
+): void {
   setCurrentProviderId(providerId);
   const providerManager = getProviderManager();
 
@@ -154,7 +181,9 @@ export function selectProvider(doc: Document, providerId: string, setCurrentProv
     apikeyPanel?.removeAttribute("hidden");
 
     // Populate API key panel with provider data
-    const config = providerManager.getProviderConfig(providerId) as ApiKeyProviderConfig;
+    const config = providerManager.getProviderConfig(
+      providerId,
+    ) as ApiKeyProviderConfig;
     const metadata = providerManager.getProviderMetadata(providerId);
 
     if (config) {
@@ -170,7 +199,9 @@ export function populateActiveProviderDropdown(doc: Document): void {
   const providerManager = getProviderManager();
   const configs = providerManager.getAllConfigs();
   const popup = doc.getElementById("pref-active-provider-popup");
-  const select = doc.getElementById("pref-active-provider-select") as unknown as XULMenuListElement;
+  const select = doc.getElementById(
+    "pref-active-provider-select",
+  ) as unknown as XULMenuListElement;
 
   if (!popup || !select) return;
 
@@ -178,12 +209,14 @@ export function populateActiveProviderDropdown(doc: Document): void {
   clearElement(popup);
 
   // Add enabled providers
-  configs.filter((c) => c.enabled || c.id === "paperchat").forEach((config) => {
-    const menuitem = doc.createXULElement("menuitem");
-    menuitem.setAttribute("label", config.name);
-    menuitem.setAttribute("value", config.id);
-    popup.appendChild(menuitem);
-  });
+  configs
+    .filter((c) => c.enabled || c.id === "paperchat")
+    .forEach((config) => {
+      const menuitem = doc.createXULElement("menuitem");
+      menuitem.setAttribute("label", config.name);
+      menuitem.setAttribute("value", config.id);
+      popup.appendChild(menuitem);
+    });
 
   // Set current active
   select.value = providerManager.getActiveProviderId();
@@ -217,7 +250,9 @@ export function bindProviderListClickEvents(
  */
 export function bindActiveProviderEvent(doc: Document): void {
   const providerManager = getProviderManager();
-  const activeProviderSelect = doc.getElementById("pref-active-provider-select") as unknown as XULMenuListElement;
+  const activeProviderSelect = doc.getElementById(
+    "pref-active-provider-select",
+  ) as unknown as XULMenuListElement;
   activeProviderSelect?.addEventListener("command", () => {
     providerManager.setActiveProvider(activeProviderSelect.value);
     // Refresh provider list to update checkmark

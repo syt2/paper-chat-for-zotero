@@ -44,18 +44,78 @@ export const BUILTIN_PROVIDERS: Record<BuiltinProviderId, ProviderMetadata> = {
       "claude-opus-4-5-20251101",
     ],
     defaultModelInfos: [
-      { modelId: "claude-haiku-4-5-20251001", contextWindow: 200000, maxOutput: 64000, capabilities: ["vision", "tool_use"] },
-      { modelId: "Pro/deepseek-ai/DeepSeek-V3.2", contextWindow: 64000, maxOutput: 8192, capabilities: ["tool_use"] },
-      { modelId: "Pro/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", contextWindow: 64000, maxOutput: 8192, capabilities: ["reasoning"] },
-      { modelId: "Pro/Qwen/Qwen2.5-VL-7B-Instruct", contextWindow: 32000, maxOutput: 8192, capabilities: ["vision"] },
-      { modelId: "Pro/THUDM/glm-4-9b-chat", contextWindow: 128000, maxOutput: 8192, capabilities: ["tool_use"] },
-      { modelId: "Pro/THUDM/GLM-4.1V-9B-Thinking", contextWindow: 128000, maxOutput: 8192, capabilities: ["vision", "reasoning"] },
-      { modelId: "claude-3-haiku-20240307", contextWindow: 200000, maxOutput: 4096, capabilities: ["vision", "tool_use"] },
-      { modelId: "claude-3-5-haiku-20241022", contextWindow: 200000, maxOutput: 8192, capabilities: ["vision", "tool_use"] },
-      { modelId: "claude-sonnet-4-5-20250929", contextWindow: 200000, maxOutput: 64000, capabilities: ["vision", "reasoning", "tool_use"] },
-      { modelId: "Pro/zai-org/GLM-4.7", contextWindow: 128000, maxOutput: 8192, capabilities: ["tool_use"] },
-      { modelId: "Pro/moonshotai/Kimi-K2-Instruct-0905", contextWindow: 128000, maxOutput: 8192, capabilities: ["tool_use"] },
-      { modelId: "claude-opus-4-5-20251101", contextWindow: 200000, maxOutput: 64000, capabilities: ["vision", "reasoning", "tool_use"] },
+      {
+        modelId: "claude-haiku-4-5-20251001",
+        contextWindow: 200000,
+        maxOutput: 64000,
+        capabilities: ["vision", "tool_use"],
+      },
+      {
+        modelId: "Pro/deepseek-ai/DeepSeek-V3.2",
+        contextWindow: 64000,
+        maxOutput: 8192,
+        capabilities: ["tool_use"],
+      },
+      {
+        modelId: "Pro/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+        contextWindow: 64000,
+        maxOutput: 8192,
+        capabilities: ["reasoning"],
+      },
+      {
+        modelId: "Pro/Qwen/Qwen2.5-VL-7B-Instruct",
+        contextWindow: 32000,
+        maxOutput: 8192,
+        capabilities: ["vision"],
+      },
+      {
+        modelId: "Pro/THUDM/glm-4-9b-chat",
+        contextWindow: 128000,
+        maxOutput: 8192,
+        capabilities: ["tool_use"],
+      },
+      {
+        modelId: "Pro/THUDM/GLM-4.1V-9B-Thinking",
+        contextWindow: 128000,
+        maxOutput: 8192,
+        capabilities: ["vision", "reasoning"],
+      },
+      {
+        modelId: "claude-3-haiku-20240307",
+        contextWindow: 200000,
+        maxOutput: 4096,
+        capabilities: ["vision", "tool_use"],
+      },
+      {
+        modelId: "claude-3-5-haiku-20241022",
+        contextWindow: 200000,
+        maxOutput: 8192,
+        capabilities: ["vision", "tool_use"],
+      },
+      {
+        modelId: "claude-sonnet-4-5-20250929",
+        contextWindow: 200000,
+        maxOutput: 64000,
+        capabilities: ["vision", "reasoning", "tool_use"],
+      },
+      {
+        modelId: "Pro/zai-org/GLM-4.7",
+        contextWindow: 128000,
+        maxOutput: 8192,
+        capabilities: ["tool_use"],
+      },
+      {
+        modelId: "Pro/moonshotai/Kimi-K2-Instruct-0905",
+        contextWindow: 128000,
+        maxOutput: 8192,
+        capabilities: ["tool_use"],
+      },
+      {
+        modelId: "claude-opus-4-5-20251101",
+        contextWindow: 200000,
+        maxOutput: 64000,
+        capabilities: ["vision", "reasoning", "tool_use"],
+      },
     ],
     website: "https://paperchat.zotero.store",
     type: "paperchat",
@@ -65,14 +125,51 @@ export const BUILTIN_PROVIDERS: Record<BuiltinProviderId, ProviderMetadata> = {
     name: "OpenAI",
     description: "Native OpenAI API - GPT-4o, o3, etc.",
     defaultBaseUrl: "https://api.openai.com/v1",
-    defaultModels: ["gpt-4o", "gpt-4o-mini", "o3-mini", "o1", "o1-mini", "gpt-4-turbo"],
+    defaultModels: [
+      "gpt-4o",
+      "gpt-4o-mini",
+      "o3-mini",
+      "o1",
+      "o1-mini",
+      "gpt-4-turbo",
+    ],
     defaultModelInfos: [
-      { modelId: "gpt-4o", contextWindow: 128000, maxOutput: 16384, capabilities: ["vision", "tool_use"] },
-      { modelId: "gpt-4o-mini", contextWindow: 128000, maxOutput: 16384, capabilities: ["vision", "tool_use"] },
-      { modelId: "o3-mini", contextWindow: 200000, maxOutput: 100000, capabilities: ["reasoning", "tool_use"] },
-      { modelId: "o1", contextWindow: 200000, maxOutput: 100000, capabilities: ["reasoning"] },
-      { modelId: "o1-mini", contextWindow: 128000, maxOutput: 65536, capabilities: ["reasoning"] },
-      { modelId: "gpt-4-turbo", contextWindow: 128000, maxOutput: 4096, capabilities: ["vision", "tool_use"] },
+      {
+        modelId: "gpt-4o",
+        contextWindow: 128000,
+        maxOutput: 16384,
+        capabilities: ["vision", "tool_use"],
+      },
+      {
+        modelId: "gpt-4o-mini",
+        contextWindow: 128000,
+        maxOutput: 16384,
+        capabilities: ["vision", "tool_use"],
+      },
+      {
+        modelId: "o3-mini",
+        contextWindow: 200000,
+        maxOutput: 100000,
+        capabilities: ["reasoning", "tool_use"],
+      },
+      {
+        modelId: "o1",
+        contextWindow: 200000,
+        maxOutput: 100000,
+        capabilities: ["reasoning"],
+      },
+      {
+        modelId: "o1-mini",
+        contextWindow: 128000,
+        maxOutput: 65536,
+        capabilities: ["reasoning"],
+      },
+      {
+        modelId: "gpt-4-turbo",
+        contextWindow: 128000,
+        maxOutput: 4096,
+        capabilities: ["vision", "tool_use"],
+      },
     ],
     website: "https://platform.openai.com",
     type: "openai",
@@ -90,11 +187,36 @@ export const BUILTIN_PROVIDERS: Record<BuiltinProviderId, ProviderMetadata> = {
       "claude-3-haiku-20240307",
     ],
     defaultModelInfos: [
-      { modelId: "claude-haiku-4-5-20251001", contextWindow: 200000, maxOutput: 64000, capabilities: ["vision", "tool_use"] },
-      { modelId: "claude-sonnet-4-5-20250929", contextWindow: 200000, maxOutput: 64000, capabilities: ["vision", "reasoning", "tool_use"] },
-      { modelId: "claude-opus-4-5-20251101", contextWindow: 200000, maxOutput: 64000, capabilities: ["vision", "reasoning", "tool_use"] },
-      { modelId: "claude-3-5-haiku-20241022", contextWindow: 200000, maxOutput: 8192, capabilities: ["vision", "tool_use"] },
-      { modelId: "claude-3-haiku-20240307", contextWindow: 200000, maxOutput: 4096, capabilities: ["vision", "tool_use"] },
+      {
+        modelId: "claude-haiku-4-5-20251001",
+        contextWindow: 200000,
+        maxOutput: 64000,
+        capabilities: ["vision", "tool_use"],
+      },
+      {
+        modelId: "claude-sonnet-4-5-20250929",
+        contextWindow: 200000,
+        maxOutput: 64000,
+        capabilities: ["vision", "reasoning", "tool_use"],
+      },
+      {
+        modelId: "claude-opus-4-5-20251101",
+        contextWindow: 200000,
+        maxOutput: 64000,
+        capabilities: ["vision", "reasoning", "tool_use"],
+      },
+      {
+        modelId: "claude-3-5-haiku-20241022",
+        contextWindow: 200000,
+        maxOutput: 8192,
+        capabilities: ["vision", "tool_use"],
+      },
+      {
+        modelId: "claude-3-haiku-20240307",
+        contextWindow: 200000,
+        maxOutput: 4096,
+        capabilities: ["vision", "tool_use"],
+      },
     ],
     website: "https://console.anthropic.com",
     type: "anthropic",
@@ -104,13 +226,44 @@ export const BUILTIN_PROVIDERS: Record<BuiltinProviderId, ProviderMetadata> = {
     name: "Gemini",
     description: "Google AI Gemini API - Gemini 2.5, 2.0, etc.",
     defaultBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
-    defaultModels: ["gemini-2.5-pro-preview-06-05", "gemini-2.5-flash-preview-05-20", "gemini-2.0-flash-exp", "gemini-1.5-pro", "gemini-1.5-flash"],
+    defaultModels: [
+      "gemini-2.5-pro-preview-06-05",
+      "gemini-2.5-flash-preview-05-20",
+      "gemini-2.0-flash-exp",
+      "gemini-1.5-pro",
+      "gemini-1.5-flash",
+    ],
     defaultModelInfos: [
-      { modelId: "gemini-2.5-pro-preview-06-05", contextWindow: 1000000, maxOutput: 65536, capabilities: ["vision", "reasoning", "tool_use"] },
-      { modelId: "gemini-2.5-flash-preview-05-20", contextWindow: 1000000, maxOutput: 65536, capabilities: ["vision", "reasoning", "tool_use"] },
-      { modelId: "gemini-2.0-flash-exp", contextWindow: 1000000, maxOutput: 8192, capabilities: ["vision", "tool_use"] },
-      { modelId: "gemini-1.5-pro", contextWindow: 2000000, maxOutput: 8192, capabilities: ["vision", "tool_use"] },
-      { modelId: "gemini-1.5-flash", contextWindow: 1000000, maxOutput: 8192, capabilities: ["vision", "tool_use"] },
+      {
+        modelId: "gemini-2.5-pro-preview-06-05",
+        contextWindow: 1000000,
+        maxOutput: 65536,
+        capabilities: ["vision", "reasoning", "tool_use"],
+      },
+      {
+        modelId: "gemini-2.5-flash-preview-05-20",
+        contextWindow: 1000000,
+        maxOutput: 65536,
+        capabilities: ["vision", "reasoning", "tool_use"],
+      },
+      {
+        modelId: "gemini-2.0-flash-exp",
+        contextWindow: 1000000,
+        maxOutput: 8192,
+        capabilities: ["vision", "tool_use"],
+      },
+      {
+        modelId: "gemini-1.5-pro",
+        contextWindow: 2000000,
+        maxOutput: 8192,
+        capabilities: ["vision", "tool_use"],
+      },
+      {
+        modelId: "gemini-1.5-flash",
+        contextWindow: 1000000,
+        maxOutput: 8192,
+        capabilities: ["vision", "tool_use"],
+      },
     ],
     website: "https://ai.google.dev",
     type: "gemini",
@@ -122,8 +275,18 @@ export const BUILTIN_PROVIDERS: Record<BuiltinProviderId, ProviderMetadata> = {
     defaultBaseUrl: "https://api.deepseek.com/v1",
     defaultModels: ["deepseek-chat", "deepseek-reasoner"],
     defaultModelInfos: [
-      { modelId: "deepseek-chat", contextWindow: 64000, maxOutput: 8192, capabilities: ["tool_use"] },
-      { modelId: "deepseek-reasoner", contextWindow: 64000, maxOutput: 8192, capabilities: ["reasoning"] },
+      {
+        modelId: "deepseek-chat",
+        contextWindow: 64000,
+        maxOutput: 8192,
+        capabilities: ["tool_use"],
+      },
+      {
+        modelId: "deepseek-reasoner",
+        contextWindow: 64000,
+        maxOutput: 8192,
+        capabilities: ["reasoning"],
+      },
     ],
     website: "https://platform.deepseek.com",
     type: "openai-compatible",
@@ -133,12 +296,37 @@ export const BUILTIN_PROVIDERS: Record<BuiltinProviderId, ProviderMetadata> = {
     name: "Mistral",
     description: "Mistral AI - Pixtral, Mistral Large, etc.",
     defaultBaseUrl: "https://api.mistral.ai/v1",
-    defaultModels: ["pixtral-large-latest", "mistral-large-latest", "mistral-small-latest", "codestral-latest"],
+    defaultModels: [
+      "pixtral-large-latest",
+      "mistral-large-latest",
+      "mistral-small-latest",
+      "codestral-latest",
+    ],
     defaultModelInfos: [
-      { modelId: "pixtral-large-latest", contextWindow: 128000, maxOutput: 4096, capabilities: ["vision", "tool_use"] },
-      { modelId: "mistral-large-latest", contextWindow: 128000, maxOutput: 4096, capabilities: ["tool_use"] },
-      { modelId: "mistral-small-latest", contextWindow: 32000, maxOutput: 4096, capabilities: ["tool_use"] },
-      { modelId: "codestral-latest", contextWindow: 32000, maxOutput: 4096, capabilities: [] },
+      {
+        modelId: "pixtral-large-latest",
+        contextWindow: 128000,
+        maxOutput: 4096,
+        capabilities: ["vision", "tool_use"],
+      },
+      {
+        modelId: "mistral-large-latest",
+        contextWindow: 128000,
+        maxOutput: 4096,
+        capabilities: ["tool_use"],
+      },
+      {
+        modelId: "mistral-small-latest",
+        contextWindow: 32000,
+        maxOutput: 4096,
+        capabilities: ["tool_use"],
+      },
+      {
+        modelId: "codestral-latest",
+        contextWindow: 32000,
+        maxOutput: 4096,
+        capabilities: [],
+      },
     ],
     website: "https://console.mistral.ai",
     type: "openai-compatible",
@@ -148,12 +336,37 @@ export const BUILTIN_PROVIDERS: Record<BuiltinProviderId, ProviderMetadata> = {
     name: "Groq",
     description: "Groq Cloud - Ultra-fast inference",
     defaultBaseUrl: "https://api.groq.com/openai/v1",
-    defaultModels: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"],
+    defaultModels: [
+      "llama-3.3-70b-versatile",
+      "llama-3.1-8b-instant",
+      "mixtral-8x7b-32768",
+      "gemma2-9b-it",
+    ],
     defaultModelInfos: [
-      { modelId: "llama-3.3-70b-versatile", contextWindow: 131072, maxOutput: 32768, capabilities: ["tool_use"] },
-      { modelId: "llama-3.1-8b-instant", contextWindow: 131072, maxOutput: 8192, capabilities: ["tool_use"] },
-      { modelId: "mixtral-8x7b-32768", contextWindow: 32768, maxOutput: 4096, capabilities: [] },
-      { modelId: "gemma2-9b-it", contextWindow: 8192, maxOutput: 4096, capabilities: [] },
+      {
+        modelId: "llama-3.3-70b-versatile",
+        contextWindow: 131072,
+        maxOutput: 32768,
+        capabilities: ["tool_use"],
+      },
+      {
+        modelId: "llama-3.1-8b-instant",
+        contextWindow: 131072,
+        maxOutput: 8192,
+        capabilities: ["tool_use"],
+      },
+      {
+        modelId: "mixtral-8x7b-32768",
+        contextWindow: 32768,
+        maxOutput: 4096,
+        capabilities: [],
+      },
+      {
+        modelId: "gemma2-9b-it",
+        contextWindow: 8192,
+        maxOutput: 4096,
+        capabilities: [],
+      },
     ],
     website: "https://console.groq.com",
     type: "openai-compatible",
@@ -163,12 +376,37 @@ export const BUILTIN_PROVIDERS: Record<BuiltinProviderId, ProviderMetadata> = {
     name: "OpenRouter",
     description: "OpenRouter - Access multiple AI providers",
     defaultBaseUrl: "https://openrouter.ai/api/v1",
-    defaultModels: ["openai/gpt-4o", "anthropic/claude-sonnet-4-20250514", "google/gemini-2.0-flash-exp:free", "deepseek/deepseek-chat"],
+    defaultModels: [
+      "openai/gpt-4o",
+      "anthropic/claude-sonnet-4-20250514",
+      "google/gemini-2.0-flash-exp:free",
+      "deepseek/deepseek-chat",
+    ],
     defaultModelInfos: [
-      { modelId: "openai/gpt-4o", contextWindow: 128000, maxOutput: 16384, capabilities: ["vision", "tool_use"] },
-      { modelId: "anthropic/claude-sonnet-4-20250514", contextWindow: 200000, maxOutput: 64000, capabilities: ["vision", "reasoning", "tool_use"] },
-      { modelId: "google/gemini-2.0-flash-exp:free", contextWindow: 1000000, maxOutput: 8192, capabilities: ["vision", "tool_use"] },
-      { modelId: "deepseek/deepseek-chat", contextWindow: 64000, maxOutput: 8192, capabilities: ["tool_use"] },
+      {
+        modelId: "openai/gpt-4o",
+        contextWindow: 128000,
+        maxOutput: 16384,
+        capabilities: ["vision", "tool_use"],
+      },
+      {
+        modelId: "anthropic/claude-sonnet-4-20250514",
+        contextWindow: 200000,
+        maxOutput: 64000,
+        capabilities: ["vision", "reasoning", "tool_use"],
+      },
+      {
+        modelId: "google/gemini-2.0-flash-exp:free",
+        contextWindow: 1000000,
+        maxOutput: 8192,
+        capabilities: ["vision", "tool_use"],
+      },
+      {
+        modelId: "deepseek/deepseek-chat",
+        contextWindow: 64000,
+        maxOutput: 8192,
+        capabilities: ["tool_use"],
+      },
     ],
     website: "https://openrouter.ai",
     type: "openai-compatible",
@@ -201,18 +439,29 @@ export class ProviderManager {
   private loadFromPrefs(): void {
     try {
       const stored = Zotero.Prefs.get(PREFS_KEY, true) as string | undefined;
-      ztoolkit.log("[ProviderManager] Loading from prefs, stored:", stored ? "has data" : "empty");
+      ztoolkit.log(
+        "[ProviderManager] Loading from prefs, stored:",
+        stored ? "has data" : "empty",
+      );
 
       if (stored) {
         const data: ProviderStorageData = JSON.parse(stored);
         const providers = data.providers || [];
-        ztoolkit.log("[ProviderManager] Parsed providers:", providers.map(p => p.id));
-        ztoolkit.log("[ProviderManager] Active provider ID:", data.activeProviderId);
+        ztoolkit.log(
+          "[ProviderManager] Parsed providers:",
+          providers.map((p) => p.id),
+        );
+        ztoolkit.log(
+          "[ProviderManager] Active provider ID:",
+          data.activeProviderId,
+        );
 
         // Check if config is valid (has paperchat provider)
         const hasPaperchat = providers.some((p) => p.id === "paperchat");
         if (!hasPaperchat) {
-          ztoolkit.log("[ProviderManager] No paperchat found, resetting to defaults");
+          ztoolkit.log(
+            "[ProviderManager] No paperchat found, resetting to defaults",
+          );
           // Invalid config, reset to defaults
           this.configs = this.getDefaultConfigs();
           this.activeProviderId = "paperchat";
@@ -222,7 +471,10 @@ export class ProviderManager {
 
         this.activeProviderId = data.activeProviderId || "paperchat";
         this.configs = providers;
-        ztoolkit.log("[ProviderManager] Loaded configs:", this.configs.map(c => ({ id: c.id, enabled: c.enabled })));
+        ztoolkit.log(
+          "[ProviderManager] Loaded configs:",
+          this.configs.map((c) => ({ id: c.id, enabled: c.enabled })),
+        );
       } else {
         ztoolkit.log("[ProviderManager] No stored config, using defaults");
         this.configs = this.getDefaultConfigs();
@@ -266,7 +518,13 @@ export class ProviderManager {
 
     // Add API key providers
     const apiKeyProviders: BuiltinProviderId[] = [
-      "openai", "claude", "gemini", "deepseek", "mistral", "groq", "openrouter"
+      "openai",
+      "claude",
+      "gemini",
+      "deepseek",
+      "mistral",
+      "groq",
+      "openrouter",
     ];
 
     apiKeyProviders.forEach((id, index) => {
@@ -381,10 +639,16 @@ export class ProviderManager {
   /**
    * Update provider config
    */
-  updateProviderConfig(providerId: string, updates: Partial<ProviderConfig>): void {
+  updateProviderConfig(
+    providerId: string,
+    updates: Partial<ProviderConfig>,
+  ): void {
     const index = this.configs.findIndex((c) => c.id === providerId);
     if (index >= 0) {
-      this.configs[index] = { ...this.configs[index], ...updates } as ProviderConfig;
+      this.configs[index] = {
+        ...this.configs[index],
+        ...updates,
+      } as ProviderConfig;
       this.saveToPrefs();
       this.initializeProviders();
     }
@@ -418,7 +682,7 @@ export class ProviderManager {
    */
   removeCustomProvider(providerId: string): boolean {
     const index = this.configs.findIndex(
-      (c) => c.id === providerId && !c.isBuiltin
+      (c) => c.id === providerId && !c.isBuiltin,
     );
     if (index >= 0) {
       this.configs.splice(index, 1);
@@ -451,7 +715,9 @@ export class ProviderManager {
    */
   addCustomModel(providerId: string, modelId: string): boolean {
     if (providerId === "paperchat") return false;
-    const config = this.getProviderConfig(providerId) as ApiKeyProviderConfig | null;
+    const config = this.getProviderConfig(
+      providerId,
+    ) as ApiKeyProviderConfig | null;
     if (!config) return false;
 
     // Check if model already exists
@@ -476,18 +742,22 @@ export class ProviderManager {
    */
   removeCustomModel(providerId: string, modelId: string): boolean {
     if (providerId === "paperchat") return false;
-    const config = this.getProviderConfig(providerId) as ApiKeyProviderConfig | null;
+    const config = this.getProviderConfig(
+      providerId,
+    ) as ApiKeyProviderConfig | null;
     if (!config) return false;
 
     // Check if model exists and is custom
-    const modelInfo = config.models?.find(m => m.modelId === modelId);
+    const modelInfo = config.models?.find((m) => m.modelId === modelId);
     if (!modelInfo?.isCustom) return false;
 
     // Remove from availableModels
-    const newModels = config.availableModels.filter(m => m !== modelId);
+    const newModels = config.availableModels.filter((m) => m !== modelId);
 
     // Remove from models array
-    const newModelInfos = (config.models || []).filter(m => m.modelId !== modelId);
+    const newModelInfos = (config.models || []).filter(
+      (m) => m.modelId !== modelId,
+    );
 
     // Update default model if it was removed
     const updates: Partial<ApiKeyProviderConfig> = {
@@ -506,17 +776,21 @@ export class ProviderManager {
    * Get model info for a provider
    */
   getModelInfo(providerId: string, modelId: string): ModelInfo | null {
-    const config = this.getProviderConfig(providerId) as ApiKeyProviderConfig | null;
+    const config = this.getProviderConfig(
+      providerId,
+    ) as ApiKeyProviderConfig | null;
     if (!config) return null;
 
     // First check provider config models
-    const configModel = config.models?.find(m => m.modelId === modelId);
+    const configModel = config.models?.find((m) => m.modelId === modelId);
     if (configModel) return configModel;
 
     // Then check built-in provider defaults
     const metadata = BUILTIN_PROVIDERS[providerId as BuiltinProviderId];
     if (metadata) {
-      const builtinModel = metadata.defaultModelInfos.find(m => m.modelId === modelId);
+      const builtinModel = metadata.defaultModelInfos.find(
+        (m) => m.modelId === modelId,
+      );
       if (builtinModel) return builtinModel;
     }
 
@@ -528,10 +802,12 @@ export class ProviderManager {
    * Check if a model is custom (user-added)
    */
   isCustomModel(providerId: string, modelId: string): boolean {
-    const config = this.getProviderConfig(providerId) as ApiKeyProviderConfig | null;
+    const config = this.getProviderConfig(
+      providerId,
+    ) as ApiKeyProviderConfig | null;
     if (!config) return false;
 
-    const modelInfo = config.models?.find(m => m.modelId === modelId);
+    const modelInfo = config.models?.find((m) => m.modelId === modelId);
     return modelInfo?.isCustom === true;
   }
 

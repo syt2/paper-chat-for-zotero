@@ -7,9 +7,14 @@ export class PdfExtractor {
    * 查找Item的PDF附件
    * 统一的PDF附件查找逻辑，避免重复代码
    */
-  private async findPdfAttachment(item: Zotero.Item): Promise<Zotero.Item | null> {
+  private async findPdfAttachment(
+    item: Zotero.Item,
+  ): Promise<Zotero.Item | null> {
     // Check if the item itself is a PDF attachment
-    if (item.isAttachment() && item.attachmentContentType === "application/pdf") {
+    if (
+      item.isAttachment() &&
+      item.attachmentContentType === "application/pdf"
+    ) {
       return item;
     }
 

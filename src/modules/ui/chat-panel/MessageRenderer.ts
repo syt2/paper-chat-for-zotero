@@ -19,11 +19,16 @@ export function createMessageElement(
   theme: ThemeColors,
   isLastAssistant: boolean = false,
 ): HTMLElement {
-  const wrapper = createElement(doc, "div", {
-    display: "block",
-    margin: "10px 0",
-    textAlign: msg.role === "user" ? "right" : "left",
-  }, { class: `chat-message ${msg.role}-message` });
+  const wrapper = createElement(
+    doc,
+    "div",
+    {
+      display: "block",
+      margin: "10px 0",
+      textAlign: msg.role === "user" ? "right" : "left",
+    },
+    { class: `chat-message ${msg.role}-message` },
+  );
 
   // 根据角色设置气泡样式
   let bubbleStyle: Record<string, string>;
@@ -50,28 +55,38 @@ export function createMessageElement(
     };
   }
 
-  const bubble = createElement(doc, "div", {
-    position: "relative",
-    display: "inline-block",
-    maxWidth: "85%",
-    padding: "12px 16px",
-    borderRadius: "14px",
-    wordWrap: "break-word",
-    textAlign: "left",
-    ...bubbleStyle,
-  }, { class: "chat-bubble" });
+  const bubble = createElement(
+    doc,
+    "div",
+    {
+      position: "relative",
+      display: "inline-block",
+      maxWidth: "85%",
+      padding: "12px 16px",
+      borderRadius: "14px",
+      wordWrap: "break-word",
+      textAlign: "left",
+      ...bubbleStyle,
+    },
+    { class: "chat-bubble" },
+  );
 
   const contentAttrs: Record<string, string> = { class: "chat-content" };
   if (msg.role === "assistant" && isLastAssistant) {
     contentAttrs.id = "chat-streaming-content";
   }
 
-  const content = createElement(doc, "div", {
-    lineHeight: "1.6",
-    whiteSpace: "pre-wrap",
-    userSelect: "text",
-    cursor: "text",
-  }, contentAttrs);
+  const content = createElement(
+    doc,
+    "div",
+    {
+      lineHeight: "1.6",
+      whiteSpace: "pre-wrap",
+      userSelect: "text",
+      cursor: "text",
+    },
+    contentAttrs,
+  );
 
   // Store raw content for copying
   let rawContent = msg.content;
@@ -127,19 +142,24 @@ export function createCopyButton(
   theme: ThemeColors,
   contentToCopy: string,
 ): HTMLElement {
-  const copyBtn = createElement(doc, "button", {
-    position: "absolute",
-    bottom: "4px",
-    right: "4px",
-    background: theme.copyBtnBg,
-    border: "none",
-    borderRadius: "4px",
-    padding: "4px 8px",
-    fontSize: "12px",
-    cursor: "pointer",
-    opacity: "0",
-    transition: "opacity 0.2s",
-  }, { class: "copy-btn", title: getString("chat-copy") });
+  const copyBtn = createElement(
+    doc,
+    "button",
+    {
+      position: "absolute",
+      bottom: "4px",
+      right: "4px",
+      background: theme.copyBtnBg,
+      border: "none",
+      borderRadius: "4px",
+      padding: "4px 8px",
+      fontSize: "12px",
+      cursor: "pointer",
+      opacity: "0",
+      transition: "opacity 0.2s",
+    },
+    { class: "copy-btn", title: getString("chat-copy") },
+  );
   copyBtn.textContent = "\uD83D\uDCCB"; // 📋
 
   copyBtn.addEventListener("click", (e) => {
@@ -158,7 +178,10 @@ export function createCopyButton(
 /**
  * Setup hover behavior for copy button visibility
  */
-export function setupCopyButtonHover(bubble: HTMLElement, copyBtn: HTMLElement): void {
+export function setupCopyButtonHover(
+  bubble: HTMLElement,
+  copyBtn: HTMLElement,
+): void {
   bubble.addEventListener("mouseenter", () => {
     copyBtn.style.opacity = "1";
   });
@@ -205,7 +228,9 @@ export function renderMessages(
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
     const isLastAssistant = i === lastAssistantIndex;
-    chatHistory.appendChild(createMessageElement(doc, msg, theme, isLastAssistant));
+    chatHistory.appendChild(
+      createMessageElement(doc, msg, theme, isLastAssistant),
+    );
   }
 
   // Scroll to bottom
@@ -215,7 +240,10 @@ export function renderMessages(
 /**
  * Update streaming content in the last assistant message
  */
-export function updateStreamingContent(container: HTMLElement, content: string): void {
+export function updateStreamingContent(
+  container: HTMLElement,
+  content: string,
+): void {
   const streamingEl = container.querySelector("#chat-streaming-content");
   if (streamingEl) {
     renderMarkdownToElement(streamingEl as HTMLElement, content);

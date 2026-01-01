@@ -19,4 +19,9 @@ export {
 export { getCurrentTheme, isDarkMode } from "./ChatPanelTheme";
 
 // Types
-export type { ThemeColors, ChatPanelContext, SessionInfo, AttachmentState } from "./types";
+export type {
+  ThemeColors,
+  ChatPanelContext,
+  SessionInfo,
+  AttachmentState,
+} from "./types";

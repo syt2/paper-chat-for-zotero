@@ -36,7 +36,9 @@ export class GeminiProvider extends BaseProvider {
       };
 
       if (this._config.systemPrompt) {
-        requestBody.systemInstruction = { parts: [{ text: this._config.systemPrompt }] };
+        requestBody.systemInstruction = {
+          parts: [{ text: this._config.systemPrompt }],
+        };
       }
 
       const response = await fetch(url, {
@@ -73,7 +75,9 @@ export class GeminiProvider extends BaseProvider {
     };
 
     if (this._config.systemPrompt) {
-      requestBody.systemInstruction = { parts: [{ text: this._config.systemPrompt }] };
+      requestBody.systemInstruction = {
+        parts: [{ text: this._config.systemPrompt }],
+      };
     }
 
     const response = await fetch(url, {
@@ -93,7 +97,9 @@ export class GeminiProvider extends BaseProvider {
 
   async testConnection(): Promise<boolean> {
     try {
-      const response = await fetch(`${this._config.baseUrl}/models?key=${this._config.apiKey}`);
+      const response = await fetch(
+        `${this._config.baseUrl}/models?key=${this._config.apiKey}`,
+      );
       return response.ok;
     } catch {
       return false;
@@ -102,14 +108,25 @@ export class GeminiProvider extends BaseProvider {
 
   async getAvailableModels(): Promise<string[]> {
     try {
-      const response = await fetch(`${this._config.baseUrl}/models?key=${this._config.apiKey}`);
+      const response = await fetch(
+        `${this._config.baseUrl}/models?key=${this._config.apiKey}`,
+      );
       if (response.ok) {
         const data = (await response.json()) as {
-          models?: Array<{ name: string; supportedGenerationMethods?: string[] }>;
+          models?: Array<{
+            name: string;
+            supportedGenerationMethods?: string[];
+          }>;
         };
-        return data.models
-          ?.filter((m) => m.supportedGenerationMethods?.includes("generateContent") && m.name.includes("gemini"))
-          .map((m) => m.name.replace("models/", "")) || [];
+        return (
+          data.models
+            ?.filter(
+              (m) =>
+                m.supportedGenerationMethods?.includes("generateContent") &&
+                m.name.includes("gemini"),
+            )
+            .map((m) => m.name.replace("models/", "")) || []
+        );
       }
     } catch {
       // Ignore errors

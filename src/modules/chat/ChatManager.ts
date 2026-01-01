@@ -147,21 +147,33 @@ export class ChatManager {
     const itemId = item?.id ?? 0;
     const isGlobalChat = !item || item.id === 0;
 
-    ztoolkit.log("[ChatManager] sendMessage called, itemId:", itemId, "isGlobal:", isGlobalChat);
+    ztoolkit.log(
+      "[ChatManager] sendMessage called, itemId:",
+      itemId,
+      "isGlobal:",
+      isGlobalChat,
+    );
 
     // 获取或创建会话
     const session = await this.getOrCreateSession(itemId);
 
     // 获取活动的 AI 提供商
     const provider = this.getActiveProvider();
-    ztoolkit.log("[ChatManager] provider:", provider?.getName(), "isReady:", provider?.isReady());
+    ztoolkit.log(
+      "[ChatManager] provider:",
+      provider?.getName(),
+      "isReady:",
+      provider?.isReady(),
+    );
 
     if (!provider || !provider.isReady()) {
       ztoolkit.log("[ChatManager] Provider not ready, showing error in chat");
       const errorMessage: ChatMessage = {
         id: this.generateId(),
         role: "assistant",
-        content: getString("chat-error-no-provider" as Parameters<typeof getString>[0]),
+        content: getString(
+          "chat-error-no-provider" as Parameters<typeof getString>[0],
+        ),
         timestamp: Date.now(),
       };
       session.messages.push(errorMessage);
@@ -182,18 +194,27 @@ export class ChatManager {
 
     // 处理选中文本
     if (options.selectedText) {
-      const prefix = isGlobalChat ? "[Selected text]" : "[Selected text from PDF]";
+      const prefix = isGlobalChat
+        ? "[Selected text]"
+        : "[Selected text from PDF]";
       finalContent = `${prefix}:\n"${options.selectedText}"\n\n[Question]:\n${content}`;
     }
 
     // PDF 附件相关（仅非全局模式）
-    let pdfAttachment: { data: string; mimeType: string; name: string } | undefined;
+    let pdfAttachment:
+      | { data: string; mimeType: string; name: string }
+      | undefined;
     let pdfWasAttached = false;
 
     if (!isGlobalChat && options.attachPdf && item) {
       const pdfInfo = await this.pdfExtractor.getPdfInfo(item);
       ztoolkit.log("[PDF Attach] Checkbox checked, attempting to attach PDF");
-      ztoolkit.log("[PDF Attach] PDF info:", pdfInfo ? `name=${pdfInfo.name}, size=${pdfInfo.size} bytes` : "No PDF found");
+      ztoolkit.log(
+        "[PDF Attach] PDF info:",
+        pdfInfo
+          ? `name=${pdfInfo.name}, size=${pdfInfo.size} bytes`
+          : "No PDF found",
+      );
 
       // 优先尝试文本提取
       const pdfText = await this.pdfExtractor.extractPdfText(item);
@@ -201,20 +222,33 @@ export class ChatManager {
         session.pdfContent = pdfText;
         session.pdfAttached = true;
         pdfWasAttached = true;
-        ztoolkit.log("[PDF Attach] PDF text extracted successfully, text length:", pdfText.length);
+        ztoolkit.log(
+          "[PDF Attach] PDF text extracted successfully, text length:",
+          pdfText.length,
+        );
         finalContent = `[PDF Content]:\n${pdfText.substring(0, 50000)}\n\n[Question]:\n${content}`;
-      } else if (provider.supportsPdfUpload() && getPref("uploadRawPdfOnFailure")) {
+      } else if (
+        provider.supportsPdfUpload() &&
+        getPref("uploadRawPdfOnFailure")
+      ) {
         // 文本提取失败，且用户允许上传原始 PDF，尝试 PDF 文件上传
-        ztoolkit.log("[PDF Attach] Text extraction failed, trying PDF file upload");
+        ztoolkit.log(
+          "[PDF Attach] Text extraction failed, trying PDF file upload",
+        );
         const pdfBase64 = await this.pdfExtractor.getPdfBase64(item);
         if (pdfBase64) {
           pdfAttachment = pdfBase64;
           session.pdfAttached = true;
           pdfWasAttached = true;
-          ztoolkit.log("[PDF Attach] PDF file ready for upload:", pdfBase64.name);
+          ztoolkit.log(
+            "[PDF Attach] PDF file ready for upload:",
+            pdfBase64.name,
+          );
         }
       } else if (!pdfText) {
-        ztoolkit.log("[PDF Attach] Text extraction failed and raw PDF upload is disabled");
+        ztoolkit.log(
+          "[PDF Attach] Text extraction failed and raw PDF upload is disabled",
+        );
       }
     }
 
@@ -229,7 +263,11 @@ export class ChatManager {
 
     // 处理图片附件
     if (options.images && options.images.length > 0) {
-      ztoolkit.log("[Image Attach] Processing", options.images.length, "image(s)");
+      ztoolkit.log(
+        "[Image Attach] Processing",
+        options.images.length,
+        "image(s)",
+      );
     }
 
     // 创建用户消息
@@ -263,7 +301,10 @@ export class ChatManager {
     ztoolkit.log("[API Request] Sending to provider:", provider.getName());
     ztoolkit.log("[API Request] Message count:", session.messages.length - 1);
     ztoolkit.log("[API Request] Has images:", options.images?.length || 0);
-    ztoolkit.log("[API Request] Has PDF attachment:", pdfAttachment ? "yes" : "no");
+    ztoolkit.log(
+      "[API Request] Has PDF attachment:",
+      pdfAttachment ? "yes" : "no",
+    );
 
     // 调用 API with retry on auth error
     let hasRetried = false;
@@ -293,8 +334,14 @@ export class ChatManager {
             ztoolkit.log("[API Error]", error.message);
 
             // 检查是否为认证错误，且可以重试
-            if (!hasRetried && this.isAuthError(error) && this.isPaperChatProvider()) {
-              ztoolkit.log("[API Error] Auth error detected, attempting to refresh API key...");
+            if (
+              !hasRetried &&
+              this.isAuthError(error) &&
+              this.isPaperChatProvider()
+            ) {
+              ztoolkit.log(
+                "[API Error] Auth error detected, attempting to refresh API key...",
+              );
               hasRetried = true;
 
               try {
@@ -304,7 +351,9 @@ export class ChatManager {
 
                 // 重置 assistant message 内容
                 assistantMessage.content = "";
-                ztoolkit.log("[API Retry] API key refreshed, retrying request...");
+                ztoolkit.log(
+                  "[API Retry] API key refreshed, retrying request...",
+                );
 
                 // 重新获取 provider (它会使用新的 API key)
                 const newProvider = this.getActiveProvider();
@@ -315,7 +364,10 @@ export class ChatManager {
                   return;
                 }
               } catch (retryError) {
-                ztoolkit.log("[API Retry] Failed to refresh API key:", retryError);
+                ztoolkit.log(
+                  "[API Retry] Failed to refresh API key:",
+                  retryError,
+                );
               }
             }
 
@@ -336,7 +388,11 @@ export class ChatManager {
           },
         };
 
-        provider.streamChatCompletion(session.messages.slice(0, -1), callbacks, pdfAttachment);
+        provider.streamChatCompletion(
+          session.messages.slice(0, -1),
+          callbacks,
+          pdfAttachment,
+        );
       });
     };
 
@@ -424,13 +480,15 @@ export class ChatManager {
    * 获取所有会话列表（带item信息）
    * 直接使用StorageService缓存的索引，性能更好
    */
-  async getAllSessions(): Promise<Array<{
-    itemId: number;
-    itemName: string;
-    messageCount: number;
-    lastMessage: string;
-    lastUpdated: number;
-  }>> {
+  async getAllSessions(): Promise<
+    Array<{
+      itemId: number;
+      itemName: string;
+      messageCount: number;
+      lastMessage: string;
+      lastUpdated: number;
+    }>
+  > {
     const storedSessions = await this.storageService.listSessions();
 
     // 索引已经包含所有需要的信息，直接映射返回

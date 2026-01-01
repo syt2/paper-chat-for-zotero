@@ -6,7 +6,10 @@ import { getAuthManager } from "../auth";
 import { getProviderManager } from "../providers";
 import { loadCachedRatios, fetchPaperchatModels } from "./ModelsFetcher";
 import { updateUserDisplay, bindUserAuthEvents } from "./UserAuthUI";
-import { populatePaperchatModels, bindPaperchatEvents } from "./PaperchatProviderUI";
+import {
+  populatePaperchatModels,
+  bindPaperchatEvents,
+} from "./PaperchatProviderUI";
 import { bindApiKeyEvents } from "./ApiKeyProviderUI";
 import {
   populateProviderList,
@@ -74,7 +77,9 @@ export async function initializePrefsUI(): Promise<void> {
  * Initialize PDF settings checkbox
  */
 function initPdfSettingsCheckbox(doc: Document): void {
-  const checkbox = doc.getElementById("pref-upload-raw-pdf-checkbox") as XUL.Checkbox | null;
+  const checkbox = doc.getElementById(
+    "pref-upload-raw-pdf-checkbox",
+  ) as XUL.Checkbox | null;
   if (checkbox) {
     checkbox.checked = getPref("uploadRawPdfOnFailure") as boolean;
   }
@@ -125,7 +130,9 @@ export function bindPrefEvents(): void {
  * Bind PDF settings checkbox event
  */
 function bindPdfSettingsEvent(doc: Document): void {
-  const checkbox = doc.getElementById("pref-upload-raw-pdf-checkbox") as XUL.Checkbox | null;
+  const checkbox = doc.getElementById(
+    "pref-upload-raw-pdf-checkbox",
+  ) as XUL.Checkbox | null;
   if (checkbox) {
     checkbox.addEventListener("command", () => {
       setPref("uploadRawPdfOnFailure", checkbox.checked);

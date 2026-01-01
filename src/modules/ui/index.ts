@@ -2,10 +2,7 @@
  * UI Module Exports
  */
 
-export {
-  showAuthDialog,
-  ensureLoggedIn,
-} from "./AuthDialog";
+export { showAuthDialog, ensureLoggedIn } from "./AuthDialog";
 
 export {
   registerToolbarButton,

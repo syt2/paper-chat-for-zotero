@@ -1,10 +1,7 @@
 import { getString, initLocale } from "./utils/locale";
 import { registerPrefsScripts } from "./modules/preferences";
 import { createZToolkit } from "./utils/ztoolkit";
-import {
-  registerToolbarButton,
-  unregisterChatPanel,
-} from "./modules/ui";
+import { registerToolbarButton, unregisterChatPanel } from "./modules/ui";
 import { getAuthManager, destroyAuthManager } from "./modules/auth";
 import { destroyProviderManager } from "./modules/providers";
 

@@ -49,16 +49,27 @@ export function setTogglePanelModeFn(fn: () => void): void {
 /**
  * Update panel mode button icon based on current mode
  */
-export function updatePanelModeButtonIcon(container: HTMLElement, mode: PanelMode): void {
-  const panelModeIcon = container.querySelector("#chat-panel-mode-icon") as HTMLImageElement;
-  const panelModeBtn = container.querySelector("#chat-panel-mode-btn") as HTMLButtonElement;
+export function updatePanelModeButtonIcon(
+  container: HTMLElement,
+  mode: PanelMode,
+): void {
+  const panelModeIcon = container.querySelector(
+    "#chat-panel-mode-icon",
+  ) as HTMLImageElement;
+  const panelModeBtn = container.querySelector(
+    "#chat-panel-mode-btn",
+  ) as HTMLButtonElement;
   if (panelModeIcon && panelModeBtn) {
     // split.svg for sidebar mode (click to switch to floating)
     // right-bar.svg for floating mode (click to switch to sidebar)
-    panelModeIcon.src = mode === "sidebar"
-      ? `chrome://${config.addonRef}/content/icons/split.svg`
-      : `chrome://${config.addonRef}/content/icons/right-bar.svg`;
-    panelModeBtn.title = mode === "sidebar" ? getString("chat-switch-to-floating") : getString("chat-switch-to-sidebar");
+    panelModeIcon.src =
+      mode === "sidebar"
+        ? `chrome://${config.addonRef}/content/icons/split.svg`
+        : `chrome://${config.addonRef}/content/icons/right-bar.svg`;
+    panelModeBtn.title =
+      mode === "sidebar"
+        ? getString("chat-switch-to-floating")
+        : getString("chat-switch-to-sidebar");
   }
 }
 
@@ -79,17 +90,35 @@ export function setupEventHandlers(context: ChatPanelContext): void {
   const { container, chatManager, authManager } = context;
 
   // Get DOM elements
-  const messageInput = container.querySelector("#chat-message-input") as HTMLTextAreaElement;
-  const sendButton = container.querySelector("#chat-send-button") as HTMLButtonElement;
-  const attachPdfCheckbox = container.querySelector("#chat-attach-pdf") as HTMLInputElement;
+  const messageInput = container.querySelector(
+    "#chat-message-input",
+  ) as HTMLTextAreaElement;
+  const sendButton = container.querySelector(
+    "#chat-send-button",
+  ) as HTMLButtonElement;
+  const attachPdfCheckbox = container.querySelector(
+    "#chat-attach-pdf",
+  ) as HTMLInputElement;
   const newChatBtn = container.querySelector("#chat-new") as HTMLButtonElement;
-  const uploadFileBtn = container.querySelector("#chat-upload-file") as HTMLButtonElement;
-  const historyBtn = container.querySelector("#chat-history-btn") as HTMLButtonElement;
-  const historyDropdown = container.querySelector("#chat-history-dropdown") as HTMLElement;
-  const attachmentsPreview = container.querySelector("#chat-attachments-preview") as HTMLElement;
-  const userActionBtn = container.querySelector("#chat-user-action-btn") as HTMLButtonElement;
+  const uploadFileBtn = container.querySelector(
+    "#chat-upload-file",
+  ) as HTMLButtonElement;
+  const historyBtn = container.querySelector(
+    "#chat-history-btn",
+  ) as HTMLButtonElement;
+  const historyDropdown = container.querySelector(
+    "#chat-history-dropdown",
+  ) as HTMLElement;
+  const attachmentsPreview = container.querySelector(
+    "#chat-attachments-preview",
+  ) as HTMLElement;
+  const userActionBtn = container.querySelector(
+    "#chat-user-action-btn",
+  ) as HTMLButtonElement;
   const chatHistory = container.querySelector("#chat-history") as HTMLElement;
-  const emptyState = container.querySelector("#chat-empty-state") as HTMLElement;
+  const emptyState = container.querySelector(
+    "#chat-empty-state",
+  ) as HTMLElement;
 
   // History dropdown state
   const historyState = createHistoryDropdownState();
@@ -110,8 +139,17 @@ export function setupEventHandlers(context: ChatPanelContext): void {
   sendButton?.addEventListener("click", async () => {
     ztoolkit.log("Send button clicked");
     ztoolkit.log("[Send] attachPdfCheckbox element:", attachPdfCheckbox);
-    ztoolkit.log("[Send] attachPdfCheckbox.checked:", attachPdfCheckbox?.checked);
-    await sendMessage(context, messageInput, sendButton, attachPdfCheckbox, attachmentsPreview);
+    ztoolkit.log(
+      "[Send] attachPdfCheckbox.checked:",
+      attachPdfCheckbox?.checked,
+    );
+    await sendMessage(
+      context,
+      messageInput,
+      sendButton,
+      attachPdfCheckbox,
+      attachmentsPreview,
+    );
   });
 
   // Input keydown - Enter to send (blocked while sending)
@@ -125,8 +163,17 @@ export function setupEventHandlers(context: ChatPanelContext): void {
       }
       ztoolkit.log("Enter key pressed to send");
       ztoolkit.log("[Send] attachPdfCheckbox element:", attachPdfCheckbox);
-      ztoolkit.log("[Send] attachPdfCheckbox.checked:", attachPdfCheckbox?.checked);
-      sendMessage(context, messageInput, sendButton, attachPdfCheckbox, attachmentsPreview);
+      ztoolkit.log(
+        "[Send] attachPdfCheckbox.checked:",
+        attachPdfCheckbox?.checked,
+      );
+      sendMessage(
+        context,
+        messageInput,
+        sendButton,
+        attachPdfCheckbox,
+        attachmentsPreview,
+      );
     }
   });
 
@@ -134,7 +181,8 @@ export function setupEventHandlers(context: ChatPanelContext): void {
   messageInput?.addEventListener("input", () => {
     if (messageInput) {
       messageInput.style.height = "auto";
-      messageInput.style.height = Math.min(messageInput.scrollHeight, 140) + "px";
+      messageInput.style.height =
+        Math.min(messageInput.scrollHeight, 140) + "px";
     }
   });
 
@@ -159,7 +207,10 @@ export function setupEventHandlers(context: ChatPanelContext): void {
       if (selectedText && selectedText.trim().length > 0) {
         e.preventDefault();
         copyToClipboard(selectedText);
-        ztoolkit.log("Copied selected text via Ctrl+C:", selectedText.substring(0, 50));
+        ztoolkit.log(
+          "Copied selected text via Ctrl+C:",
+          selectedText.substring(0, 50),
+        );
       }
     }
   });
@@ -211,7 +262,10 @@ export function setupEventHandlers(context: ChatPanelContext): void {
   uploadFileBtn?.addEventListener("click", async () => {
     ztoolkit.log("Upload file button clicked");
     const fp = new ztoolkit.FilePicker("Select File", "open", [
-      ["All supported", "*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp;*.txt;*.md;*.json;*.xml;*.csv;*.log"],
+      [
+        "All supported",
+        "*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp;*.txt;*.md;*.json;*.xml;*.csv;*.log",
+      ],
       ["Images", "*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp"],
       ["Text files", "*.txt;*.md;*.json;*.xml;*.csv;*.log"],
     ]);
@@ -228,7 +282,14 @@ export function setupEventHandlers(context: ChatPanelContext): void {
         const result = await extractor.imageFileToBase64(filePath);
         if (result) {
           const fileName = filePath.split(/[/\\]/).pop() || "image";
-          ztoolkit.log("[User Upload] Image uploaded:", fileName, "mimeType:", result.mimeType, "data length:", result.data.length);
+          ztoolkit.log(
+            "[User Upload] Image uploaded:",
+            fileName,
+            "mimeType:",
+            result.mimeType,
+            "data length:",
+            result.data.length,
+          );
           attachmentState.pendingImages.push({
             type: "base64",
             data: result.data,
@@ -244,7 +305,12 @@ export function setupEventHandlers(context: ChatPanelContext): void {
         const fileContent = await extractor.readTextFile(filePath);
         if (fileContent) {
           const fileName = filePath.split(/[/\\]/).pop() || "file.txt";
-          ztoolkit.log("[User Upload] Text file uploaded:", fileName, "content length:", fileContent.length);
+          ztoolkit.log(
+            "[User Upload] Text file uploaded:",
+            fileName,
+            "content length:",
+            fileContent.length,
+          );
           attachmentState.pendingFiles.push({
             name: fileName,
             content: fileContent.substring(0, 50000),
@@ -288,7 +354,9 @@ export function setupEventHandlers(context: ChatPanelContext): void {
         ztoolkit.log("Loading session for item:", session.itemId);
         historyDropdown.style.display = "none";
 
-        const loadedSession = await chatManager.loadSessionForItem(session.itemId);
+        const loadedSession = await chatManager.loadSessionForItem(
+          session.itemId,
+        );
         if (loadedSession) {
           let itemForSession: Zotero.Item | null = null;
 
@@ -302,12 +370,18 @@ export function setupEventHandlers(context: ChatPanelContext): void {
                 itemForSession = item as Zotero.Item;
               } else {
                 // Item was deleted - treat as global chat
-                ztoolkit.log("Item not found, treating as global chat:", session.itemId);
+                ztoolkit.log(
+                  "Item not found, treating as global chat:",
+                  session.itemId,
+                );
                 itemForSession = { id: 0 } as Zotero.Item;
               }
             } catch {
               // Error fetching item - treat as global chat
-              ztoolkit.log("Error fetching item, treating as global chat:", session.itemId);
+              ztoolkit.log(
+                "Error fetching item, treating as global chat:",
+                session.itemId,
+              );
               itemForSession = { id: 0 } as Zotero.Item;
             }
           }
@@ -334,8 +408,12 @@ export function setupEventHandlers(context: ChatPanelContext): void {
   }
 
   // Model selector
-  const modelSelectorBtn = container.querySelector("#chat-model-selector-btn") as HTMLButtonElement;
-  const modelDropdown = container.querySelector("#chat-model-dropdown") as HTMLElement;
+  const modelSelectorBtn = container.querySelector(
+    "#chat-model-selector-btn",
+  ) as HTMLButtonElement;
+  const modelDropdown = container.querySelector(
+    "#chat-model-dropdown",
+  ) as HTMLElement;
 
   if (modelSelectorBtn && modelDropdown) {
     // Initialize model selector text
@@ -355,14 +433,19 @@ export function setupEventHandlers(context: ChatPanelContext): void {
     // Close model dropdown when clicking outside
     container.ownerDocument?.addEventListener("click", (e: Event) => {
       const target = e.target as HTMLElement;
-      if (!modelSelectorBtn.contains(target) && !modelDropdown.contains(target)) {
+      if (
+        !modelSelectorBtn.contains(target) &&
+        !modelDropdown.contains(target)
+      ) {
         modelDropdown.style.display = "none";
       }
     });
   }
 
   // Settings button - open preferences
-  const settingsBtn = container.querySelector("#chat-settings-btn") as HTMLButtonElement;
+  const settingsBtn = container.querySelector(
+    "#chat-settings-btn",
+  ) as HTMLButtonElement;
   if (settingsBtn) {
     settingsBtn.addEventListener("click", () => {
       ztoolkit.log("Settings button clicked");
@@ -380,7 +463,9 @@ export function setupEventHandlers(context: ChatPanelContext): void {
   }
 
   // User bar settings button (visible when not logged in) - open preferences
-  const userBarSettingsBtn = container.querySelector("#chat-user-bar-settings-btn") as HTMLButtonElement;
+  const userBarSettingsBtn = container.querySelector(
+    "#chat-user-bar-settings-btn",
+  ) as HTMLButtonElement;
   if (userBarSettingsBtn) {
     userBarSettingsBtn.addEventListener("click", () => {
       ztoolkit.log("User bar settings button clicked");
@@ -397,7 +482,9 @@ export function setupEventHandlers(context: ChatPanelContext): void {
   }
 
   // Panel mode toggle button - switch between sidebar and floating mode
-  const panelModeBtn = container.querySelector("#chat-panel-mode-btn") as HTMLButtonElement;
+  const panelModeBtn = container.querySelector(
+    "#chat-panel-mode-btn",
+  ) as HTMLButtonElement;
   if (panelModeBtn) {
     panelModeBtn.addEventListener("click", () => {
       ztoolkit.log("Panel mode toggle button clicked");
@@ -425,16 +512,26 @@ export function updateAttachmentsPreviewDisplay(
   container: HTMLElement,
   attachmentState: AttachmentState,
 ): void {
-  const attachmentsPreview = container.querySelector("#chat-attachments-preview") as HTMLElement;
+  const attachmentsPreview = container.querySelector(
+    "#chat-attachments-preview",
+  ) as HTMLElement;
   if (!attachmentsPreview) return;
 
   attachmentsPreview.textContent = "";
   const doc = container.ownerDocument!;
 
   const tags = [
-    ...(attachmentState.pendingSelectedText ? [{ text: "\uD83D\uDCDD Selection", type: "selection" }] : []),
-    ...attachmentState.pendingImages.map((img) => ({ text: `\uD83D\uDDBC\uFE0F ${img.name || "image"}`, type: "image" })),
-    ...attachmentState.pendingFiles.map((file) => ({ text: `\uD83D\uDCCE ${file.name}`, type: "file" })),
+    ...(attachmentState.pendingSelectedText
+      ? [{ text: "\uD83D\uDCDD Selection", type: "selection" }]
+      : []),
+    ...attachmentState.pendingImages.map((img) => ({
+      text: `\uD83D\uDDBC\uFE0F ${img.name || "image"}`,
+      type: "image",
+    })),
+    ...attachmentState.pendingFiles.map((file) => ({
+      text: `\uD83D\uDCCE ${file.name}`,
+      type: "file",
+    })),
   ];
 
   for (const tag of tags) {
@@ -503,7 +600,9 @@ async function sendMessage(
       // Try to refresh the plugin token
       await authManager.ensurePluginToken(true);
       if (!activeProvider?.isReady()) {
-        ztoolkit.log("PaperChat provider still not ready after token refresh, forcing logout");
+        ztoolkit.log(
+          "PaperChat provider still not ready after token refresh, forcing logout",
+        );
         // Session is invalid and auto-relogin failed, force logout
         await authManager.logout();
         context.updateUserBar();
@@ -535,7 +634,8 @@ async function sendMessage(
 
   // Get attachment state before clearing
   const attachmentState = context.getAttachmentState();
-  const shouldAttachPdf = attachPdfCheckbox?.checked && activeReaderItem !== null;
+  const shouldAttachPdf =
+    attachPdfCheckbox?.checked && activeReaderItem !== null;
 
   // Clear input immediately after getting the content
   if (messageInput) {
@@ -547,8 +647,14 @@ async function sendMessage(
 
   // Build attachment options (shared between global and item chat)
   const attachmentOptions = {
-    images: attachmentState.pendingImages.length > 0 ? attachmentState.pendingImages : undefined,
-    files: attachmentState.pendingFiles.length > 0 ? attachmentState.pendingFiles : undefined,
+    images:
+      attachmentState.pendingImages.length > 0
+        ? attachmentState.pendingImages
+        : undefined,
+    files:
+      attachmentState.pendingFiles.length > 0
+        ? attachmentState.pendingFiles
+        : undefined,
     selectedText: attachmentState.pendingSelectedText || undefined,
   };
 
@@ -591,12 +697,25 @@ async function sendMessage(
  * Update user bar display
  * Only shows user bar when PaperChat provider is active
  */
-export function updateUserBarDisplay(container: HTMLElement, authManager: { isLoggedIn(): boolean; getUser(): { username: string } | null; formatBalance(): string }): void {
+export function updateUserBarDisplay(
+  container: HTMLElement,
+  authManager: {
+    isLoggedIn(): boolean;
+    getUser(): { username: string } | null;
+    formatBalance(): string;
+  },
+): void {
   const userBar = container.querySelector("#chat-user-bar") as HTMLElement;
   const userNameEl = container.querySelector("#chat-user-name") as HTMLElement;
-  const userBalanceEl = container.querySelector("#chat-user-balance") as HTMLElement;
-  const userActionBtn = container.querySelector("#chat-user-action-btn") as HTMLButtonElement;
-  const userBarSettingsBtn = container.querySelector("#chat-user-bar-settings-btn") as HTMLButtonElement;
+  const userBalanceEl = container.querySelector(
+    "#chat-user-balance",
+  ) as HTMLElement;
+  const userActionBtn = container.querySelector(
+    "#chat-user-action-btn",
+  ) as HTMLButtonElement;
+  const userBarSettingsBtn = container.querySelector(
+    "#chat-user-bar-settings-btn",
+  ) as HTMLButtonElement;
 
   if (!userBar || !userNameEl || !userBalanceEl || !userActionBtn) return;
 
@@ -656,14 +775,19 @@ export async function updatePdfCheckboxVisibilityForItem(
 
   const hasPdf = await chatManager.hasPdfAttachment(activeReaderItem);
   pdfLabel.style.display = hasPdf ? "flex" : "none";
-  ztoolkit.log("PDF checkbox visibility based on active reader:", hasPdf ? "visible" : "hidden");
+  ztoolkit.log(
+    "PDF checkbox visibility based on active reader:",
+    hasPdf ? "visible" : "hidden",
+  );
 }
 
 /**
  * Focus the message input
  */
 export function focusInput(container: HTMLElement): void {
-  const messageInput = container.querySelector("#chat-message-input") as HTMLTextAreaElement;
+  const messageInput = container.querySelector(
+    "#chat-message-input",
+  ) as HTMLTextAreaElement;
   messageInput?.focus();
 }
 
@@ -671,7 +795,9 @@ export function focusInput(container: HTMLElement): void {
  * Update model selector display with current model
  */
 export function updateModelSelectorDisplay(container: HTMLElement): void {
-  const modelSelectorText = container.querySelector("#chat-model-selector-text") as HTMLElement;
+  const modelSelectorText = container.querySelector(
+    "#chat-model-selector-text",
+  ) as HTMLElement;
   if (!modelSelectorText) return;
 
   const providerManager = getProviderManager();
@@ -681,7 +807,10 @@ export function updateModelSelectorDisplay(container: HTMLElement): void {
   if (activeProvider && currentModel) {
     // Show provider name + model (truncated)
     const providerName = activeProvider.getName();
-    const modelShort = currentModel.length > 20 ? currentModel.substring(0, 18) + "..." : currentModel;
+    const modelShort =
+      currentModel.length > 20
+        ? currentModel.substring(0, 18) + "..."
+        : currentModel;
     modelSelectorText.textContent = `${providerName}: ${modelShort}`;
   } else if (activeProvider) {
     modelSelectorText.textContent = activeProvider.getName();
@@ -747,7 +876,9 @@ function populateModelDropdown(
           fontSize: "12px",
           color: isCurrentModel ? chatColors.userBubble : theme.textPrimary,
           cursor: "pointer",
-          background: isCurrentModel ? theme.dropdownItemHoverBg : "transparent",
+          background: isCurrentModel
+            ? theme.dropdownItemHoverBg
+            : "transparent",
           display: "flex",
           alignItems: "center",
           gap: "8px",
@@ -794,7 +925,9 @@ function populateModelDropdown(
           setPref("model", model);
 
           // Update provider config
-          providerManager.updateProviderConfig(config.id, { defaultModel: model });
+          providerManager.updateProviderConfig(config.id, {
+            defaultModel: model,
+          });
 
           // Update display and close dropdown
           updateModelSelectorDisplay(container);

@@ -4,7 +4,12 @@
  */
 
 import type { ChatMessage, StreamCallbacks } from "../../types/chat";
-import type { AIProvider, ApiKeyProviderConfig, PaperChatProviderConfig, PdfAttachment } from "../../types/provider";
+import type {
+  AIProvider,
+  ApiKeyProviderConfig,
+  PaperChatProviderConfig,
+  PdfAttachment,
+} from "../../types/provider";
 import { getAuthManager } from "../auth";
 import { OpenAICompatibleProvider } from "./OpenAICompatibleProvider";
 import { BUILTIN_PROVIDERS } from "./ProviderManager";
@@ -33,7 +38,9 @@ export class PaperChatProvider implements AIProvider {
       apiKey: authManager.getApiKey() || "",
       baseUrl: BUILTIN_PROVIDERS.paperchat.defaultBaseUrl,
       defaultModel: this._config.defaultModel || defaultModel,
-      availableModels: this._config.availableModels || BUILTIN_PROVIDERS.paperchat.defaultModels,
+      availableModels:
+        this._config.availableModels ||
+        BUILTIN_PROVIDERS.paperchat.defaultModels,
       maxTokens: this._config.maxTokens || 4096,
       temperature: this._config.temperature ?? 0.7,
       systemPrompt: this._config.systemPrompt || "",
@@ -69,7 +76,11 @@ export class PaperChatProvider implements AIProvider {
   ): Promise<void> {
     // Refresh config before each call (API key may have changed)
     this._delegate.updateConfig(this.createDelegateConfig());
-    return this._delegate.streamChatCompletion(messages, callbacks, pdfAttachment);
+    return this._delegate.streamChatCompletion(
+      messages,
+      callbacks,
+      pdfAttachment,
+    );
   }
 
   async chatCompletion(messages: ChatMessage[]): Promise<string> {

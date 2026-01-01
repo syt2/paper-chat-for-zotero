@@ -17,7 +17,11 @@ import type {
   GeminiContent,
   GeminiPart,
 } from "../../types/provider";
-import { parseSSEStream, type SSEFormat, type SSEParserCallbacks } from "./SSEParser";
+import {
+  parseSSEStream,
+  type SSEFormat,
+  type SSEParserCallbacks,
+} from "./SSEParser";
 
 export abstract class BaseProvider implements AIProvider {
   protected _config: ApiKeyProviderConfig;
@@ -35,7 +39,9 @@ export abstract class BaseProvider implements AIProvider {
   }
 
   isReady(): boolean {
-    return !!this._config.apiKey && !!this._config.baseUrl && this._config.enabled;
+    return (
+      !!this._config.apiKey && !!this._config.baseUrl && this._config.enabled
+    );
   }
 
   updateConfig(config: Partial<ApiKeyProviderConfig>): void {
@@ -82,7 +88,9 @@ export abstract class BaseProvider implements AIProvider {
   /**
    * Get readable stream reader from response, throws if unavailable
    */
-  protected getResponseReader(response: Response): ReadableStreamDefaultReader<Uint8Array> {
+  protected getResponseReader(
+    response: Response,
+  ): ReadableStreamDefaultReader<Uint8Array> {
     const reader = response.body?.getReader();
     if (!reader) throw new Error("Response body is not readable");
     return reader as ReadableStreamDefaultReader<Uint8Array>;
@@ -146,7 +154,8 @@ export abstract class BaseProvider implements AIProvider {
     const firstUserIndex = filtered.findIndex((m) => m.role === "user");
 
     return filtered.map((msg, index) => {
-      const shouldAttachPdf = pdfAttachment && msg.role === "user" && index === firstUserIndex;
+      const shouldAttachPdf =
+        pdfAttachment && msg.role === "user" && index === firstUserIndex;
       const hasImages = msg.images && msg.images.length > 0;
 
       // Use multimodal format if has images or PDF
@@ -174,9 +183,10 @@ export abstract class BaseProvider implements AIProvider {
             content.push({
               type: "image_url",
               image_url: {
-                url: image.type === "base64"
-                  ? `data:${image.mimeType};base64,${image.data}`
-                  : image.data,
+                url:
+                  image.type === "base64"
+                    ? `data:${image.mimeType};base64,${image.data}`
+                    : image.data,
                 detail: "auto",
               },
             });
@@ -187,7 +197,10 @@ export abstract class BaseProvider implements AIProvider {
       }
 
       // Plain text message
-      return { role: msg.role as "user" | "assistant" | "system", content: msg.content };
+      return {
+        role: msg.role as "user" | "assistant" | "system",
+        content: msg.content,
+      };
     });
   }
 
@@ -199,11 +212,14 @@ export abstract class BaseProvider implements AIProvider {
     messages: ChatMessage[],
     pdfAttachment?: PdfAttachment,
   ): AnthropicMessage[] {
-    const filtered = this.filterMessages(messages).filter((msg) => msg.role !== "system");
+    const filtered = this.filterMessages(messages).filter(
+      (msg) => msg.role !== "system",
+    );
     const firstUserIndex = filtered.findIndex((m) => m.role === "user");
 
     return filtered.map((msg, index) => {
-      const shouldAttachPdf = pdfAttachment && msg.role === "user" && index === firstUserIndex;
+      const shouldAttachPdf =
+        pdfAttachment && msg.role === "user" && index === firstUserIndex;
       const hasImages = msg.images && msg.images.length > 0;
 
       // Use multimodal format if has images or PDF

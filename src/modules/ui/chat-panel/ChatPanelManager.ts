@@ -12,11 +12,25 @@ import { getPref, setPref } from "../../../utils/prefs";
 
 import type { ChatPanelContext } from "./types";
 import { chatColors } from "../../../utils/colors";
-import { getCurrentTheme, updateCurrentTheme, applyThemeToContainer, setupThemeListener } from "./ChatPanelTheme";
+import {
+  getCurrentTheme,
+  updateCurrentTheme,
+  applyThemeToContainer,
+  setupThemeListener,
+} from "./ChatPanelTheme";
 import { createChatContainer } from "./ChatPanelBuilder";
 import { renderMessages as renderMessageElements } from "./MessageRenderer";
 import { renderMarkdownToElement } from "./MarkdownRenderer";
-import { setupEventHandlers, updateAttachmentsPreviewDisplay, updateUserBarDisplay, updatePdfCheckboxVisibilityForItem, focusInput, setActiveReaderItemFn, setTogglePanelModeFn, updatePanelModeButtonIcon } from "./ChatPanelEvents";
+import {
+  setupEventHandlers,
+  updateAttachmentsPreviewDisplay,
+  updateUserBarDisplay,
+  updatePdfCheckboxVisibilityForItem,
+  focusInput,
+  setActiveReaderItemFn,
+  setTogglePanelModeFn,
+  updatePanelModeButtonIcon,
+} from "./ChatPanelEvents";
 import { loadCachedRatios } from "../../preferences/ModelsFetcher";
 import { Guide } from "../Guide";
 
@@ -162,7 +176,8 @@ function getSidebar(): HTMLElement | null {
     Zotero_Tabs?: { selectedType: string };
   };
   const currentTab = mainWindow.Zotero_Tabs?.selectedType;
-  const paneName = currentTab === "reader" ? "#zotero-context-pane" : "#zotero-item-pane";
+  const paneName =
+    currentTab === "reader" ? "#zotero-context-pane" : "#zotero-item-pane";
   return mainWindow.document.querySelector(paneName) as HTMLElement | null;
 }
 
@@ -174,7 +189,10 @@ function getSplitter(): HTMLElement | null {
     Zotero_Tabs?: { selectedType: string };
   };
   const currentTab = mainWindow.Zotero_Tabs?.selectedType;
-  const splitterName = currentTab === "reader" ? "#zotero-context-splitter" : "#zotero-items-splitter";
+  const splitterName =
+    currentTab === "reader"
+      ? "#zotero-context-splitter"
+      : "#zotero-items-splitter";
   return mainWindow.document.querySelector(splitterName) as HTMLElement | null;
 }
 
@@ -276,7 +294,9 @@ function openFloatingWindow(): void {
   const top = mainWindow.screenY + (mainWindow.outerHeight - height) / 2;
 
   // Open new window using openDialog for better control
-  floatingWindow = (mainWindow as Window & { openDialog: (...args: unknown[]) => Window }).openDialog(
+  floatingWindow = (
+    mainWindow as Window & { openDialog: (...args: unknown[]) => Window }
+  ).openDialog(
     `chrome://${config.addonRef}/content/chatWindow.xhtml`,
     "paperchat-chat-window",
     `chrome,dialog=no,resizable=yes,centerscreen,width=${width},height=${height},left=${left},top=${top}`,
@@ -343,7 +363,9 @@ function initializeFloatingWindowContent(): void {
   floatingContainer.style.border = "none";
 
   // Hide drag bar (window has its own title bar)
-  const dragBar = floatingContainer.querySelector("#chat-drag-bar") as HTMLElement;
+  const dragBar = floatingContainer.querySelector(
+    "#chat-drag-bar",
+  ) as HTMLElement;
   if (dragBar) {
     dragBar.style.display = "none";
   }
@@ -359,7 +381,9 @@ function initializeFloatingWindowContent(): void {
 /**
  * Common initialization logic for chat content (shared between sidebar and floating)
  */
-async function initializeChatContentCommon(container: HTMLElement): Promise<void> {
+async function initializeChatContentCommon(
+  container: HTMLElement,
+): Promise<void> {
   const authManager = getAuthManager();
   const context = createContext(container);
 
@@ -425,23 +449,35 @@ async function refreshChatForContainer(container: HTMLElement): Promise<void> {
   await updatePdfCheckboxVisibilityForItem(container, null, manager);
 
   // Reset checkbox state
-  const attachPdfCheckbox = container.querySelector("#chat-attach-pdf") as HTMLInputElement;
+  const attachPdfCheckbox = container.querySelector(
+    "#chat-attach-pdf",
+  ) as HTMLInputElement;
   if (attachPdfCheckbox) {
     attachPdfCheckbox.checked = false;
   }
 
   // Load and render session
-  const sessionItem = (!itemToUse || itemToUse.id === 0) ? { id: 0 } as Zotero.Item : itemToUse;
+  const sessionItem =
+    !itemToUse || itemToUse.id === 0 ? ({ id: 0 } as Zotero.Item) : itemToUse;
   const session = await manager.getSession(sessionItem);
   manager.setActiveItem(sessionItem.id);
 
   const chatHistory = container.querySelector("#chat-history") as HTMLElement;
-  const emptyState = container.querySelector("#chat-empty-state") as HTMLElement;
+  const emptyState = container.querySelector(
+    "#chat-empty-state",
+  ) as HTMLElement;
   if (chatHistory) {
-    renderMessageElements(chatHistory, emptyState, session.messages, getCurrentTheme());
+    renderMessageElements(
+      chatHistory,
+      emptyState,
+      session.messages,
+      getCurrentTheme(),
+    );
   }
 
-  const messageInput = container.querySelector("#chat-message-input") as HTMLTextAreaElement;
+  const messageInput = container.querySelector(
+    "#chat-message-input",
+  ) as HTMLTextAreaElement;
   messageInput?.focus();
 }
 
@@ -544,7 +580,9 @@ function showSidebarPanel(): void {
   }
 
   // Add sidebar observer
-  const mainWin = win as unknown as { MutationObserver?: typeof MutationObserver };
+  const mainWin = win as unknown as {
+    MutationObserver?: typeof MutationObserver;
+  };
   const MutationObserverClass = mainWin.MutationObserver;
   const sidebar = getSidebar();
   if (!sidebarObserver && MutationObserverClass && sidebar) {
@@ -620,12 +658,21 @@ function hideSidebarPanel(): void {
 /**
  * Setup chat manager callbacks
  */
-function setupChatManagerCallbacks(manager: ChatManager, context: ChatPanelContext, container: HTMLElement): void {
+function setupChatManagerCallbacks(
+  manager: ChatManager,
+  context: ChatPanelContext,
+  container: HTMLElement,
+): void {
   const authManager = getAuthManager();
 
   manager.setCallbacks({
     onMessageUpdate: (itemId, messages) => {
-      ztoolkit.log("onMessageUpdate callback fired, itemId:", itemId, "moduleCurrentItem:", moduleCurrentItem?.id);
+      ztoolkit.log(
+        "onMessageUpdate callback fired, itemId:",
+        itemId,
+        "moduleCurrentItem:",
+        moduleCurrentItem?.id,
+      );
       if (moduleCurrentItem && itemId === moduleCurrentItem.id) {
         context.renderMessages(messages);
       }
@@ -644,10 +691,14 @@ function setupChatManagerCallbacks(manager: ChatManager, context: ChatPanelConte
     },
     onPdfAttached: () => {
       if (container) {
-        const attachPdfCheckbox = container.querySelector("#chat-attach-pdf") as HTMLInputElement;
+        const attachPdfCheckbox = container.querySelector(
+          "#chat-attach-pdf",
+        ) as HTMLInputElement;
         if (attachPdfCheckbox) {
           attachPdfCheckbox.checked = false;
-          ztoolkit.log("[PDF Attach] Checkbox unchecked after successful attachment");
+          ztoolkit.log(
+            "[PDF Attach] Checkbox unchecked after successful attachment",
+          );
         }
       }
     },
@@ -712,7 +763,9 @@ export function hidePanel(): void {
  */
 function updateToolbarButtonState(pressed: boolean): void {
   const doc = Zotero.getMainWindow().document;
-  const button = doc.getElementById(`${config.addonRef}-toolbar-button`) as HTMLElement;
+  const button = doc.getElementById(
+    `${config.addonRef}-toolbar-button`,
+  ) as HTMLElement;
   if (button) {
     if (pressed) {
       button.style.backgroundColor = "var(--fill-quinary)";
@@ -789,7 +842,9 @@ export function registerToolbarButton(): void {
     return;
   }
 
-  const anchor = doc.querySelector("#zotero-tabs-toolbar > .zotero-tb-separator");
+  const anchor = doc.querySelector(
+    "#zotero-tabs-toolbar > .zotero-tb-separator",
+  );
   if (!anchor) {
     ztoolkit.log("Tabs toolbar separator not found");
     return;
@@ -801,7 +856,9 @@ export function registerToolbarButton(): void {
       namespace: "html",
       id: `${config.addonRef}-toolbar-button`,
       attributes: {
-        title: getString("chat-toolbar-button-tooltip" as Parameters<typeof getString>[0]),
+        title: getString(
+          "chat-toolbar-button-tooltip" as Parameters<typeof getString>[0],
+        ),
       },
       styles: {
         backgroundImage: `url(chrome://${config.addonRef}/content/icons/favicon.svg)`,
@@ -823,7 +880,8 @@ export function registerToolbarButton(): void {
         {
           type: "mouseover",
           listener: (e: Event) => {
-            (e.currentTarget as HTMLElement).style.backgroundColor = "var(--fill-quinary)";
+            (e.currentTarget as HTMLElement).style.backgroundColor =
+              "var(--fill-quinary)";
           },
         },
         {
@@ -831,7 +889,8 @@ export function registerToolbarButton(): void {
           listener: (e: Event) => {
             // Keep pressed state if panel is open
             if (!isPanelShown()) {
-              (e.currentTarget as HTMLElement).style.backgroundColor = "transparent";
+              (e.currentTarget as HTMLElement).style.backgroundColor =
+                "transparent";
             }
           },
         },
@@ -881,7 +940,11 @@ function createContext(container: HTMLElement): ChatPanelContext {
       if (!moduleCurrentItem) {
         moduleCurrentItem = getActiveReaderItem();
         if (moduleCurrentItem && container) {
-          updatePdfCheckboxVisibilityForItem(container, moduleCurrentItem, manager);
+          updatePdfCheckboxVisibilityForItem(
+            container,
+            moduleCurrentItem,
+            manager,
+          );
         }
       }
       return moduleCurrentItem;
@@ -921,21 +984,38 @@ function createContext(container: HTMLElement): ChatPanelContext {
     },
     renderMessages: (messages: ChatMessage[]) => {
       if (container) {
-        const chatHistory = container.querySelector("#chat-history") as HTMLElement;
-        const emptyState = container.querySelector("#chat-empty-state") as HTMLElement;
+        const chatHistory = container.querySelector(
+          "#chat-history",
+        ) as HTMLElement;
+        const emptyState = container.querySelector(
+          "#chat-empty-state",
+        ) as HTMLElement;
         if (chatHistory) {
-          renderMessageElements(chatHistory, emptyState, messages, getCurrentTheme());
+          renderMessageElements(
+            chatHistory,
+            emptyState,
+            messages,
+            getCurrentTheme(),
+          );
         }
       }
     },
     appendError: (errorMessage: string) => {
-      ztoolkit.log("[ChatPanel] appendError called:", errorMessage.substring(0, 100));
+      ztoolkit.log(
+        "[ChatPanel] appendError called:",
+        errorMessage.substring(0, 100),
+      );
       ztoolkit.log("[ChatPanel] container:", container ? "exists" : "null");
 
       if (container) {
-        const chatHistory = container.querySelector("#chat-history") as HTMLElement;
+        const chatHistory = container.querySelector(
+          "#chat-history",
+        ) as HTMLElement;
         const doc = container.ownerDocument;
-        ztoolkit.log("[ChatPanel] chatHistory:", chatHistory ? "exists" : "null");
+        ztoolkit.log(
+          "[ChatPanel] chatHistory:",
+          chatHistory ? "exists" : "null",
+        );
         ztoolkit.log("[ChatPanel] doc:", doc ? "exists" : "null");
 
         if (chatHistory && doc) {

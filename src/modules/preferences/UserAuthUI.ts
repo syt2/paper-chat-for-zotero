@@ -15,24 +15,42 @@ type AuthManagerType = ReturnType<typeof getAuthManager>;
 /**
  * Update user status display in preferences
  */
-export function updateUserDisplay(doc: Document, authManager: AuthManagerType): void {
-  const userStatusEl = doc.getElementById("pref-user-status") as HTMLElement | null;
-  const userBalanceEl = doc.getElementById("pref-user-balance") as HTMLElement | null;
+export function updateUserDisplay(
+  doc: Document,
+  authManager: AuthManagerType,
+): void {
+  const userStatusEl = doc.getElementById(
+    "pref-user-status",
+  ) as HTMLElement | null;
+  const userBalanceEl = doc.getElementById(
+    "pref-user-balance",
+  ) as HTMLElement | null;
   const userUsedEl = doc.getElementById("pref-user-used") as HTMLElement | null;
   const loginBtn = doc.getElementById("pref-login-btn") as HTMLElement | null;
-  const getRedeemCodeBtn = doc.getElementById("pref-get-redeem-code-btn") as HTMLElement | null;
+  const getRedeemCodeBtn = doc.getElementById(
+    "pref-get-redeem-code-btn",
+  ) as HTMLElement | null;
 
   if (authManager.isLoggedIn()) {
     const user = authManager.getUser();
     if (userStatusEl) {
-      userStatusEl.setAttribute("value", `${getString("user-panel-logged-in", { args: { username: user?.username || "" } })}`);
+      userStatusEl.setAttribute(
+        "value",
+        `${getString("user-panel-logged-in", { args: { username: user?.username || "" } })}`,
+      );
       userStatusEl.style.color = prefColors.userLoggedIn;
     }
     if (userBalanceEl) {
-      userBalanceEl.setAttribute("value", `${getString("user-panel-balance")}: ${authManager.formatBalance()}`);
+      userBalanceEl.setAttribute(
+        "value",
+        `${getString("user-panel-balance")}: ${authManager.formatBalance()}`,
+      );
     }
     if (userUsedEl) {
-      userUsedEl.setAttribute("value", `${getString("user-panel-used")}: ${authManager.formatUsedQuota()}`);
+      userUsedEl.setAttribute(
+        "value",
+        `${getString("user-panel-used")}: ${authManager.formatUsedQuota()}`,
+      );
     }
     if (loginBtn) {
       loginBtn.setAttribute("label", getString("user-panel-logout-btn"));
@@ -88,7 +106,9 @@ export function bindUserAuthEvents(
 
   // Redeem button
   const redeemBtn = doc.getElementById("pref-redeem-btn");
-  const redeemInput = doc.getElementById("pref-redeem-code") as HTMLInputElement;
+  const redeemInput = doc.getElementById(
+    "pref-redeem-code",
+  ) as HTMLInputElement;
 
   redeemBtn?.addEventListener("click", async () => {
     const code = redeemInput?.value?.trim();

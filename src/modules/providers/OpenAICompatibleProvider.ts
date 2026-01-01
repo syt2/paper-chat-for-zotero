@@ -23,7 +23,10 @@ export class OpenAICompatibleProvider extends BaseProvider {
       const apiMessages = this.formatOpenAIMessages(messages, pdfAttachment);
 
       if (this._config.systemPrompt) {
-        apiMessages.unshift({ role: "system", content: this._config.systemPrompt });
+        apiMessages.unshift({
+          role: "system",
+          content: this._config.systemPrompt,
+        });
       }
 
       const requestBody: Record<string, unknown> = {
@@ -60,7 +63,10 @@ export class OpenAICompatibleProvider extends BaseProvider {
     const apiMessages = this.formatOpenAIMessages(messages);
 
     if (this._config.systemPrompt) {
-      apiMessages.unshift({ role: "system", content: this._config.systemPrompt });
+      apiMessages.unshift({
+        role: "system",
+        content: this._config.systemPrompt,
+      });
     }
 
     const requestBody: Record<string, unknown> = {
@@ -107,7 +113,9 @@ export class OpenAICompatibleProvider extends BaseProvider {
         headers: { Authorization: `Bearer ${this._config.apiKey}` },
       });
       if (response.ok) {
-        const data = (await response.json()) as { data?: Array<{ id: string }> };
+        const data = (await response.json()) as {
+          data?: Array<{ id: string }>;
+        };
         return data.data?.map((m) => m.id) || [];
       }
     } catch {

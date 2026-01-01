@@ -18,45 +18,48 @@ export interface SSEParserCallbacks {
 /**
  * Content extractors for different API formats
  */
-const contentExtractors: Record<SSEFormat, (parsed: unknown) => string | null> = {
-  openai: (parsed) => {
-    const data = parsed as { choices?: Array<{ delta?: { content?: string } }> };
-    return data.choices?.[0]?.delta?.content || null;
-  },
+const contentExtractors: Record<SSEFormat, (parsed: unknown) => string | null> =
+  {
+    openai: (parsed) => {
+      const data = parsed as {
+        choices?: Array<{ delta?: { content?: string } }>;
+      };
+      return data.choices?.[0]?.delta?.content || null;
+    },
 
-  anthropic: (parsed) => {
-    const data = parsed as {
-      type?: string;
-      delta?: { text?: string };
-      error?: { message?: string };
-    };
-    // Handle errors
-    if (data.type === "error") {
-      throw new Error(data.error?.message || "Unknown Anthropic error");
-    }
-    // Only extract text from content_block_delta events
-    if (data.type === "content_block_delta") {
-      return data.delta?.text || null;
-    }
-    return null;
-  },
+    anthropic: (parsed) => {
+      const data = parsed as {
+        type?: string;
+        delta?: { text?: string };
+        error?: { message?: string };
+      };
+      // Handle errors
+      if (data.type === "error") {
+        throw new Error(data.error?.message || "Unknown Anthropic error");
+      }
+      // Only extract text from content_block_delta events
+      if (data.type === "content_block_delta") {
+        return data.delta?.text || null;
+      }
+      return null;
+    },
 
-  gemini: (parsed) => {
-    const data = parsed as {
-      candidates?: Array<{
-        content?: {
-          parts?: Array<{ text?: string }>;
-        };
-      }>;
-      error?: { message?: string };
-    };
-    // Handle errors
-    if (data.error) {
-      throw new Error(data.error.message || "Unknown Gemini error");
-    }
-    return data.candidates?.[0]?.content?.parts?.[0]?.text || null;
-  },
-};
+    gemini: (parsed) => {
+      const data = parsed as {
+        candidates?: Array<{
+          content?: {
+            parts?: Array<{ text?: string }>;
+          };
+        }>;
+        error?: { message?: string };
+      };
+      // Handle errors
+      if (data.error) {
+        throw new Error(data.error.message || "Unknown Gemini error");
+      }
+      return data.candidates?.[0]?.content?.parts?.[0]?.text || null;
+    },
+  };
 
 /**
  * Parse SSE stream with unified handling for different API formats
@@ -100,7 +103,10 @@ export async function parseSSEStream(
           }
         } catch (extractError) {
           // If extractor threw an error (not JSON parse error), propagate it
-          if (extractError instanceof Error && extractError.message !== "Unexpected end of JSON input") {
+          if (
+            extractError instanceof Error &&
+            extractError.message !== "Unexpected end of JSON input"
+          ) {
             if (onError) {
               onError(extractError);
             }

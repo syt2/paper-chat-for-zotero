@@ -48,7 +48,7 @@ export interface ApiConfig {
   maxTokens?: number;
   temperature?: number;
   systemPrompt?: string;
-  providerId?: string;   // Reference to provider config
+  providerId?: string; // Reference to provider config
   providerType?: string; // Type of provider for format selection
 }
 
@@ -61,8 +61,14 @@ export interface OpenAIMessage {
 // OpenAI消息内容 (Vision API and File API)
 export type OpenAIMessageContent =
   | { type: "text"; text: string }
-  | { type: "image_url"; image_url: { url: string; detail?: "low" | "high" | "auto" } }
-  | { type: "document"; source: { type: "base64"; media_type: string; data: string } };
+  | {
+      type: "image_url";
+      image_url: { url: string; detail?: "low" | "high" | "auto" };
+    }
+  | {
+      type: "document";
+      source: { type: "base64"; media_type: string; data: string };
+    };
 
 // 流式响应回调
 export interface StreamCallbacks {

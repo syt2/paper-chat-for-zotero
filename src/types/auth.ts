@@ -86,7 +86,7 @@ export interface CreateTokenRequest {
  * 兑换码请求
  */
 export interface TopUpRequest {
-  key: string;  // 兑换码
+  key: string; // 兑换码
 }
 
 /**

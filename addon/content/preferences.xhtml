@@ -4,87 +4,142 @@
 <groupbox
   onload="Zotero.__addonInstance__.hooks.onPrefsEvent('load', { window })"
 >
-
   <!-- Main layout: Sidebar + Content -->
-  <hbox flex="1" style="min-height: 400px;">
-
+  <hbox flex="1" style="min-height: 400px">
     <!-- Provider Sidebar -->
-    <vbox style="width: 140px; border-right: 1px solid #ddd; padding-right: 8px;">
+    <vbox
+      style="width: 140px; border-right: 1px solid #ddd; padding-right: 8px"
+    >
       <label><html:h3 data-l10n-id="pref-providers"></html:h3></label>
 
-      <vbox id="pref-provider-list" style="margin-top: 8px;">
+      <vbox id="pref-provider-list" style="margin-top: 8px">
         <!-- Provider items will be populated by JS -->
       </vbox>
 
       <!-- Add Custom Provider Button -->
-      <button id="pref-add-provider-btn" data-l10n-id="pref-add-provider" style="margin-top: 12px;"></button>
+      <button
+        id="pref-add-provider-btn"
+        data-l10n-id="pref-add-provider"
+        style="margin-top: 12px"
+      ></button>
     </vbox>
 
     <!-- Provider Content Panel -->
-    <vbox flex="1" style="padding-left: 16px;">
-
+    <vbox flex="1" style="padding-left: 16px">
       <!-- PaperChat Panel (Login-based) -->
       <vbox id="pref-panel-paperchat" class="provider-panel">
         <label><html:h3 data-l10n-id="pref-paperchat-title"></html:h3></label>
-        <label data-l10n-id="pref-paperchat-description" style="margin-bottom: 12px; color: #666;"></label>
+        <label
+          data-l10n-id="pref-paperchat-description"
+          style="margin-bottom: 12px; color: #666"
+        ></label>
 
-        <hbox id="pref-user-bar" align="center" pack="start" style="margin-bottom: 12px; padding: 12px; border-radius: 6px; border: 1px solid var(--color-border, #ddd);">
+        <hbox
+          id="pref-user-bar"
+          align="center"
+          pack="start"
+          style="
+            margin-bottom: 12px;
+            padding: 12px;
+            border-radius: 6px;
+            border: 1px solid var(--color-border, #ddd);
+          "
+        >
           <vbox flex="1">
-            <label id="pref-user-status" style="font-weight: bold;"></label>
-            <label id="pref-user-balance" style="font-size: 12px; opacity: 0.8;"></label>
-            <label id="pref-user-used" style="font-size: 12px; opacity: 0.6;"></label>
+            <label id="pref-user-status" style="font-weight: bold"></label>
+            <label
+              id="pref-user-balance"
+              style="font-size: 12px; opacity: 0.8"
+            ></label>
+            <label
+              id="pref-user-used"
+              style="font-size: 12px; opacity: 0.6"
+            ></label>
           </vbox>
-          <button id="pref-login-btn" style="margin-left: 12px;"></button>
+          <button id="pref-login-btn" style="margin-left: 12px"></button>
         </hbox>
 
         <!-- Redemption Code -->
-        <hbox align="center" style="margin-bottom: 8px;">
-          <label for="pref-redeem-code" data-l10n-id="pref-redeem-label" style="width: 70px; text-align: right;"></label>
+        <hbox align="center" style="margin-bottom: 8px">
+          <label
+            for="pref-redeem-code"
+            data-l10n-id="pref-redeem-label"
+            style="width: 70px; text-align: right"
+          ></label>
           <html:input
             type="text"
             id="pref-redeem-code"
             data-l10n-id="pref-redeem-placeholder"
-            style="flex: 1; margin: 0 8px; min-width: 120px;"
+            style="flex: 1; margin: 0 8px; min-width: 120px"
           ></html:input>
           <button id="pref-redeem-btn" data-l10n-id="pref-redeem-btn"></button>
-          <button id="pref-get-redeem-code-btn" data-l10n-id="pref-get-redeem-code" style="margin-left: 8px; display: none;"></button>
+          <button
+            id="pref-get-redeem-code-btn"
+            data-l10n-id="pref-get-redeem-code"
+            style="margin-left: 8px; display: none"
+          ></button>
         </hbox>
-        <label id="pref-redeem-message" style="margin-left: 78px; font-size: 12px;"></label>
+        <label
+          id="pref-redeem-message"
+          style="margin-left: 78px; font-size: 12px"
+        ></label>
 
         <!-- PaperChat Model Selection -->
-        <hbox align="center" style="margin-top: 16px; margin-bottom: 8px;">
-          <label for="pref-paperchat-model" data-l10n-id="pref-model" style="width: 70px; text-align: right;"></label>
-          <menulist id="pref-paperchat-model" style="flex: 1; margin-left: 8px; min-width: 150px;">
+        <hbox align="center" style="margin-top: 16px; margin-bottom: 8px">
+          <label
+            for="pref-paperchat-model"
+            data-l10n-id="pref-model"
+            style="width: 70px; text-align: right"
+          ></label>
+          <menulist
+            id="pref-paperchat-model"
+            style="flex: 1; margin-left: 8px; min-width: 150px"
+          >
             <menupopup id="pref-paperchat-model-popup">
               <!-- Models populated by JS -->
             </menupopup>
           </menulist>
-          <button id="pref-paperchat-refresh-models" data-l10n-id="pref-refresh-models" style="margin-left: 8px;"></button>
+          <button
+            id="pref-paperchat-refresh-models"
+            data-l10n-id="pref-refresh-models"
+            style="margin-left: 8px"
+          ></button>
         </hbox>
 
         <!-- Advanced Options (Collapsible) -->
-        <html:details style="margin-top: 12px; margin-bottom: 12px;">
-          <html:summary data-l10n-id="pref-advanced-options" style="cursor: pointer; font-weight: bold; margin-bottom: 8px;"></html:summary>
+        <html:details style="margin-top: 12px; margin-bottom: 12px">
+          <html:summary
+            data-l10n-id="pref-advanced-options"
+            style="cursor: pointer; font-weight: bold; margin-bottom: 8px"
+          ></html:summary>
 
           <!-- PaperChat Max Tokens -->
-          <hbox align="center" style="margin-bottom: 8px; margin-left: 12px;">
-            <label for="pref-paperchat-maxtokens" data-l10n-id="pref-max-tokens" style="width: 70px; text-align: right;"></label>
+          <hbox align="center" style="margin-bottom: 8px; margin-left: 12px">
+            <label
+              for="pref-paperchat-maxtokens"
+              data-l10n-id="pref-max-tokens"
+              style="width: 70px; text-align: right"
+            ></label>
             <html:input
               type="number"
               id="pref-paperchat-maxtokens"
-              style="width: 100px; margin-left: 8px;"
+              style="width: 100px; margin-left: 8px"
               min="256"
               max="128000"
             ></html:input>
           </hbox>
 
           <!-- PaperChat Temperature -->
-          <hbox align="center" style="margin-bottom: 8px; margin-left: 12px;">
-            <label for="pref-paperchat-temperature" data-l10n-id="pref-temperature" style="width: 70px; text-align: right;"></label>
+          <hbox align="center" style="margin-bottom: 8px; margin-left: 12px">
+            <label
+              for="pref-paperchat-temperature"
+              data-l10n-id="pref-temperature"
+              style="width: 70px; text-align: right"
+            ></label>
             <html:input
               type="number"
               id="pref-paperchat-temperature"
-              style="width: 80px; margin-left: 8px;"
+              style="width: 80px; margin-left: 8px"
               min="0"
               max="2"
               step="0.1"
@@ -92,94 +147,162 @@
           </hbox>
 
           <!-- PaperChat System Prompt -->
-          <hbox align="start" style="margin-bottom: 8px; margin-left: 12px;">
-            <label for="pref-paperchat-systemprompt" data-l10n-id="pref-system-prompt" style="width: 70px; text-align: right; margin-top: 4px;"></label>
+          <hbox align="start" style="margin-bottom: 8px; margin-left: 12px">
+            <label
+              for="pref-paperchat-systemprompt"
+              data-l10n-id="pref-system-prompt"
+              style="width: 70px; text-align: right; margin-top: 4px"
+            ></label>
             <html:textarea
               id="pref-paperchat-systemprompt"
-              style="flex: 1; height: 60px; margin-left: 8px; min-width: 200px;"
+              style="flex: 1; height: 60px; margin-left: 8px; min-width: 200px"
             ></html:textarea>
           </hbox>
         </html:details>
 
         <!-- Official Website Link -->
-        <hbox align="center" style="margin-top: 16px; justify-content: center;">
-          <html:a id="pref-paperchat-website" href="#" style="color: #0078d4; cursor: pointer; text-decoration: none;">
-            <label data-l10n-id="pref-official-website" style="color: #0078d4; cursor: pointer;"></label>
+        <hbox align="center" style="margin-top: 16px; justify-content: center">
+          <html:a
+            id="pref-paperchat-website"
+            href="#"
+            style="color: #0078d4; cursor: pointer; text-decoration: none"
+          >
+            <label
+              data-l10n-id="pref-official-website"
+              style="color: #0078d4; cursor: pointer"
+            ></label>
           </html:a>
         </hbox>
       </vbox>
 
       <!-- API Key Provider Panel Template (used for OpenAI, Claude, Gemini, etc.) -->
       <vbox id="pref-panel-apikey" class="provider-panel" hidden="true">
-        <label id="pref-provider-title" style="font-size: 16px; font-weight: bold; margin-bottom: 8px;"></label>
-        <label id="pref-provider-description" style="margin-bottom: 12px; opacity: 0.7;"></label>
+        <label
+          id="pref-provider-title"
+          style="font-size: 16px; font-weight: bold; margin-bottom: 8px"
+        ></label>
+        <label
+          id="pref-provider-description"
+          style="margin-bottom: 12px; opacity: 0.7"
+        ></label>
 
         <!-- API Key -->
-        <hbox align="center" style="margin-bottom: 8px;">
-          <label for="pref-provider-apikey" data-l10n-id="pref-api-key" style="width: 70px; text-align: right;"></label>
+        <hbox align="center" style="margin-bottom: 8px">
+          <label
+            for="pref-provider-apikey"
+            data-l10n-id="pref-api-key"
+            style="width: 70px; text-align: right"
+          ></label>
           <html:input
             type="password"
             id="pref-provider-apikey"
-            style="flex: 1; margin-left: 8px; min-width: 150px;"
+            style="flex: 1; margin-left: 8px; min-width: 150px"
           ></html:input>
-          <button id="pref-toggle-apikey" data-l10n-id="pref-show-key" style="margin-left: 8px;"></button>
+          <button
+            id="pref-toggle-apikey"
+            data-l10n-id="pref-show-key"
+            style="margin-left: 8px"
+          ></button>
         </hbox>
 
         <!-- Base URL -->
-        <hbox align="center" style="margin-bottom: 8px;">
-          <label for="pref-provider-baseurl" data-l10n-id="pref-base-url" style="width: 70px; text-align: right;"></label>
+        <hbox align="center" style="margin-bottom: 8px">
+          <label
+            for="pref-provider-baseurl"
+            data-l10n-id="pref-base-url"
+            style="width: 70px; text-align: right"
+          ></label>
           <html:input
             type="text"
             id="pref-provider-baseurl"
-            style="flex: 1; margin-left: 8px; min-width: 150px;"
+            style="flex: 1; margin-left: 8px; min-width: 150px"
           ></html:input>
         </hbox>
 
         <!-- Model Selection -->
-        <hbox align="center" style="margin-bottom: 8px;">
-          <label for="pref-provider-model" data-l10n-id="pref-model" style="width: 70px; text-align: right;"></label>
-          <menulist id="pref-provider-model" style="flex: 1; margin-left: 8px; min-width: 120px;">
+        <hbox align="center" style="margin-bottom: 8px">
+          <label
+            for="pref-provider-model"
+            data-l10n-id="pref-model"
+            style="width: 70px; text-align: right"
+          ></label>
+          <menulist
+            id="pref-provider-model"
+            style="flex: 1; margin-left: 8px; min-width: 120px"
+          >
             <menupopup id="pref-provider-model-popup">
               <!-- Models populated by JS -->
             </menupopup>
           </menulist>
-          <button id="pref-refresh-models" data-l10n-id="pref-refresh-models" style="margin-left: 8px;"></button>
+          <button
+            id="pref-refresh-models"
+            data-l10n-id="pref-refresh-models"
+            style="margin-left: 8px"
+          ></button>
         </hbox>
 
         <!-- Model List -->
-        <vbox style="margin-top: 12px; margin-bottom: 8px;">
-          <hbox align="center" style="margin-bottom: 8px;">
-            <label data-l10n-id="pref-model-list" style="width: 70px; text-align: right; font-weight: bold;"></label>
-            <button id="pref-add-model-btn" data-l10n-id="pref-add-model" style="margin-left: 8px;"></button>
+        <vbox style="margin-top: 12px; margin-bottom: 8px">
+          <hbox align="center" style="margin-bottom: 8px">
+            <label
+              data-l10n-id="pref-model-list"
+              style="width: 70px; text-align: right; font-weight: bold"
+            ></label>
+            <button
+              id="pref-add-model-btn"
+              data-l10n-id="pref-add-model"
+              style="margin-left: 8px"
+            ></button>
           </hbox>
-          <vbox id="pref-model-list" style="margin-left: 78px; max-height: 120px; overflow-y: auto; border: 1px solid var(--color-border, #ddd); border-radius: 4px; padding: 4px;">
+          <vbox
+            id="pref-model-list"
+            style="
+              margin-left: 78px;
+              max-height: 120px;
+              overflow-y: auto;
+              border: 1px solid var(--color-border, #ddd);
+              border-radius: 4px;
+              padding: 4px;
+            "
+          >
             <!-- Model list populated by JS -->
           </vbox>
         </vbox>
 
         <!-- Advanced Options (Collapsible) -->
-        <html:details style="margin-top: 12px; margin-bottom: 12px;">
-          <html:summary data-l10n-id="pref-advanced-options" style="cursor: pointer; font-weight: bold; margin-bottom: 8px;"></html:summary>
+        <html:details style="margin-top: 12px; margin-bottom: 12px">
+          <html:summary
+            data-l10n-id="pref-advanced-options"
+            style="cursor: pointer; font-weight: bold; margin-bottom: 8px"
+          ></html:summary>
 
           <!-- Max Tokens -->
-          <hbox align="center" style="margin-bottom: 8px; margin-left: 12px;">
-            <label for="pref-provider-maxtokens" data-l10n-id="pref-max-tokens" style="width: 70px; text-align: right;"></label>
+          <hbox align="center" style="margin-bottom: 8px; margin-left: 12px">
+            <label
+              for="pref-provider-maxtokens"
+              data-l10n-id="pref-max-tokens"
+              style="width: 70px; text-align: right"
+            ></label>
             <html:input
               type="number"
               id="pref-provider-maxtokens"
-              style="width: 100px; margin-left: 8px;"
+              style="width: 100px; margin-left: 8px"
               min="256"
               max="128000"
             ></html:input>
           </hbox>
 
           <!-- Temperature -->
-          <hbox align="center" style="margin-bottom: 8px; margin-left: 12px;">
-            <label for="pref-provider-temperature" data-l10n-id="pref-temperature" style="width: 70px; text-align: right;"></label>
+          <hbox align="center" style="margin-bottom: 8px; margin-left: 12px">
+            <label
+              for="pref-provider-temperature"
+              data-l10n-id="pref-temperature"
+              style="width: 70px; text-align: right"
+            ></label>
             <html:input
               type="number"
               id="pref-provider-temperature"
-              style="width: 80px; margin-left: 8px;"
+              style="width: 80px; margin-left: 8px"
               min="0"
               max="2"
               step="0.1"
@@ -187,33 +310,49 @@
           </hbox>
 
           <!-- System Prompt -->
-          <hbox align="start" style="margin-bottom: 8px; margin-left: 12px;">
-            <label for="pref-provider-systemprompt" data-l10n-id="pref-system-prompt" style="width: 70px; text-align: right; margin-top: 4px;"></label>
+          <hbox align="start" style="margin-bottom: 8px; margin-left: 12px">
+            <label
+              for="pref-provider-systemprompt"
+              data-l10n-id="pref-system-prompt"
+              style="width: 70px; text-align: right; margin-top: 4px"
+            ></label>
             <html:textarea
               id="pref-provider-systemprompt"
-              style="flex: 1; height: 60px; margin-left: 8px; min-width: 200px;"
+              style="flex: 1; height: 60px; margin-left: 8px; min-width: 200px"
             ></html:textarea>
           </hbox>
         </html:details>
 
         <!-- Test Connection & Delete -->
-        <hbox align="center" style="margin-top: 16px;">
-          <button id="pref-test-connection" data-l10n-id="pref-test-connection" style="text-align: center;"></button>
-          <label id="pref-test-result" style="margin-left: 12px;"></label>
+        <hbox align="center" style="margin-top: 16px">
+          <button
+            id="pref-test-connection"
+            data-l10n-id="pref-test-connection"
+            style="text-align: center"
+          ></button>
+          <label id="pref-test-result" style="margin-left: 12px"></label>
           <spacer flex="1" />
-          <button id="pref-delete-provider" data-l10n-id="pref-delete-provider" hidden="true" style="color: #c00;"></button>
+          <button
+            id="pref-delete-provider"
+            data-l10n-id="pref-delete-provider"
+            hidden="true"
+            style="color: #c00"
+          ></button>
         </hbox>
       </vbox>
-
     </vbox>
   </hbox>
 
   <!-- Active Provider Selection -->
-  <groupbox style="margin-top: 16px;">
+  <groupbox style="margin-top: 16px">
     <label><html:h3 data-l10n-id="pref-active-provider"></html:h3></label>
     <hbox align="center">
-      <label for="pref-active-provider-select" data-l10n-id="pref-current-provider" style="margin-right: 8px;"></label>
-      <menulist id="pref-active-provider-select" style="width: 200px;">
+      <label
+        for="pref-active-provider-select"
+        data-l10n-id="pref-current-provider"
+        style="margin-right: 8px"
+      ></label>
+      <menulist id="pref-active-provider-select" style="width: 200px">
         <menupopup id="pref-active-provider-popup">
           <!-- Populated by JS -->
         </menupopup>
@@ -222,12 +361,18 @@
   </groupbox>
 
   <!-- PDF Settings -->
-  <groupbox style="margin-top: 16px;">
+  <groupbox style="margin-top: 16px">
     <label><html:h3 data-l10n-id="pref-pdf-settings"></html:h3></label>
     <hbox align="center">
-      <label data-l10n-id="pref-upload-raw-pdf" style="margin-right: 8px;"></label>
+      <label
+        data-l10n-id="pref-upload-raw-pdf"
+        style="margin-right: 8px"
+      ></label>
       <checkbox id="pref-upload-raw-pdf-checkbox" />
     </hbox>
-    <label data-l10n-id="pref-upload-raw-pdf-desc" style="font-size: 11px; color: #666; margin-top: 4px; margin-left: 2px;"></label>
+    <label
+      data-l10n-id="pref-upload-raw-pdf-desc"
+      style="font-size: 11px; color: #666; margin-top: 4px; margin-left: 2px"
+    ></label>
   </groupbox>
 </groupbox>

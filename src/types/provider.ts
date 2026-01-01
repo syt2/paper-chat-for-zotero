@@ -7,30 +7,34 @@ import type { ChatMessage, StreamCallbacks } from "./chat";
 /**
  * Model capabilities
  */
-export type ModelCapability = "vision" | "reasoning" | "tool_use" | "web_search";
+export type ModelCapability =
+  | "vision"
+  | "reasoning"
+  | "tool_use"
+  | "web_search";
 
 /**
  * Model information with metadata
  */
 export interface ModelInfo {
   modelId: string;
-  nickname?: string;           // Display name (optional)
-  contextWindow?: number;      // Context window size
-  maxOutput?: number;          // Max output tokens
+  nickname?: string; // Display name (optional)
+  contextWindow?: number; // Context window size
+  maxOutput?: number; // Max output tokens
   capabilities?: ModelCapability[]; // Model capabilities
-  isCustom?: boolean;          // User-added custom model
+  isCustom?: boolean; // User-added custom model
 }
 
 /**
  * Supported provider types
  */
 export type ProviderType =
-  | "paperchat"         // PaperChat login-based system
-  | "openai"            // Native OpenAI API
-  | "anthropic"         // Anthropic Claude API (different format)
-  | "gemini"            // Google Gemini API (different format)
+  | "paperchat" // PaperChat login-based system
+  | "openai" // Native OpenAI API
+  | "anthropic" // Anthropic Claude API (different format)
+  | "gemini" // Google Gemini API (different format)
   | "openai-compatible" // DeepSeek, Mistral, Groq, OpenRouter
-  | "custom";           // User-defined OpenAI-compatible
+  | "custom"; // User-defined OpenAI-compatible
 
 /**
  * Provider identifier for built-in providers
@@ -77,8 +81,8 @@ export interface ApiKeyProviderConfig extends BaseProviderConfig {
   apiKey: string;
   baseUrl: string;
   defaultModel: string;
-  availableModels: string[];   // Model ID list
-  models?: ModelInfo[];        // Detailed model info (optional)
+  availableModels: string[]; // Model ID list
+  models?: ModelInfo[]; // Detailed model info (optional)
   maxTokens?: number;
   temperature?: number;
   systemPrompt?: string;
@@ -97,7 +101,7 @@ export interface ProviderMetadata {
   name: string;
   description: string;
   defaultBaseUrl: string;
-  defaultModels: string[];        // Model ID list
+  defaultModels: string[]; // Model ID list
   defaultModelInfos: ModelInfo[]; // Detailed model info
   website: string;
   type: ProviderType;
@@ -149,7 +153,7 @@ export interface GeminiPart {
  * PDF attachment for providers that support PDF upload
  */
 export interface PdfAttachment {
-  data: string;  // base64 encoded
+  data: string; // base64 encoded
   mimeType: string;
   name: string;
 }

@@ -13,7 +13,9 @@ import { clearElement } from "./utils";
  */
 export function populatePaperchatPanel(doc: Document): void {
   const providerManager = getProviderManager();
-  const config = providerManager.getProviderConfig("paperchat") as PaperChatProviderConfig;
+  const config = providerManager.getProviderConfig(
+    "paperchat",
+  ) as PaperChatProviderConfig;
 
   if (!config) return;
 
@@ -21,9 +23,15 @@ export function populatePaperchatPanel(doc: Document): void {
   populatePaperchatModels(doc);
 
   // Populate other settings
-  const maxTokensEl = doc.getElementById("pref-paperchat-maxtokens") as HTMLInputElement;
-  const temperatureEl = doc.getElementById("pref-paperchat-temperature") as HTMLInputElement;
-  const systemPromptEl = doc.getElementById("pref-paperchat-systemprompt") as HTMLTextAreaElement;
+  const maxTokensEl = doc.getElementById(
+    "pref-paperchat-maxtokens",
+  ) as HTMLInputElement;
+  const temperatureEl = doc.getElementById(
+    "pref-paperchat-temperature",
+  ) as HTMLInputElement;
+  const systemPromptEl = doc.getElementById(
+    "pref-paperchat-systemprompt",
+  ) as HTMLTextAreaElement;
 
   if (maxTokensEl) maxTokensEl.value = String(config.maxTokens || 4096);
   if (temperatureEl) temperatureEl.value = String(config.temperature ?? 0.7);
@@ -33,10 +41,18 @@ export function populatePaperchatPanel(doc: Document): void {
 /**
  * Populate PaperChat model dropdown from cache, defaults, or API response
  */
-export function populatePaperchatModels(doc: Document, models?: string[], saveToCache: boolean = false): void {
+export function populatePaperchatModels(
+  doc: Document,
+  models?: string[],
+  saveToCache: boolean = false,
+): void {
   const providerManager = getProviderManager();
-  const config = providerManager.getProviderConfig("paperchat") as PaperChatProviderConfig;
-  const modelSelect = doc.getElementById("pref-paperchat-model") as unknown as XULMenuListElement;
+  const config = providerManager.getProviderConfig(
+    "paperchat",
+  ) as PaperChatProviderConfig;
+  const modelSelect = doc.getElementById(
+    "pref-paperchat-model",
+  ) as unknown as XULMenuListElement;
   const modelPopup = doc.getElementById("pref-paperchat-model-popup");
 
   if (!modelSelect || !modelPopup) return;
@@ -70,7 +86,9 @@ export function populatePaperchatModels(doc: Document, models?: string[], saveTo
   // Save to cache and provider config if requested
   if (saveToCache && models) {
     setPref("paperchatModelsCache", JSON.stringify(models));
-    providerManager.updateProviderConfig("paperchat", { availableModels: models });
+    providerManager.updateProviderConfig("paperchat", {
+      availableModels: models,
+    });
   }
 
   modelList.forEach((model) => {
@@ -91,10 +109,18 @@ export function populatePaperchatModels(doc: Document, models?: string[], saveTo
 export function savePaperchatConfig(doc: Document): void {
   const providerManager = getProviderManager();
 
-  const modelSelect = doc.getElementById("pref-paperchat-model") as unknown as XULMenuListElement;
-  const maxTokensEl = doc.getElementById("pref-paperchat-maxtokens") as HTMLInputElement;
-  const temperatureEl = doc.getElementById("pref-paperchat-temperature") as HTMLInputElement;
-  const systemPromptEl = doc.getElementById("pref-paperchat-systemprompt") as HTMLTextAreaElement;
+  const modelSelect = doc.getElementById(
+    "pref-paperchat-model",
+  ) as unknown as XULMenuListElement;
+  const maxTokensEl = doc.getElementById(
+    "pref-paperchat-maxtokens",
+  ) as HTMLInputElement;
+  const temperatureEl = doc.getElementById(
+    "pref-paperchat-temperature",
+  ) as HTMLInputElement;
+  const systemPromptEl = doc.getElementById(
+    "pref-paperchat-systemprompt",
+  ) as HTMLTextAreaElement;
 
   const updates: Partial<PaperChatProviderConfig> = {
     defaultModel: modelSelect?.value || "",
@@ -114,26 +140,45 @@ export function bindPaperchatEvents(
   onRefreshModels: () => Promise<void>,
 ): void {
   // PaperChat model selection - save to provider config
-  const paperchatModelSelect = doc.getElementById("pref-paperchat-model") as unknown as XULMenuListElement;
+  const paperchatModelSelect = doc.getElementById(
+    "pref-paperchat-model",
+  ) as unknown as XULMenuListElement;
   paperchatModelSelect?.addEventListener("command", () => {
     savePaperchatConfig(doc);
   });
 
   // PaperChat max tokens
-  const paperchatMaxTokensInput = doc.getElementById("pref-paperchat-maxtokens") as HTMLInputElement;
-  paperchatMaxTokensInput?.addEventListener("blur", () => savePaperchatConfig(doc));
+  const paperchatMaxTokensInput = doc.getElementById(
+    "pref-paperchat-maxtokens",
+  ) as HTMLInputElement;
+  paperchatMaxTokensInput?.addEventListener("blur", () =>
+    savePaperchatConfig(doc),
+  );
 
   // PaperChat temperature
-  const paperchatTemperatureInput = doc.getElementById("pref-paperchat-temperature") as HTMLInputElement;
-  paperchatTemperatureInput?.addEventListener("blur", () => savePaperchatConfig(doc));
+  const paperchatTemperatureInput = doc.getElementById(
+    "pref-paperchat-temperature",
+  ) as HTMLInputElement;
+  paperchatTemperatureInput?.addEventListener("blur", () =>
+    savePaperchatConfig(doc),
+  );
 
   // PaperChat system prompt
-  const paperchatSystemPromptInput = doc.getElementById("pref-paperchat-systemprompt") as HTMLTextAreaElement;
-  paperchatSystemPromptInput?.addEventListener("blur", () => savePaperchatConfig(doc));
+  const paperchatSystemPromptInput = doc.getElementById(
+    "pref-paperchat-systemprompt",
+  ) as HTMLTextAreaElement;
+  paperchatSystemPromptInput?.addEventListener("blur", () =>
+    savePaperchatConfig(doc),
+  );
 
   // PaperChat refresh models button
-  const paperchatRefreshBtn = doc.getElementById("pref-paperchat-refresh-models");
-  ztoolkit.log("[Preferences] paperchatRefreshBtn element:", paperchatRefreshBtn ? "found" : "NOT FOUND");
+  const paperchatRefreshBtn = doc.getElementById(
+    "pref-paperchat-refresh-models",
+  );
+  ztoolkit.log(
+    "[Preferences] paperchatRefreshBtn element:",
+    paperchatRefreshBtn ? "found" : "NOT FOUND",
+  );
   paperchatRefreshBtn?.addEventListener("click", async () => {
     ztoolkit.log("[Preferences] Refresh models button clicked");
     await onRefreshModels();

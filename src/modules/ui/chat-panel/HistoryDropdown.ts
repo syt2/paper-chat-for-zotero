@@ -113,7 +113,9 @@ export function createSessionItem(
   });
 
   const msgCount = createElement(doc, "span", {});
-  msgCount.textContent = getString("chat-message-count", { args: { count: session.messageCount } });
+  msgCount.textContent = getString("chat-message-count", {
+    args: { count: session.messageCount },
+  });
 
   const timeEl = createElement(doc, "span", {});
   const date = new Date(session.lastUpdated);
@@ -175,7 +177,10 @@ export function renderMoreSessions(
   onSelect: (session: SessionInfo) => void,
   onDelete?: (session: SessionInfo) => void,
 ): void {
-  const endIndex = Math.min(state.displayedCount + SESSIONS_PER_PAGE, state.allSessions.length);
+  const endIndex = Math.min(
+    state.displayedCount + SESSIONS_PER_PAGE,
+    state.allSessions.length,
+  );
 
   // Remove existing "load more" button if any
   const existingLoadMore = container.querySelector(".load-more-btn");
@@ -185,7 +190,9 @@ export function renderMoreSessions(
 
   // Add session items
   for (let i = state.displayedCount; i < endIndex; i++) {
-    container.appendChild(createSessionItem(doc, state.allSessions[i], theme, onSelect, onDelete));
+    container.appendChild(
+      createSessionItem(doc, state.allSessions[i], theme, onSelect, onDelete),
+    );
   }
   state.displayedCount = endIndex;
 
@@ -200,7 +207,9 @@ export function renderMoreSessions(
       fontSize: "13px",
     });
     loadMoreBtn.className = "load-more-btn";
-    loadMoreBtn.textContent = getString("chat-show-more", { args: { count: state.allSessions.length - state.displayedCount } });
+    loadMoreBtn.textContent = getString("chat-show-more", {
+      args: { count: state.allSessions.length - state.displayedCount },
+    });
 
     loadMoreBtn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -280,7 +289,10 @@ export function setupClickOutsideHandler(
 ): void {
   container.addEventListener("click", (e) => {
     if (dropdown.style.display !== "none") {
-      if (!historyBtn.contains(e.target as Node) && !dropdown.contains(e.target as Node)) {
+      if (
+        !historyBtn.contains(e.target as Node) &&
+        !dropdown.contains(e.target as Node)
+      ) {
         dropdown.style.display = "none";
       }
     }

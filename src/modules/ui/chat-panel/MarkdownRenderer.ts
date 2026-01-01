@@ -21,7 +21,10 @@ const md = new MarkdownIt({
  * Render markdown content to DOM elements directly
  * This avoids XHTML parsing issues by building elements programmatically
  */
-export function renderMarkdownToElement(element: HTMLElement, markdownContent: string): void {
+export function renderMarkdownToElement(
+  element: HTMLElement,
+  markdownContent: string,
+): void {
   element.textContent = "";
   const doc = element.ownerDocument;
   if (!doc) return;
@@ -37,7 +40,10 @@ export function renderMarkdownToElement(element: HTMLElement, markdownContent: s
 /**
  * Build DOM elements from markdown-it tokens
  */
-export function buildDOMFromTokens(doc: Document, tokens: ReturnType<typeof md.parse>): HTMLElement {
+export function buildDOMFromTokens(
+  doc: Document,
+  tokens: ReturnType<typeof md.parse>,
+): HTMLElement {
   const container = doc.createElementNS(HTML_NS, "div") as HTMLElement;
   const stack: HTMLElement[] = [container];
 
@@ -125,7 +131,8 @@ export function buildDOMFromTokens(doc: Document, tokens: ReturnType<typeof md.p
         pre.style.borderRadius = "6px";
         pre.style.overflow = "auto";
         pre.style.fontSize = "13px";
-        pre.style.fontFamily = "'SF Mono', Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace";
+        pre.style.fontFamily =
+          "'SF Mono', Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace";
         pre.style.lineHeight = "1.45";
         pre.style.margin = "8px 0";
 
@@ -133,7 +140,9 @@ export function buildDOMFromTokens(doc: Document, tokens: ReturnType<typeof md.p
         try {
           let highlighted: string;
           if (lang && hljs.getLanguage(lang)) {
-            highlighted = hljs.highlight(token.content, { language: lang }).value;
+            highlighted = hljs.highlight(token.content, {
+              language: lang,
+            }).value;
           } else {
             highlighted = hljs.highlightAuto(token.content).value;
           }
@@ -251,7 +260,11 @@ export function buildDOMFromTokens(doc: Document, tokens: ReturnType<typeof md.p
 /**
  * Render inline tokens (text, bold, italic, code, links, etc.)
  */
-export function renderInlineTokens(doc: Document, parent: HTMLElement, tokens: ReturnType<typeof md.parse>): void {
+export function renderInlineTokens(
+  doc: Document,
+  parent: HTMLElement,
+  tokens: ReturnType<typeof md.parse>,
+): void {
   const stack: HTMLElement[] = [parent];
 
   for (const token of tokens) {
@@ -334,46 +347,46 @@ export function renderInlineTokens(doc: Document, parent: HTMLElement, tokens: R
  */
 const highlightColors = {
   light: {
-    keyword: "#d73a49",      // red - if, const, return
-    string: "#032f62",       // dark blue - "strings"
-    number: "#005cc5",       // blue - 123
-    comment: "#6a737d",      // gray - // comments
-    function: "#6f42c1",     // purple - function names
-    class: "#6f42c1",        // purple - class names
-    variable: "#e36209",     // orange - variables
-    operator: "#d73a49",     // red - =, +, -
-    punctuation: "#24292e",  // black - {, }, (, )
-    property: "#005cc5",     // blue - object properties
-    builtin: "#005cc5",      // blue - built-in functions
-    attr: "#22863a",         // green - attributes
-    tag: "#22863a",          // green - HTML tags
-    selector: "#6f42c1",     // purple - CSS selectors
-    type: "#d73a49",         // red - type names
-    literal: "#005cc5",      // blue - true, false, null
-    meta: "#6a737d",         // gray - meta info
-    regexp: "#032f62",       // dark blue - regex
-    symbol: "#e36209",       // orange - symbols
+    keyword: "#d73a49", // red - if, const, return
+    string: "#032f62", // dark blue - "strings"
+    number: "#005cc5", // blue - 123
+    comment: "#6a737d", // gray - // comments
+    function: "#6f42c1", // purple - function names
+    class: "#6f42c1", // purple - class names
+    variable: "#e36209", // orange - variables
+    operator: "#d73a49", // red - =, +, -
+    punctuation: "#24292e", // black - {, }, (, )
+    property: "#005cc5", // blue - object properties
+    builtin: "#005cc5", // blue - built-in functions
+    attr: "#22863a", // green - attributes
+    tag: "#22863a", // green - HTML tags
+    selector: "#6f42c1", // purple - CSS selectors
+    type: "#d73a49", // red - type names
+    literal: "#005cc5", // blue - true, false, null
+    meta: "#6a737d", // gray - meta info
+    regexp: "#032f62", // dark blue - regex
+    symbol: "#e36209", // orange - symbols
   },
   dark: {
-    keyword: "#ff7b72",      // red - if, const, return
-    string: "#a5d6ff",       // light blue - "strings"
-    number: "#79c0ff",       // blue - 123
-    comment: "#8b949e",      // gray - // comments
-    function: "#d2a8ff",     // purple - function names
-    class: "#d2a8ff",        // purple - class names
-    variable: "#ffa657",     // orange - variables
-    operator: "#ff7b72",     // red - =, +, -
-    punctuation: "#c9d1d9",  // light gray - {, }, (, )
-    property: "#79c0ff",     // blue - object properties
-    builtin: "#79c0ff",      // blue - built-in functions
-    attr: "#7ee787",         // green - attributes
-    tag: "#7ee787",          // green - HTML tags
-    selector: "#d2a8ff",     // purple - CSS selectors
-    type: "#ff7b72",         // red - type names
-    literal: "#79c0ff",      // blue - true, false, null
-    meta: "#8b949e",         // gray - meta info
-    regexp: "#a5d6ff",       // light blue - regex
-    symbol: "#ffa657",       // orange - symbols
+    keyword: "#ff7b72", // red - if, const, return
+    string: "#a5d6ff", // light blue - "strings"
+    number: "#79c0ff", // blue - 123
+    comment: "#8b949e", // gray - // comments
+    function: "#d2a8ff", // purple - function names
+    class: "#d2a8ff", // purple - class names
+    variable: "#ffa657", // orange - variables
+    operator: "#ff7b72", // red - =, +, -
+    punctuation: "#c9d1d9", // light gray - {, }, (, )
+    property: "#79c0ff", // blue - object properties
+    builtin: "#79c0ff", // blue - built-in functions
+    attr: "#7ee787", // green - attributes
+    tag: "#7ee787", // green - HTML tags
+    selector: "#d2a8ff", // purple - CSS selectors
+    type: "#ff7b72", // red - type names
+    literal: "#79c0ff", // blue - true, false, null
+    meta: "#8b949e", // gray - meta info
+    regexp: "#a5d6ff", // light blue - regex
+    symbol: "#ffa657", // orange - symbols
   },
 } as const;
 
@@ -429,7 +442,12 @@ const classToColorKey: Record<string, keyof typeof highlightColors.light> = {
  * Safely render highlight.js HTML output to DOM elements
  * This parses the HTML string and builds DOM elements manually to avoid innerHTML
  */
-function renderHighlightedCode(doc: Document, parent: HTMLElement, html: string, dark: boolean): void {
+function renderHighlightedCode(
+  doc: Document,
+  parent: HTMLElement,
+  html: string,
+  dark: boolean,
+): void {
   const colors = dark ? highlightColors.dark : highlightColors.light;
 
   // Simple regex-based parser for highlight.js output
@@ -482,19 +500,34 @@ function renderHighlightedCode(doc: Document, parent: HTMLElement, html: string,
 
     // Check for HTML entities
     if (html[pos] === "&") {
-      const entityMatch = html.slice(pos).match(/^&(amp|lt|gt|quot|#39|#x27|nbsp);/);
+      const entityMatch = html
+        .slice(pos)
+        .match(/^&(amp|lt|gt|quot|#39|#x27|nbsp);/);
       if (entityMatch) {
         const entity = entityMatch[1];
         let char = "";
         switch (entity) {
-          case "amp": char = "&"; break;
-          case "lt": char = "<"; break;
-          case "gt": char = ">"; break;
-          case "quot": char = '"'; break;
+          case "amp":
+            char = "&";
+            break;
+          case "lt":
+            char = "<";
+            break;
+          case "gt":
+            char = ">";
+            break;
+          case "quot":
+            char = '"';
+            break;
           case "#39":
-          case "#x27": char = "'"; break;
-          case "nbsp": char = "\u00A0"; break;
-          default: char = entityMatch[0];
+          case "#x27":
+            char = "'";
+            break;
+          case "nbsp":
+            char = "\u00A0";
+            break;
+          default:
+            char = entityMatch[0];
         }
         parent.appendChild(doc.createTextNode(char));
         pos += entityMatch[0].length;

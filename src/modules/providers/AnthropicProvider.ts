@@ -25,7 +25,10 @@ export class AnthropicProvider extends BaseProvider {
     }
 
     try {
-      const anthropicMessages = this.formatAnthropicMessages(messages, pdfAttachment);
+      const anthropicMessages = this.formatAnthropicMessages(
+        messages,
+        pdfAttachment,
+      );
 
       const response = await fetch(`${this._config.baseUrl}/messages`, {
         method: "POST",
@@ -78,10 +81,12 @@ export class AnthropicProvider extends BaseProvider {
       content?: Array<{ type: string; text?: string }>;
     };
 
-    return data.content
-      ?.filter((block) => block.type === "text")
-      .map((block) => block.text || "")
-      .join("") || "";
+    return (
+      data.content
+        ?.filter((block) => block.type === "text")
+        .map((block) => block.text || "")
+        .join("") || ""
+    );
   }
 
   async testConnection(): Promise<boolean> {

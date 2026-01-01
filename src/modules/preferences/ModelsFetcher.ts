@@ -40,7 +40,11 @@ export function loadCachedRatios(): void {
   if (cached) {
     try {
       paperchatModelRatios = JSON.parse(cached);
-      ztoolkit.log("[Preferences] Loaded cached ratios for", Object.keys(paperchatModelRatios).length, "models");
+      ztoolkit.log(
+        "[Preferences] Loaded cached ratios for",
+        Object.keys(paperchatModelRatios).length,
+        "models",
+      );
     } catch {
       // ignore parse error
     }
@@ -59,7 +63,7 @@ export async function fetchPaperchatRatios(apiKey: string): Promise<void> {
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        "Authorization": `Bearer ${apiKey}`,
+        Authorization: `Bearer ${apiKey}`,
       },
     });
 
@@ -68,7 +72,7 @@ export async function fetchPaperchatRatios(apiKey: string): Promise<void> {
       return;
     }
 
-    const result = await response.json() as {
+    const result = (await response.json()) as {
       data?: Array<{
         model_name: string;
         model_ratio: number;
@@ -85,7 +89,11 @@ export async function fetchPaperchatRatios(apiKey: string): Promise<void> {
       }
       // Cache ratios to prefs
       setPref("paperchatRatiosCache", JSON.stringify(paperchatModelRatios));
-      ztoolkit.log("[Preferences] Loaded ratios for", Object.keys(paperchatModelRatios).length, "models");
+      ztoolkit.log(
+        "[Preferences] Loaded ratios for",
+        Object.keys(paperchatModelRatios).length,
+        "models",
+      );
     }
   } catch (e) {
     ztoolkit.log("[Preferences] Failed to fetch ratios:", e);
@@ -123,7 +131,7 @@ export async function fetchPaperchatModels(
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        "Authorization": `Bearer ${apiKey}`,
+        Authorization: `Bearer ${apiKey}`,
       },
     });
 
@@ -133,8 +141,11 @@ export async function fetchPaperchatModels(
       throw new Error(`HTTP ${response.status}`);
     }
 
-    const result = await response.json() as { data?: Array<{ id: string }> };
-    ztoolkit.log("[Preferences] Models response:", JSON.stringify(result).substring(0, 200));
+    const result = (await response.json()) as { data?: Array<{ id: string }> };
+    ztoolkit.log(
+      "[Preferences] Models response:",
+      JSON.stringify(result).substring(0, 200),
+    );
 
     // Wait for ratios to complete
     await ratiosPromise;
@@ -143,7 +154,11 @@ export async function fetchPaperchatModels(
       const models = result.data.map((m) => m.id).sort();
       ztoolkit.log("[Preferences] Parsed models count:", models.length);
       onModelsLoaded(models);
-      showMessage(doc, getString("pref-models-loaded", { args: { count: models.length } }), false);
+      showMessage(
+        doc,
+        getString("pref-models-loaded", { args: { count: models.length } }),
+        false,
+      );
     }
   } catch (e) {
     ztoolkit.log("[Preferences] Failed to fetch PaperChat models:", e);
