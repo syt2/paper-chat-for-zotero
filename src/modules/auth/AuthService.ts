@@ -42,6 +42,8 @@ export class AuthService {
   private setupHttpObserver(): void {
     if (this.httpObserver) return;
 
+    const baseUrl = this.baseUrl; // 捕获到闭包中
+
     this.httpObserver = {
       observe(subject: any, topic: string, _data: string) {
         if (topic !== "http-on-examine-response") return;
@@ -50,7 +52,7 @@ export class AuthService {
           const channel = subject.QueryInterface(Ci.nsIHttpChannel);
           const url = channel.URI.spec;
 
-          if (!url.startsWith(self.baseUrl)) return;
+          if (!url.startsWith(baseUrl)) return;
 
           try {
             const setCookie = channel.getResponseHeader("Set-Cookie");
