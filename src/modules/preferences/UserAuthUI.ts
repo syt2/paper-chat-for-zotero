@@ -176,7 +176,7 @@ function showRedeemCodeDialog(): void {
     return;
   }
 
-  const purchaseUrl = "https://e.tb.cn/h.7KnGGW4DfuRotV3";
+  const purchaseUrl = "https://item.taobao.com/item.htm?id=1008529360525";
   const qrCodeUrl = `chrome://${config.addonRef}/content/icons/tb_qrcode.png`;
 
   const dialogHelper = new ztoolkit.Dialog(1, 1)
