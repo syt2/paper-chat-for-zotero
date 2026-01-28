@@ -176,7 +176,7 @@ function showRedeemCodeDialog(): void {
     return;
   }
 
-  const purchaseUrl = "https://m.tb.cn/h.75M7wID";
+  const purchaseUrl = "https://e.tb.cn/h.7KnGGW4DfuRotV3";
   const qrCodeUrl = `chrome://${config.addonRef}/content/icons/tb_qrcode.png`;
 
   const dialogHelper = new ztoolkit.Dialog(1, 1)
