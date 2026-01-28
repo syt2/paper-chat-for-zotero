@@ -1,6 +1,6 @@
 {
   "name": "paper-chat",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Zotero Paper Chat - Chat with AI about your PDF documents in Zotero",
   "config": {
     "addonName": "Paper Chat",
