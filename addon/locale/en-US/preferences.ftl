@@ -70,3 +70,8 @@ pref-model-exists = Model already exists
 pref-pdf-settings = PDF Settings
 pref-upload-raw-pdf = Upload raw PDF on text extraction failure
 pref-upload-raw-pdf-desc = When enabled, uploads original PDF to AI if text extraction fails. This may consume significantly more tokens.
+
+# AI Tools Settings
+pref-ai-tools-settings = AI Tools Settings
+pref-enable-ai-write = Allow AI to create notes and modify tags
+pref-enable-ai-write-desc = When enabled, AI can create notes and batch update tags in your library. Use with caution.

@@ -77,7 +77,18 @@ export type PaperToolName =
   | "list_all_items"
   | "get_item_notes"
   | "get_note_content"
-  | "get_item_metadata";
+  | "get_item_metadata"
+  // 新增工具
+  | "get_annotations"
+  | "search_items"
+  | "get_collections"
+  | "get_collection_items"
+  | "get_tags"
+  | "search_by_tag"
+  | "get_recent"
+  | "search_notes"
+  | "create_note"
+  | "batch_update_tags";
 
 // 基础工具参数（所有工具都可以指定 itemKey）
 export interface BaseToolArgs {
@@ -150,4 +161,69 @@ export interface PageInfo {
 export interface PaperStructureExtended extends PaperStructure {
   pages: PageInfo[];
   pageCount: number;
+}
+
+// ========== 新增工具参数类型 ==========
+
+// 获取 PDF 标注的参数
+export interface GetAnnotationsArgs extends BaseToolArgs {
+  annotationType?: "highlight" | "note" | "underline" | "image" | "all";
+  limit?: number;
+}
+
+// 搜索 Zotero 库的参数
+export interface SearchItemsArgs {
+  query: string;
+  field?: "title" | "creator" | "tag" | "everywhere"; // 搜索范围
+  itemType?: string; // 条目类型筛选
+  limit?: number;
+}
+
+// 获取分类列表的参数
+export interface GetCollectionsArgs {
+  parentKey?: string; // 获取子分类，不传则获取顶级分类
+}
+
+// 获取分类下条目的参数
+export interface GetCollectionItemsArgs {
+  collectionKey: string;
+  limit?: number;
+}
+
+// 获取所有标签的参数
+export interface GetTagsArgs {
+  limit?: number;
+}
+
+// 按标签搜索的参数
+export interface SearchByTagArgs {
+  tags: string; // 逗号分隔的多个标签
+  mode?: "and" | "or"; // 组合模式
+  limit?: number;
+}
+
+// 获取最近条目的参数
+export interface GetRecentArgs {
+  limit?: number;
+  days?: number; // 最近N天
+}
+
+// 跨条目搜索笔记的参数
+export interface SearchNotesArgs {
+  query: string;
+  limit?: number;
+}
+
+// 创建笔记的参数
+export interface CreateNoteArgs extends BaseToolArgs {
+  content: string; // 笔记内容 (支持 HTML)
+  tags?: string; // 逗号分隔的标签
+}
+
+// 批量更新标签的参数
+export interface BatchUpdateTagsArgs {
+  query: string; // 搜索条件，找到要更新的 items
+  addTags?: string; // 要添加的标签（逗号分隔）
+  removeTags?: string; // 要移除的标签（逗号分隔）
+  limit?: number; // 最多影响的条目数
 }

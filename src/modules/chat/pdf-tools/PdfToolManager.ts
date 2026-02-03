@@ -34,6 +34,17 @@ import type {
   GetItemMetadataArgs,
   GetItemNotesArgs,
   GetNoteContentArgs,
+  // 新增类型
+  GetAnnotationsArgs,
+  SearchItemsArgs,
+  GetCollectionsArgs,
+  GetCollectionItemsArgs,
+  GetTagsArgs,
+  SearchByTagArgs,
+  GetRecentArgs,
+  SearchNotesArgs,
+  CreateNoteArgs,
+  BatchUpdateTagsArgs,
 } from "../../../types/tool";
 import { parsePaperStructure, parsePages } from "./paperParser";
 import { generatePaperContextPrompt as generatePaperContextPromptFn } from "./promptGenerator";
@@ -54,6 +65,19 @@ import {
   executeGetItemNotes,
   executeGetNoteContent,
 } from "./zoteroExecutors";
+import {
+  executeGetAnnotations,
+  executeSearchItems,
+  executeGetCollections,
+  executeGetCollectionItems,
+  executeGetTags,
+  executeSearchByTag,
+  executeGetRecent,
+  executeSearchNotes,
+  executeCreateNote,
+  executeBatchUpdateTags,
+} from "./libraryExecutors";
+import { getPref } from "../../../utils/prefs";
 
 // 缓存条目类型
 interface CacheEntry {
@@ -300,7 +324,267 @@ export class PdfToolManager {
           },
         },
       },
+      // ========== 新增高级库工具 ==========
+      {
+        type: "function",
+        function: {
+          name: "get_annotations",
+          description:
+            "Get PDF annotations (highlights, notes, underlines, images) from a paper. Returns annotation text, comments, colors, and page numbers.",
+          parameters: {
+            type: "object",
+            properties: {
+              ...itemKeyProp,
+              annotationType: {
+                type: "string",
+                description:
+                  "Filter by annotation type. Options: highlight, note, underline, image, all. Default: all",
+                enum: ["highlight", "note", "underline", "image", "all"],
+              },
+              limit: {
+                type: "number",
+                description:
+                  "Maximum number of annotations to return (max 100). Default: 50",
+              },
+            },
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "search_items",
+          description:
+            "Search for items in Zotero library by keyword. Searches across titles, authors, and other metadata.",
+          parameters: {
+            type: "object",
+            properties: {
+              query: {
+                type: "string",
+                description: "The search keyword or phrase. Required.",
+              },
+              field: {
+                type: "string",
+                description:
+                  "Search scope: title (titles only), creator (authors only), tag (exact tag match), everywhere (all fields). Default: everywhere",
+                enum: ["title", "creator", "tag", "everywhere"],
+              },
+              itemType: {
+                type: "string",
+                description:
+                  "Filter by item type (e.g., journalArticle, book, conferencePaper). Optional.",
+              },
+              limit: {
+                type: "number",
+                description:
+                  "Maximum number of results to return (max 50). Default: 20",
+              },
+            },
+            required: ["query"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "get_collections",
+          description:
+            "List collections (folders) in the Zotero library. Shows collection hierarchy with item counts.",
+          parameters: {
+            type: "object",
+            properties: {
+              parentKey: {
+                type: "string",
+                description:
+                  "Get sub-collections of a specific collection. If omitted, returns top-level collections.",
+              },
+            },
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "get_collection_items",
+          description:
+            "Get all items in a specific collection by its key.",
+          parameters: {
+            type: "object",
+            properties: {
+              collectionKey: {
+                type: "string",
+                description: "The collection key. Required.",
+              },
+              limit: {
+                type: "number",
+                description:
+                  "Maximum number of items to return (max 100). Default: 30",
+              },
+            },
+            required: ["collectionKey"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "get_tags",
+          description:
+            "Get all tags used in the Zotero library, sorted alphabetically.",
+          parameters: {
+            type: "object",
+            properties: {
+              limit: {
+                type: "number",
+                description:
+                  "Maximum number of tags to return (max 500). Default: 100",
+              },
+            },
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "search_by_tag",
+          description:
+            "Find items with specific tag(s). Supports multiple tags with AND/OR logic.",
+          parameters: {
+            type: "object",
+            properties: {
+              tags: {
+                type: "string",
+                description:
+                  "Comma-separated list of tags to search for. Required.",
+              },
+              mode: {
+                type: "string",
+                description:
+                  "How to combine multiple tags: 'and' (all tags required) or 'or' (any tag matches). Default: or",
+                enum: ["and", "or"],
+              },
+              limit: {
+                type: "number",
+                description:
+                  "Maximum number of results to return (max 100). Default: 30",
+              },
+            },
+            required: ["tags"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "get_recent",
+          description:
+            "Get recently added items in the Zotero library, sorted by date added (newest first).",
+          parameters: {
+            type: "object",
+            properties: {
+              limit: {
+                type: "number",
+                description:
+                  "Maximum number of items to return (max 100). Default: 20",
+              },
+              days: {
+                type: "number",
+                description:
+                  "Only return items added in the last N days. Optional.",
+              },
+            },
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "search_notes",
+          description:
+            "Search for notes across all items in the library by content.",
+          parameters: {
+            type: "object",
+            properties: {
+              query: {
+                type: "string",
+                description: "The search text to find in notes. Required.",
+              },
+              limit: {
+                type: "number",
+                description:
+                  "Maximum number of notes to return (max 50). Default: 20",
+              },
+            },
+            required: ["query"],
+          },
+        },
+      },
     ];
+
+    // 写入工具（根据设置动态添加）
+    const enableAIWrite = getPref("enableAIWriteOperations") as boolean;
+    if (enableAIWrite) {
+      libraryTools.push(
+        {
+          type: "function",
+          function: {
+            name: "create_note",
+            description:
+              "Create a new note in Zotero, optionally attached to a specific item. The note will be saved to the user's library.",
+            parameters: {
+              type: "object",
+              properties: {
+                ...itemKeyProp,
+                content: {
+                  type: "string",
+                  description:
+                    "The note content. Can be plain text or HTML. Required.",
+                },
+                tags: {
+                  type: "string",
+                  description: "Comma-separated list of tags to add. Optional.",
+                },
+              },
+              required: ["content"],
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "batch_update_tags",
+            description:
+              "Add or remove tags from multiple items matching a search query. Useful for organizing your library.",
+            parameters: {
+              type: "object",
+              properties: {
+                query: {
+                  type: "string",
+                  description:
+                    "Search query to find items to update. Required.",
+                },
+                addTags: {
+                  type: "string",
+                  description:
+                    "Comma-separated list of tags to add to matching items.",
+                },
+                removeTags: {
+                  type: "string",
+                  description:
+                    "Comma-separated list of tags to remove from matching items.",
+                },
+                limit: {
+                  type: "number",
+                  description:
+                    "Maximum number of items to affect (max 100). Default: 50",
+                },
+              },
+              required: ["query"],
+            },
+          },
+        },
+      );
+    }
 
     // 如果没有当前 item，只返回 library 工具
     if (!hasCurrentItem) {
@@ -581,6 +865,74 @@ export class PdfToolManager {
     );
   }
 
+  // === 新增工具的类型守卫 ===
+
+  private isGetAnnotationsArgs(args: unknown): args is GetAnnotationsArgs {
+    return typeof args === "object" && args !== null;
+  }
+
+  private isSearchItemsArgs(args: unknown): args is SearchItemsArgs {
+    return (
+      typeof args === "object" &&
+      args !== null &&
+      typeof (args as SearchItemsArgs).query === "string"
+    );
+  }
+
+  private isGetCollectionsArgs(args: unknown): args is GetCollectionsArgs {
+    return typeof args === "object" && args !== null;
+  }
+
+  private isGetCollectionItemsArgs(
+    args: unknown,
+  ): args is GetCollectionItemsArgs {
+    return (
+      typeof args === "object" &&
+      args !== null &&
+      typeof (args as GetCollectionItemsArgs).collectionKey === "string"
+    );
+  }
+
+  private isGetTagsArgs(args: unknown): args is GetTagsArgs {
+    return typeof args === "object" && args !== null;
+  }
+
+  private isSearchByTagArgs(args: unknown): args is SearchByTagArgs {
+    return (
+      typeof args === "object" &&
+      args !== null &&
+      typeof (args as SearchByTagArgs).tags === "string"
+    );
+  }
+
+  private isGetRecentArgs(args: unknown): args is GetRecentArgs {
+    return typeof args === "object" && args !== null;
+  }
+
+  private isSearchNotesArgs(args: unknown): args is SearchNotesArgs {
+    return (
+      typeof args === "object" &&
+      args !== null &&
+      typeof (args as SearchNotesArgs).query === "string"
+    );
+  }
+
+  private isCreateNoteArgs(args: unknown): args is CreateNoteArgs {
+    return (
+      typeof args === "object" &&
+      args !== null &&
+      typeof (args as CreateNoteArgs).content === "string"
+    );
+  }
+
+  private isBatchUpdateTagsArgs(args: unknown): args is BatchUpdateTagsArgs {
+    return (
+      typeof args === "object" &&
+      args !== null &&
+      typeof (args as BatchUpdateTagsArgs).query === "string"
+    );
+  }
+
   /**
    * 执行工具调用（异步，按需提取 PDF）
    * @param toolCall AI 请求的工具调用
@@ -621,6 +973,79 @@ export class PdfToolManager {
           return "Error: Invalid arguments for get_note_content. Required: noteKey (string)";
         }
         return executeGetNoteContent(args);
+
+      // === 新增高级库工具 ===
+      case "get_annotations":
+        if (!this.isGetAnnotationsArgs(args)) {
+          return "Error: Invalid arguments for get_annotations";
+        }
+        return executeGetAnnotations(args, this.currentItemKey);
+
+      case "search_items":
+        if (!this.isSearchItemsArgs(args)) {
+          return "Error: Invalid arguments for search_items. Required: query (string)";
+        }
+        return executeSearchItems(args);
+
+      case "get_collections":
+        if (!this.isGetCollectionsArgs(args)) {
+          return "Error: Invalid arguments for get_collections";
+        }
+        return executeGetCollections(args);
+
+      case "get_collection_items":
+        if (!this.isGetCollectionItemsArgs(args)) {
+          return "Error: Invalid arguments for get_collection_items. Required: collectionKey (string)";
+        }
+        return executeGetCollectionItems(args);
+
+      case "get_tags":
+        if (!this.isGetTagsArgs(args)) {
+          return "Error: Invalid arguments for get_tags";
+        }
+        return executeGetTags(args);
+
+      case "search_by_tag":
+        if (!this.isSearchByTagArgs(args)) {
+          return "Error: Invalid arguments for search_by_tag. Required: tags (string)";
+        }
+        return executeSearchByTag(args);
+
+      case "get_recent":
+        if (!this.isGetRecentArgs(args)) {
+          return "Error: Invalid arguments for get_recent";
+        }
+        return executeGetRecent(args);
+
+      case "search_notes":
+        if (!this.isSearchNotesArgs(args)) {
+          return "Error: Invalid arguments for search_notes. Required: query (string)";
+        }
+        return executeSearchNotes(args);
+
+      case "create_note": {
+        // 检查写入权限
+        const canWrite1 = getPref("enableAIWriteOperations") as boolean;
+        if (!canWrite1) {
+          return "Error: AI write operations are disabled. The user needs to enable 'Allow AI to create notes and modify tags' in settings.";
+        }
+        if (!this.isCreateNoteArgs(args)) {
+          return "Error: Invalid arguments for create_note. Required: content (string)";
+        }
+        return executeCreateNote(args, this.currentItemKey);
+      }
+
+      case "batch_update_tags": {
+        // 检查写入权限
+        const canWrite2 = getPref("enableAIWriteOperations") as boolean;
+        if (!canWrite2) {
+          return "Error: AI write operations are disabled. The user needs to enable 'Allow AI to create notes and modify tags' in settings.";
+        }
+        if (!this.isBatchUpdateTagsArgs(args)) {
+          return "Error: Invalid arguments for batch_update_tags. Required: query (string)";
+        }
+        return executeBatchUpdateTags(args);
+      }
     }
 
     // === PDF 内容工具（需要 PDF）===

@@ -33,6 +33,20 @@ export {
   executeGetNoteContent,
 } from "./zoteroExecutors";
 
+// 导出新增的高级 Zotero 库工具执行函数
+export {
+  executeGetAnnotations,
+  executeSearchItems,
+  executeGetCollections,
+  executeGetCollectionItems,
+  executeGetTags,
+  executeSearchByTag,
+  executeGetRecent,
+  executeSearchNotes,
+  executeCreateNote,
+  executeBatchUpdateTags,
+} from "./libraryExecutors";
+
 // 单例管理
 import { PdfToolManager } from "./PdfToolManager";
 

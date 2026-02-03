@@ -71,6 +71,9 @@ export async function initializePrefsUI(): Promise<void> {
 
   // Initialize PDF settings checkbox
   initPdfSettingsCheckbox(doc);
+
+  // Initialize AI tools settings checkbox
+  initAIToolsSettingsCheckbox(doc);
 }
 
 /**
@@ -82,6 +85,20 @@ function initPdfSettingsCheckbox(doc: Document): void {
   ) as XUL.Checkbox | null;
   if (uploadRawPdfCheckbox) {
     uploadRawPdfCheckbox.checked = getPref("uploadRawPdfOnFailure") as boolean;
+  }
+}
+
+/**
+ * Initialize AI tools settings checkbox
+ */
+function initAIToolsSettingsCheckbox(doc: Document): void {
+  const enableAIWriteCheckbox = doc.getElementById(
+    "pref-enable-ai-write-checkbox",
+  ) as XUL.Checkbox | null;
+  if (enableAIWriteCheckbox) {
+    enableAIWriteCheckbox.checked = getPref(
+      "enableAIWriteOperations",
+    ) as boolean;
   }
 }
 
@@ -124,6 +141,9 @@ export function bindPrefEvents(): void {
 
   // Bind PDF settings checkbox event
   bindPdfSettingsEvent(doc);
+
+  // Bind AI tools settings checkbox event
+  bindAIToolsSettingsEvent(doc);
 }
 
 /**
@@ -136,6 +156,20 @@ function bindPdfSettingsEvent(doc: Document): void {
   if (uploadRawPdfCheckbox) {
     uploadRawPdfCheckbox.addEventListener("command", () => {
       setPref("uploadRawPdfOnFailure", uploadRawPdfCheckbox.checked);
+    });
+  }
+}
+
+/**
+ * Bind AI tools settings checkbox events
+ */
+function bindAIToolsSettingsEvent(doc: Document): void {
+  const enableAIWriteCheckbox = doc.getElementById(
+    "pref-enable-ai-write-checkbox",
+  ) as XUL.Checkbox | null;
+  if (enableAIWriteCheckbox) {
+    enableAIWriteCheckbox.addEventListener("command", () => {
+      setPref("enableAIWriteOperations", enableAIWriteCheckbox.checked);
     });
   }
 }

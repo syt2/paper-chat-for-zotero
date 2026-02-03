@@ -26,6 +26,7 @@ declare namespace _ZoteroTypes {
       "contextMaxRecentPairs": number;
       "contextEnableSummary": boolean;
       "contextSummaryThreshold": number;
+      "enableAIWriteOperations": boolean;
     };
   }
 }

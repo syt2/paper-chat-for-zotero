@@ -70,3 +70,8 @@ pref-model-exists = 该模型已存在
 pref-pdf-settings = PDF 设置
 pref-upload-raw-pdf = 文本提取失败时上传原始 PDF
 pref-upload-raw-pdf-desc = 启用后，若文本提取失败将上传原始 PDF 给 AI，这可能会消耗大量 token。
+
+# AI Tools Settings
+pref-ai-tools-settings = AI 工具设置
+pref-enable-ai-write = 允许 AI 创建笔记和修改标签
+pref-enable-ai-write-desc = 启用后，AI 可以在您的文献库中创建笔记和批量更新标签。请谨慎使用。

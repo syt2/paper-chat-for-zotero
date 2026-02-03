@@ -32,3 +32,6 @@ pref("guideStatus", 0);
 pref("contextMaxRecentPairs", 10);
 pref("contextEnableSummary", false);
 pref("contextSummaryThreshold", 20);
+
+// AI Tools Settings
+pref("enableAIWriteOperations", true); // 是否允许 AI 执行写入操作（创建笔记、批量更新标签）
