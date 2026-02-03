@@ -10,6 +10,7 @@ import type {
   PaperChatProviderConfig,
   PdfAttachment,
 } from "../../types/provider";
+import type { ToolDefinition, ToolCall } from "../../types/tool";
 import { getAuthManager } from "../auth";
 import { OpenAICompatibleProvider } from "./OpenAICompatibleProvider";
 import { BUILTIN_PROVIDERS } from "./ProviderManager";
@@ -106,5 +107,17 @@ export class PaperChatProvider implements AIProvider {
       }
     }
     return BUILTIN_PROVIDERS.paperchat.defaultModels;
+  }
+
+  /**
+   * Chat completion with tool calling support (non-streaming)
+   * Delegates to the internal OpenAICompatibleProvider
+   */
+  async chatCompletionWithTools(
+    messages: ChatMessage[],
+    tools?: ToolDefinition[],
+  ): Promise<{ content: string; toolCalls?: ToolCall[] }> {
+    this._delegate.updateConfig(this.createDelegateConfig());
+    return this._delegate.chatCompletionWithTools(messages, tools);
   }
 }

@@ -38,13 +38,14 @@ export interface ThemeColors {
   copyBtnBg: string;
 }
 
-// Session info for history dropdown
+// Session info for history dropdown (matches SessionMeta from chat types)
 export interface SessionInfo {
-  itemId: number;
-  itemName: string;
+  id: string;
+  createdAt: number;
+  updatedAt: number;
   messageCount: number;
-  lastMessage: string;
-  lastUpdated: number;
+  lastMessagePreview: string;
+  lastMessageTime: number;
 }
 
 // Attachment state for pending uploads

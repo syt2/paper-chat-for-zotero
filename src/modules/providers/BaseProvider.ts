@@ -128,12 +128,21 @@ export abstract class BaseProvider implements AIProvider {
 
   /**
    * Filter messages - remove empty content and error messages
+   * Keep tool messages and messages with tool_calls
    */
   protected filterMessages(messages: ChatMessage[]): ChatMessage[] {
     const nonErrorMessages = messages.filter((msg) => msg.role !== "error");
     const lastIndex = nonErrorMessages.length - 1;
 
     return nonErrorMessages.filter((msg, index) => {
+      // Always keep tool messages
+      if (msg.role === "tool") {
+        return true;
+      }
+      // Always keep messages with tool_calls
+      if (msg.tool_calls && msg.tool_calls.length > 0) {
+        return true;
+      }
       // Allow empty content for last assistant message (streaming placeholder)
       if (index === lastIndex && msg.role === "assistant") {
         return msg.content.trim() !== "";
@@ -144,7 +153,7 @@ export abstract class BaseProvider implements AIProvider {
 
   /**
    * Format messages for OpenAI-compatible API (OpenAI, DeepSeek, Mistral, etc.)
-   * Supports Vision API format for images and optional PDF attachment
+   * Supports Vision API format for images, optional PDF attachment, and tool calling
    */
   protected formatOpenAIMessages(
     messages: ChatMessage[],
@@ -154,6 +163,28 @@ export abstract class BaseProvider implements AIProvider {
     const firstUserIndex = filtered.findIndex((m) => m.role === "user");
 
     return filtered.map((msg, index) => {
+      // Handle tool messages
+      if (msg.role === "tool") {
+        return {
+          role: "tool" as const,
+          content: msg.content,
+          tool_call_id: msg.tool_call_id,
+        };
+      }
+
+      // Handle assistant messages with tool_calls
+      if (
+        msg.role === "assistant" &&
+        msg.tool_calls &&
+        msg.tool_calls.length > 0
+      ) {
+        return {
+          role: "assistant" as const,
+          content: msg.content || null,
+          tool_calls: msg.tool_calls,
+        };
+      }
+
       const shouldAttachPdf =
         pdfAttachment && msg.role === "user" && index === firstUserIndex;
       const hasImages = msg.images && msg.images.length > 0;

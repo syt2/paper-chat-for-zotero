@@ -104,8 +104,17 @@ export class AnthropicProvider extends BaseProvider {
           messages: [{ role: "user", content: "Hi" }],
         }),
       });
+      if (!response.ok) {
+        ztoolkit.log(
+          `[${this.getName()}] testConnection failed: ${response.status} ${response.statusText}`,
+        );
+      }
       return response.ok;
-    } catch {
+    } catch (error) {
+      ztoolkit.log(
+        `[${this.getName()}] testConnection error:`,
+        error instanceof Error ? error.message : String(error),
+      );
       return false;
     }
   }

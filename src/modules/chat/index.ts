@@ -4,7 +4,15 @@
 
 export { ChatManager } from "./ChatManager";
 export { StorageService } from "./StorageService";
+export { SessionStorageService } from "./SessionStorageService";
 export { PdfExtractor } from "./PdfExtractor";
+export { getContextManager } from "./ContextManager";
+export {
+  getPdfToolManager,
+  PdfToolManager,
+  generatePaperContextPrompt,
+} from "./pdf-tools";
+export { checkAndMigrate } from "./migration/migrateV1Sessions";
 
 // Re-export types
 export type {
@@ -14,4 +22,20 @@ export type {
   FileAttachment,
   SendMessageOptions,
   StreamCallbacks,
+  ContextSummary,
+  ContextState,
+  SessionIndex,
+  SessionMeta,
 } from "../../types/chat";
+
+export type { FilteredMessagesResult } from "./ContextManager";
+
+export type {
+  ToolDefinition,
+  ToolCall,
+  PaperStructure,
+  PaperSection,
+  PaperMetadata,
+  PageInfo,
+  PaperStructureExtended,
+} from "../../types/tool";

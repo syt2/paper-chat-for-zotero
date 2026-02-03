@@ -27,3 +27,8 @@ pref("panelMode", "sidebar");
 // Guide Settings
 pref("firstInstalledVersion", "");
 pref("guideStatus", 0);
+
+// Context Management Settings
+pref("contextMaxRecentPairs", 10);
+pref("contextEnableSummary", false);
+pref("contextSummaryThreshold", 20);

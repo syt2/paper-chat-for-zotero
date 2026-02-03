@@ -74,14 +74,14 @@ export async function initializePrefsUI(): Promise<void> {
 }
 
 /**
- * Initialize PDF settings checkbox
+ * Initialize PDF settings checkboxes
  */
 function initPdfSettingsCheckbox(doc: Document): void {
-  const checkbox = doc.getElementById(
+  const uploadRawPdfCheckbox = doc.getElementById(
     "pref-upload-raw-pdf-checkbox",
   ) as XUL.Checkbox | null;
-  if (checkbox) {
-    checkbox.checked = getPref("uploadRawPdfOnFailure") as boolean;
+  if (uploadRawPdfCheckbox) {
+    uploadRawPdfCheckbox.checked = getPref("uploadRawPdfOnFailure") as boolean;
   }
 }
 
@@ -127,15 +127,15 @@ export function bindPrefEvents(): void {
 }
 
 /**
- * Bind PDF settings checkbox event
+ * Bind PDF settings checkbox events
  */
 function bindPdfSettingsEvent(doc: Document): void {
-  const checkbox = doc.getElementById(
+  const uploadRawPdfCheckbox = doc.getElementById(
     "pref-upload-raw-pdf-checkbox",
   ) as XUL.Checkbox | null;
-  if (checkbox) {
-    checkbox.addEventListener("command", () => {
-      setPref("uploadRawPdfOnFailure", checkbox.checked);
+  if (uploadRawPdfCheckbox) {
+    uploadRawPdfCheckbox.addEventListener("command", () => {
+      setPref("uploadRawPdfOnFailure", uploadRawPdfCheckbox.checked);
     });
   }
 }

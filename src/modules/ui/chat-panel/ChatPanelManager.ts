@@ -413,60 +413,62 @@ async function initializeChatContentCommon(
   const manager = getChatManager();
   setupChatManagerCallbacks(manager, context, container);
 
-  // Get current item
+  // Initialize ChatManager (handles migration and session loading)
+  await manager.init();
+
+  // Get current item from reader
   const activeItem = getActiveReaderItem();
   if (activeItem) {
     moduleCurrentItem = activeItem;
-  }
-  if (!moduleCurrentItem) {
-    moduleCurrentItem = { id: 0 } as Zotero.Item;
+    manager.setCurrentItemKey(activeItem.key);
+  } else {
+    moduleCurrentItem = null;
+    manager.setCurrentItemKey(null);
   }
 
   // Update PDF checkbox visibility
   await context.updatePdfCheckboxVisibility(moduleCurrentItem);
 
-  // Load session and render
-  const session = await manager.getSession(moduleCurrentItem);
-  manager.setActiveItem(moduleCurrentItem.id);
-  context.renderMessages(session.messages);
+  // Load active session and render
+  const session = manager.getActiveSession();
+  if (session) {
+    context.renderMessages(session.messages);
+  }
 
   focusInput(container);
 }
 
 /**
  * Refresh chat for current item (works for both sidebar and floating)
+ * Note: This updates the current item tracking but does NOT switch sessions
  */
 async function refreshChatForContainer(container: HTMLElement): Promise<void> {
   const activeItem = getActiveReaderItem();
-  if (activeItem) {
-    moduleCurrentItem = activeItem;
-  }
-
-  const itemToUse = moduleCurrentItem;
   const manager = getChatManager();
 
-  // Update PDF checkbox visibility
-  await updatePdfCheckboxVisibilityForItem(container, null, manager);
-
-  // Reset checkbox state
-  const attachPdfCheckbox = container.querySelector(
-    "#chat-attach-pdf",
-  ) as HTMLInputElement;
-  if (attachPdfCheckbox) {
-    attachPdfCheckbox.checked = false;
+  // Update current item tracking (session remains the same)
+  if (activeItem) {
+    moduleCurrentItem = activeItem;
+    manager.setCurrentItemKey(activeItem.key);
+  } else {
+    moduleCurrentItem = null;
+    manager.setCurrentItemKey(null);
   }
 
-  // Load and render session
-  const sessionItem =
-    !itemToUse || itemToUse.id === 0 ? ({ id: 0 } as Zotero.Item) : itemToUse;
-  const session = await manager.getSession(sessionItem);
-  manager.setActiveItem(sessionItem.id);
+  // Update PDF checkbox visibility
+  await updatePdfCheckboxVisibilityForItem(
+    container,
+    moduleCurrentItem,
+    manager,
+  );
 
+  // Render current session messages (session doesn't change on tab switch)
+  const session = manager.getActiveSession();
   const chatHistory = container.querySelector("#chat-history") as HTMLElement;
   const emptyState = container.querySelector(
     "#chat-empty-state",
   ) as HTMLElement;
-  if (chatHistory) {
+  if (chatHistory && session) {
     renderMessageElements(
       chatHistory,
       emptyState,
@@ -666,19 +668,15 @@ function setupChatManagerCallbacks(
   const authManager = getAuthManager();
 
   manager.setCallbacks({
-    onMessageUpdate: (itemId, messages) => {
+    onMessageUpdate: (messages) => {
       ztoolkit.log(
-        "onMessageUpdate callback fired, itemId:",
-        itemId,
-        "moduleCurrentItem:",
-        moduleCurrentItem?.id,
+        "onMessageUpdate callback fired, messages:",
+        messages.length,
       );
-      if (moduleCurrentItem && itemId === moduleCurrentItem.id) {
-        context.renderMessages(messages);
-      }
+      context.renderMessages(messages);
     },
-    onStreamingUpdate: (itemId, content) => {
-      if (moduleCurrentItem && itemId === moduleCurrentItem.id && container) {
+    onStreamingUpdate: (content) => {
+      if (container) {
         const streamingEl = container.querySelector("#chat-streaming-content");
         if (streamingEl) {
           renderMarkdownToElement(streamingEl as HTMLElement, content);

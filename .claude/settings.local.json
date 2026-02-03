@@ -30,7 +30,9 @@
       "Bash(git diff:*)",
       "Bash(git status:*)",
       "Bash(git log:*)",
-      "Bash(git -C:*)"
+      "Bash(git -C:*)",
+      "Bash(npm run lint:check:*)",
+      "Bash(npm run lint:fix:*)"
     ]
   }
 }

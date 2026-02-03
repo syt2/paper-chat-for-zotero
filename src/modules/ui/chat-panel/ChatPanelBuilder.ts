@@ -279,49 +279,6 @@ export function createChatContainer(
     { id: "chat-toolbar" },
   );
 
-  // PDF checkbox
-  const pdfLabel = createElement(
-    doc,
-    "label",
-    {
-      display: "none",
-      alignItems: "center",
-      gap: "6px",
-      fontSize: "12px",
-      color: theme.textSecondary,
-      cursor: "pointer",
-    },
-    { id: "chat-pdf-label" },
-  );
-
-  const pdfCheckbox = createElement(
-    doc,
-    "input",
-    {
-      margin: "0",
-      cursor: "pointer",
-    },
-    { type: "checkbox", id: "chat-attach-pdf" },
-  ) as HTMLInputElement;
-
-  const pdfText = createElement(doc, "span", {});
-  pdfText.textContent = getString("chat-attach-pdf");
-
-  const pdfStatus = createElement(
-    doc,
-    "span",
-    {
-      fontSize: "11px",
-      color: theme.textMuted,
-      marginLeft: "4px",
-    },
-    { id: "chat-pdf-status" },
-  );
-
-  pdfLabel.appendChild(pdfCheckbox);
-  pdfLabel.appendChild(pdfText);
-  pdfLabel.appendChild(pdfStatus);
-
   // Toolbar buttons
   const toolbarButtons = createElement(doc, "div", {
     display: "flex",
@@ -377,7 +334,6 @@ export function createChatContainer(
   toolbarButtons.appendChild(uploadFileBtn);
   toolbarButtons.appendChild(historyBtn);
 
-  toolbar.appendChild(pdfLabel);
   toolbar.appendChild(toolbarButtons);
 
   // Attachments Preview

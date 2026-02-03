@@ -100,8 +100,17 @@ export class GeminiProvider extends BaseProvider {
       const response = await fetch(
         `${this._config.baseUrl}/models?key=${this._config.apiKey}`,
       );
+      if (!response.ok) {
+        ztoolkit.log(
+          `[${this.getName()}] testConnection failed: ${response.status} ${response.statusText}`,
+        );
+      }
       return response.ok;
-    } catch {
+    } catch (error) {
+      ztoolkit.log(
+        `[${this.getName()}] testConnection error:`,
+        error instanceof Error ? error.message : String(error),
+      );
       return false;
     }
   }
@@ -128,8 +137,14 @@ export class GeminiProvider extends BaseProvider {
             .map((m) => m.name.replace("models/", "")) || []
         );
       }
-    } catch {
-      // Ignore errors
+      ztoolkit.log(
+        `[${this.getName()}] getAvailableModels failed: ${response.status}`,
+      );
+    } catch (error) {
+      ztoolkit.log(
+        `[${this.getName()}] getAvailableModels error:`,
+        error instanceof Error ? error.message : String(error),
+      );
     }
     return this._config.availableModels || [];
   }

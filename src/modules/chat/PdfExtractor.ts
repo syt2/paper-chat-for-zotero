@@ -11,11 +11,17 @@ export class PdfExtractor {
     item: Zotero.Item,
   ): Promise<Zotero.Item | null> {
     // Check if the item itself is a PDF attachment
-    if (
-      item.isAttachment() &&
-      item.attachmentContentType === "application/pdf"
-    ) {
-      return item;
+    if (item.isAttachment()) {
+      if (item.attachmentContentType === "application/pdf") {
+        return item;
+      }
+      // Non-PDF attachment, can't have child attachments
+      return null;
+    }
+
+    // Notes can't have attachments
+    if (item.isNote()) {
+      return null;
     }
 
     // Otherwise, look for PDF attachments on the item

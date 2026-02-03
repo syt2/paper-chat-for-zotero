@@ -11,6 +11,22 @@ import { createElement } from "./ChatPanelBuilder";
 export const SESSIONS_PER_PAGE = 20;
 
 /**
+ * Format timestamp to display string
+ */
+function formatTimestamp(timestamp: number): string {
+  const date = new Date(timestamp);
+  const now = new Date();
+  const isThisYear = date.getFullYear() === now.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return isThisYear
+    ? `${month}/${day} ${hours}:${minutes}`
+    : `${date.getFullYear()}/${month}/${day} ${hours}:${minutes}`;
+}
+
+/**
  * Create a session item element for the history dropdown
  */
 export function createSessionItem(
@@ -81,8 +97,8 @@ export function createSessionItem(
     paddingRight: "30px",
   });
 
-  // Item name
-  const nameEl = createElement(doc, "div", {
+  // Session title (based on creation time)
+  const titleEl = createElement(doc, "div", {
     fontWeight: "600",
     fontSize: "13px",
     marginBottom: "4px",
@@ -91,7 +107,7 @@ export function createSessionItem(
     whiteSpace: "nowrap",
     color: theme.textPrimary,
   });
-  nameEl.textContent = session.itemName;
+  titleEl.textContent = `Chat ${formatTimestamp(session.createdAt)}`;
 
   // Message preview
   const previewEl = createElement(doc, "div", {
@@ -102,9 +118,10 @@ export function createSessionItem(
     whiteSpace: "nowrap",
     marginBottom: "4px",
   });
-  previewEl.textContent = session.lastMessage || getString("chat-no-messages");
+  previewEl.textContent =
+    session.lastMessagePreview || getString("chat-no-messages");
 
-  // Meta info (message count and date)
+  // Meta info (message count and last update)
   const metaEl = createElement(doc, "div", {
     fontSize: "11px",
     color: theme.textMuted,
@@ -118,22 +135,12 @@ export function createSessionItem(
   });
 
   const timeEl = createElement(doc, "span", {});
-  const date = new Date(session.lastUpdated);
-  // 格式化为 "MM/DD HH:mm" 或 "YYYY/MM/DD HH:mm"（如果不是今年）
-  const now = new Date();
-  const isThisYear = date.getFullYear() === now.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  const hours = String(date.getHours()).padStart(2, "0");
-  const minutes = String(date.getMinutes()).padStart(2, "0");
-  timeEl.textContent = isThisYear
-    ? `${month}/${day} ${hours}:${minutes}`
-    : `${date.getFullYear()}/${month}/${day} ${hours}:${minutes}`;
+  timeEl.textContent = formatTimestamp(session.updatedAt);
 
   metaEl.appendChild(msgCount);
   metaEl.appendChild(timeEl);
 
-  contentWrapper.appendChild(nameEl);
+  contentWrapper.appendChild(titleEl);
   contentWrapper.appendChild(previewEl);
   contentWrapper.appendChild(metaEl);
 

@@ -23,6 +23,9 @@ declare namespace _ZoteroTypes {
       "panelMode": string;
       "firstInstalledVersion": string;
       "guideStatus": number;
+      "contextMaxRecentPairs": number;
+      "contextEnableSummary": boolean;
+      "contextSummaryThreshold": number;
     };
   }
 }

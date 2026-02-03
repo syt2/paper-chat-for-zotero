@@ -11,10 +11,38 @@ import { getPref, setPref } from "../../utils/prefs";
 import { BUILTIN_PROVIDERS, getProviderManager } from "../providers";
 import { getString } from "../../utils/locale";
 
-// 简单的密码编码/解码（base64，非加密，仅混淆）
+// 密码加密/解密（使用简单的 XOR 加密 + Base64 编码）
+// 加密密钥基于插件 ID 和用户 profile 路径生成，比纯 Base64 更安全
+const ENCRYPTION_SALT = "paper-chat-v1-salt";
+
+function getEncryptionKey(): string {
+  // 使用插件 ID、salt 和 Zotero 数据目录生成密钥
+  const dataDir = Zotero.DataDirectory?.dir || "default";
+  const keySource = `${ENCRYPTION_SALT}-${dataDir}`;
+  // 生成固定长度的密钥
+  let key = "";
+  for (let i = 0; i < keySource.length; i++) {
+    key += String.fromCharCode(keySource.charCodeAt(i) % 256);
+  }
+  return key;
+}
+
+function xorEncrypt(text: string, key: string): string {
+  let result = "";
+  for (let i = 0; i < text.length; i++) {
+    result += String.fromCharCode(
+      text.charCodeAt(i) ^ key.charCodeAt(i % key.length),
+    );
+  }
+  return result;
+}
+
 function encodePassword(password: string): string {
   try {
-    return btoa(unescape(encodeURIComponent(password)));
+    const key = getEncryptionKey();
+    const encrypted = xorEncrypt(password, key);
+    // 添加版本前缀以便后续升级
+    return "v1:" + btoa(unescape(encodeURIComponent(encrypted)));
   } catch {
     return password;
   }
@@ -22,6 +50,14 @@ function encodePassword(password: string): string {
 
 function decodePassword(encoded: string): string {
   try {
+    // 检查版本前缀
+    if (encoded.startsWith("v1:")) {
+      const base64Part = encoded.substring(3);
+      const encrypted = decodeURIComponent(escape(atob(base64Part)));
+      const key = getEncryptionKey();
+      return xorEncrypt(encrypted, key); // XOR 是对称的
+    }
+    // 兼容旧版本（纯 Base64）
     return decodeURIComponent(escape(atob(encoded)));
   } catch {
     return encoded;
@@ -75,8 +111,9 @@ export class AuthManager {
 
   /**
    * 添加回调监听器（支持多个组件同时监听）
+   * @returns 清理函数，调用后移除所有添加的监听器
    */
-  addListener(callbacks: AuthCallbacks): void {
+  addListener(callbacks: AuthCallbacks): () => void {
     if (callbacks.onLoginStatusChange) {
       this.listeners.onLoginStatusChange.push(callbacks.onLoginStatusChange);
     }
@@ -88,6 +125,39 @@ export class AuthManager {
     }
     if (callbacks.onError) {
       this.listeners.onError.push(callbacks.onError);
+    }
+
+    // 返回清理函数
+    return () => {
+      this.removeListener(callbacks);
+    };
+  }
+
+  /**
+   * 移除回调监听器
+   */
+  removeListener(callbacks: AuthCallbacks): void {
+    if (callbacks.onLoginStatusChange) {
+      const idx = this.listeners.onLoginStatusChange.indexOf(
+        callbacks.onLoginStatusChange,
+      );
+      if (idx > -1) this.listeners.onLoginStatusChange.splice(idx, 1);
+    }
+    if (callbacks.onUserInfoUpdate) {
+      const idx = this.listeners.onUserInfoUpdate.indexOf(
+        callbacks.onUserInfoUpdate,
+      );
+      if (idx > -1) this.listeners.onUserInfoUpdate.splice(idx, 1);
+    }
+    if (callbacks.onBalanceUpdate) {
+      const idx = this.listeners.onBalanceUpdate.indexOf(
+        callbacks.onBalanceUpdate,
+      );
+      if (idx > -1) this.listeners.onBalanceUpdate.splice(idx, 1);
+    }
+    if (callbacks.onError) {
+      const idx = this.listeners.onError.indexOf(callbacks.onError);
+      if (idx > -1) this.listeners.onError.splice(idx, 1);
     }
   }
 
@@ -824,8 +894,15 @@ export class AuthManager {
 
 // 全局单例
 let authManager: AuthManager | null = null;
+let isAuthManagerDestroyed = false;
 
 export function getAuthManager(): AuthManager {
+  if (isAuthManagerDestroyed) {
+    ztoolkit.log(
+      "[AuthManager] Warning: Accessing destroyed AuthManager, recreating...",
+    );
+    isAuthManagerDestroyed = false;
+  }
   if (!authManager) {
     authManager = new AuthManager();
   }
@@ -837,4 +914,9 @@ export function destroyAuthManager(): void {
     authManager.destroy();
     authManager = null;
   }
+  isAuthManagerDestroyed = true;
+}
+
+export function isAuthManagerAvailable(): boolean {
+  return authManager !== null && !isAuthManagerDestroyed;
 }

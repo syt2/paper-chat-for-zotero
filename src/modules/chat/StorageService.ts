@@ -1,11 +1,16 @@
 /**
- * StorageService - 对话历史持久化
+ * StorageService - 对话历史持久化 (旧版，用于迁移兼容)
  *
  * 使用Zotero Profile目录下的JSON文件存储对话历史
  * 使用索引文件缓存元数据，避免频繁读取所有session文件
+ *
+ * @deprecated 使用 SessionStorageService 替代
  */
 
-import type { ChatSession, StoredSessionMeta } from "../../types/chat";
+import type { LegacyChatSession, StoredSessionMeta } from "../../types/chat";
+
+// 使用旧版类型
+type ChatSession = LegacyChatSession;
 
 export class StorageService {
   private storagePath: string;

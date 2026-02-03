@@ -11,6 +11,45 @@ import { createElement, copyToClipboard } from "./ChatPanelBuilder";
 import { getString } from "../../../utils/locale";
 
 /**
+ * Create a system notice element (for item switching, etc.)
+ */
+function createSystemNoticeElement(
+  doc: Document,
+  msg: ChatMessage,
+  theme: ThemeColors,
+): HTMLElement {
+  const wrapper = createElement(
+    doc,
+    "div",
+    {
+      display: "flex",
+      justifyContent: "center",
+      margin: "16px 0",
+    },
+    { class: "chat-message system-notice" },
+  );
+
+  const notice = createElement(
+    doc,
+    "div",
+    {
+      display: "inline-block",
+      padding: "6px 16px",
+      fontSize: "12px",
+      color: theme.textMuted,
+      background: theme.buttonBg,
+      borderRadius: "12px",
+      border: `1px solid ${theme.borderColor}`,
+    },
+    { class: "system-notice-content" },
+  );
+
+  notice.textContent = msg.content;
+  wrapper.appendChild(notice);
+  return wrapper;
+}
+
+/**
  * Create a message element for display in chat history
  */
 export function createMessageElement(
@@ -19,6 +58,11 @@ export function createMessageElement(
   theme: ThemeColors,
   isLastAssistant: boolean = false,
 ): HTMLElement {
+  // Handle system notices specially
+  if (msg.isSystemNotice) {
+    return createSystemNoticeElement(doc, msg, theme);
+  }
+
   const wrapper = createElement(
     doc,
     "div",
