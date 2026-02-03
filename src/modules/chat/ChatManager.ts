@@ -13,9 +13,11 @@ import type {
   ChatSession,
   SendMessageOptions,
   StreamCallbacks,
+  StreamToolCallingCallbacks,
   SessionMeta,
 } from "../../types/chat";
 import type { ToolDefinition, ToolCall } from "../../types/tool";
+import type { ToolCallingProvider } from "../../types/provider";
 import { SessionStorageService } from "./SessionStorageService";
 import { PdfExtractor } from "./PdfExtractor";
 import { getContextManager } from "./ContextManager";
@@ -26,14 +28,9 @@ import { getString } from "../../utils/locale";
 import { getPref } from "../../utils/prefs";
 import { checkAndMigrate } from "./migration/migrateV1Sessions";
 
-// Type guard for providers that support tool calling
-interface ToolCallingProvider {
-  chatCompletionWithTools(
-    messages: ChatMessage[],
-    tools?: ToolDefinition[],
-  ): Promise<{ content: string; toolCalls?: ToolCall[] }>;
-}
-
+/**
+ * Type guard: check if provider supports tool calling
+ */
 function supportsToolCalling(
   provider: unknown,
 ): provider is ToolCallingProvider {
@@ -43,6 +40,23 @@ function supportsToolCalling(
     "chatCompletionWithTools" in provider &&
     typeof (provider as ToolCallingProvider).chatCompletionWithTools ===
       "function"
+  );
+}
+
+/**
+ * Type guard: check if provider supports streaming tool calling
+ */
+function supportsStreamingToolCalling(
+  provider: unknown,
+): provider is ToolCallingProvider & {
+  streamChatCompletionWithTools: NonNullable<
+    ToolCallingProvider["streamChatCompletionWithTools"]
+  >;
+} {
+  return (
+    supportsToolCalling(provider) &&
+    "streamChatCompletionWithTools" in provider &&
+    typeof provider.streamChatCompletionWithTools === "function"
   );
 }
 
@@ -576,6 +590,7 @@ export class ChatManager {
 
   /**
    * 使用 Tool Calling 发送消息
+   * 优先使用流式模式，fallback 到非流式
    */
   private async sendMessageWithToolCalling(
     provider: ToolCallingProvider,
@@ -615,7 +630,249 @@ export class ChatManager {
       ...messagesForApi,
     ];
 
-    const currentMessages = messagesWithContext;
+    // 检查是否支持流式 tool calling
+    if (supportsStreamingToolCalling(provider)) {
+      ztoolkit.log("[Tool Calling] Using streaming mode");
+      await this.sendMessageWithStreamingToolCalling(
+        provider,
+        messagesWithContext,
+        assistantMessage,
+        pdfWasAttached,
+        summaryTriggered,
+        tools,
+        paperStructure,
+      );
+    } else {
+      ztoolkit.log("[Tool Calling] Using non-streaming mode");
+      await this.sendMessageWithNonStreamingToolCalling(
+        provider,
+        messagesWithContext,
+        assistantMessage,
+        pdfWasAttached,
+        summaryTriggered,
+        tools,
+        paperStructure,
+      );
+    }
+  }
+
+  /**
+   * 流式 Tool Calling - 边输出边调用工具
+   */
+  private async sendMessageWithStreamingToolCalling(
+    provider: ToolCallingProvider & {
+      streamChatCompletionWithTools: NonNullable<
+        ToolCallingProvider["streamChatCompletionWithTools"]
+      >;
+    },
+    currentMessages: ChatMessage[],
+    assistantMessage: ChatMessage,
+    pdfWasAttached: boolean,
+    summaryTriggered: boolean,
+    tools: ToolDefinition[],
+    paperStructure: Awaited<
+      ReturnType<typeof getPdfToolManager.prototype.extractAndParsePaper>
+    >,
+  ): Promise<void> {
+    const pdfToolManager = getPdfToolManager();
+    const contextManager = getContextManager();
+    const maxIterations = 10;
+    let iteration = 0;
+
+    try {
+      while (iteration < maxIterations) {
+        iteration++;
+        ztoolkit.log(
+          `[Streaming Tool Calling] Iteration ${iteration}, messages: ${currentMessages.length}`,
+        );
+
+        // 累积工具调用信息
+        const pendingToolCalls = new Map<
+          number,
+          { id: string; name: string; arguments: string }
+        >();
+
+        const result = await new Promise<{
+          content: string;
+          toolCalls?: ToolCall[];
+          stopReason: string;
+        }>((resolve, reject) => {
+          let fullContent = "";
+          let stopReason = "end_turn";
+
+          const callbacks: StreamToolCallingCallbacks = {
+            onTextDelta: (text) => {
+              fullContent += text;
+              assistantMessage.content = fullContent;
+              this.onStreamingUpdate?.(fullContent);
+            },
+            onToolCallStart: ({ index, id, name }) => {
+              pendingToolCalls.set(index, { id, name, arguments: "" });
+              ztoolkit.log(
+                `[Streaming Tool Calling] Tool call started: ${name} (${id})`,
+              );
+            },
+            onToolCallDelta: (index, argumentsDelta) => {
+              const tc = pendingToolCalls.get(index);
+              if (tc) {
+                tc.arguments += argumentsDelta;
+              }
+            },
+            onComplete: (result) => {
+              stopReason = result.stopReason;
+              // Build tool calls from accumulated data
+              const toolCalls: ToolCall[] = [];
+              for (const [, tc] of pendingToolCalls) {
+                toolCalls.push({
+                  id: tc.id,
+                  type: "function",
+                  function: {
+                    name: tc.name,
+                    arguments: tc.arguments,
+                  },
+                });
+              }
+              resolve({
+                content: fullContent,
+                toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+                stopReason,
+              });
+            },
+            onError: (error) => {
+              reject(error);
+            },
+          };
+
+          // 调用流式方法，捕获可能的同步异常
+          provider
+            .streamChatCompletionWithTools(currentMessages, tools, callbacks)
+            .catch(reject);
+        });
+
+        ztoolkit.log(
+          "[Streaming Tool Calling] Response:",
+          result.content ? result.content.substring(0, 100) : "(no content)",
+          "toolCalls:",
+          result.toolCalls?.length || 0,
+          "stopReason:",
+          result.stopReason,
+        );
+
+        // 如果有工具调用，执行并继续
+        if (result.toolCalls && result.toolCalls.length > 0) {
+          // 添加带 tool_calls 的 assistant 消息到上下文
+          const assistantToolMessage: ChatMessage = {
+            id: this.generateId(),
+            role: "assistant",
+            content: result.content || "",
+            tool_calls: result.toolCalls,
+            timestamp: Date.now(),
+          };
+          currentMessages.push(assistantToolMessage);
+
+          // 显示正在执行工具
+          assistantMessage.content =
+            result.content + "\n\n[Executing tools...]\n";
+          this.onStreamingUpdate?.(assistantMessage.content);
+
+          // 执行所有工具
+          for (const toolCall of result.toolCalls) {
+            ztoolkit.log(
+              `[Streaming Tool Calling] Executing: ${toolCall.function.name}`,
+            );
+
+            const toolResult = await pdfToolManager.executeToolCall(
+              toolCall,
+              paperStructure || undefined,
+            );
+
+            ztoolkit.log(
+              `[Streaming Tool Calling] Result (truncated): ${toolResult.substring(0, 200)}...`,
+            );
+
+            const toolResultMessage: ChatMessage = {
+              id: this.generateId(),
+              role: "tool",
+              content: toolResult,
+              tool_call_id: toolCall.id,
+              timestamp: Date.now(),
+            };
+            currentMessages.push(toolResultMessage);
+          }
+
+          // 继续下一轮
+          continue;
+        }
+
+        // 没有 tool calls，最终回答
+        assistantMessage.content = result.content || "";
+        assistantMessage.timestamp = Date.now();
+        this.currentSession!.updatedAt = Date.now();
+
+        await this.sessionStorage.saveSession(this.currentSession!);
+        this.onMessageUpdate?.(this.currentSession!.messages);
+
+        if (pdfWasAttached) {
+          this.onPdfAttached?.();
+        }
+        this.onMessageComplete?.();
+
+        if (summaryTriggered) {
+          contextManager
+            .generateSummaryAsync(this.currentSession!, async () => {
+              await this.sessionStorage.saveSession(this.currentSession!);
+            })
+            .catch((err) => {
+              ztoolkit.log("[ChatManager] Summary generation failed:", err);
+            });
+        }
+
+        return;
+      }
+
+      // 达到最大迭代次数
+      // Note: Use += to append because streaming mode may have partial content visible to user
+      ztoolkit.log("[Streaming Tool Calling] Max iterations reached");
+      assistantMessage.content +=
+        "\n\nI apologize, but I was unable to complete the request within the allowed number of iterations.";
+      assistantMessage.timestamp = Date.now();
+      this.currentSession!.updatedAt = Date.now();
+      await this.sessionStorage.saveSession(this.currentSession!);
+      this.onMessageUpdate?.(this.currentSession!.messages);
+    } catch (error) {
+      ztoolkit.log("[Streaming Tool Calling] Error:", error);
+
+      this.currentSession!.messages.pop();
+
+      const errorMessage: ChatMessage = {
+        id: this.generateId(),
+        role: "error",
+        content: error instanceof Error ? error.message : String(error),
+        timestamp: Date.now(),
+      };
+      this.currentSession!.messages.push(errorMessage);
+
+      this.onError?.(error instanceof Error ? error : new Error(String(error)));
+      this.onMessageUpdate?.(this.currentSession!.messages);
+    }
+  }
+
+  /**
+   * 非流式 Tool Calling - 等待完整响应后再继续
+   */
+  private async sendMessageWithNonStreamingToolCalling(
+    provider: ToolCallingProvider,
+    currentMessages: ChatMessage[],
+    assistantMessage: ChatMessage,
+    pdfWasAttached: boolean,
+    summaryTriggered: boolean,
+    tools: ToolDefinition[],
+    paperStructure: Awaited<
+      ReturnType<typeof getPdfToolManager.prototype.extractAndParsePaper>
+    >,
+  ): Promise<void> {
+    const pdfToolManager = getPdfToolManager();
+    const contextManager = getContextManager();
     const maxIterations = 10;
     let iteration = 0;
 
@@ -708,6 +965,7 @@ export class ChatManager {
       }
 
       // 达到最大迭代次数
+      // Note: Use = to replace because non-streaming mode only shows placeholder text
       ztoolkit.log("[Tool Calling] Max iterations reached");
       assistantMessage.content =
         "I apologize, but I was unable to complete the request within the allowed number of iterations.";

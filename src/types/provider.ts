@@ -2,7 +2,12 @@
  * Provider Types - Multi-provider AI API type definitions
  */
 
-import type { ChatMessage, StreamCallbacks } from "./chat";
+import type {
+  ChatMessage,
+  StreamCallbacks,
+  StreamToolCallingCallbacks,
+} from "./chat";
+import type { ToolDefinition, ToolCall } from "./tool";
 
 /**
  * Model capabilities
@@ -117,12 +122,51 @@ export interface ProviderStorageData {
 
 /**
  * Message format for Anthropic API
+ * Supports text, images, documents, tool_use, and tool_result blocks
  */
 export interface AnthropicMessage {
   role: "user" | "assistant";
-  content: string | AnthropicContentBlock[];
+  content:
+    | string
+    | (
+        | AnthropicTextBlock
+        | AnthropicImageBlock
+        | AnthropicDocumentBlock
+        | AnthropicToolUseBlock
+        | AnthropicToolResultBlock
+      )[];
 }
 
+/** Anthropic text content block */
+export interface AnthropicTextBlock {
+  type: "text";
+  text: string;
+}
+
+/** Anthropic image content block */
+export interface AnthropicImageBlock {
+  type: "image";
+  source: {
+    type: "base64";
+    media_type: string;
+    data: string;
+  };
+}
+
+/** Anthropic document content block */
+export interface AnthropicDocumentBlock {
+  type: "document";
+  source: {
+    type: "base64";
+    media_type: string;
+    data: string;
+  };
+}
+
+/**
+ * @deprecated Use AnthropicTextBlock | AnthropicImageBlock | AnthropicDocumentBlock instead
+ * Kept for backward compatibility
+ */
 export interface AnthropicContentBlock {
   type: "text" | "image" | "document";
   text?: string;
@@ -198,3 +242,54 @@ export interface AIProvider {
  * Provider factory type
  */
 export type ProviderFactory = (config: ProviderConfig) => AIProvider;
+
+/**
+ * Tool Calling Provider interface
+ * Extends AIProvider with tool calling capabilities
+ */
+export interface ToolCallingProvider extends AIProvider {
+  /** 非流式 tool calling */
+  chatCompletionWithTools(
+    messages: ChatMessage[],
+    tools?: ToolDefinition[],
+  ): Promise<{ content: string; toolCalls?: ToolCall[] }>;
+
+  /** 流式 tool calling（可选，部分 provider 可能不支持） */
+  streamChatCompletionWithTools?(
+    messages: ChatMessage[],
+    tools: ToolDefinition[],
+    callbacks: StreamToolCallingCallbacks,
+  ): Promise<void>;
+}
+
+/**
+ * Anthropic Tool 定义格式
+ */
+export interface AnthropicTool {
+  name: string;
+  description: string;
+  input_schema: {
+    type: "object";
+    properties: Record<string, unknown>;
+    required?: string[];
+  };
+}
+
+/**
+ * Anthropic Tool Use 内容块
+ */
+export interface AnthropicToolUseBlock {
+  type: "tool_use";
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+}
+
+/**
+ * Anthropic Tool Result 内容块
+ */
+export interface AnthropicToolResultBlock {
+  type: "tool_result";
+  tool_use_id: string;
+  content: string;
+}

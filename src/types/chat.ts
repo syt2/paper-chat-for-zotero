@@ -118,6 +118,35 @@ export interface StreamCallbacks {
   onError: (error: Error) => void;
 }
 
+// 流式 Tool Calling 完成结果
+export interface StreamToolCallingResult {
+  content: string;
+  toolCalls?: ToolCall[];
+  stopReason: "tool_calls" | "end_turn" | "max_tokens" | "stop";
+}
+
+// 流式 Tool Calling 回调
+export interface StreamToolCallingCallbacks {
+  /** 文本片段 */
+  onTextDelta: (text: string) => void;
+
+  /** Tool call 开始 */
+  onToolCallStart: (toolCall: {
+    index: number;
+    id: string;
+    name: string;
+  }) => void;
+
+  /** Tool call 参数增量 */
+  onToolCallDelta: (index: number, argumentsDelta: string) => void;
+
+  /** 所有内容完成 */
+  onComplete: (result: StreamToolCallingResult) => void;
+
+  /** 错误 */
+  onError: (error: Error) => void;
+}
+
 // 发送消息选项
 export interface SendMessageOptions {
   attachPdf?: boolean;

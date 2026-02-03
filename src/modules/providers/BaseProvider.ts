@@ -13,7 +13,9 @@ import type {
   ApiKeyProviderConfig,
   PdfAttachment,
   AnthropicMessage,
-  AnthropicContentBlock,
+  AnthropicTextBlock,
+  AnthropicImageBlock,
+  AnthropicDocumentBlock,
   GeminiContent,
   GeminiPart,
 } from "../../types/provider";
@@ -255,7 +257,11 @@ export abstract class BaseProvider implements AIProvider {
 
       // Use multimodal format if has images or PDF
       if (hasImages || shouldAttachPdf) {
-        const content: AnthropicContentBlock[] = [];
+        const content: (
+          | AnthropicTextBlock
+          | AnthropicImageBlock
+          | AnthropicDocumentBlock
+        )[] = [];
 
         // Add PDF document first
         if (shouldAttachPdf) {
