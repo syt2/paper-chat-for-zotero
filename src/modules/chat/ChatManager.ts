@@ -378,7 +378,6 @@ export class ChatManager {
       | { data: string; mimeType: string; name: string }
       | undefined;
     let pdfWasAttached = false;
-    let useToolCalling = false;
 
     ztoolkit.log("[Tool Calling] provider type:", provider?.constructor?.name);
     ztoolkit.log(
@@ -386,37 +385,41 @@ export class ChatManager {
       supportsToolCalling(provider),
     );
 
-    // 自动检测并解析 PDF（有 item 且 provider 支持 tool calling）
-    if (hasCurrentItem && item && supportsToolCalling(provider)) {
-      const hasPdf = await this.pdfExtractor.hasPdfAttachment(item);
-      ztoolkit.log("[PDF Auto-detect] Item has PDF:", hasPdf);
+    // 如果 provider 支持 tool calling，启用 tool calling 模式
+    // 即使没有 PDF，也可以使用 library 工具（搜索、笔记等）
+    const useToolCalling = supportsToolCalling(provider);
 
-      if (hasPdf) {
-        // 实时提取 PDF（不再存储）
-        const pdfText = await this.pdfExtractor.extractPdfText(item);
-        if (pdfText) {
-          pdfWasAttached = true;
-          useToolCalling = true;
-          ztoolkit.log("[PDF Auto-detect] PDF extracted for tool calling");
-        } else {
-          ztoolkit.log("[PDF Auto-detect] PDF text extraction failed");
-          // 尝试原始 PDF 上传
-          if (
-            provider.supportsPdfUpload() &&
-            getPref("uploadRawPdfOnFailure")
-          ) {
-            const pdfBase64 = await this.pdfExtractor.getPdfBase64(item);
-            if (pdfBase64) {
-              pdfAttachment = pdfBase64;
-              pdfWasAttached = true;
-              ztoolkit.log(
-                "[PDF Auto-detect] Using raw PDF upload as fallback",
-              );
+    if (useToolCalling) {
+      // 如果有当前 item，尝试提取 PDF（用于 PDF 相关工具）
+      if (hasCurrentItem && item) {
+        const hasPdf = await this.pdfExtractor.hasPdfAttachment(item);
+        ztoolkit.log("[PDF Auto-detect] Item has PDF:", hasPdf);
+
+        if (hasPdf) {
+          const pdfText = await this.pdfExtractor.extractPdfText(item);
+          if (pdfText) {
+            pdfWasAttached = true;
+            ztoolkit.log("[PDF Auto-detect] PDF extracted for tool calling");
+          } else {
+            ztoolkit.log("[PDF Auto-detect] PDF text extraction failed");
+            // 尝试原始 PDF 上传
+            if (
+              provider.supportsPdfUpload() &&
+              getPref("uploadRawPdfOnFailure")
+            ) {
+              const pdfBase64 = await this.pdfExtractor.getPdfBase64(item);
+              if (pdfBase64) {
+                pdfAttachment = pdfBase64;
+                pdfWasAttached = true;
+                ztoolkit.log(
+                  "[PDF Auto-detect] Using raw PDF upload as fallback",
+                );
+              }
             }
           }
         }
       }
-    } else if (hasCurrentItem && item && !supportsToolCalling(provider)) {
+    } else if (hasCurrentItem && item) {
       // Provider 不支持 tool calling，使用传统模式
       const hasPdf = await this.pdfExtractor.hasPdfAttachment(item);
       if (hasPdf) {
