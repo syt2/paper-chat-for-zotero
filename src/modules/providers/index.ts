@@ -30,4 +30,7 @@ export type {
   PaperChatProviderConfig,
   ModelInfo,
   ModelCapability,
+  FallbackConfig,
+  FallbackExecutionResult,
+  RetryableErrorType,
 } from "../../types/provider";

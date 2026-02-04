@@ -17,7 +17,7 @@ import type {
   SessionMeta,
 } from "../../types/chat";
 import type { ToolDefinition, ToolCall } from "../../types/tool";
-import type { ToolCallingProvider } from "../../types/provider";
+import type { ToolCallingProvider, AIProvider } from "../../types/provider";
 import { SessionStorageService } from "./SessionStorageService";
 import { PdfExtractor } from "./PdfExtractor";
 import { getContextManager } from "./ContextManager";
@@ -30,36 +30,33 @@ import { checkAndMigrate } from "./migration/migrateV1Sessions";
 
 /**
  * Type guard: check if provider supports tool calling
+ * Works with any AIProvider (for fallback compatibility)
  */
-function supportsToolCalling(
-  provider: unknown,
-): provider is ToolCallingProvider {
+function providerSupportsToolCalling(
+  provider: AIProvider,
+): provider is AIProvider & ToolCallingProvider {
   return (
-    provider !== null &&
-    typeof provider === "object" &&
     "chatCompletionWithTools" in provider &&
-    typeof (provider as ToolCallingProvider).chatCompletionWithTools ===
-      "function"
+    typeof (provider as ToolCallingProvider).chatCompletionWithTools === "function"
   );
 }
 
 /**
  * Type guard: check if provider supports streaming tool calling
  */
-function supportsStreamingToolCalling(
-  provider: unknown,
-): provider is ToolCallingProvider & {
+function providerSupportsStreamingToolCalling(
+  provider: AIProvider,
+): provider is AIProvider & ToolCallingProvider & {
   streamChatCompletionWithTools: NonNullable<
     ToolCallingProvider["streamChatCompletionWithTools"]
   >;
 } {
   return (
-    supportsToolCalling(provider) &&
+    providerSupportsToolCalling(provider) &&
     "streamChatCompletionWithTools" in provider &&
     typeof provider.streamChatCompletionWithTools === "function"
   );
 }
-
 /**
  * 获取 item 的正确标题（处理附件情况）
  * 如果 item 是附件，返回父条目的标题
@@ -100,6 +97,7 @@ export class ChatManager {
   private onPdfAttached?: () => void;
   private onMessageComplete?: () => void;
   private onSelectedItemsChange?: (itemKeys: string[]) => void; // 多文档选择变化回调
+  private onFallbackNotice?: (fromProvider: string, toProvider: string) => void; // 降级通知回调
 
   constructor() {
     this.sessionStorage = new SessionStorageService();
@@ -170,6 +168,7 @@ export class ChatManager {
     onPdfAttached?: () => void;
     onMessageComplete?: () => void;
     onSelectedItemsChange?: (itemKeys: string[]) => void;
+    onFallbackNotice?: (fromProvider: string, toProvider: string) => void;
   }): void {
     this.onMessageUpdate = callbacks.onMessageUpdate;
     this.onStreamingUpdate = callbacks.onStreamingUpdate;
@@ -177,6 +176,17 @@ export class ChatManager {
     this.onPdfAttached = callbacks.onPdfAttached;
     this.onMessageComplete = callbacks.onMessageComplete;
     this.onSelectedItemsChange = callbacks.onSelectedItemsChange;
+    this.onFallbackNotice = callbacks.onFallbackNotice;
+
+    // 设置 ProviderManager 的降级回调
+    const providerManager = getProviderManager();
+    providerManager.setOnFallback((from, to, error) => {
+      ztoolkit.log(`[ChatManager] Provider fallback: ${from} -> ${to}, error: ${error.message}`);
+      // 在聊天消息中插入降级通知
+      this.insertFallbackNotice(from, to);
+      // 通知 UI 层（如果需要额外处理）
+      this.onFallbackNotice?.(from, to);
+    });
   }
 
   /**
@@ -325,6 +335,24 @@ export class ChatManager {
   }
 
   /**
+   * 插入降级通知消息到聊天界面
+   */
+  private insertFallbackNotice(fromProvider: string, toProvider: string): void {
+    if (!this.currentSession) return;
+
+    const notice: ChatMessage = {
+      id: this.generateId(),
+      role: "system",
+      content: `⚠️ ${fromProvider} unavailable, switching to ${toProvider}...`,
+      timestamp: Date.now(),
+      isSystemNotice: true,
+    };
+
+    this.currentSession.messages.push(notice);
+    this.onMessageUpdate?.(this.currentSession.messages);
+  }
+
+  /**
    * 插入 item 切换的 system-notice 消息
    */
   private insertItemSwitchNotice(
@@ -439,13 +467,13 @@ export class ChatManager {
 
     ztoolkit.log("[Tool Calling] provider type:", provider?.constructor?.name);
     ztoolkit.log(
-      "[Tool Calling] supportsToolCalling:",
-      supportsToolCalling(provider),
+      "[Tool Calling] providerSupportsToolCalling:",
+      providerSupportsToolCalling(provider),
     );
 
     // 如果 provider 支持 tool calling，启用 tool calling 模式
     // 即使没有 PDF，也可以使用 library 工具（搜索、笔记等）
-    const useToolCalling = supportsToolCalling(provider);
+    const useToolCalling = providerSupportsToolCalling(provider);
 
     if (useToolCalling) {
       // 如果有当前 item，尝试提取 PDF（用于 PDF 相关工具）
@@ -547,7 +575,7 @@ export class ChatManager {
     ztoolkit.log("[API Request] Use tool calling:", useToolCalling);
 
     // 如果启用 tool calling
-    if (useToolCalling && supportsToolCalling(provider)) {
+    if (useToolCalling && providerSupportsToolCalling(provider)) {
       ztoolkit.log("[Tool Calling] Using tool calling mode");
       await this.sendMessageWithToolCalling(
         provider,
@@ -561,100 +589,100 @@ export class ChatManager {
       return;
     }
 
-    // 传统模式：流式调用
-    let hasRetried = false;
+    // 传统模式：流式调用（带自动降级）
+    const providerManager = getProviderManager();
 
-    const attemptRequest = async (): Promise<void> => {
-      return new Promise((resolve) => {
-        const callbacks: StreamCallbacks = {
-          onChunk: (chunk: string) => {
-            assistantMessage.content += chunk;
-            this.onStreamingUpdate?.(assistantMessage.content);
-          },
-          onComplete: async (fullContent: string) => {
-            assistantMessage.content = fullContent;
-            assistantMessage.timestamp = Date.now();
-            this.currentSession!.updatedAt = Date.now();
+    try {
+      await providerManager.executeWithFallback(async (currentProvider) => {
+        // 重置 assistant 消息内容（降级时需要清空之前的部分内容）
+        assistantMessage.content = "";
 
-            await this.sessionStorage.saveSession(this.currentSession!);
-            this.onMessageUpdate?.(this.currentSession!.messages);
+        return new Promise<void>((resolve, reject) => {
+          const callbacks: StreamCallbacks = {
+            onChunk: (chunk: string) => {
+              assistantMessage.content += chunk;
+              this.onStreamingUpdate?.(assistantMessage.content);
+            },
+            onComplete: async (fullContent: string) => {
+              assistantMessage.content = fullContent;
+              assistantMessage.timestamp = Date.now();
+              this.currentSession!.updatedAt = Date.now();
 
-            if (pdfWasAttached) {
-              this.onPdfAttached?.();
-            }
-            this.onMessageComplete?.();
+              await this.sessionStorage.saveSession(this.currentSession!);
+              this.onMessageUpdate?.(this.currentSession!.messages);
 
-            // 异步触发摘要生成（不阻塞主流程）
-            if (summaryTriggered) {
-              contextManager
-                .generateSummaryAsync(this.currentSession!, async () => {
-                  await this.sessionStorage.saveSession(this.currentSession!);
-                })
-                .catch((err) => {
-                  ztoolkit.log("[ChatManager] Summary generation failed:", err);
-                });
-            }
-
-            resolve();
-          },
-          onError: async (error: Error) => {
-            ztoolkit.log("[API Error]", error.message);
-
-            if (
-              !hasRetried &&
-              this.isAuthError(error) &&
-              this.isPaperChatProvider()
-            ) {
-              ztoolkit.log("[API Error] Auth error, attempting refresh...");
-              hasRetried = true;
-
-              try {
-                const authManager = getAuthManager();
-                await authManager.ensurePluginToken(true);
-                assistantMessage.content = "";
-                ztoolkit.log("[API Retry] API key refreshed, retrying...");
-
-                const newProvider = this.getActiveProvider();
-                if (newProvider && newProvider.isReady()) {
-                  await attemptRequest();
-                  resolve();
-                  return;
-                }
-              } catch (retryError) {
-                ztoolkit.log("[API Retry] Failed to refresh:", retryError);
+              if (pdfWasAttached) {
+                this.onPdfAttached?.();
               }
-            }
+              this.onMessageComplete?.();
 
-            // 显示错误消息
-            this.currentSession!.messages.pop();
+              // 异步触发摘要生成（不阻塞主流程）
+              if (summaryTriggered) {
+                contextManager
+                  .generateSummaryAsync(this.currentSession!, async () => {
+                    await this.sessionStorage.saveSession(this.currentSession!);
+                  })
+                  .catch((err) => {
+                    ztoolkit.log("[ChatManager] Summary generation failed:", err);
+                  });
+              }
 
-            const errorMessage: ChatMessage = {
-              id: this.generateId(),
-              role: "error",
-              content: error.message,
-              timestamp: Date.now(),
-            };
-            this.currentSession!.messages.push(errorMessage);
+              resolve();
+            },
+            onError: async (error: Error) => {
+              ztoolkit.log("[API Error]", error.message);
 
-            this.onError?.(error);
-            this.onMessageUpdate?.(this.currentSession!.messages);
-            resolve();
-          },
-        };
+              // 对于 PaperChat 的认证错误，尝试刷新 token
+              if (this.isAuthError(error) && currentProvider.getName() === "PaperChat") {
+                try {
+                  const authManager = getAuthManager();
+                  await authManager.ensurePluginToken(true);
+                  ztoolkit.log("[API Retry] Token refreshed, but will use fallback mechanism");
+                } catch (refreshError) {
+                  ztoolkit.log("[API Retry] Failed to refresh token:", refreshError);
+                }
+              }
 
-        provider.streamChatCompletion(messagesForApi, callbacks, pdfAttachment);
+              // 拒绝 Promise，让 executeWithFallback 处理降级
+              reject(error);
+            },
+          };
+
+          currentProvider.streamChatCompletion(messagesForApi, callbacks, pdfAttachment);
+        });
       });
-    };
+    } catch (error) {
+      // 所有 provider 都失败了
+      ztoolkit.log("[ChatManager] All providers failed:", error);
 
-    await attemptRequest();
+      // 移除 assistant 占位消息（使用 id 精确定位，避免误删 fallback notice）
+      const assistantIndex = this.currentSession!.messages.findIndex(
+        (m) => m.id === assistantMessage.id
+      );
+      if (assistantIndex !== -1) {
+        this.currentSession!.messages.splice(assistantIndex, 1);
+      }
+
+      const errorMessage: ChatMessage = {
+        id: this.generateId(),
+        role: "error",
+        content: error instanceof Error ? error.message : String(error),
+        timestamp: Date.now(),
+      };
+      this.currentSession!.messages.push(errorMessage);
+
+      this.onError?.(error instanceof Error ? error : new Error(String(error)));
+      this.onMessageUpdate?.(this.currentSession!.messages);
+    }
   }
 
   /**
    * 使用 Tool Calling 发送消息
    * 优先使用流式模式，fallback 到非流式
+   * 支持 provider 降级：在第一次调用时选择可用的 provider
    */
   private async sendMessageWithToolCalling(
-    provider: ToolCallingProvider,
+    _provider: ToolCallingProvider, // 原始 provider，可能被降级替换
     messagesForApi: ChatMessage[],
     assistantMessage: ChatMessage,
     pdfWasAttached: boolean,
@@ -663,6 +691,7 @@ export class ChatManager {
     item: Zotero.Item,
   ): Promise<void> {
     const pdfToolManager = getPdfToolManager();
+    const providerManager = getProviderManager();
 
     // 获取动态工具列表
     const tools = pdfToolManager.getToolDefinitions(hasCurrentItem);
@@ -690,29 +719,69 @@ export class ChatManager {
       ...messagesForApi,
     ];
 
-    // 检查是否支持流式 tool calling
-    if (supportsStreamingToolCalling(provider)) {
-      ztoolkit.log("[Tool Calling] Using streaming mode");
-      await this.sendMessageWithStreamingToolCalling(
-        provider,
-        messagesWithContext,
-        assistantMessage,
-        pdfWasAttached,
-        summaryTriggered,
-        tools,
-        paperStructure,
+    // 使用 executeWithFallback 找到第一个可用的支持 tool calling 的 provider
+    // 注意：一旦开始 tool calling 循环，就不再降级（状态难以恢复）
+    try {
+      await providerManager.executeWithFallback(async (currentProvider) => {
+        // 检查 provider 是否支持 tool calling
+        if (!providerSupportsToolCalling(currentProvider)) {
+          throw new Error(`Provider ${currentProvider.getName()} does not support tool calling`);
+        }
+
+        const toolProvider = currentProvider as AIProvider & ToolCallingProvider;
+
+        // 重置 assistant 消息内容（降级时需要清空之前的部分内容）
+        assistantMessage.content = "";
+
+        // 检查是否支持流式 tool calling
+        if (providerSupportsStreamingToolCalling(currentProvider)) {
+          ztoolkit.log(`[Tool Calling] Using streaming mode with ${currentProvider.getName()}`);
+          await this.sendMessageWithStreamingToolCalling(
+            currentProvider as AIProvider & ToolCallingProvider & {
+              streamChatCompletionWithTools: NonNullable<ToolCallingProvider["streamChatCompletionWithTools"]>;
+            },
+            messagesWithContext,
+            assistantMessage,
+            pdfWasAttached,
+            summaryTriggered,
+            tools,
+            paperStructure,
+          );
+        } else {
+          ztoolkit.log(`[Tool Calling] Using non-streaming mode with ${currentProvider.getName()}`);
+          await this.sendMessageWithNonStreamingToolCalling(
+            toolProvider,
+            messagesWithContext,
+            assistantMessage,
+            pdfWasAttached,
+            summaryTriggered,
+            tools,
+            paperStructure,
+          );
+        }
+      });
+    } catch (error) {
+      // 所有 provider 都失败了
+      ztoolkit.log("[Tool Calling] All providers failed:", error);
+
+      // 移除 assistant 占位消息（使用 id 精确定位，避免误删 fallback notice）
+      const assistantIndex = this.currentSession!.messages.findIndex(
+        (m) => m.id === assistantMessage.id
       );
-    } else {
-      ztoolkit.log("[Tool Calling] Using non-streaming mode");
-      await this.sendMessageWithNonStreamingToolCalling(
-        provider,
-        messagesWithContext,
-        assistantMessage,
-        pdfWasAttached,
-        summaryTriggered,
-        tools,
-        paperStructure,
-      );
+      if (assistantIndex !== -1) {
+        this.currentSession!.messages.splice(assistantIndex, 1);
+      }
+
+      const errorMessage: ChatMessage = {
+        id: this.generateId(),
+        role: "error",
+        content: error instanceof Error ? error.message : String(error),
+        timestamp: Date.now(),
+      };
+      this.currentSession!.messages.push(errorMessage);
+
+      this.onError?.(error instanceof Error ? error : new Error(String(error)));
+      this.onMessageUpdate?.(this.currentSession!.messages);
     }
   }
 
@@ -1004,19 +1073,8 @@ export class ChatManager {
       this.onMessageComplete?.();
     } catch (error) {
       ztoolkit.log("[Streaming Tool Calling] Error:", error);
-
-      this.currentSession!.messages.pop();
-
-      const errorMessage: ChatMessage = {
-        id: this.generateId(),
-        role: "error",
-        content: error instanceof Error ? error.message : String(error),
-        timestamp: Date.now(),
-      };
-      this.currentSession!.messages.push(errorMessage);
-
-      this.onError?.(error instanceof Error ? error : new Error(String(error)));
-      this.onMessageUpdate?.(this.currentSession!.messages);
+      // 重新抛出错误，让外层的 executeWithFallback 处理降级
+      throw error;
     }
   }
 
@@ -1164,19 +1222,8 @@ export class ChatManager {
       this.onMessageComplete?.();
     } catch (error) {
       ztoolkit.log("[Tool Calling] Error:", error);
-
-      this.currentSession!.messages.pop();
-
-      const errorMessage: ChatMessage = {
-        id: this.generateId(),
-        role: "error",
-        content: error instanceof Error ? error.message : String(error),
-        timestamp: Date.now(),
-      };
-      this.currentSession!.messages.push(errorMessage);
-
-      this.onError?.(error instanceof Error ? error : new Error(String(error)));
-      this.onMessageUpdate?.(this.currentSession!.messages);
+      // 重新抛出错误，让外层的 executeWithFallback 处理降级
+      throw error;
     }
   }
 

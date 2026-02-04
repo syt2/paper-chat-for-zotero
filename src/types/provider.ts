@@ -118,6 +118,41 @@ export interface ProviderMetadata {
 export interface ProviderStorageData {
   activeProviderId: string;
   providers: ProviderConfig[];
+  fallbackConfig?: FallbackConfig;
+}
+
+/**
+ * Fallback configuration for provider failover
+ *
+ * Auto-fallback is enabled by default when multiple providers are ready.
+ * User can optionally specify fallbackProviderIds to control the order.
+ */
+export interface FallbackConfig {
+  /** Provider IDs to try in order after primary fails (optional, auto-detected if empty) */
+  fallbackProviderIds: string[];
+  /** Maximum number of retries across all providers (default: 3) */
+  maxRetries: number;
+}
+
+/**
+ * Error types that trigger fallback to next provider
+ */
+export type RetryableErrorType =
+  | "rate_limit"
+  | "timeout"
+  | "service_unavailable"
+  | "network_error"
+  | "quota_exceeded";
+
+/**
+ * Result of a fallback execution attempt
+ */
+export interface FallbackExecutionResult<T> {
+  success: boolean;
+  result?: T;
+  error?: Error;
+  providerId: string;
+  attemptNumber: number;
 }
 
 /**

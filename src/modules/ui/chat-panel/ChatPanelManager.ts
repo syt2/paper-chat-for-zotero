@@ -708,6 +708,11 @@ function setupChatManagerCallbacks(
         context.updateUserBar();
       }
     },
+    onFallbackNotice: (fromProvider: string, toProvider: string) => {
+      ztoolkit.log(
+        `[Fallback] Provider ${fromProvider} unavailable, switching to ${toProvider}`,
+      );
+    },
   });
 }
 
