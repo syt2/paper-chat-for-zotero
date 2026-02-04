@@ -4,13 +4,9 @@
 
 // AISummary 配置
 export interface AISummaryConfig {
-  enabled: boolean; // 是否启用 AISummary
   templateId: string; // 使用的模板 ID
-  scheduleEnabled: boolean; // 是否启用定时执行
-  scheduleIntervalHours: number; // 执行间隔（小时）
   noteLocation: "child" | "standalone"; // 笔记位置
   markProcessedTag: string; // 处理后添加的标签
-  rateLimitRpm: number; // 每分钟请求数
   pauseBetweenMs: number; // 请求间隔毫秒
   maxItemsPerRun: number; // 每次运行最多处理的条目数
   filterHasPdf: boolean; // 是否只处理有 PDF 的条目
@@ -57,7 +53,6 @@ export interface AISummaryStoredState {
   pendingItemKeys: string[];
   completedItemKeys: string[];
   failedItemKeys: string[];
-  lastScheduledRun?: number;
 }
 
 // AISummary 处理结果
@@ -73,13 +68,9 @@ export interface AISummaryProcessResult {
 
 // 默认配置
 export const DEFAULT_AISUMMARY_CONFIG: AISummaryConfig = {
-  enabled: false,
   templateId: "summary-brief",
-  scheduleEnabled: false,
-  scheduleIntervalHours: 24, // 默认每 24 小时执行一次
   noteLocation: "child",
   markProcessedTag: "ai-processed",
-  rateLimitRpm: 10,
   pauseBetweenMs: 2000,
   maxItemsPerRun: 10,
   filterHasPdf: true,

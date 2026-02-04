@@ -78,12 +78,6 @@ pref-enable-ai-write-desc = When enabled, AI can create notes and batch update t
 
 # AISummary Settings
 pref-aisummary-settings = AI Summary
-pref-aisummary-enable = Enable Automatic Execution
-pref-aisummary-interval-hours = Run Interval
-pref-aisummary-interval-hours-unit = hours
 pref-aisummary-template = Template
-pref-aisummary-filter-pdf = Only process items with PDF
-pref-aisummary-tag = Processed Tag
-pref-aisummary-rate-limit = Rate Limit
-pref-aisummary-run-now = Run Now
-pref-aisummary-desc = AI Summary automatically generates summaries for papers in your library based on the interval.
+pref-aisummary-run-now = Generate Summaries
+pref-aisummary-desc = Generate AI summaries for unprocessed papers in your library (up to 10 per run).

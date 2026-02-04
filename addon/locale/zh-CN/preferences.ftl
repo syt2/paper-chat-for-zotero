@@ -78,12 +78,6 @@ pref-enable-ai-write-desc = 启用后，AI 可以在您的文献库中创建笔�
 
 # AISummary Settings
 pref-aisummary-settings = AI摘要
-pref-aisummary-enable = 启用自动执行
-pref-aisummary-interval-hours = 执行间隔
-pref-aisummary-interval-hours-unit = 小时
 pref-aisummary-template = 模板
-pref-aisummary-filter-pdf = 仅处理有 PDF 附件的条目
-pref-aisummary-tag = 已处理标签
-pref-aisummary-rate-limit = 速率限制
-pref-aisummary-run-now = 立即执行
-pref-aisummary-desc = AI摘要将按照设定的间隔自动为文献库中的论文生成摘要笔记。
+pref-aisummary-run-now = 生成摘要
+pref-aisummary-desc = 为文献库中未处理的论文生成AI摘要笔记（每次最多10篇）。

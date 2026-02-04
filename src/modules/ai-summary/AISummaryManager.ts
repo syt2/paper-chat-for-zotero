@@ -4,7 +4,6 @@
  * 职责：
  * 1. 管理 AISummary 配置和状态
  * 2. 协调批处理流程
- * 3. 管理定时执行
  */
 
 import type {
@@ -31,7 +30,6 @@ export class AISummaryManager {
   private processor: AISummaryProcessor;
   private storage: AISummaryStorage;
   private abortController: AbortController | null = null;
-  private schedulerIntervalId: number | null = null;
   private initialized: boolean = false;
 
   // 回调
@@ -63,11 +61,6 @@ export class AISummaryManager {
       await this.storage.saveProgress(storedState);
       this.progress = storedState.progress;
       ztoolkit.log("[AISummary] Found interrupted progress, marked as paused");
-    }
-
-    // 启动定时器（如果配置启用）
-    if (this.config.scheduleEnabled) {
-      this.startScheduler();
     }
 
     this.initialized = true;
@@ -107,13 +100,6 @@ export class AISummaryManager {
   async updateConfig(newConfig: Partial<AISummaryConfig>): Promise<void> {
     this.config = { ...this.config, ...newConfig };
     await this.storage.saveConfig(this.config);
-
-    // 重新配置定时器
-    this.stopScheduler();
-    if (this.config.scheduleEnabled) {
-      this.startScheduler();
-    }
-
     ztoolkit.log("[AISummary] Config updated");
   }
 
@@ -122,6 +108,35 @@ export class AISummaryManager {
    */
   getProgress(): AISummaryProgress {
     return { ...this.progress };
+  }
+
+  /**
+   * 处理单个条目（供 AISummaryService 调用）
+   */
+  async processSingleItem(itemKey: string): Promise<{
+    success: boolean;
+    noteKey?: string;
+    error?: string;
+  }> {
+    const libraryID = Zotero.Libraries.userLibraryID;
+    const item = Zotero.Items.getByLibraryAndKey(libraryID, itemKey);
+
+    if (!item) {
+      return { success: false, error: "Item not found" };
+    }
+
+    const template = getTemplateById(this.config.templateId);
+    if (!template) {
+      return { success: false, error: `Template not found: ${this.config.templateId}` };
+    }
+
+    const result = await this.processor.processItem(item, template, this.config);
+
+    return {
+      success: result.success,
+      noteKey: result.noteKey,
+      error: result.error,
+    };
   }
 
   /**
@@ -399,80 +414,10 @@ export class AISummaryManager {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  // ========== 定时执行 ==========
-
-  /**
-   * 启动定时器
-   * 每分钟检查一次是否到达执行间隔
-   */
-  private startScheduler(): void {
-    if (this.schedulerIntervalId) return;
-
-    ztoolkit.log(
-      "[AISummary] Starting scheduler, interval:",
-      this.config.scheduleIntervalHours,
-      "hours",
-    );
-
-    // 立即检查是否需要运行
-    this.checkScheduledRun();
-
-    // 每分钟检查一次是否到达执行间隔
-    this.schedulerIntervalId = setInterval(() => {
-      this.checkScheduledRun();
-    }, 60000) as unknown as number;
-  }
-
-  /**
-   * 停止定时器
-   */
-  private stopScheduler(): void {
-    if (this.schedulerIntervalId) {
-      clearInterval(this.schedulerIntervalId);
-      this.schedulerIntervalId = null;
-      ztoolkit.log("[AISummary] Scheduler stopped");
-    }
-  }
-
-  /**
-   * 检查是否已过执行间隔
-   */
-  private async hasIntervalPassed(): Promise<boolean> {
-    const lastRun = await this.storage.getLastScheduledRun();
-    if (!lastRun) return true; // 从未运行过，立即执行
-
-    const now = Date.now();
-    const intervalMs = this.config.scheduleIntervalHours * 60 * 60 * 1000;
-    const elapsed = now - lastRun;
-
-    return elapsed >= intervalMs;
-  }
-
-  /**
-   * 检查是否需要定时运行
-   */
-  private async checkScheduledRun(): Promise<void> {
-    if (!this.config.scheduleEnabled) return;
-    if (this.progress.status === "running") return;
-
-    // 检查是否已过执行间隔
-    const shouldRun = await this.hasIntervalPassed();
-    if (!shouldRun) return;
-
-    ztoolkit.log(
-      "[AISummary] Scheduled run triggered, interval:",
-      this.config.scheduleIntervalHours,
-      "hours",
-    );
-    await this.storage.saveLastScheduledRun(Date.now());
-    await this.startBatch();
-  }
-
   /**
    * 销毁
    */
   destroy(): void {
-    this.stopScheduler();
     this.abortController?.abort();
     ztoolkit.log("[AISummary] Manager destroyed");
   }

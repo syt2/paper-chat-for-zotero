@@ -189,48 +189,8 @@ function initAISummarySettings(doc: Document): void {
   const aiSummaryManager = getAISummaryManager();
   const config = aiSummaryManager.getConfig();
 
-  // Schedule enabled checkbox (controls automatic execution)
-  const scheduleEnabledCheckbox = doc.getElementById(
-    "pref-aisummary-enabled",
-  ) as XUL.Checkbox | null;
-  if (scheduleEnabledCheckbox) {
-    scheduleEnabledCheckbox.checked = config.scheduleEnabled;
-  }
-
-  // Interval hours
-  const intervalHoursInput = doc.getElementById(
-    "pref-aisummary-interval-hours",
-  ) as HTMLInputElement | null;
-  if (intervalHoursInput) {
-    intervalHoursInput.value = String(config.scheduleIntervalHours || 24);
-  }
-
   // Template dropdown
   populateAISummaryTemplates(doc, config.templateId);
-
-  // Filter PDF checkbox
-  const filterPdfCheckbox = doc.getElementById(
-    "pref-aisummary-filter-pdf",
-  ) as XUL.Checkbox | null;
-  if (filterPdfCheckbox) {
-    filterPdfCheckbox.checked = config.filterHasPdf;
-  }
-
-  // Processed tag
-  const tagInput = doc.getElementById(
-    "pref-aisummary-tag",
-  ) as HTMLInputElement | null;
-  if (tagInput) {
-    tagInput.value = config.markProcessedTag || "ai-processed";
-  }
-
-  // Rate limit
-  const rateLimitInput = doc.getElementById(
-    "pref-aisummary-rate-limit",
-  ) as HTMLInputElement | null;
-  if (rateLimitInput) {
-    rateLimitInput.value = String(config.rateLimitRpm || 10);
-  }
 
   // Update status display
   updateAISummaryStatus(doc);
@@ -308,29 +268,6 @@ function updateAISummaryStatus(doc: Document): void {
 function bindAISummarySettingsEvents(doc: Document): void {
   const aiSummaryManager = getAISummaryManager();
 
-  // Schedule enabled checkbox (controls automatic execution)
-  const scheduleEnabledCheckbox = doc.getElementById(
-    "pref-aisummary-enabled",
-  ) as XUL.Checkbox | null;
-  if (scheduleEnabledCheckbox) {
-    scheduleEnabledCheckbox.addEventListener("command", async () => {
-      await aiSummaryManager.updateConfig({ scheduleEnabled: scheduleEnabledCheckbox.checked });
-    });
-  }
-
-  // Interval hours
-  const intervalHoursInput = doc.getElementById(
-    "pref-aisummary-interval-hours",
-  ) as HTMLInputElement | null;
-  if (intervalHoursInput) {
-    intervalHoursInput.addEventListener("change", async () => {
-      const value = parseInt(intervalHoursInput.value, 10);
-      if (value >= 1 && value <= 168) {
-        await aiSummaryManager.updateConfig({ scheduleIntervalHours: value });
-      }
-    });
-  }
-
   // Template
   const templateSelect = doc.getElementById(
     "pref-aisummary-template",
@@ -341,63 +278,41 @@ function bindAISummarySettingsEvents(doc: Document): void {
     });
   }
 
-  // Filter PDF checkbox
-  const filterPdfCheckbox = doc.getElementById(
-    "pref-aisummary-filter-pdf",
-  ) as XUL.Checkbox | null;
-  if (filterPdfCheckbox) {
-    filterPdfCheckbox.addEventListener("command", async () => {
-      await aiSummaryManager.updateConfig({
-        filterHasPdf: filterPdfCheckbox.checked,
-      });
-    });
-  }
-
-  // Processed tag
-  const tagInput = doc.getElementById(
-    "pref-aisummary-tag",
-  ) as HTMLInputElement | null;
-  if (tagInput) {
-    tagInput.addEventListener("change", async () => {
-      await aiSummaryManager.updateConfig({ markProcessedTag: tagInput.value });
-    });
-  }
-
-  // Rate limit
-  const rateLimitInput = doc.getElementById(
-    "pref-aisummary-rate-limit",
-  ) as HTMLInputElement | null;
-  if (rateLimitInput) {
-    rateLimitInput.addEventListener("change", async () => {
-      const value = parseInt(rateLimitInput.value, 10);
-      if (value > 0 && value <= 60) {
-        await aiSummaryManager.updateConfig({ rateLimitRpm: value });
-      }
-    });
-  }
-
   // Run now button
   const runNowBtn = doc.getElementById(
     "pref-aisummary-run-now",
   ) as HTMLButtonElement | null;
   if (runNowBtn) {
     runNowBtn.addEventListener("click", async () => {
+      const progress = aiSummaryManager.getProgress();
+
+      // 如果正在运行，不要再次启动
+      if (progress.status === "running") {
+        return;
+      }
+
+      // 更新按钮状态
+      runNowBtn.disabled = true;
+      updateAISummaryStatus(doc);
+
       try {
         await aiSummaryManager.startBatch();
         updateAISummaryStatus(doc);
 
         // Set up periodic status updates while running
         const updateInterval = setInterval(() => {
-          const progress = aiSummaryManager.getProgress();
+          const currentProgress = aiSummaryManager.getProgress();
           updateAISummaryStatus(doc);
           if (
-            progress.status !== "running" &&
-            progress.status !== "paused"
+            currentProgress.status !== "running" &&
+            currentProgress.status !== "paused"
           ) {
             clearInterval(updateInterval);
+            runNowBtn.disabled = false;
           }
         }, 1000);
       } catch (error) {
+        runNowBtn.disabled = false;
         const statusLabel = doc.getElementById(
           "pref-aisummary-status",
         ) as HTMLElement | null;

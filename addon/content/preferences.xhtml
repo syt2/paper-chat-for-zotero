@@ -396,42 +396,12 @@
   <groupbox style="margin-top: 16px">
     <label><html:h3 data-l10n-id="pref-aisummary-settings"></html:h3></label>
 
-    <!-- Enable AISummary -->
-    <hbox align="center" style="margin-bottom: 8px">
-      <label
-        data-l10n-id="pref-aisummary-enable"
-        style="margin-right: 8px"
-      ></label>
-      <checkbox id="pref-aisummary-enabled" />
-    </hbox>
-
-    <!-- Schedule Interval (hours) -->
-    <hbox align="center" style="margin-bottom: 8px">
-      <label
-        for="pref-aisummary-interval-hours"
-        data-l10n-id="pref-aisummary-interval-hours"
-        style="width: 120px; text-align: right"
-      ></label>
-      <html:input
-        type="number"
-        id="pref-aisummary-interval-hours"
-        value="24"
-        min="1"
-        max="168"
-        style="margin-left: 8px; width: 80px"
-      ></html:input>
-      <label
-        data-l10n-id="pref-aisummary-interval-hours-unit"
-        style="margin-left: 4px"
-      ></label>
-    </hbox>
-
     <!-- Template Selection -->
     <hbox align="center" style="margin-bottom: 8px">
       <label
         for="pref-aisummary-template"
         data-l10n-id="pref-aisummary-template"
-        style="width: 120px; text-align: right"
+        style="width: 80px; text-align: right"
       ></label>
       <menulist
         id="pref-aisummary-template"
@@ -443,52 +413,9 @@
       </menulist>
     </hbox>
 
-    <!-- Filter: Only items with PDF -->
-    <hbox align="center" style="margin-bottom: 8px">
-      <label style="width: 120px"></label>
-      <checkbox id="pref-aisummary-filter-pdf" />
-      <label
-        data-l10n-id="pref-aisummary-filter-pdf"
-        style="margin-left: 4px"
-      ></label>
-    </hbox>
-
-    <!-- Processed Tag -->
-    <hbox align="center" style="margin-bottom: 8px">
-      <label
-        for="pref-aisummary-tag"
-        data-l10n-id="pref-aisummary-tag"
-        style="width: 120px; text-align: right"
-      ></label>
-      <html:input
-        type="text"
-        id="pref-aisummary-tag"
-        value="ai-processed"
-        style="margin-left: 8px; width: 150px"
-      ></html:input>
-    </hbox>
-
-    <!-- Rate Limit -->
-    <hbox align="center" style="margin-bottom: 8px">
-      <label
-        for="pref-aisummary-rate-limit"
-        data-l10n-id="pref-aisummary-rate-limit"
-        style="width: 120px; text-align: right"
-      ></label>
-      <html:input
-        type="number"
-        id="pref-aisummary-rate-limit"
-        value="10"
-        min="1"
-        max="60"
-        style="margin-left: 8px; width: 80px"
-      ></html:input>
-      <label style="margin-left: 4px">/min</label>
-    </hbox>
-
     <!-- Manual Run Button -->
     <hbox align="center" style="margin-top: 12px">
-      <label style="width: 120px"></label>
+      <label style="width: 80px"></label>
       <button
         id="pref-aisummary-run-now"
         data-l10n-id="pref-aisummary-run-now"

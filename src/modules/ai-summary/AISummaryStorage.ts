@@ -138,34 +138,4 @@ export class AISummaryStorage {
 
     return [];
   }
-
-  /**
-   * 记录上次定时运行时间
-   */
-  async saveLastScheduledRun(timestamp: number): Promise<void> {
-    const state = (await this.loadProgress()) || {
-      progress: {
-        status: "idle",
-        totalItems: 0,
-        processedItems: 0,
-        successfulItems: 0,
-        failedItems: 0,
-        errors: [],
-      },
-      pendingItemKeys: [],
-      completedItemKeys: [],
-      failedItemKeys: [],
-    };
-
-    state.lastScheduledRun = timestamp;
-    await this.saveProgress(state);
-  }
-
-  /**
-   * 获取上次定时运行时间
-   */
-  async getLastScheduledRun(): Promise<number | undefined> {
-    const state = await this.loadProgress();
-    return state?.lastScheduledRun;
-  }
 }

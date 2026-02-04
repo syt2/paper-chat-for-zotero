@@ -4,7 +4,14 @@ import { createZToolkit } from "./utils/ztoolkit";
 import { registerToolbarButton, unregisterChatPanel } from "./modules/ui";
 import { getAuthManager, destroyAuthManager } from "./modules/auth";
 import { destroyProviderManager } from "./modules/providers";
-import { initAISummary, getAISummaryManager } from "./modules/ai-summary";
+import {
+  initAISummary,
+  getAISummaryManager,
+  initAISummaryService,
+  destroyAISummaryService,
+  getAISummaryService,
+  openTaskWindow,
+} from "./modules/ai-summary";
 
 async function onStartup() {
   await Promise.all([
@@ -30,6 +37,12 @@ async function onStartup() {
 
   // Initialize AISummary
   await initAISummary();
+
+  // Initialize AISummary Service (item notifier + context menu)
+  initAISummaryService();
+
+  // 注入打开任务窗口的回调（避免循环依赖）
+  getAISummaryService().setOnOpenTaskWindow(openTaskWindow);
 
   await Promise.all(
     Zotero.getMainWindows().map((win) => onMainWindowLoad(win)),
@@ -71,6 +84,7 @@ function onShutdown(): void {
   destroyProviderManager();
   destroyAuthManager();
   // Destroy AISummary
+  destroyAISummaryService();
   getAISummaryManager().destroy();
   addon.data.dialog?.window?.close();
   addon.data.alive = false;

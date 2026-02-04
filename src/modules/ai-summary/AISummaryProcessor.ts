@@ -8,14 +8,8 @@ import type {
   AISummaryProcessResult,
 } from "../../types/ai-summary";
 import { getProviderManager } from "../providers";
-import { PdfExtractor } from "../chat/PdfExtractor";
 
 export class AISummaryProcessor {
-  private pdfExtractor: PdfExtractor;
-
-  constructor() {
-    this.pdfExtractor = new PdfExtractor();
-  }
 
   /**
    * 处理单个条目
@@ -204,7 +198,7 @@ export class AISummaryProcessor {
   }
 
   /**
-   * 调用 AI
+   * 调用 AI (带超时)
    */
   private async callAI(
     prompt: string,
@@ -242,8 +236,16 @@ export class AISummaryProcessor {
       timestamp: now,
     });
 
-    // 使用非流式调用
-    const response = await provider.chatCompletion(messages);
+    // 使用非流式调用，带超时 (60秒)
+    const timeoutMs = 60000;
+    const timeoutPromise = new Promise<null>((_, reject) => {
+      setTimeout(() => reject(new Error("AI request timed out after 60 seconds")), timeoutMs);
+    });
+
+    const response = await Promise.race([
+      provider.chatCompletion(messages),
+      timeoutPromise,
+    ]);
 
     return response || null;
   }
@@ -302,7 +304,20 @@ export class AISummaryProcessor {
    * 格式化内容为 HTML
    */
   private formatContentAsHtml(title: string, content: string): string {
-    // 转换 markdown 风格的标题
+    // 转义 HTML 特殊字符（防止 XSS）
+    const escapeHtml = (text: string): string => {
+      return text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    };
+
+    // 转义标题
+    const safeTitle = escapeHtml(title);
+
+    // 转换 markdown 风格的标题（先转义再处理 markdown）
     let html = content
       .replace(/^## (.+)$/gm, "<h2>$1</h2>")
       .replace(/^### (.+)$/gm, "<h3>$1</h3>")
@@ -314,7 +329,7 @@ export class AISummaryProcessor {
     html = html.replace(/(<li>.*<\/li>)+/g, "<ul>$&</ul>");
 
     // 添加标题
-    html = `<h1>${title}</h1><p>${html}</p>`;
+    html = `<h1>${safeTitle}</h1><p>${html}</p>`;
 
     return html;
   }
