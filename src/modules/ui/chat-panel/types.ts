@@ -19,6 +19,7 @@ export interface ThemeColors {
   buttonHoverBg: string;
   dropdownBg: string;
   dropdownItemHoverBg: string;
+  hoverBg: string;
   // Borders
   borderColor: string;
   inputBorderColor: string;
@@ -70,6 +71,15 @@ export interface ChatPanelContext {
   updatePdfCheckboxVisibility: (item: Zotero.Item | null) => Promise<void>;
   renderMessages: (messages: ChatMessage[]) => void;
   appendError: (errorMessage: string) => void;
+  // Callbacks reference for multi-doc selector
+  callbacks?: {
+    onMessageUpdate?: (messages: ChatMessage[]) => void;
+    onStreamingUpdate?: (content: string) => void;
+    onError?: (error: Error) => void;
+    onPdfAttached?: () => void;
+    onMessageComplete?: () => void;
+    onSelectedItemsChange?: (itemKeys: string[]) => void;
+  };
 }
 
 // HTML namespace for XHTML environment

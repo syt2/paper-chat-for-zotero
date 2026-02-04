@@ -453,6 +453,9 @@ export function setupEventHandlers(context: ChatPanelContext): void {
     });
   }
 
+  // Multi-document selector
+  setupMultiDocSelector(context);
+
   ztoolkit.log("Event listeners attached to buttons");
 }
 
@@ -927,4 +930,272 @@ function populateModelDropdown(
     noProviders.textContent = getString("chat-configure-provider");
     dropdown.appendChild(noProviders);
   }
+}
+
+// ========== Multi-Document Selector ==========
+
+/**
+ * Setup multi-document selector events
+ */
+function setupMultiDocSelector(context: ChatPanelContext): void {
+  const { container, chatManager } = context;
+  const doc = container.ownerDocument!;
+  const theme = getCurrentTheme();
+
+  const multiDocBtn = container.querySelector(
+    "#chat-multi-doc-btn",
+  ) as HTMLButtonElement;
+  const multiDocDropdown = container.querySelector(
+    "#chat-multi-doc-dropdown",
+  ) as HTMLElement;
+  const multiDocSearch = container.querySelector(
+    "#chat-multi-doc-search",
+  ) as HTMLInputElement;
+  const multiDocList = container.querySelector(
+    "#chat-multi-doc-list",
+  ) as HTMLElement;
+  const selectedPapersBar = container.querySelector(
+    "#chat-selected-papers-bar",
+  ) as HTMLElement;
+  const selectedPapersText = container.querySelector(
+    "#chat-selected-papers-text",
+  ) as HTMLElement;
+  const clearPapersBtn = container.querySelector(
+    "#chat-clear-papers-btn",
+  ) as HTMLButtonElement;
+
+  if (!multiDocBtn || !multiDocDropdown || !multiDocList) {
+    ztoolkit.log("[MultiDoc] Required elements not found");
+    return;
+  }
+
+  // Track selected items (stored in ChatManager)
+  let allItems: { key: string; title: string; hasPdf: boolean }[] = [];
+
+  // Toggle dropdown
+  multiDocBtn.addEventListener("click", async () => {
+    const isVisible = multiDocDropdown.style.display === "block";
+    if (isVisible) {
+      multiDocDropdown.style.display = "none";
+    } else {
+      multiDocDropdown.style.display = "block";
+      await loadPaperList();
+      multiDocSearch?.focus();
+    }
+  });
+
+  // Close dropdown when clicking outside
+  container.addEventListener("click", (e: Event) => {
+    const target = e.target as HTMLElement;
+    if (
+      multiDocDropdown.style.display === "block" &&
+      !multiDocDropdown.contains(target) &&
+      target !== multiDocBtn &&
+      !multiDocBtn.contains(target)
+    ) {
+      multiDocDropdown.style.display = "none";
+    }
+  });
+
+  // Search filter
+  multiDocSearch?.addEventListener("input", () => {
+    const query = multiDocSearch.value.toLowerCase().trim();
+    renderPaperList(query);
+  });
+
+  // Clear all selected papers
+  clearPapersBtn?.addEventListener("click", () => {
+    chatManager.clearItemSelection();
+    updateSelectedPapersDisplay();
+    renderPaperList(multiDocSearch?.value || "");
+  });
+
+  // Load paper list from Zotero
+  async function loadPaperList() {
+    const libraryID = Zotero.Libraries.userLibraryID;
+    const rawItems = await Zotero.Items.getAll(libraryID);
+
+    allItems = [];
+    for (const item of rawItems) {
+      // Skip attachments and notes
+      if (item.isAttachment?.() || item.isNote?.()) continue;
+
+      const title = (item.getField?.("title") as string) || "Untitled";
+      const hasPdf = hasPdfAttachment(item);
+
+      allItems.push({
+        key: item.key,
+        title,
+        hasPdf,
+      });
+    }
+
+    // Sort by title
+    allItems.sort((a, b) => a.title.localeCompare(b.title));
+
+    renderPaperList("");
+  }
+
+  // Check if item has PDF attachment
+  function hasPdfAttachment(item: Zotero.Item): boolean {
+    if (item.isPDFAttachment?.()) return true;
+    const attachmentIDs = item.getAttachments?.() || [];
+    for (const id of attachmentIDs) {
+      const attachment = Zotero.Items.get(id);
+      if (attachment?.isPDFAttachment?.()) return true;
+    }
+    return false;
+  }
+
+  // Render filtered paper list
+  function renderPaperList(filter: string) {
+    if (!multiDocList) return;
+    multiDocList.textContent = "";
+
+    const selectedKeys = chatManager.getCurrentItemKeys();
+    const filteredItems = filter
+      ? allItems.filter((item) => item.title.toLowerCase().includes(filter))
+      : allItems;
+
+    // Show max 50 items
+    const displayItems = filteredItems.slice(0, 50);
+
+    if (displayItems.length === 0) {
+      const emptyMsg = createElement(doc, "div", {
+        padding: "12px",
+        fontSize: "12px",
+        color: theme.textMuted,
+        textAlign: "center",
+      });
+      emptyMsg.textContent = filter ? "No papers found" : "Loading...";
+      multiDocList.appendChild(emptyMsg);
+      return;
+    }
+
+    for (const item of displayItems) {
+      const isSelected = selectedKeys.includes(item.key);
+      const paperItem = createElement(
+        doc,
+        "div",
+        {
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+          padding: "8px 12px",
+          cursor: "pointer",
+          background: isSelected ? theme.hoverBg : "transparent",
+          fontSize: "12px",
+          borderBottom: `1px solid ${theme.borderColor}`,
+        },
+        { "data-item-key": item.key },
+      );
+
+      // Checkbox
+      const checkbox = createElement(
+        doc,
+        "input",
+        {
+          flexShrink: "0",
+        },
+        {
+          type: "checkbox",
+        },
+      ) as HTMLInputElement;
+      checkbox.checked = isSelected;
+
+      // PDF indicator
+      const pdfIndicator = createElement(doc, "span", {
+        fontSize: "10px",
+        opacity: item.hasPdf ? "1" : "0.3",
+      });
+      pdfIndicator.textContent = "📄";
+
+      // Title
+      const titleSpan = createElement(doc, "span", {
+        flex: "1",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        color: theme.textPrimary,
+      });
+      titleSpan.textContent = item.title;
+
+      paperItem.appendChild(checkbox);
+      paperItem.appendChild(pdfIndicator);
+      paperItem.appendChild(titleSpan);
+
+      // Click to toggle selection
+      paperItem.addEventListener("click", (e: Event) => {
+        e.stopPropagation();
+        if (isSelected) {
+          chatManager.removeItemFromSelection(item.key);
+        } else {
+          chatManager.addItemToSelection(item.key);
+        }
+        updateSelectedPapersDisplay();
+        renderPaperList(filter);
+      });
+
+      // Hover effect
+      paperItem.addEventListener("mouseenter", () => {
+        if (!selectedKeys.includes(item.key)) {
+          paperItem.style.background = theme.hoverBg;
+        }
+      });
+      paperItem.addEventListener("mouseleave", () => {
+        if (!selectedKeys.includes(item.key)) {
+          paperItem.style.background = "transparent";
+        }
+      });
+
+      multiDocList.appendChild(paperItem);
+    }
+
+    // Show more indicator
+    if (filteredItems.length > 50) {
+      const moreMsg = createElement(doc, "div", {
+        padding: "8px 12px",
+        fontSize: "11px",
+        color: theme.textMuted,
+        textAlign: "center",
+      });
+      moreMsg.textContent = `... and ${filteredItems.length - 50} more. Type to filter.`;
+      multiDocList.appendChild(moreMsg);
+    }
+  }
+
+  // Update selected papers bar display
+  function updateSelectedPapersDisplay() {
+    if (!selectedPapersBar || !selectedPapersText) return;
+
+    const selectedKeys = chatManager.getCurrentItemKeys();
+
+    if (selectedKeys.length === 0) {
+      selectedPapersBar.style.display = "none";
+      return;
+    }
+
+    selectedPapersBar.style.display = "flex";
+
+    if (selectedKeys.length === 1) {
+      const item = allItems.find((i) => i.key === selectedKeys[0]);
+      const title = item?.title || selectedKeys[0];
+      selectedPapersText.textContent =
+        title.length > 40 ? title.substring(0, 40) + "..." : title;
+    } else {
+      selectedPapersText.textContent = `${selectedKeys.length} papers selected`;
+    }
+  }
+
+  // Listen for selection changes from ChatManager
+  chatManager.setCallbacks({
+    ...context.callbacks,
+    onSelectedItemsChange: () => {
+      updateSelectedPapersDisplay();
+      renderPaperList(multiDocSearch?.value || "");
+    },
+  });
+
+  // Initialize display
+  updateSelectedPapersDisplay();
 }

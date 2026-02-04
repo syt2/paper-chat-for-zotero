@@ -90,6 +90,7 @@ export class ChatManager {
   private pdfExtractor: PdfExtractor;
   private currentSession: ChatSession | null = null;
   private currentItemKey: string | null = null;
+  private currentItemKeys: string[] = []; // 多文档支持
   private initialized: boolean = false;
 
   // UI回调
@@ -98,6 +99,7 @@ export class ChatManager {
   private onError?: (error: Error) => void;
   private onPdfAttached?: () => void;
   private onMessageComplete?: () => void;
+  private onSelectedItemsChange?: (itemKeys: string[]) => void; // 多文档选择变化回调
 
   constructor() {
     this.sessionStorage = new SessionStorageService();
@@ -167,28 +169,82 @@ export class ChatManager {
     onError?: (error: Error) => void;
     onPdfAttached?: () => void;
     onMessageComplete?: () => void;
+    onSelectedItemsChange?: (itemKeys: string[]) => void;
   }): void {
     this.onMessageUpdate = callbacks.onMessageUpdate;
     this.onStreamingUpdate = callbacks.onStreamingUpdate;
     this.onError = callbacks.onError;
     this.onPdfAttached = callbacks.onPdfAttached;
     this.onMessageComplete = callbacks.onMessageComplete;
+    this.onSelectedItemsChange = callbacks.onSelectedItemsChange;
   }
 
   /**
-   * 设置当前活动的 Item Key
+   * 设置当前活动的 Item Key (单文档模式，向后兼容)
    */
   setCurrentItemKey(itemKey: string | null): void {
     this.currentItemKey = itemKey;
+    // 同步更新多文档列表
+    this.currentItemKeys = itemKey ? [itemKey] : [];
     // 同步更新 PdfToolManager
     getPdfToolManager().setCurrentItemKey(itemKey);
+    getPdfToolManager().setCurrentItemKeys(this.currentItemKeys);
   }
 
   /**
-   * 获取当前活动的 Item Key
+   * 获取当前活动的 Item Key (单文档模式)
    */
   getCurrentItemKey(): string | null {
     return this.currentItemKey;
+  }
+
+  /**
+   * 设置当前活动的多个 Item Keys (多文档模式)
+   */
+  setCurrentItemKeys(itemKeys: string[]): void {
+    this.currentItemKeys = itemKeys;
+    // 保持向后兼容：单文档 key 取第一个
+    this.currentItemKey = itemKeys[0] || null;
+    // 同步更新 PdfToolManager
+    getPdfToolManager().setCurrentItemKeys(itemKeys);
+    getPdfToolManager().setCurrentItemKey(this.currentItemKey);
+    // 更新 session
+    if (this.currentSession) {
+      this.currentSession.lastActiveItemKeys = itemKeys;
+      this.currentSession.lastActiveItemKey = this.currentItemKey;
+    }
+    // 通知 UI
+    this.onSelectedItemsChange?.(itemKeys);
+  }
+
+  /**
+   * 获取当前活动的多个 Item Keys
+   */
+  getCurrentItemKeys(): string[] {
+    return this.currentItemKeys;
+  }
+
+  /**
+   * 添加一个 Item 到当前选择
+   */
+  addItemToSelection(itemKey: string): void {
+    if (!this.currentItemKeys.includes(itemKey)) {
+      this.setCurrentItemKeys([...this.currentItemKeys, itemKey]);
+    }
+  }
+
+  /**
+   * 从当前选择移除一个 Item
+   */
+  removeItemFromSelection(itemKey: string): void {
+    this.setCurrentItemKeys(this.currentItemKeys.filter(k => k !== itemKey));
+  }
+
+  /**
+   * 清空所有选择的 Items
+   */
+  clearItemSelection(): void {
+    this.setCurrentItemKeys([]);
   }
 
   /**
@@ -216,9 +272,11 @@ export class ChatManager {
     if (session) {
       this.currentSession = session;
       await this.sessionStorage.setActiveSession(sessionId);
-      // 恢复 lastActiveItemKey
+      // 恢复 lastActiveItemKey 和 lastActiveItemKeys
       this.currentItemKey = session.lastActiveItemKey;
+      this.currentItemKeys = session.lastActiveItemKeys || (this.currentItemKey ? [this.currentItemKey] : []);
       getPdfToolManager().setCurrentItemKey(this.currentItemKey);
+      getPdfToolManager().setCurrentItemKeys(this.currentItemKeys);
     }
     return session;
   }
@@ -605,7 +663,6 @@ export class ChatManager {
     item: Zotero.Item,
   ): Promise<void> {
     const pdfToolManager = getPdfToolManager();
-    const contextManager = getContextManager();
 
     // 获取动态工具列表
     const tools = pdfToolManager.getToolDefinitions(hasCurrentItem);
@@ -660,7 +717,78 @@ export class ChatManager {
   }
 
   /**
+   * 转义 XML 特殊字符，防止 XSS/XML 注入
+   */
+  private escapeXml(str: string): string {
+    return str
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&apos;");
+  }
+
+  /**
+   * 格式化工具调用卡片（用于 UI 显示）
+   */
+  private formatToolCallCard(
+    toolName: string,
+    args: string,
+    status: "calling" | "completed" | "error",
+    resultPreview?: string,
+  ): string {
+    const statusIcon =
+      status === "calling" ? "⏳" : status === "completed" ? "✓" : "✗";
+    const statusText =
+      status === "calling"
+        ? "Calling..."
+        : status === "completed"
+          ? "Done"
+          : "Error";
+
+    // 解析参数用于显示
+    let argsDisplay = "";
+    try {
+      const parsed = JSON.parse(args);
+      argsDisplay = Object.entries(parsed)
+        .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+        .join(", ");
+      if (argsDisplay.length > 60) {
+        argsDisplay = argsDisplay.substring(0, 57) + "...";
+      }
+    } catch {
+      argsDisplay = args.length > 60 ? args.substring(0, 57) + "..." : args;
+    }
+
+    // 转义所有用户输入，防止 XSS/XML 注入
+    const escapedToolName = this.escapeXml(toolName);
+    const escapedArgs = this.escapeXml(argsDisplay);
+    const escapedResult = resultPreview
+      ? this.escapeXml(
+          resultPreview.length > 100
+            ? resultPreview.substring(0, 97) + "..."
+            : resultPreview,
+        )
+      : "";
+
+    // 使用特殊标记格式，便于 MessageRenderer 识别和渲染
+    let card = `\n<tool-call status="${status}">\n`;
+    card += `<tool-name>${statusIcon} ${escapedToolName}</tool-name>\n`;
+    if (escapedArgs) {
+      card += `<tool-args>${escapedArgs}</tool-args>\n`;
+    }
+    card += `<tool-status>${statusText}</tool-status>\n`;
+    if (escapedResult && status === "completed") {
+      card += `<tool-result>${escapedResult}</tool-result>\n`;
+    }
+    card += `</tool-call>\n`;
+
+    return card;
+  }
+
+  /**
    * 流式 Tool Calling - 边输出边调用工具
+   * 实现类似 Claude Code 的效果：实时显示文本和工具调用状态
    */
   private async sendMessageWithStreamingToolCalling(
     provider: ToolCallingProvider & {
@@ -682,6 +810,9 @@ export class ChatManager {
     const maxIterations = 10;
     let iteration = 0;
 
+    // 累积的显示内容（跨多轮保持）
+    let accumulatedDisplay = "";
+
     try {
       while (iteration < maxIterations) {
         iteration++;
@@ -689,31 +820,37 @@ export class ChatManager {
           `[Streaming Tool Calling] Iteration ${iteration}, messages: ${currentMessages.length}`,
         );
 
-        // 累积工具调用信息
+        // 本轮的工具调用信息
         const pendingToolCalls = new Map<
           number,
           { id: string; name: string; arguments: string }
         >();
+
+        // 本轮开始前的显示内容长度
+        const displayBeforeThisRound = accumulatedDisplay;
 
         const result = await new Promise<{
           content: string;
           toolCalls?: ToolCall[];
           stopReason: string;
         }>((resolve, reject) => {
-          let fullContent = "";
+          let roundContent = "";
           let stopReason = "end_turn";
 
           const callbacks: StreamToolCallingCallbacks = {
             onTextDelta: (text) => {
-              fullContent += text;
-              assistantMessage.content = fullContent;
-              this.onStreamingUpdate?.(fullContent);
+              roundContent += text;
+              // 实时更新：显示累积内容 + 本轮文本
+              assistantMessage.content = displayBeforeThisRound + roundContent;
+              this.onStreamingUpdate?.(assistantMessage.content);
             },
             onToolCallStart: ({ index, id, name }) => {
               pendingToolCalls.set(index, { id, name, arguments: "" });
               ztoolkit.log(
                 `[Streaming Tool Calling] Tool call started: ${name} (${id})`,
               );
+              // 注意：这里不显示卡片，因为参数还在流式接收中
+              // 等到工具实际执行时再显示完整的 "calling" 卡片，避免 UI 闪烁
             },
             onToolCallDelta: (index, argumentsDelta) => {
               const tc = pendingToolCalls.get(index);
@@ -736,7 +873,7 @@ export class ChatManager {
                 });
               }
               resolve({
-                content: fullContent,
+                content: roundContent,
                 toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
                 stopReason,
               });
@@ -773,17 +910,26 @@ export class ChatManager {
           };
           currentMessages.push(assistantToolMessage);
 
-          // 显示正在执行工具
-          assistantMessage.content =
-            result.content + "\n\n[Executing tools...]\n";
-          this.onStreamingUpdate?.(assistantMessage.content);
+          // 累积本轮的文本内容
+          if (result.content) {
+            accumulatedDisplay += result.content;
+          }
 
-          // 执行所有工具
+          // 执行所有工具，并实时更新显示
           for (const toolCall of result.toolCalls) {
-            ztoolkit.log(
-              `[Streaming Tool Calling] Executing: ${toolCall.function.name}`,
-            );
+            const toolName = toolCall.function.name;
+            const toolArgs = toolCall.function.arguments;
 
+            ztoolkit.log(`[Streaming Tool Calling] Executing: ${toolName}`);
+
+            // 显示"正在调用"状态
+            const callingDisplay =
+              accumulatedDisplay +
+              this.formatToolCallCard(toolName, toolArgs, "calling");
+            assistantMessage.content = callingDisplay;
+            this.onStreamingUpdate?.(callingDisplay);
+
+            // 执行工具
             const toolResult = await pdfToolManager.executeToolCall(
               toolCall,
               paperStructure || undefined,
@@ -793,6 +939,7 @@ export class ChatManager {
               `[Streaming Tool Calling] Result (truncated): ${toolResult.substring(0, 200)}...`,
             );
 
+            // 添加工具结果到上下文
             const toolResultMessage: ChatMessage = {
               id: this.generateId(),
               role: "tool",
@@ -801,6 +948,16 @@ export class ChatManager {
               timestamp: Date.now(),
             };
             currentMessages.push(toolResultMessage);
+
+            // 更新显示：工具执行完成
+            accumulatedDisplay += this.formatToolCallCard(
+              toolName,
+              toolArgs,
+              "completed",
+              toolResult,
+            );
+            assistantMessage.content = accumulatedDisplay;
+            this.onStreamingUpdate?.(accumulatedDisplay);
           }
 
           // 继续下一轮
@@ -808,7 +965,9 @@ export class ChatManager {
         }
 
         // 没有 tool calls，最终回答
-        assistantMessage.content = result.content || "";
+        // 累积本轮内容作为最终显示
+        accumulatedDisplay += result.content || "";
+        assistantMessage.content = accumulatedDisplay;
         assistantMessage.timestamp = Date.now();
         this.currentSession!.updatedAt = Date.now();
 
@@ -834,14 +993,15 @@ export class ChatManager {
       }
 
       // 达到最大迭代次数
-      // Note: Use += to append because streaming mode may have partial content visible to user
       ztoolkit.log("[Streaming Tool Calling] Max iterations reached");
-      assistantMessage.content +=
+      accumulatedDisplay +=
         "\n\nI apologize, but I was unable to complete the request within the allowed number of iterations.";
+      assistantMessage.content = accumulatedDisplay;
       assistantMessage.timestamp = Date.now();
       this.currentSession!.updatedAt = Date.now();
       await this.sessionStorage.saveSession(this.currentSession!);
       this.onMessageUpdate?.(this.currentSession!.messages);
+      this.onMessageComplete?.();
     } catch (error) {
       ztoolkit.log("[Streaming Tool Calling] Error:", error);
 
@@ -862,6 +1022,7 @@ export class ChatManager {
 
   /**
    * 非流式 Tool Calling - 等待完整响应后再继续
+   * 使用与流式相同的累积显示逻辑
    */
   private async sendMessageWithNonStreamingToolCalling(
     provider: ToolCallingProvider,
@@ -879,17 +1040,15 @@ export class ChatManager {
     const maxIterations = 10;
     let iteration = 0;
 
+    // 累积的显示内容（跨多轮保持）
+    let accumulatedDisplay = "";
+
     try {
       while (iteration < maxIterations) {
         iteration++;
         ztoolkit.log(
           `[Tool Calling] Iteration ${iteration}, messages: ${currentMessages.length}`,
         );
-
-        if (iteration > 1) {
-          assistantMessage.content += "\n\n[Retrieving information...]\n\n";
-          this.onStreamingUpdate?.(assistantMessage.content);
-        }
 
         const result = await provider.chatCompletionWithTools(
           currentMessages,
@@ -913,12 +1072,26 @@ export class ChatManager {
           };
           currentMessages.push(assistantToolMessage);
 
-          for (const toolCall of result.toolCalls) {
-            ztoolkit.log(
-              `[Tool Calling] Executing tool: ${toolCall.function.name}`,
-              toolCall.function.arguments,
-            );
+          // 累积本轮的文本内容
+          if (result.content) {
+            accumulatedDisplay += result.content;
+          }
 
+          // 执行所有工具，并实时更新显示
+          for (const toolCall of result.toolCalls) {
+            const toolName = toolCall.function.name;
+            const toolArgs = toolCall.function.arguments;
+
+            ztoolkit.log(`[Tool Calling] Executing tool: ${toolName}`, toolArgs);
+
+            // 显示"正在调用"状态
+            const callingDisplay =
+              accumulatedDisplay +
+              this.formatToolCallCard(toolName, toolArgs, "calling");
+            assistantMessage.content = callingDisplay;
+            this.onStreamingUpdate?.(callingDisplay);
+
+            // 执行工具
             const toolResult = await pdfToolManager.executeToolCall(
               toolCall,
               paperStructure || undefined,
@@ -928,6 +1101,7 @@ export class ChatManager {
               `[Tool Calling] Tool result (truncated): ${toolResult.substring(0, 200)}...`,
             );
 
+            // 添加工具结果到上下文
             const toolResultMessage: ChatMessage = {
               id: this.generateId(),
               role: "tool",
@@ -936,13 +1110,24 @@ export class ChatManager {
               timestamp: Date.now(),
             };
             currentMessages.push(toolResultMessage);
+
+            // 更新显示：工具执行完成
+            accumulatedDisplay += this.formatToolCallCard(
+              toolName,
+              toolArgs,
+              "completed",
+              toolResult,
+            );
+            assistantMessage.content = accumulatedDisplay;
+            this.onStreamingUpdate?.(accumulatedDisplay);
           }
 
           continue;
         }
 
         // 没有 tool calls，最终回答
-        assistantMessage.content = result.content || "";
+        accumulatedDisplay += result.content || "";
+        assistantMessage.content = accumulatedDisplay;
         assistantMessage.timestamp = Date.now();
         this.currentSession!.updatedAt = Date.now();
 
@@ -968,14 +1153,15 @@ export class ChatManager {
       }
 
       // 达到最大迭代次数
-      // Note: Use = to replace because non-streaming mode only shows placeholder text
       ztoolkit.log("[Tool Calling] Max iterations reached");
-      assistantMessage.content =
-        "I apologize, but I was unable to complete the request within the allowed number of iterations.";
+      accumulatedDisplay +=
+        "\n\nI apologize, but I was unable to complete the request within the allowed number of iterations.";
+      assistantMessage.content = accumulatedDisplay;
       assistantMessage.timestamp = Date.now();
       this.currentSession!.updatedAt = Date.now();
       await this.sessionStorage.saveSession(this.currentSession!);
       this.onMessageUpdate?.(this.currentSession!.messages);
+      this.onMessageComplete?.();
     } catch (error) {
       ztoolkit.log("[Tool Calling] Error:", error);
 
@@ -1004,6 +1190,7 @@ export class ChatManager {
     this.currentSession.contextSummary = undefined;
     this.currentSession.contextState = undefined;
     this.currentSession.lastActiveItemKey = null;
+    this.currentSession.lastActiveItemKeys = [];
     this.currentSession.updatedAt = Date.now();
 
     await this.sessionStorage.saveSession(this.currentSession);
@@ -1049,6 +1236,7 @@ export class ChatManager {
     }
     this.currentSession = null;
     this.currentItemKey = null;
+    this.currentItemKeys = [];
     this.initialized = false;
   }
 }

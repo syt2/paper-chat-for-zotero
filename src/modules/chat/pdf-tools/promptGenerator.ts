@@ -5,17 +5,28 @@
 import type { PaperStructureExtended } from "../../../types/tool";
 
 /**
+ * 多文档上下文信息
+ */
+export interface MultiPaperContext {
+  itemKeys: string[];
+  titles: Map<string, string>;
+  structures?: Map<string, PaperStructureExtended>;
+}
+
+/**
  * 生成系统提示（包含当前论文信息和工具使用说明）
  * @param currentPaperStructure 当前论文的结构（可选）
  * @param currentItemKey 当前 item 的 key（可选）
  * @param currentTitle 当前论文标题（可选）
  * @param hasCurrentItem 是否有当前选中的 item
+ * @param multiPaperContext 多文档上下文（可选，用于多文档对话）
  */
 export function generatePaperContextPrompt(
   currentPaperStructure?: PaperStructureExtended,
   currentItemKey?: string,
   currentTitle?: string,
   hasCurrentItem: boolean = true,
+  multiPaperContext?: MultiPaperContext,
 ): string {
   let prompt = `You are a helpful research assistant analyzing academic papers.\n\n`;
 
@@ -34,11 +45,37 @@ You can help the user by listing available papers with list_all_items or answeri
     return prompt;
   }
 
-  // 当前论文详情
+  // 多文档模式
+  if (multiPaperContext && multiPaperContext.itemKeys.length > 1) {
+    prompt += `=== MULTIPLE PAPERS SELECTED (${multiPaperContext.itemKeys.length}) ===\n`;
+    prompt += `You have ${multiPaperContext.itemKeys.length} papers available for analysis:\n\n`;
+
+    for (const key of multiPaperContext.itemKeys) {
+      const title = multiPaperContext.titles.get(key) || "Unknown Title";
+      const structure = multiPaperContext.structures?.get(key);
+      const pageCount = structure?.pageCount || "?";
+      prompt += `- [${key}] "${title}" (${pageCount} pages)\n`;
+    }
+
+    prompt += `\n=== MULTI-PAPER COMPARISON TOOLS ===
+- compare_papers: Compare methodology, results, or conclusions across papers
+- search_across_papers: Search for content across all selected papers
+
+When comparing papers, always specify which paper(s) you're referring to using their itemKey.
+\n`;
+  }
+
+  // 当前/主要论文详情
   if (currentPaperStructure) {
     const title =
       currentTitle || currentPaperStructure.metadata.title || "Current Paper";
-    prompt += `=== CURRENT PAPER ===\n`;
+
+    if (multiPaperContext && multiPaperContext.itemKeys.length > 1) {
+      prompt += `=== PRIMARY PAPER ===\n`;
+    } else {
+      prompt += `=== CURRENT PAPER ===\n`;
+    }
+
     prompt += `Title: "${title}"\n`;
     prompt += `itemKey: "${currentItemKey || "unknown"}"\n`;
     prompt += `Pages: ${currentPaperStructure.pageCount}\n`;

@@ -88,7 +88,10 @@ export type PaperToolName =
   | "get_recent"
   | "search_notes"
   | "create_note"
-  | "batch_update_tags";
+  | "batch_update_tags"
+  // 多文档比较工具
+  | "compare_papers"
+  | "search_across_papers";
 
 // 基础工具参数（所有工具都可以指定 itemKey）
 export interface BaseToolArgs {
@@ -226,4 +229,20 @@ export interface BatchUpdateTagsArgs {
   addTags?: string; // 要添加的标签（逗号分隔）
   removeTags?: string; // 要移除的标签（逗号分隔）
   limit?: number; // 最多影响的条目数
+}
+
+// ========== 多文档比较工具参数类型 ==========
+
+// 比较多篇论文的参数
+export interface ComparePapersArgs {
+  itemKeys: string[]; // 要比较的论文 keys
+  aspect?: "methodology" | "results" | "conclusions" | "all"; // 比较方面
+  section?: string; // 比较特定章节
+}
+
+// 跨论文搜索的参数
+export interface SearchAcrossPapersArgs {
+  query: string; // 搜索查询
+  itemKeys?: string[]; // 指定论文 keys，不传则搜索所有当前选中的论文
+  max_results_per_paper?: number; // 每篇论文最多返回结果数
 }

@@ -75,3 +75,15 @@ pref-upload-raw-pdf-desc = 启用后，若文本提取失败将上传原始 PDF 
 pref-ai-tools-settings = AI 工具设置
 pref-enable-ai-write = 允许 AI 创建笔记和修改标签
 pref-enable-ai-write-desc = 启用后，AI 可以在您的文献库中创建笔记和批量更新标签。请谨慎使用。
+
+# AISummary Settings
+pref-aisummary-settings = AI摘要
+pref-aisummary-enable = 启用自动执行
+pref-aisummary-interval-hours = 执行间隔
+pref-aisummary-interval-hours-unit = 小时
+pref-aisummary-template = 模板
+pref-aisummary-filter-pdf = 仅处理有 PDF 附件的条目
+pref-aisummary-tag = 已处理标签
+pref-aisummary-rate-limit = 速率限制
+pref-aisummary-run-now = 立即执行
+pref-aisummary-desc = AI摘要将按照设定的间隔自动为文献库中的论文生成摘要笔记。

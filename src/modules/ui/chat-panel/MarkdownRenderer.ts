@@ -18,6 +18,226 @@ const md = new MarkdownIt({
 });
 
 /**
+ * Tool call card styles
+ */
+const toolCallStyles = {
+  light: {
+    cardBg: "#f6f8fa",
+    cardBorder: "#d0d7de",
+    nameBg: "#eef1f4",
+    nameText: "#24292f",
+    argsText: "#57606a",
+    statusCalling: "#bf8700",
+    statusDone: "#1a7f37",
+    statusError: "#cf222e",
+    resultBg: "#ffffff",
+    resultText: "#57606a",
+  },
+  dark: {
+    cardBg: "#161b22",
+    cardBorder: "#30363d",
+    nameBg: "#21262d",
+    nameText: "#c9d1d9",
+    argsText: "#8b949e",
+    statusCalling: "#d29922",
+    statusDone: "#3fb950",
+    statusError: "#f85149",
+    resultBg: "#0d1117",
+    resultText: "#8b949e",
+  },
+};
+
+/**
+ * Unescape XML entities back to original characters
+ * This reverses the escaping done in ChatManager.formatToolCallCard
+ */
+function unescapeXml(str: string): string {
+  return str
+    .replace(/&apos;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&gt;/g, ">")
+    .replace(/&lt;/g, "<")
+    .replace(/&amp;/g, "&");
+}
+
+/**
+ * Parse and render tool call cards from special markup
+ * Format: <tool-call status="calling|completed|error">...</tool-call>
+ * Features: Collapsible cards with expand/collapse toggle
+ */
+function renderToolCallCards(
+  doc: Document,
+  parent: HTMLElement,
+  content: string,
+): string {
+  const dark = isDarkMode();
+  const colors = dark ? toolCallStyles.dark : toolCallStyles.light;
+
+  // Regex to match tool-call blocks
+  const toolCallRegex =
+    /<tool-call status="(calling|completed|error)">\s*<tool-name>([^<]*)<\/tool-name>\s*(?:<tool-args>([^<]*)<\/tool-args>\s*)?<tool-status>([^<]*)<\/tool-status>\s*(?:<tool-result>([^<]*)<\/tool-result>\s*)?<\/tool-call>/g;
+
+  let lastIndex = 0;
+  let match;
+  let remainingContent = "";
+  let hasToolCards = false;
+
+  while ((match = toolCallRegex.exec(content)) !== null) {
+    hasToolCards = true;
+
+    // Add text before this match as remaining content to render as markdown
+    if (match.index > lastIndex) {
+      const textBefore = content.slice(lastIndex, match.index).trim();
+      if (textBefore) {
+        // Render preceding markdown
+        const textContainer = doc.createElementNS(HTML_NS, "div") as HTMLElement;
+        const tokens = md.parse(textBefore, {});
+        const builtContent = buildDOMFromTokens(doc, tokens);
+        while (builtContent.firstChild) {
+          textContainer.appendChild(builtContent.firstChild);
+        }
+        parent.appendChild(textContainer);
+      }
+    }
+
+    const [, status, toolName, toolArgs, statusText, toolResult] = match;
+    const hasDetails = toolArgs || toolResult;
+    const isCompleted = status === "completed";
+
+    // Create tool call card
+    const card = doc.createElementNS(HTML_NS, "div") as HTMLElement;
+    card.style.margin = "8px 0";
+    card.style.border = `1px solid ${colors.cardBorder}`;
+    card.style.borderRadius = "8px";
+    card.style.background = colors.cardBg;
+    card.style.overflow = "hidden";
+    card.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
+    card.style.fontSize = "12px";
+
+    // Header row (clickable for expand/collapse)
+    const header = doc.createElementNS(HTML_NS, "div") as HTMLElement;
+    header.style.display = "flex";
+    header.style.alignItems = "center";
+    header.style.padding = "8px 12px";
+    header.style.background = colors.nameBg;
+    header.style.gap = "8px";
+    if (hasDetails && isCompleted) {
+      header.style.cursor = "pointer";
+      header.style.userSelect = "none";
+    }
+
+    // Expand/collapse chevron (only for completed cards with details)
+    let chevron: HTMLElement | null = null;
+    if (hasDetails && isCompleted) {
+      chevron = doc.createElementNS(HTML_NS, "span") as HTMLElement;
+      chevron.style.fontSize = "10px";
+      chevron.style.color = colors.argsText;
+      chevron.style.transition = "transform 0.2s";
+      chevron.style.display = "inline-block";
+      chevron.textContent = "▶"; // Collapsed state
+      header.appendChild(chevron);
+    }
+
+    // Tool name (unescape XML entities)
+    const nameEl = doc.createElementNS(HTML_NS, "span") as HTMLElement;
+    nameEl.style.fontWeight = "600";
+    nameEl.style.color = colors.nameText;
+    nameEl.style.flex = "1";
+    nameEl.textContent = unescapeXml(toolName || "");
+    header.appendChild(nameEl);
+
+    // Status badge
+    const statusEl = doc.createElementNS(HTML_NS, "span") as HTMLElement;
+    const statusColor =
+      status === "calling"
+        ? colors.statusCalling
+        : status === "completed"
+          ? colors.statusDone
+          : colors.statusError;
+    statusEl.style.fontSize = "11px";
+    statusEl.style.color = statusColor;
+    statusEl.style.fontWeight = "500";
+    statusEl.textContent = statusText || "";
+    header.appendChild(statusEl);
+
+    card.appendChild(header);
+
+    // Details container (collapsible)
+    let detailsContainer: HTMLElement | null = null;
+    if (hasDetails) {
+      detailsContainer = doc.createElementNS(HTML_NS, "div") as HTMLElement;
+      detailsContainer.style.borderTop = `1px solid ${colors.cardBorder}`;
+      // Default: collapsed for completed, expanded for calling
+      detailsContainer.style.display = isCompleted ? "none" : "block";
+      detailsContainer.style.overflow = "hidden";
+
+      // Args row (if present, unescape XML entities)
+      if (toolArgs) {
+        const argsEl = doc.createElementNS(HTML_NS, "div") as HTMLElement;
+        argsEl.style.padding = "6px 12px";
+        argsEl.style.color = colors.argsText;
+        argsEl.style.fontFamily = '"SF Mono", Monaco, Consolas, monospace';
+        argsEl.style.fontSize = "11px";
+        argsEl.style.borderBottom = toolResult ? `1px solid ${colors.cardBorder}` : "none";
+        argsEl.style.wordBreak = "break-all";
+        argsEl.textContent = unescapeXml(toolArgs);
+        detailsContainer.appendChild(argsEl);
+      }
+
+      // Result row (if present and completed, unescape XML entities)
+      if (toolResult && isCompleted) {
+        const resultEl = doc.createElementNS(HTML_NS, "div") as HTMLElement;
+        resultEl.style.padding = "6px 12px";
+        resultEl.style.color = colors.resultText;
+        resultEl.style.fontSize = "11px";
+        resultEl.style.background = colors.resultBg;
+        resultEl.style.whiteSpace = "pre-wrap";
+        resultEl.style.wordBreak = "break-word";
+        resultEl.style.maxHeight = "150px";
+        resultEl.style.overflow = "auto";
+        resultEl.textContent = unescapeXml(toolResult);
+        detailsContainer.appendChild(resultEl);
+      }
+
+      card.appendChild(detailsContainer);
+    }
+
+    // Add click handler for expand/collapse (only for completed cards)
+    if (hasDetails && isCompleted && chevron && detailsContainer) {
+      let isExpanded = false;
+      const details = detailsContainer; // Capture for closure
+      const chev = chevron;
+
+      header.addEventListener("click", () => {
+        isExpanded = !isExpanded;
+        details.style.display = isExpanded ? "block" : "none";
+        chev.style.transform = isExpanded ? "rotate(90deg)" : "rotate(0deg)";
+      });
+
+      // Hover effect
+      header.addEventListener("mouseenter", () => {
+        header.style.background = dark ? "#2d333b" : "#e6eaef";
+      });
+      header.addEventListener("mouseleave", () => {
+        header.style.background = colors.nameBg;
+      });
+    }
+
+    parent.appendChild(card);
+    lastIndex = match.index + match[0].length;
+  }
+
+  // Return remaining content after last tool card
+  if (hasToolCards) {
+    remainingContent = content.slice(lastIndex).trim();
+    return remainingContent;
+  }
+
+  // No tool cards found, return original content
+  return content;
+}
+
+/**
  * Render markdown content to DOM elements directly
  * This avoids XHTML parsing issues by building elements programmatically
  */
@@ -29,11 +249,17 @@ export function renderMarkdownToElement(
   const doc = element.ownerDocument;
   if (!doc) return;
 
-  const tokens = md.parse(markdownContent, {});
-  const container = buildDOMFromTokens(doc, tokens);
+  // First, check for and render tool call cards
+  const remainingContent = renderToolCallCards(doc, element, markdownContent);
 
-  while (container.firstChild) {
-    element.appendChild(container.firstChild);
+  // If there's remaining content after tool cards, render it as markdown
+  if (remainingContent) {
+    const tokens = md.parse(remainingContent, {});
+    const container = buildDOMFromTokens(doc, tokens);
+
+    while (container.firstChild) {
+      element.appendChild(container.firstChild);
+    }
   }
 }
 

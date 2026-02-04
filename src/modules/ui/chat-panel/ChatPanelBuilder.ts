@@ -330,11 +330,132 @@ export function createChatContainer(
   });
   historyBtn.appendChild(historyIcon);
 
+  // Multi-document select button
+  const multiDocBtn = createElement(doc, "button", btnStyle, {
+    id: "chat-multi-doc-btn",
+    title: "Add papers to conversation",
+  });
+  const multiDocIcon = createElement(doc, "img", iconStyle, {
+    src: `chrome://${config.addonRef}/content/icons/newlybuild.svg`,
+  });
+  multiDocBtn.appendChild(multiDocIcon);
+  // Add "+" label to distinguish from new chat
+  const multiDocLabel = createElement(doc, "span", {
+    fontSize: "10px",
+    marginLeft: "2px",
+  });
+  multiDocLabel.textContent = "+";
+  multiDocBtn.appendChild(multiDocLabel);
+
   toolbarButtons.appendChild(newChatBtn);
   toolbarButtons.appendChild(uploadFileBtn);
   toolbarButtons.appendChild(historyBtn);
+  toolbarButtons.appendChild(multiDocBtn);
 
   toolbar.appendChild(toolbarButtons);
+
+  // Selected papers indicator (shows when multiple papers are selected)
+  const selectedPapersBar = createElement(
+    doc,
+    "div",
+    {
+      display: "none",
+      width: "100%",
+      marginTop: "8px",
+      padding: "6px 10px",
+      background: theme.attachmentPreviewBg,
+      borderRadius: "6px",
+      fontSize: "11px",
+      color: theme.textSecondary,
+    },
+    { id: "chat-selected-papers-bar" },
+  );
+
+  const selectedPapersText = createElement(
+    doc,
+    "span",
+    {},
+    { id: "chat-selected-papers-text" },
+  );
+  selectedPapersText.textContent = "No papers selected";
+
+  const clearPapersBtn = createElement(
+    doc,
+    "button",
+    {
+      marginLeft: "8px",
+      padding: "2px 6px",
+      fontSize: "10px",
+      background: "transparent",
+      border: `1px solid ${theme.borderColor}`,
+      borderRadius: "4px",
+      cursor: "pointer",
+      color: theme.textMuted,
+    },
+    { id: "chat-clear-papers-btn" },
+  );
+  clearPapersBtn.textContent = "Clear";
+
+  selectedPapersBar.appendChild(selectedPapersText);
+  selectedPapersBar.appendChild(clearPapersBtn);
+  toolbar.appendChild(selectedPapersBar);
+
+  // Multi-document dropdown (paper selector)
+  const multiDocDropdown = createElement(
+    doc,
+    "div",
+    {
+      display: "none",
+      position: "absolute",
+      bottom: "120px",
+      left: "10px",
+      width: "320px",
+      maxHeight: "400px",
+      background: theme.dropdownBg,
+      border: `1px solid ${theme.borderColor}`,
+      borderRadius: "8px",
+      boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+      zIndex: "10001",
+      overflow: "hidden",
+    },
+    { id: "chat-multi-doc-dropdown" },
+  );
+
+  // Search input in dropdown
+  const multiDocSearch = createElement(
+    doc,
+    "input",
+    {
+      width: "100%",
+      padding: "10px 12px",
+      border: "none",
+      borderBottom: `1px solid ${theme.borderColor}`,
+      fontSize: "13px",
+      outline: "none",
+      background: theme.inputBg,
+      color: theme.textPrimary,
+    },
+    {
+      id: "chat-multi-doc-search",
+      type: "text",
+      placeholder: "Search papers...",
+    },
+  );
+
+  // Paper list in dropdown
+  const multiDocList = createElement(
+    doc,
+    "div",
+    {
+      maxHeight: "340px",
+      overflowY: "auto",
+      padding: "4px 0",
+    },
+    { id: "chat-multi-doc-list" },
+  );
+
+  multiDocDropdown.appendChild(multiDocSearch);
+  multiDocDropdown.appendChild(multiDocList);
 
   // Attachments Preview
   const attachmentsPreview = createElement(
@@ -623,6 +744,7 @@ export function createChatContainer(
   root.appendChild(attachmentsPreview);
   root.appendChild(inputArea);
   root.appendChild(historyDropdown);
+  root.appendChild(multiDocDropdown);
   container.appendChild(root);
 
   doc.documentElement?.appendChild(container);

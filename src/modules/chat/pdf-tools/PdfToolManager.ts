@@ -45,6 +45,9 @@ import type {
   SearchNotesArgs,
   CreateNoteArgs,
   BatchUpdateTagsArgs,
+  // 多文档比较工具类型
+  ComparePapersArgs,
+  SearchAcrossPapersArgs,
 } from "../../../types/tool";
 import { parsePaperStructure, parsePages } from "./paperParser";
 import { generatePaperContextPrompt as generatePaperContextPromptFn } from "./promptGenerator";
@@ -86,8 +89,10 @@ interface CacheEntry {
 }
 
 export class PdfToolManager {
-  // 当前活动的 Item Key
+  // 当前活动的 Item Key (单文档，向后兼容)
   private currentItemKey: string | null = null;
+  // 当前活动的多个 Item Keys (多文档支持)
+  private currentItemKeys: string[] = [];
 
   // PDF 解析缓存（避免重复解析同一个 PDF）
   private paperCache: Map<string, CacheEntry> = new Map();
@@ -95,17 +100,47 @@ export class PdfToolManager {
   private readonly MAX_CACHE_SIZE = 10; // 最多缓存10个文档
 
   /**
-   * 设置当前活动的 Item Key
+   * 设置当前活动的 Item Key (单文档模式)
    */
   setCurrentItemKey(itemKey: string | null): void {
     this.currentItemKey = itemKey;
   }
 
   /**
-   * 获取当前活动的 Item Key
+   * 获取当前活动的 Item Key (单文档模式)
    */
   getCurrentItemKey(): string | null {
     return this.currentItemKey;
+  }
+
+  /**
+   * 设置当前活动的多个 Item Keys (多文档模式)
+   */
+  setCurrentItemKeys(itemKeys: string[]): void {
+    this.currentItemKeys = itemKeys;
+  }
+
+  /**
+   * 获取当前活动的多个 Item Keys
+   */
+  getCurrentItemKeys(): string[] {
+    return this.currentItemKeys;
+  }
+
+  /**
+   * 批量提取多个论文的结构（用于多文档比较）
+   */
+  async extractAndParsePapers(
+    itemKeys: string[],
+  ): Promise<Map<string, PaperStructureExtended>> {
+    const results = new Map<string, PaperStructureExtended>();
+    for (const key of itemKeys) {
+      const structure = await this.extractAndParsePaper(key);
+      if (structure) {
+        results.set(key, structure);
+      }
+    }
+    return results;
   }
 
   /**
@@ -786,8 +821,74 @@ export class PdfToolManager {
       },
     ];
 
-    // 返回 PDF 工具 + Library 工具
-    return [...pdfTools, ...libraryTools];
+    // 多文档比较工具（仅在选择了多个文档时可用）
+    const comparisonTools: ToolDefinition[] = [];
+    if (this.currentItemKeys.length > 1) {
+      comparisonTools.push(
+        {
+          type: "function",
+          function: {
+            name: "compare_papers",
+            description:
+              "Compare specific aspects across multiple papers. Use this when you need to compare methodology, results, or conclusions between papers.",
+            parameters: {
+              type: "object",
+              properties: {
+                itemKeys: {
+                  type: "array",
+                  items: { type: "string" },
+                  description:
+                    "Array of paper item keys to compare. If not provided, compares all currently selected papers.",
+                },
+                aspect: {
+                  type: "string",
+                  description:
+                    "The aspect to compare: methodology (research methods), results (findings), conclusions, or all. Default: all",
+                  enum: ["methodology", "results", "conclusions", "all"],
+                },
+                section: {
+                  type: "string",
+                  description:
+                    "Optionally compare a specific section by name (e.g., 'introduction', 'experiments').",
+                },
+              },
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "search_across_papers",
+            description:
+              "Search for content across all selected papers simultaneously. Returns matches from each paper.",
+            parameters: {
+              type: "object",
+              properties: {
+                query: {
+                  type: "string",
+                  description: "The search query to find across papers.",
+                },
+                itemKeys: {
+                  type: "array",
+                  items: { type: "string" },
+                  description:
+                    "Optional: specific paper keys to search. If not provided, searches all currently selected papers.",
+                },
+                max_results_per_paper: {
+                  type: "number",
+                  description:
+                    "Maximum results per paper (default: 3, max: 10).",
+                },
+              },
+              required: ["query"],
+            },
+          },
+        },
+      );
+    }
+
+    // 返回 PDF 工具 + Library 工具 + 比较工具
+    return [...pdfTools, ...libraryTools, ...comparisonTools];
   }
 
   // === 类型守卫函数 ===
@@ -933,6 +1034,22 @@ export class PdfToolManager {
     );
   }
 
+  // === 多文档比较工具的类型守卫 ===
+
+  private isComparePapersArgs(args: unknown): args is ComparePapersArgs {
+    return typeof args === "object" && args !== null;
+  }
+
+  private isSearchAcrossPapersArgs(
+    args: unknown,
+  ): args is SearchAcrossPapersArgs {
+    return (
+      typeof args === "object" &&
+      args !== null &&
+      typeof (args as SearchAcrossPapersArgs).query === "string"
+    );
+  }
+
   /**
    * 执行工具调用（异步，按需提取 PDF）
    * @param toolCall AI 请求的工具调用
@@ -1046,6 +1163,21 @@ export class PdfToolManager {
         }
         return executeBatchUpdateTags(args);
       }
+
+      // === 多文档比较工具 ===
+      case "compare_papers": {
+        if (!this.isComparePapersArgs(args)) {
+          return "Error: Invalid arguments for compare_papers";
+        }
+        return this.executeComparePapers(args);
+      }
+
+      case "search_across_papers": {
+        if (!this.isSearchAcrossPapersArgs(args)) {
+          return "Error: Invalid arguments for search_across_papers. Required: query (string)";
+        }
+        return this.executeSearchAcrossPapers(args);
+      }
     }
 
     // === PDF 内容工具（需要 PDF）===
@@ -1150,5 +1282,152 @@ export class PdfToolManager {
       currentTitle,
       hasCurrentItem,
     );
+  }
+
+  // === 多文档比较工具的执行方法 ===
+
+  /**
+   * 执行 compare_papers 工具
+   * 比较多篇论文的特定方面
+   */
+  private async executeComparePapers(args: ComparePapersArgs): Promise<string> {
+    // 确定要比较的论文 keys
+    const itemKeys = args.itemKeys?.length ? args.itemKeys : this.currentItemKeys;
+
+    if (itemKeys.length < 2) {
+      return "Error: compare_papers requires at least 2 papers. Please select multiple papers or provide itemKeys array.";
+    }
+
+    // 提取所有论文的结构
+    const papersMap = await this.extractAndParsePapers(itemKeys);
+
+    if (papersMap.size < 2) {
+      return `Error: Could only extract ${papersMap.size} paper(s). Need at least 2 for comparison.`;
+    }
+
+    const aspect = args.aspect || "all";
+    const results: string[] = [];
+
+    results.push(`=== Comparing ${papersMap.size} Papers ===\n`);
+
+    // 获取每篇论文的标题
+    for (const [key, structure] of papersMap) {
+      const title = structure.metadata.title || key;
+      results.push(`- [${key}] "${title}"`);
+    }
+    results.push("");
+
+    // 根据 aspect 提取对应内容
+    const sectionsToCompare: string[] = [];
+    if (aspect === "methodology" || aspect === "all") {
+      sectionsToCompare.push("methodology", "methods", "approach");
+    }
+    if (aspect === "results" || aspect === "all") {
+      sectionsToCompare.push("results", "experiments", "evaluation");
+    }
+    if (aspect === "conclusions" || aspect === "all") {
+      sectionsToCompare.push("conclusion", "conclusions", "discussion");
+    }
+    if (args.section) {
+      sectionsToCompare.push(args.section.toLowerCase());
+    }
+
+    // 对每篇论文提取相关章节
+    for (const [key, structure] of papersMap) {
+      const title = structure.metadata.title || key;
+      results.push(`\n--- Paper [${key}]: ${title} ---\n`);
+
+      let foundContent = false;
+      for (const sectionName of sectionsToCompare) {
+        const section = structure.sections.find(
+          (s) =>
+            s.normalizedName === sectionName ||
+            s.name.toLowerCase().includes(sectionName),
+        );
+        if (section) {
+          foundContent = true;
+          results.push(`**${section.name}:**`);
+          // 截断到合理长度
+          const content =
+            section.content.length > 2000
+              ? section.content.substring(0, 2000) + "... [truncated]"
+              : section.content;
+          results.push(content);
+          results.push("");
+        }
+      }
+
+      if (!foundContent) {
+        // 如果没有找到具体章节，返回摘要
+        if (structure.metadata.abstract) {
+          results.push("**Abstract:**");
+          results.push(structure.metadata.abstract);
+        } else {
+          results.push("(No matching sections found for this paper)");
+        }
+      }
+    }
+
+    return results.join("\n");
+  }
+
+  /**
+   * 执行 search_across_papers 工具
+   * 在多篇论文中搜索内容
+   */
+  private async executeSearchAcrossPapers(
+    args: SearchAcrossPapersArgs,
+  ): Promise<string> {
+    const query = args.query;
+    const itemKeys = args.itemKeys?.length ? args.itemKeys : this.currentItemKeys;
+    const maxResultsPerPaper = Math.min(args.max_results_per_paper || 3, 10);
+
+    if (itemKeys.length === 0) {
+      return "Error: No papers selected. Please select papers or provide itemKeys array.";
+    }
+
+    // 提取所有论文的结构
+    const papersMap = await this.extractAndParsePapers(itemKeys);
+
+    if (papersMap.size === 0) {
+      return "Error: Could not extract any paper content.";
+    }
+
+    const results: string[] = [];
+    results.push(`=== Search Results for "${query}" across ${papersMap.size} papers ===\n`);
+
+    const queryLower = query.toLowerCase();
+
+    for (const [key, structure] of papersMap) {
+      const title = structure.metadata.title || key;
+      results.push(`\n--- Paper [${key}]: ${title} ---\n`);
+
+      // 搜索全文
+      const fullText = structure.fullText;
+      const paragraphs = fullText.split(/\n\s*\n/);
+      const matches: string[] = [];
+
+      for (const para of paragraphs) {
+        if (para.toLowerCase().includes(queryLower) && para.trim().length > 20) {
+          // 高亮匹配
+          const highlighted = para.trim();
+          matches.push(highlighted);
+          if (matches.length >= maxResultsPerPaper) break;
+        }
+      }
+
+      if (matches.length > 0) {
+        results.push(`Found ${matches.length} match(es):\n`);
+        matches.forEach((match, i) => {
+          const truncated =
+            match.length > 500 ? match.substring(0, 500) + "..." : match;
+          results.push(`${i + 1}. ${truncated}\n`);
+        });
+      } else {
+        results.push("No matches found in this paper.\n");
+      }
+    }
+
+    return results.join("\n");
   }
 }

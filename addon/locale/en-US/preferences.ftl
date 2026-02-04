@@ -75,3 +75,15 @@ pref-upload-raw-pdf-desc = When enabled, uploads original PDF to AI if text extr
 pref-ai-tools-settings = AI Tools Settings
 pref-enable-ai-write = Allow AI to create notes and modify tags
 pref-enable-ai-write-desc = When enabled, AI can create notes and batch update tags in your library. Use with caution.
+
+# AISummary Settings
+pref-aisummary-settings = AI Summary
+pref-aisummary-enable = Enable Automatic Execution
+pref-aisummary-interval-hours = Run Interval
+pref-aisummary-interval-hours-unit = hours
+pref-aisummary-template = Template
+pref-aisummary-filter-pdf = Only process items with PDF
+pref-aisummary-tag = Processed Tag
+pref-aisummary-rate-limit = Rate Limit
+pref-aisummary-run-now = Run Now
+pref-aisummary-desc = AI Summary automatically generates summaries for papers in your library based on the interval.

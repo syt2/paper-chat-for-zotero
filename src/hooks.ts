@@ -4,6 +4,7 @@ import { createZToolkit } from "./utils/ztoolkit";
 import { registerToolbarButton, unregisterChatPanel } from "./modules/ui";
 import { getAuthManager, destroyAuthManager } from "./modules/auth";
 import { destroyProviderManager } from "./modules/providers";
+import { initAISummary, getAISummaryManager } from "./modules/ai-summary";
 
 async function onStartup() {
   await Promise.all([
@@ -26,6 +27,9 @@ async function onStartup() {
   // Initialize auth manager
   const authManager = getAuthManager();
   await authManager.initialize();
+
+  // Initialize AISummary
+  await initAISummary();
 
   await Promise.all(
     Zotero.getMainWindows().map((win) => onMainWindowLoad(win)),
@@ -66,6 +70,8 @@ function onShutdown(): void {
   unregisterChatPanel();
   destroyProviderManager();
   destroyAuthManager();
+  // Destroy AISummary
+  getAISummaryManager().destroy();
   addon.data.dialog?.window?.close();
   addon.data.alive = false;
   // @ts-expect-error - Plugin instance is not typed

@@ -72,7 +72,8 @@ export interface ChatSession {
   id: string; // timestamp-uuid 格式
   createdAt: number;
   updatedAt: number;
-  lastActiveItemKey: string | null; // 上次活动的 item key
+  lastActiveItemKey: string | null; // 上次活动的 item key (向后兼容)
+  lastActiveItemKeys?: string[]; // 多文档支持：当前活动的 item keys
   messages: ChatMessage[];
   // 上下文管理相关
   contextSummary?: ContextSummary;
