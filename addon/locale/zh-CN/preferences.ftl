@@ -79,5 +79,6 @@ pref-enable-ai-write-desc = 启用后，AI 可以在您的文献库中创建笔�
 # AISummary Settings
 pref-aisummary-settings = AI摘要
 pref-aisummary-template = 模板
+pref-aisummary-include-annotations = 包含用户高亮和笔记
 pref-aisummary-run-now = 生成摘要
 pref-aisummary-desc = 为文献库中未处理的论文生成AI摘要笔记（每次最多10篇）。

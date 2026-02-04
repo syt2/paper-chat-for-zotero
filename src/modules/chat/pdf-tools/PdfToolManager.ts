@@ -70,6 +70,7 @@ import {
 } from "./zoteroExecutors";
 import {
   executeGetAnnotations,
+  executeGetPdfSelection,
   executeSearchItems,
   executeGetCollections,
   executeGetCollectionItems,
@@ -365,7 +366,7 @@ export class PdfToolManager {
         function: {
           name: "get_annotations",
           description:
-            "Get PDF annotations (highlights, notes, underlines, images) from a paper. Returns annotation text, comments, colors, and page numbers.",
+            "Get PDF annotations (highlights, notes, underlines, images) from a paper. Returns annotation text, comments, colors, and page numbers. Can filter by type or get only currently selected annotations.",
           parameters: {
             type: "object",
             properties: {
@@ -376,12 +377,34 @@ export class PdfToolManager {
                   "Filter by annotation type. Options: highlight, note, underline, image, all. Default: all",
                 enum: ["highlight", "note", "underline", "image", "all"],
               },
+              selectedOnly: {
+                type: "boolean",
+                description:
+                  "If true, only return annotations that are currently selected in the PDF reader. Default: false",
+              },
+              includePosition: {
+                type: "boolean",
+                description:
+                  "If true, include detailed position information (rect coordinates) for each annotation. Default: false",
+              },
               limit: {
                 type: "number",
                 description:
                   "Maximum number of annotations to return (max 100). Default: 50",
               },
             },
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "get_pdf_selection",
+          description:
+            "Get the text currently selected by the user in the PDF reader. Use this when the user asks about specific text they have highlighted or selected, or to check if the user has selected any text.",
+          parameters: {
+            type: "object",
+            properties: {},
           },
         },
       },
@@ -1097,6 +1120,9 @@ export class PdfToolManager {
           return "Error: Invalid arguments for get_annotations";
         }
         return executeGetAnnotations(args, this.currentItemKey);
+
+      case "get_pdf_selection":
+        return executeGetPdfSelection();
 
       case "search_items":
         if (!this.isSearchItemsArgs(args)) {

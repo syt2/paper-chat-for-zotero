@@ -80,6 +80,7 @@ export type PaperToolName =
   | "get_item_metadata"
   // 新增工具
   | "get_annotations"
+  | "get_pdf_selection"
   | "search_items"
   | "get_collections"
   | "get_collection_items"
@@ -171,8 +172,13 @@ export interface PaperStructureExtended extends PaperStructure {
 // 获取 PDF 标注的参数
 export interface GetAnnotationsArgs extends BaseToolArgs {
   annotationType?: "highlight" | "note" | "underline" | "image" | "all";
+  selectedOnly?: boolean; // 仅获取 PDF 阅读器中选中的标注
+  includePosition?: boolean; // 是否包含详细位置信息 (rect)
   limit?: number;
 }
+
+// 获取 PDF 选中文本的参数（无参数）
+export type GetPdfSelectionArgs = Record<string, never>;
 
 // 搜索 Zotero 库的参数
 export interface SearchItemsArgs {

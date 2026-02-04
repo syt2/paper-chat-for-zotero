@@ -23,6 +23,11 @@ Full Text (excerpt):
 {{pdfContent}}
 {{/if}}
 
+{{#if annotations}}
+User's highlights and notes (pay special attention to these):
+{{annotations}}
+{{/if}}
+
 Focus on:
 1. The main research question or objective
 2. The methodology used
@@ -30,7 +35,7 @@ Focus on:
 
 Write in a clear, academic style.`,
     systemPrompt:
-      "You are an expert academic research assistant. Provide concise, accurate summaries of research papers.",
+      "You are an expert academic research assistant. Provide concise, accurate summaries of research papers. When user annotations are provided, pay special attention to the sections they highlighted.",
     noteTitle: "AI Summary: {{title}}",
     tags: ["ai-processed", "summary"],
     maxTokens: 1000,
@@ -52,11 +57,16 @@ Full Text (excerpt):
 {{pdfContent}}
 {{/if}}
 
+{{#if annotations}}
+User's highlights and notes (prioritize these):
+{{annotations}}
+{{/if}}
+
 Please list:
 - 5-7 most important findings or contributions
 - Each point should be 1-2 sentences
 - Focus on empirical results and theoretical contributions`,
-    systemPrompt: "You are a research analyst. Extract and organize key findings from academic papers.",
+    systemPrompt: "You are a research analyst. Extract and organize key findings from academic papers. User annotations indicate areas of interest.",
     noteTitle: "Key Findings: {{title}}",
     tags: ["ai-processed", "key-findings"],
     maxTokens: 800,
@@ -107,6 +117,11 @@ Full Text (excerpt):
 {{pdfContent}}
 {{/if}}
 
+{{#if annotations}}
+User's highlights and notes:
+{{annotations}}
+{{/if}}
+
 Please include:
 ## Summary
 Brief overview of the paper
@@ -120,12 +135,17 @@ How did the authors approach the problem?
 ## Key Findings
 Main results and contributions
 
+{{#if annotations}}
+## User Notes
+Key points highlighted by the user
+{{/if}}
+
 ## Relevance
 Why is this paper important?
 
 ## Citation
 How to cite this work`,
-    systemPrompt: "You are a researcher creating detailed literature notes for academic papers.",
+    systemPrompt: "You are a researcher creating detailed literature notes for academic papers. Incorporate user annotations where relevant.",
     noteTitle: "Literature Note: {{title}}",
     tags: ["ai-processed", "literature-note"],
     maxTokens: 1500,

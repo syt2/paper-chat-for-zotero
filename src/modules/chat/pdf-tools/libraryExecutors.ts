@@ -76,6 +76,27 @@ function stripHtml(html: string): string {
 // ==================== get_annotations ====================
 
 /**
+ * 获取 PDF 阅读器中选中的标注 keys
+ * 借鉴自 zotero-gpt
+ */
+async function getSelectedAnnotationKeys(): Promise<string[]> {
+  try {
+    const reader = await ztoolkit.Reader.getReader();
+    if (!reader || !reader._iframeWindow) {
+      return [];
+    }
+    const nodes = reader._iframeWindow.document.querySelectorAll(
+      "[id^=annotation-].selected",
+    );
+    return Array.from(nodes)
+      .filter((node): node is Element => node instanceof Element)
+      .map((node) => node.id.split("-")[1]);
+  } catch {
+    return [];
+  }
+}
+
+/**
  * 执行 get_annotations - 获取 PDF 标注
  */
 export async function executeGetAnnotations(
@@ -84,6 +105,8 @@ export async function executeGetAnnotations(
 ): Promise<string> {
   const targetItemKey = args.itemKey ?? currentItemKey;
   const annotationType = args.annotationType ?? "all";
+  const selectedOnly = args.selectedOnly ?? false;
+  const includePosition = args.includePosition ?? false;
   const limit = Math.min(args.limit ?? 50, 100);
 
   if (!targetItemKey) {
@@ -106,14 +129,25 @@ export async function executeGetAnnotations(
     }
   }
 
+  // 获取选中的标注 keys（如果需要）
+  let selectedKeys: string[] = [];
+  if (selectedOnly) {
+    selectedKeys = await getSelectedAnnotationKeys();
+    if (selectedKeys.length === 0) {
+      return `No annotations are currently selected in the PDF reader. Please select some annotations first.`;
+    }
+  }
+
   // 获取所有附件
   const attachmentIDs = item.getAttachments ? item.getAttachments() : [];
   const annotations: Array<{
+    key: string;
     type: string;
     text: string;
     comment: string;
     color: string;
     page: number;
+    rect?: number[];
     dateModified: string;
   }> = [];
 
@@ -129,6 +163,13 @@ export async function executeGetAnnotations(
     for (const annotation of annotationIDs) {
       if (!annotation) continue;
 
+      const annKey = annotation.key;
+
+      // 选中筛选
+      if (selectedOnly && !selectedKeys.includes(annKey)) {
+        continue;
+      }
+
       const annType = annotation.annotationType || "unknown";
 
       // 类型筛选
@@ -143,23 +184,31 @@ export async function executeGetAnnotations(
       const comment = annotation.annotationComment || "";
       const color = annotation.annotationColor || "";
       let page = 0;
+      let rect: number[] | undefined;
+
       if (annotation.annotationPosition) {
         try {
           const position = JSON.parse(annotation.annotationPosition);
           page = (position?.pageIndex ?? -1) + 1;
           if (page < 1) page = 0;
+          // 提取 rect 位置信息
+          if (includePosition && position?.rects && position.rects.length > 0) {
+            rect = position.rects[0]; // [left, bottom, right, top]
+          }
         } catch {
-          // 解析失败时保持 page = 0
+          // 解析失败时保持默认值
         }
       }
       const dateModified = annotation.dateModified || "";
 
       annotations.push({
+        key: annKey,
         type: annType,
         text,
         comment,
         color,
         page,
+        rect,
         dateModified,
       });
 
@@ -170,12 +219,20 @@ export async function executeGetAnnotations(
   }
 
   if (annotations.length === 0) {
-    return `No annotations found for item "${getItemTitle(item)}"${annotationType !== "all" ? ` with type "${annotationType}"` : ""}.`;
+    const filters: string[] = [];
+    if (annotationType !== "all") filters.push(`type: ${annotationType}`);
+    if (selectedOnly) filters.push("selected only");
+    const filterStr = filters.length > 0 ? ` (${filters.join(", ")})` : "";
+    return `No annotations found for item "${getItemTitle(item)}"${filterStr}.`;
   }
 
   // 格式化输出
   const title = getItemTitle(item);
-  const header = `Annotations for "${title}" (${annotations.length} found${annotationType !== "all" ? `, type: ${annotationType}` : ""}):\n\n`;
+  const filters: string[] = [];
+  if (annotationType !== "all") filters.push(`type: ${annotationType}`);
+  if (selectedOnly) filters.push("selected only");
+  const filterStr = filters.length > 0 ? `, ${filters.join(", ")}` : "";
+  const header = `Annotations for "${title}" (${annotations.length} found${filterStr}):\n\n`;
 
   const formattedAnnotations = annotations.map((ann, index) => {
     const parts = [`${index + 1}. [${ann.type.toUpperCase()}]`];
@@ -189,11 +246,51 @@ export async function executeGetAnnotations(
     if (ann.comment) {
       parts.push(`   Comment: ${ann.comment}\n`);
     }
+    if (ann.rect) {
+      parts.push(`   Position: [${ann.rect.map((n) => n.toFixed(1)).join(", ")}]\n`);
+    }
 
     return parts.join("");
   });
 
   return header + formattedAnnotations.join("\n");
+}
+
+// ==================== get_pdf_selection ====================
+
+/**
+ * 执行 get_pdf_selection - 获取 PDF 阅读器中选中的文本
+ * 借鉴自 zotero-gpt
+ */
+export function executeGetPdfSelection(): string {
+  try {
+    // 获取主窗口
+    const mainWindow = Zotero.getMainWindow() as (Window & {
+      Zotero_Tabs?: { selectedID: string };
+    }) | null;
+
+    // 获取当前选中的 tab
+    const selectedID = mainWindow?.Zotero_Tabs?.selectedID;
+    if (!selectedID) {
+      return "No PDF reader is currently open. Please open a PDF in Zotero first.";
+    }
+
+    const reader = Zotero.Reader?.getByTabID(selectedID);
+    if (!reader) {
+      return "No PDF reader is currently open. Please open a PDF in Zotero first.";
+    }
+
+    const selectedText = ztoolkit.Reader.getSelectedText(reader);
+
+    if (!selectedText || selectedText.trim() === "") {
+      return "No text is currently selected in the PDF reader. Please select some text first.";
+    }
+
+    return `Selected text from PDF:\n\n"${selectedText.trim()}"`;
+  } catch (error) {
+    ztoolkit.log("[get_pdf_selection] Error:", error);
+    return "Error: Could not get PDF selection. Make sure a PDF is open in the reader.";
+  }
 }
 
 // ==================== search_items ====================

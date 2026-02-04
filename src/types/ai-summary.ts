@@ -11,6 +11,7 @@ export interface AISummaryConfig {
   maxItemsPerRun: number; // 每次运行最多处理的条目数
   filterHasPdf: boolean; // 是否只处理有 PDF 的条目
   excludeProcessedItems: boolean; // 是否排除已处理的条目
+  includeAnnotations: boolean; // 是否在摘要中包含用户的标注
 }
 
 // AISummary 模板
@@ -75,4 +76,5 @@ export const DEFAULT_AISUMMARY_CONFIG: AISummaryConfig = {
   maxItemsPerRun: 10,
   filterHasPdf: true,
   excludeProcessedItems: true,
+  includeAnnotations: true, // 默认包含标注
 };

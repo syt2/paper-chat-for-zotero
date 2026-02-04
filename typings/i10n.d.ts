@@ -98,6 +98,7 @@ export type FluentMessageId =
   | 'pref-advanced-options'
   | 'pref-ai-tools-settings'
   | 'pref-aisummary-desc'
+  | 'pref-aisummary-include-annotations'
   | 'pref-aisummary-run-now'
   | 'pref-aisummary-settings'
   | 'pref-aisummary-template'

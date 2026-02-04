@@ -192,6 +192,14 @@ function initAISummarySettings(doc: Document): void {
   // Template dropdown
   populateAISummaryTemplates(doc, config.templateId);
 
+  // Include Annotations checkbox
+  const includeAnnotationsCheckbox = doc.getElementById(
+    "pref-aisummary-include-annotations",
+  ) as XUL.Checkbox | null;
+  if (includeAnnotationsCheckbox) {
+    includeAnnotationsCheckbox.checked = config.includeAnnotations ?? true;
+  }
+
   // Update status display
   updateAISummaryStatus(doc);
 }
@@ -275,6 +283,18 @@ function bindAISummarySettingsEvents(doc: Document): void {
   if (templateSelect) {
     templateSelect.addEventListener("command", async () => {
       await aiSummaryManager.updateConfig({ templateId: templateSelect.value });
+    });
+  }
+
+  // Include Annotations checkbox
+  const includeAnnotationsCheckbox = doc.getElementById(
+    "pref-aisummary-include-annotations",
+  ) as XUL.Checkbox | null;
+  if (includeAnnotationsCheckbox) {
+    includeAnnotationsCheckbox.addEventListener("command", async () => {
+      await aiSummaryManager.updateConfig({
+        includeAnnotations: includeAnnotationsCheckbox.checked,
+      });
     });
   }
 

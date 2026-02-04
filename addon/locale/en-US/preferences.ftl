@@ -79,5 +79,6 @@ pref-enable-ai-write-desc = When enabled, AI can create notes and batch update t
 # AISummary Settings
 pref-aisummary-settings = AI Summary
 pref-aisummary-template = Template
+pref-aisummary-include-annotations = Include user highlights and notes
 pref-aisummary-run-now = Generate Summaries
 pref-aisummary-desc = Generate AI summaries for unprocessed papers in your library (up to 10 per run).

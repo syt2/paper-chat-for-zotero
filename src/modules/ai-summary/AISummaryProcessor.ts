@@ -44,8 +44,14 @@ export class AISummaryProcessor {
         pdfContent = await this.extractPdfText(item);
       }
 
-      // 3. 构建 prompt
-      const prompt = this.buildPrompt(template, metadata, pdfContent);
+      // 3. 提取用户标注（可选）
+      let annotations: string | undefined;
+      if (config.includeAnnotations) {
+        annotations = await this.extractAnnotations(item);
+      }
+
+      // 4. 构建 prompt
+      const prompt = this.buildPrompt(template, metadata, pdfContent, annotations);
 
       // 4. 调用 AI
       const response = await this.callAI(prompt, template);
@@ -166,12 +172,81 @@ export class AISummaryProcessor {
   }
 
   /**
+   * 提取用户标注（highlights 和 notes）
+   */
+  private async extractAnnotations(item: Zotero.Item): Promise<string | undefined> {
+    try {
+      // 获取所有附件的标注
+      const attachmentIDs = item.getAttachments?.() || [];
+      const annotations: Array<{
+        type: string;
+        text: string;
+        comment: string;
+        page: number;
+      }> = [];
+
+      for (const attachmentID of attachmentIDs) {
+        const attachment = Zotero.Items.get(attachmentID);
+        if (!attachment) continue;
+
+        const annotationItems = attachment.getAnnotations?.() || [];
+        for (const annotation of annotationItems) {
+          if (!annotation) continue;
+
+          const annType = annotation.annotationType || "unknown";
+          // 只提取 highlight 和 note 类型
+          if (annType !== "highlight" && annType !== "note") continue;
+
+          const text = annotation.annotationText || "";
+          const comment = annotation.annotationComment || "";
+
+          // 跳过没有内容的标注
+          if (!text && !comment) continue;
+
+          let page = 0;
+          if (annotation.annotationPosition) {
+            try {
+              const position = JSON.parse(annotation.annotationPosition);
+              page = (position?.pageIndex ?? -1) + 1;
+              if (page < 1) page = 0;
+            } catch {
+              // 忽略解析错误
+            }
+          }
+
+          annotations.push({ type: annType, text, comment, page });
+        }
+      }
+
+      if (annotations.length === 0) {
+        return undefined;
+      }
+
+      // 格式化标注内容
+      const formattedAnnotations = annotations.map((ann) => {
+        const parts: string[] = [];
+        parts.push(`- [${ann.type.toUpperCase()}]`);
+        if (ann.page > 0) parts.push(`(Page ${ann.page})`);
+        if (ann.text) parts.push(`"${ann.text}"`);
+        if (ann.comment) parts.push(`Comment: ${ann.comment}`);
+        return parts.join(" ");
+      });
+
+      return formattedAnnotations.join("\n");
+    } catch (error) {
+      ztoolkit.log("[AISummary] Failed to extract annotations:", error);
+      return undefined;
+    }
+  }
+
+  /**
    * 构建 prompt
    */
   private buildPrompt(
     template: AISummaryTemplate,
     metadata: Record<string, string>,
     pdfContent?: string,
+    annotations?: string,
   ): string {
     let prompt = template.prompt;
 
@@ -186,6 +261,9 @@ export class AISummaryProcessor {
       (_, varName, content) => {
         if (varName === "pdfContent" && pdfContent) {
           return content.replace(/{{pdfContent}}/g, pdfContent);
+        }
+        if (varName === "annotations" && annotations) {
+          return content.replace(/{{annotations}}/g, annotations);
         }
         if (metadata[varName]) {
           return content.replace(new RegExp(`{{${varName}}}`, "g"), metadata[varName]);
