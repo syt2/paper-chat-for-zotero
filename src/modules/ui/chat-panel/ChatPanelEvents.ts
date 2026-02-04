@@ -19,6 +19,7 @@ import { getProviderManager } from "../../providers";
 import { getPref, setPref } from "../../../utils/prefs";
 import { formatModelLabel } from "../../preferences/ModelsFetcher";
 import type { PanelMode } from "./ChatPanelManager";
+import { MentionSelector, type MentionResource } from "./MentionSelector";
 
 // Import getActiveReaderItem from the manager module to avoid circular dependency
 // This is set by ChatPanelManager during initialization
@@ -139,9 +140,18 @@ export function setupEventHandlers(context: ChatPanelContext): void {
     await sendMessage(context, messageInput, sendButton, attachmentsPreview);
   });
 
-  // Input keydown - Enter to send (blocked while sending)
+  // Input keydown - Enter to send (blocked while sending or when mention popup is open)
   messageInput?.addEventListener("keydown", (e: KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
+      // Check if mention popup is open - if so, let mention selector handle Enter
+      const mentionPopup = container.querySelector(
+        "#chat-mention-popup",
+      ) as HTMLElement;
+      if (mentionPopup && mentionPopup.style.display === "block") {
+        // Mention popup is open, don't send message (mention selector will handle it)
+        return;
+      }
+
       e.preventDefault();
       // Block Enter key while sending (lock mechanism handles duplicate prevention)
       if (sendLock) {
@@ -453,8 +463,8 @@ export function setupEventHandlers(context: ChatPanelContext): void {
     });
   }
 
-  // Multi-document selector
-  setupMultiDocSelector(context);
+  // @ Mention selector
+  setupMentionSelector(context);
 
   ztoolkit.log("Event listeners attached to buttons");
 }
@@ -932,270 +942,185 @@ function populateModelDropdown(
   }
 }
 
-// ========== Multi-Document Selector ==========
+// ========== @ Mention Selector ==========
 
 /**
- * Setup multi-document selector events
+ * Setup @ mention selector for the chat input
+ * When user types @, show a popup to select resources (Items, Attachments, Notes)
+ * Selected resource will be inserted as @[title] and added to context
  */
-function setupMultiDocSelector(context: ChatPanelContext): void {
+function setupMentionSelector(context: ChatPanelContext): void {
   const { container, chatManager } = context;
-  const doc = container.ownerDocument!;
   const theme = getCurrentTheme();
 
-  const multiDocBtn = container.querySelector(
-    "#chat-multi-doc-btn",
-  ) as HTMLButtonElement;
-  const multiDocDropdown = container.querySelector(
-    "#chat-multi-doc-dropdown",
+  const messageInput = container.querySelector(
+    "#chat-message-input",
+  ) as HTMLTextAreaElement;
+  const mentionPopup = container.querySelector(
+    "#chat-mention-popup",
   ) as HTMLElement;
-  const multiDocSearch = container.querySelector(
-    "#chat-multi-doc-search",
-  ) as HTMLInputElement;
-  const multiDocList = container.querySelector(
-    "#chat-multi-doc-list",
-  ) as HTMLElement;
-  const selectedPapersBar = container.querySelector(
-    "#chat-selected-papers-bar",
-  ) as HTMLElement;
-  const selectedPapersText = container.querySelector(
-    "#chat-selected-papers-text",
-  ) as HTMLElement;
-  const clearPapersBtn = container.querySelector(
-    "#chat-clear-papers-btn",
-  ) as HTMLButtonElement;
 
-  if (!multiDocBtn || !multiDocDropdown || !multiDocList) {
-    ztoolkit.log("[MultiDoc] Required elements not found");
+  if (!messageInput || !mentionPopup) {
+    ztoolkit.log("[MentionSelector] Required elements not found");
     return;
   }
 
-  // Track selected items (stored in ChatManager)
-  let allItems: { key: string; title: string; hasPdf: boolean }[] = [];
+  // Create and initialize the MentionSelector
+  const mentionSelector = new MentionSelector(
+    mentionPopup,
+    theme,
+    (resource: MentionResource) => {
+      // Insert @[title] into input
+      insertMentionIntoInput(messageInput, resource);
+      // Add resource to chat context
+      chatManager.addItemToSelection(resource.key);
+      ztoolkit.log(
+        `[MentionSelector] Selected: ${resource.type}/${resource.key} - ${resource.title}`,
+      );
+    },
+  );
 
-  // Toggle dropdown
-  multiDocBtn.addEventListener("click", async () => {
-    const isVisible = multiDocDropdown.style.display === "block";
-    if (isVisible) {
-      multiDocDropdown.style.display = "none";
-    } else {
-      multiDocDropdown.style.display = "block";
-      await loadPaperList();
-      multiDocSearch?.focus();
+  // Track the position where @ was typed
+  let mentionStartPos = -1;
+
+  // Handle input events - detect @ typing
+  messageInput.addEventListener("input", async (e: Event) => {
+    const inputEvent = e as InputEvent;
+    const cursorPos = messageInput.selectionStart;
+    const text = messageInput.value;
+
+    // Check if @ was just typed
+    if (inputEvent.data === "@") {
+      mentionStartPos = cursorPos;
+      await mentionSelector.show();
+      return;
+    }
+
+    // If popup is visible, update the filter
+    if (mentionSelector.isVisible()) {
+      const beforeCursor = text.substring(0, cursorPos);
+      const atPos = beforeCursor.lastIndexOf("@");
+
+      // @ was deleted or cursor moved before @
+      if (atPos === -1 || atPos < mentionStartPos - 1) {
+        mentionSelector.hide();
+        mentionStartPos = -1;
+        return;
+      }
+
+      // Extract query after @
+      const query = beforeCursor.substring(atPos + 1);
+
+      // If query contains space or newline, close popup (user finished mention)
+      if (/[\s\n]/.test(query)) {
+        mentionSelector.hide();
+        mentionStartPos = -1;
+        return;
+      }
+
+      // Update filter
+      mentionSelector.filter(query);
     }
   });
 
-  // Close dropdown when clicking outside
-  container.addEventListener("click", (e: Event) => {
+  // Handle keydown events for navigation
+  messageInput.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (!mentionSelector.isVisible()) return;
+
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        e.stopPropagation();
+        mentionSelector.moveDown();
+        break;
+
+      case "ArrowUp":
+        e.preventDefault();
+        e.stopPropagation();
+        mentionSelector.moveUp();
+        break;
+
+      case "Enter":
+        // If mention popup is visible, select instead of sending
+        e.preventDefault();
+        e.stopPropagation();
+        mentionSelector.selectCurrent();
+        mentionStartPos = -1;
+        break;
+
+      case "Tab":
+        e.preventDefault();
+        e.stopPropagation();
+        mentionSelector.selectCurrent();
+        mentionStartPos = -1;
+        break;
+
+      case "Escape":
+        e.preventDefault();
+        e.stopPropagation();
+        mentionSelector.hide();
+        mentionStartPos = -1;
+        break;
+    }
+  });
+
+  // Close popup when clicking outside
+  container.ownerDocument?.addEventListener("click", (e: Event) => {
     const target = e.target as HTMLElement;
     if (
-      multiDocDropdown.style.display === "block" &&
-      !multiDocDropdown.contains(target) &&
-      target !== multiDocBtn &&
-      !multiDocBtn.contains(target)
+      mentionSelector.isVisible() &&
+      !mentionPopup.contains(target) &&
+      target !== messageInput
     ) {
-      multiDocDropdown.style.display = "none";
+      mentionSelector.hide();
+      mentionStartPos = -1;
     }
   });
 
-  // Search filter
-  multiDocSearch?.addEventListener("input", () => {
-    const query = multiDocSearch.value.toLowerCase().trim();
-    renderPaperList(query);
+  // Close popup when input loses focus (with small delay to allow popup clicks)
+  messageInput.addEventListener("blur", () => {
+    setTimeout(() => {
+      if (mentionSelector.isVisible() && !mentionPopup.matches(":hover")) {
+        mentionSelector.hide();
+        mentionStartPos = -1;
+      }
+    }, 150);
   });
 
-  // Clear all selected papers
-  clearPapersBtn?.addEventListener("click", () => {
-    chatManager.clearItemSelection();
-    updateSelectedPapersDisplay();
-    renderPaperList(multiDocSearch?.value || "");
-  });
+  ztoolkit.log("[MentionSelector] Setup complete");
+}
 
-  // Load paper list from Zotero
-  async function loadPaperList() {
-    const libraryID = Zotero.Libraries.userLibraryID;
-    const rawItems = await Zotero.Items.getAll(libraryID);
+/**
+ * Insert a mention into the input at the current cursor position
+ * Replaces @query with @[title]
+ */
+function insertMentionIntoInput(
+  input: HTMLTextAreaElement,
+  resource: MentionResource,
+): void {
+  const text = input.value;
+  const cursorPos = input.selectionStart;
 
-    allItems = [];
-    for (const item of rawItems) {
-      // Skip attachments and notes
-      if (item.isAttachment?.() || item.isNote?.()) continue;
+  // Find the @ position before cursor
+  const beforeCursor = text.substring(0, cursorPos);
+  const atPos = beforeCursor.lastIndexOf("@");
 
-      const title = (item.getField?.("title") as string) || "Untitled";
-      const hasPdf = hasPdfAttachment(item);
+  if (atPos === -1) return;
 
-      allItems.push({
-        key: item.key,
-        title,
-        hasPdf,
-      });
-    }
+  // Build the mention text
+  const mentionText = `@[${resource.title}] `;
 
-    // Sort by title
-    allItems.sort((a, b) => a.title.localeCompare(b.title));
+  // Replace @query with @[title]
+  const beforeAt = text.substring(0, atPos);
+  const afterCursor = text.substring(cursorPos);
 
-    renderPaperList("");
-  }
+  input.value = beforeAt + mentionText + afterCursor;
 
-  // Check if item has PDF attachment
-  function hasPdfAttachment(item: Zotero.Item): boolean {
-    if (item.isPDFAttachment?.()) return true;
-    const attachmentIDs = item.getAttachments?.() || [];
-    for (const id of attachmentIDs) {
-      const attachment = Zotero.Items.get(id);
-      if (attachment?.isPDFAttachment?.()) return true;
-    }
-    return false;
-  }
+  // Move cursor after the mention
+  const newCursorPos = atPos + mentionText.length;
+  input.setSelectionRange(newCursorPos, newCursorPos);
+  input.focus();
 
-  // Render filtered paper list
-  function renderPaperList(filter: string) {
-    if (!multiDocList) return;
-    multiDocList.textContent = "";
-
-    const selectedKeys = chatManager.getCurrentItemKeys();
-    const filteredItems = filter
-      ? allItems.filter((item) => item.title.toLowerCase().includes(filter))
-      : allItems;
-
-    // Show max 50 items
-    const displayItems = filteredItems.slice(0, 50);
-
-    if (displayItems.length === 0) {
-      const emptyMsg = createElement(doc, "div", {
-        padding: "12px",
-        fontSize: "12px",
-        color: theme.textMuted,
-        textAlign: "center",
-      });
-      emptyMsg.textContent = filter ? "No papers found" : "Loading...";
-      multiDocList.appendChild(emptyMsg);
-      return;
-    }
-
-    for (const item of displayItems) {
-      const isSelected = selectedKeys.includes(item.key);
-      const paperItem = createElement(
-        doc,
-        "div",
-        {
-          display: "flex",
-          alignItems: "center",
-          gap: "8px",
-          padding: "8px 12px",
-          cursor: "pointer",
-          background: isSelected ? theme.hoverBg : "transparent",
-          fontSize: "12px",
-          borderBottom: `1px solid ${theme.borderColor}`,
-        },
-        { "data-item-key": item.key },
-      );
-
-      // Checkbox
-      const checkbox = createElement(
-        doc,
-        "input",
-        {
-          flexShrink: "0",
-        },
-        {
-          type: "checkbox",
-        },
-      ) as HTMLInputElement;
-      checkbox.checked = isSelected;
-
-      // PDF indicator
-      const pdfIndicator = createElement(doc, "span", {
-        fontSize: "10px",
-        opacity: item.hasPdf ? "1" : "0.3",
-      });
-      pdfIndicator.textContent = "📄";
-
-      // Title
-      const titleSpan = createElement(doc, "span", {
-        flex: "1",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
-        color: theme.textPrimary,
-      });
-      titleSpan.textContent = item.title;
-
-      paperItem.appendChild(checkbox);
-      paperItem.appendChild(pdfIndicator);
-      paperItem.appendChild(titleSpan);
-
-      // Click to toggle selection
-      paperItem.addEventListener("click", (e: Event) => {
-        e.stopPropagation();
-        if (isSelected) {
-          chatManager.removeItemFromSelection(item.key);
-        } else {
-          chatManager.addItemToSelection(item.key);
-        }
-        updateSelectedPapersDisplay();
-        renderPaperList(filter);
-      });
-
-      // Hover effect
-      paperItem.addEventListener("mouseenter", () => {
-        if (!selectedKeys.includes(item.key)) {
-          paperItem.style.background = theme.hoverBg;
-        }
-      });
-      paperItem.addEventListener("mouseleave", () => {
-        if (!selectedKeys.includes(item.key)) {
-          paperItem.style.background = "transparent";
-        }
-      });
-
-      multiDocList.appendChild(paperItem);
-    }
-
-    // Show more indicator
-    if (filteredItems.length > 50) {
-      const moreMsg = createElement(doc, "div", {
-        padding: "8px 12px",
-        fontSize: "11px",
-        color: theme.textMuted,
-        textAlign: "center",
-      });
-      moreMsg.textContent = `... and ${filteredItems.length - 50} more. Type to filter.`;
-      multiDocList.appendChild(moreMsg);
-    }
-  }
-
-  // Update selected papers bar display
-  function updateSelectedPapersDisplay() {
-    if (!selectedPapersBar || !selectedPapersText) return;
-
-    const selectedKeys = chatManager.getCurrentItemKeys();
-
-    if (selectedKeys.length === 0) {
-      selectedPapersBar.style.display = "none";
-      return;
-    }
-
-    selectedPapersBar.style.display = "flex";
-
-    if (selectedKeys.length === 1) {
-      const item = allItems.find((i) => i.key === selectedKeys[0]);
-      const title = item?.title || selectedKeys[0];
-      selectedPapersText.textContent =
-        title.length > 40 ? title.substring(0, 40) + "..." : title;
-    } else {
-      selectedPapersText.textContent = `${selectedKeys.length} papers selected`;
-    }
-  }
-
-  // Listen for selection changes from ChatManager
-  chatManager.setCallbacks({
-    ...context.callbacks,
-    onSelectedItemsChange: () => {
-      updateSelectedPapersDisplay();
-      renderPaperList(multiDocSearch?.value || "");
-    },
-  });
-
-  // Initialize display
-  updateSelectedPapersDisplay();
+  // Trigger input event for auto-resize
+  input.dispatchEvent(new Event("input", { bubbles: true }));
 }

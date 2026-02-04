@@ -84,3 +84,11 @@ export interface ChatPanelContext {
 
 // HTML namespace for XHTML environment
 export const HTML_NS = "http://www.w3.org/1999/xhtml";
+
+// Re-export mention types for convenience
+export type {
+  MentionResource,
+  MentionResourceType,
+  MentionSelectorState,
+  OnMentionSelectCallback,
+} from "./MentionSelector";
