@@ -4,6 +4,7 @@
 
 import { getAISummaryService, type AISummaryTask } from "./AISummaryService";
 import { getString } from "../../utils/locale";
+import { isDarkMode, setupThemeListener } from "../ui/chat-panel/ChatPanelTheme";
 
 let taskWindow: Window | null = null;
 
@@ -129,8 +130,21 @@ function setupTaskUpdates(win: Window): void {
 
   service.setOnTaskUpdate(updateCallback);
 
+  // 设置主题变化监听
+  const cleanupThemeListener = setupThemeListener(() => {
+    if (win.closed) return;
+    // 重新应用样式
+    const style = win.document.querySelector("style");
+    if (style) {
+      style.textContent = getStyles();
+    }
+  });
+
   // 窗口关闭时清理回调
   win.addEventListener("unload", () => {
+    // 清理主题监听器
+    cleanupThemeListener();
+
     // 清理全局窗口引用
     if (taskWindow === win) {
       taskWindow = null;
@@ -267,6 +281,49 @@ function formatTime(timestamp: number): string {
  * 获取样式
  */
 function getStyles(): string {
+  const dark = isDarkMode();
+
+  // Theme colors
+  const theme = dark
+    ? {
+        bodyBg: "#1e1e1e",
+        bodyColor: "#e0e0e0",
+        titleColor: "#f0f0f0",
+        sectionTitleColor: "#aaa",
+        sectionBorder: "#444",
+        taskListBg: "#2d2d2d",
+        taskListShadow: "rgba(0,0,0,0.3)",
+        emptyStateColor: "#888",
+        taskItemBorder: "#3a3a3a",
+        metaColor: "#999",
+        statusPending: "#aaa",
+        statusRunning: "#5c9ce6",
+        statusCompleted: "#5cb85c",
+        statusFailed: "#e55353",
+        errorBg: "#3a2020",
+        errorColor: "#e55353",
+        runningBg: "#1a2a3a",
+      }
+    : {
+        bodyBg: "#f5f5f5",
+        bodyColor: "#333",
+        titleColor: "#1a1a1a",
+        sectionTitleColor: "#666",
+        sectionBorder: "#ddd",
+        taskListBg: "#fff",
+        taskListShadow: "rgba(0,0,0,0.1)",
+        emptyStateColor: "#999",
+        taskItemBorder: "#eee",
+        metaColor: "#666",
+        statusPending: "#666",
+        statusRunning: "#0066cc",
+        statusCompleted: "#28a745",
+        statusFailed: "#dc3545",
+        errorBg: "#fff5f5",
+        errorColor: "#dc3545",
+        runningBg: "#f0f7ff",
+      };
+
   return `
     * {
       box-sizing: border-box;
@@ -277,8 +334,8 @@ function getStyles(): string {
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       font-size: 13px;
-      background: #f5f5f5;
-      color: #333;
+      background: ${theme.bodyBg};
+      color: ${theme.bodyColor};
     }
 
     .container {
@@ -290,7 +347,7 @@ function getStyles(): string {
       font-size: 18px;
       font-weight: 600;
       margin-bottom: 16px;
-      color: #1a1a1a;
+      color: ${theme.titleColor};
     }
 
     .section {
@@ -300,28 +357,28 @@ function getStyles(): string {
     .section-title {
       font-size: 14px;
       font-weight: 500;
-      color: #666;
+      color: ${theme.sectionTitleColor};
       margin-bottom: 8px;
       padding-bottom: 4px;
-      border-bottom: 1px solid #ddd;
+      border-bottom: 1px solid ${theme.sectionBorder};
     }
 
     .task-list {
-      background: #fff;
+      background: ${theme.taskListBg};
       border-radius: 8px;
       overflow: hidden;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      box-shadow: 0 1px 3px ${theme.taskListShadow};
     }
 
     .empty-state {
       padding: 24px;
       text-align: center;
-      color: #999;
+      color: ${theme.emptyStateColor};
     }
 
     .task-item {
       padding: 12px 16px;
-      border-bottom: 1px solid #eee;
+      border-bottom: 1px solid ${theme.taskItemBorder};
     }
 
     .task-item:last-child {
@@ -338,7 +395,7 @@ function getStyles(): string {
       display: flex;
       gap: 12px;
       font-size: 12px;
-      color: #666;
+      color: ${theme.metaColor};
     }
 
     .task-status {
@@ -346,32 +403,32 @@ function getStyles(): string {
     }
 
     .status-pending .task-status {
-      color: #666;
+      color: ${theme.statusPending};
     }
 
     .status-running .task-status {
-      color: #0066cc;
+      color: ${theme.statusRunning};
     }
 
     .status-completed .task-status {
-      color: #28a745;
+      color: ${theme.statusCompleted};
     }
 
     .status-failed .task-status {
-      color: #dc3545;
+      color: ${theme.statusFailed};
     }
 
     .task-error {
       margin-top: 4px;
       font-size: 12px;
-      color: #dc3545;
-      background: #fff5f5;
+      color: ${theme.errorColor};
+      background: ${theme.errorBg};
       padding: 4px 8px;
       border-radius: 4px;
     }
 
     .status-running {
-      background: #f0f7ff;
+      background: ${theme.runningBg};
     }
   `;
 }
