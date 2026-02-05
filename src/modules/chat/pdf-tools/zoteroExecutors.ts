@@ -67,11 +67,11 @@ export async function executeListAllItems(
   const rawItems = await Zotero.Items.getAll(libraryID);
   const allItems = rawItems.filter((item: Zotero.Item) => {
     // 排除有parentItem的附件
-    if (item.isAttachment() && item.parentItem) {
+    if (item.isAttachment?.() && item.parentItem) {
       return false;
     }
     // 排除笔记
-    if (item.isNote()) {
+    if (item.isNote?.()) {
       return false;
     }
     // 如果需要过滤只有 PDF 的
@@ -188,7 +188,7 @@ export function executeGetItemMetadata(args: GetItemMetadataArgs): string {
   }
 
   // 附件信息（只对非附件 item 有效）
-  if (item.getAttachments && !item.isAttachment()) {
+  if (item.getAttachments && !item.isAttachment?.()) {
     const attachmentIDs = item.getAttachments();
     if (attachmentIDs.length > 0) {
       const attachmentInfo: string[] = [];
@@ -209,7 +209,7 @@ export function executeGetItemMetadata(args: GetItemMetadataArgs): string {
   }
 
   // 笔记数量（只对非附件 item 有效）
-  if (item.getNotes && !item.isAttachment()) {
+  if (item.getNotes && !item.isAttachment?.()) {
     const noteIDs = item.getNotes();
     if (noteIDs.length > 0) {
       parts.push(`\nNotes: ${noteIDs.length} note(s) available`);

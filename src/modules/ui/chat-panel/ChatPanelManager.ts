@@ -170,29 +170,37 @@ export function getChatManager(): ChatManager {
 
 /**
  * Get the current sidebar element based on active tab
+ * Tab types: 'library', 'reader', 'note'
+ * - reader and note tabs use #zotero-context-pane
+ * - library tab uses #zotero-item-pane
  */
 function getSidebar(): HTMLElement | null {
   const mainWindow = Zotero.getMainWindow() as Window & {
     Zotero_Tabs?: { selectedType: string };
   };
   const currentTab = mainWindow.Zotero_Tabs?.selectedType;
-  const paneName =
-    currentTab === "reader" ? "#zotero-context-pane" : "#zotero-item-pane";
+  // Both 'reader' and 'note' tabs use context pane
+  const useContextPane = currentTab === "reader" || currentTab === "note";
+  const paneName = useContextPane ? "#zotero-context-pane" : "#zotero-item-pane";
   return mainWindow.document.querySelector(paneName) as HTMLElement | null;
 }
 
 /**
  * Get the splitter element
+ * Tab types: 'library', 'reader', 'note'
+ * - reader and note tabs use #zotero-context-splitter
+ * - library tab uses #zotero-items-splitter
  */
 function getSplitter(): HTMLElement | null {
   const mainWindow = Zotero.getMainWindow() as Window & {
     Zotero_Tabs?: { selectedType: string };
   };
   const currentTab = mainWindow.Zotero_Tabs?.selectedType;
-  const splitterName =
-    currentTab === "reader"
-      ? "#zotero-context-splitter"
-      : "#zotero-items-splitter";
+  // Both 'reader' and 'note' tabs use context splitter
+  const useContextSplitter = currentTab === "reader" || currentTab === "note";
+  const splitterName = useContextSplitter
+    ? "#zotero-context-splitter"
+    : "#zotero-items-splitter";
   return mainWindow.document.querySelector(splitterName) as HTMLElement | null;
 }
 
