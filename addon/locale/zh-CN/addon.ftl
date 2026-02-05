@@ -98,3 +98,43 @@ paperchat-chat-copy = 复制
 paperchat-guide-toolbar-title = 开始与 AI 对话
 paperchat-guide-toolbar-description = 点击这里打开 AI 聊天面板，与 AI 讨论你的文献内容
 paperchat-guide-got-it = 知道了
+
+# Chat Panel - Panel Title
+paperchat-chat-panel-title = Paper Chat
+
+# Mention Selector
+paperchat-mention-no-match = 没有匹配的资源
+paperchat-mention-group-items = 条目
+paperchat-mention-group-attachments = 附件
+paperchat-mention-group-notes = 笔记
+paperchat-mention-loading = 加载中...
+
+# Default titles
+paperchat-untitled = 无标题
+paperchat-untitled-attachment = 无标题附件
+paperchat-untitled-note = 无标题笔记
+
+# AI Summary Task Window
+paperchat-aisummary-window-title = AI 摘要任务
+paperchat-aisummary-section-queue = 当前队列
+paperchat-aisummary-section-history = 历史记录
+paperchat-aisummary-no-tasks = 队列中暂无任务
+paperchat-aisummary-no-history = 暂无历史记录
+paperchat-aisummary-status-pending = 等待中
+paperchat-aisummary-status-running = 处理中...
+paperchat-aisummary-status-completed = 已完成
+paperchat-aisummary-status-failed = 失败
+
+# AI Summary Progress Status
+paperchat-aisummary-progress-running = 处理中 { $processed }/{ $total }...
+paperchat-aisummary-progress-paused = 已暂停 ({ $processed }/{ $total })
+paperchat-aisummary-progress-completed = 完成: { $success } 成功, { $failed } 失败
+paperchat-aisummary-progress-error = 错误: { $error }
+
+# Common
+paperchat-unknown = 未知
+
+# Tool call status
+paperchat-tool-status-calling = 调用中...
+paperchat-tool-status-done = 完成
+paperchat-tool-status-error = 错误

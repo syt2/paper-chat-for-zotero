@@ -6,6 +6,7 @@
 import type { ThemeColors } from "./types";
 import { createElement } from "./ChatPanelBuilder";
 import { chatColors } from "../../../utils/colors";
+import { getString } from "../../../utils/locale";
 
 // Resource types that can be mentioned
 export type MentionResourceType = "item" | "attachment" | "note";
@@ -107,7 +108,7 @@ export async function loadMentionResources(): Promise<MentionResource[]> {
         resources.push({
           type: "attachment",
           key: item.key,
-          title: (item.getField?.("title") as string) || "Untitled Attachment",
+          title: (item.getField?.("title") as string) || getString("untitled-attachment"),
           icon: "📎",
           parentKey,
           parentTitle,
@@ -126,7 +127,7 @@ export async function loadMentionResources(): Promise<MentionResource[]> {
           }
         }
 
-        const noteTitle = item.getNoteTitle?.() || "Untitled Note";
+        const noteTitle = item.getNoteTitle?.() || getString("untitled-note");
         resources.push({
           type: "note",
           key: item.key,
@@ -140,7 +141,7 @@ export async function loadMentionResources(): Promise<MentionResource[]> {
         resources.push({
           type: "item",
           key: item.key,
-          title: (item.getField?.("title") as string) || "Untitled",
+          title: (item.getField?.("title") as string) || getString("untitled"),
           icon: "📄",
         });
       }
@@ -207,7 +208,7 @@ export function renderMentionPopup(
       color: theme.textMuted,
       textAlign: "center",
     });
-    emptyMsg.textContent = "No matching resources";
+    emptyMsg.textContent = getString("mention-no-match");
     popup.appendChild(emptyMsg);
     return;
   }
@@ -318,9 +319,9 @@ export function renderMentionPopup(
     }
   };
 
-  renderGroup(items, "Items");
-  renderGroup(attachments, "Attachments");
-  renderGroup(notes, "Notes");
+  renderGroup(items, getString("mention-group-items"));
+  renderGroup(attachments, getString("mention-group-attachments"));
+  renderGroup(notes, getString("mention-group-notes"));
 }
 
 /**
@@ -468,7 +469,7 @@ export class MentionSelector {
       color: this.theme.textMuted,
       textAlign: "center",
     });
-    loadingMsg.textContent = "Loading...";
+    loadingMsg.textContent = getString("mention-loading");
     this.popup.appendChild(loadingMsg);
   }
 

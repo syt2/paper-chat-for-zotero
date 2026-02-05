@@ -86,7 +86,7 @@ export function createChatContainer(
     color: theme.textPrimary,
     pointerEvents: "none",
   });
-  dragTitle.textContent = "Paper Chat";
+  dragTitle.textContent = getString("chat-panel-title");
 
   const closeBtn = createElement(
     doc,

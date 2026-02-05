@@ -71,15 +71,15 @@ function getItemTitle(item: Zotero.Item): string {
         return (
           (parent.getField("title") as string) ||
           item.attachmentFilename ||
-          "Untitled"
+          getString("untitled")
         );
       }
     }
     // 没有父条目，返回文件名
-    return item.attachmentFilename || "Untitled";
+    return item.attachmentFilename || getString("untitled");
   }
   // 普通条目，直接返回标题
-  return (item.getField("title") as string) || "Untitled";
+  return (item.getField("title") as string) || getString("untitled");
 }
 
 export class ChatManager {
@@ -810,10 +810,10 @@ export class ChatManager {
       status === "calling" ? "⏳" : status === "completed" ? "✓" : "✗";
     const statusText =
       status === "calling"
-        ? "Calling..."
+        ? getString("tool-status-calling")
         : status === "completed"
-          ? "Done"
-          : "Error";
+          ? getString("tool-status-done")
+          : getString("tool-status-error");
 
     // 解析参数用于显示
     let argsDisplay = "";

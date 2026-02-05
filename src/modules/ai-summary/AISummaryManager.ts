@@ -15,6 +15,7 @@ import { DEFAULT_AISUMMARY_CONFIG } from "../../types/ai-summary";
 import { AISummaryProcessor } from "./AISummaryProcessor";
 import { AISummaryStorage } from "./AISummaryStorage";
 import { getTemplateById } from "./defaultTemplates";
+import { getString } from "../../utils/locale";
 
 export class AISummaryManager {
   private config: AISummaryConfig = { ...DEFAULT_AISUMMARY_CONFIG };
@@ -328,7 +329,7 @@ export class AISummaryManager {
       // 更新进度
       this.progress.currentItemKey = itemKey;
       this.progress.currentItemTitle =
-        (item.getField?.("title") as string) || "Untitled";
+        (item.getField?.("title") as string) || getString("untitled");
       this.onProgressUpdate?.(this.progress);
 
       // 处理条目

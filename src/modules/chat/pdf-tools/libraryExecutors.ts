@@ -24,6 +24,7 @@ import type {
   CreateNoteArgs,
   BatchUpdateTagsArgs,
 } from "../../../types/tool";
+import { getString } from "../../../utils/locale";
 
 /**
  * 根据 itemKey 获取 Zotero Item
@@ -46,13 +47,13 @@ function getItemTitle(item: Zotero.Item): string {
         return (
           (parent.getField("title") as string) ||
           item.attachmentFilename ||
-          "Untitled"
+          getString("untitled")
         );
       }
     }
-    return item.attachmentFilename || "Untitled";
+    return item.attachmentFilename || getString("untitled");
   }
-  return (item.getField("title") as string) || "Untitled";
+  return (item.getField("title") as string) || getString("untitled");
 }
 
 /**

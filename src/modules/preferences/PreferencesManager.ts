@@ -19,6 +19,7 @@ import {
   bindActiveProviderEvent,
 } from "./ProviderListUI";
 import { getPref, setPref } from "../../utils/prefs";
+import { getString } from "../../utils/locale";
 import { getAISummaryManager } from "../ai-summary";
 import { DEFAULT_TEMPLATES } from "../ai-summary/defaultTemplates";
 import { getEmbeddingProviderFactory } from "../embedding";
@@ -261,16 +262,24 @@ function updateAISummaryStatus(doc: Document): void {
   const progress = aiSummaryManager.getProgress();
 
   if (progress.status === "running") {
-    statusLabel.textContent = `Processing ${progress.processedItems}/${progress.totalItems}...`;
+    statusLabel.textContent = getString("aisummary-progress-running", {
+      args: { processed: progress.processedItems, total: progress.totalItems },
+    });
     statusLabel.style.color = "#0078d4";
   } else if (progress.status === "paused") {
-    statusLabel.textContent = `Paused (${progress.processedItems}/${progress.totalItems})`;
+    statusLabel.textContent = getString("aisummary-progress-paused", {
+      args: { processed: progress.processedItems, total: progress.totalItems },
+    });
     statusLabel.style.color = "#ffa500";
   } else if (progress.status === "completed") {
-    statusLabel.textContent = `Completed: ${progress.successfulItems} success, ${progress.failedItems} failed`;
+    statusLabel.textContent = getString("aisummary-progress-completed", {
+      args: { success: progress.successfulItems, failed: progress.failedItems },
+    });
     statusLabel.style.color = "#008000";
   } else if (progress.status === "error") {
-    statusLabel.textContent = `Error: ${progress.errors[0]?.error || "Unknown"}`;
+    statusLabel.textContent = getString("aisummary-progress-error", {
+      args: { error: progress.errors[0]?.error || getString("unknown") },
+    });
     statusLabel.style.color = "#c00";
   } else {
     statusLabel.textContent = "";
@@ -344,7 +353,9 @@ function bindAISummarySettingsEvents(doc: Document): void {
           "pref-aisummary-status",
         ) as HTMLElement | null;
         if (statusLabel) {
-          statusLabel.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
+          statusLabel.textContent = getString("aisummary-progress-error", {
+            args: { error: error instanceof Error ? error.message : String(error) },
+          });
           statusLabel.style.color = "#c00";
         }
       }
@@ -390,7 +401,9 @@ async function updateSemanticSearchStatus(doc: Document): Promise<void> {
     statusLabel.textContent = status.message;
     statusLabel.style.color = status.available ? "#008000" : "#c00";
   } catch (error) {
-    statusLabel.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
+    statusLabel.textContent = getString("aisummary-progress-error", {
+      args: { error: error instanceof Error ? error.message : String(error) },
+    });
     statusLabel.style.color = "#c00";
   }
 }

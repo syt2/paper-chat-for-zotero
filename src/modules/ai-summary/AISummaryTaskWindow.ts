@@ -3,6 +3,7 @@
  */
 
 import { getAISummaryService, type AISummaryTask } from "./AISummaryService";
+import { getString } from "../../utils/locale";
 
 let taskWindow: Window | null = null;
 
@@ -50,7 +51,7 @@ function buildTaskWindowContent(win: Window): void {
   const doc = win.document;
 
   // 设置标题
-  doc.title = "AI Summary Tasks";
+  doc.title = getString("aisummary-window-title");
 
   // 清空并重建文档
   while (doc.documentElement.firstChild) {
@@ -74,7 +75,7 @@ function buildTaskWindowContent(win: Window): void {
 
   const title = doc.createElement("h2");
   title.className = "title";
-  title.textContent = "AI Summary Tasks";
+  title.textContent = getString("aisummary-window-title");
   container.appendChild(title);
 
   // 当前队列区域
@@ -83,7 +84,7 @@ function buildTaskWindowContent(win: Window): void {
 
   const queueTitle = doc.createElement("h3");
   queueTitle.className = "section-title";
-  queueTitle.textContent = "Current Queue";
+  queueTitle.textContent = getString("aisummary-section-queue");
   queueSection.appendChild(queueTitle);
 
   const queueList = doc.createElement("div");
@@ -99,7 +100,7 @@ function buildTaskWindowContent(win: Window): void {
 
   const historyTitle = doc.createElement("h3");
   historyTitle.className = "section-title";
-  historyTitle.textContent = "History";
+  historyTitle.textContent = getString("aisummary-section-history");
   historySection.appendChild(historyTitle);
 
   const historyList = doc.createElement("div");
@@ -165,7 +166,7 @@ function renderTasks(doc: Document): void {
     if (queue.length === 0) {
       const empty = doc.createElement("div");
       empty.className = "empty-state";
-      empty.textContent = "No tasks in queue";
+      empty.textContent = getString("aisummary-no-tasks");
       queueContainer.appendChild(empty);
     } else {
       queue.forEach((task) => {
@@ -185,7 +186,7 @@ function renderTasks(doc: Document): void {
     if (history.length === 0) {
       const empty = doc.createElement("div");
       empty.className = "empty-state";
-      empty.textContent = "No history";
+      empty.textContent = getString("aisummary-no-history");
       historyContainer.appendChild(empty);
     } else {
       history.forEach((task) => {
@@ -242,13 +243,13 @@ function createTaskItemElement(doc: Document, task: AISummaryTask): HTMLElement 
 function getStatusText(status: string): string {
   switch (status) {
     case "pending":
-      return "Pending";
+      return getString("aisummary-status-pending");
     case "running":
-      return "Processing...";
+      return getString("aisummary-status-running");
     case "completed":
-      return "Completed";
+      return getString("aisummary-status-completed");
     case "failed":
-      return "Failed";
+      return getString("aisummary-status-failed");
     default:
       return status;
   }

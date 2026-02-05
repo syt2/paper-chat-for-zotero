@@ -8,6 +8,7 @@ import type {
   GetItemNotesArgs,
   GetNoteContentArgs,
 } from "../../../types/tool";
+import { getString } from "../../../utils/locale";
 
 /**
  * 根据 itemKey 获取 Zotero Item
@@ -196,7 +197,7 @@ export function executeGetItemMetadata(args: GetItemMetadataArgs): string {
         const attachment = Zotero.Items.get(attachmentID);
         if (attachment) {
           const attachmentTitle =
-            attachment.getField("title") || "[Untitled attachment]";
+            attachment.getField("title") || `[${getString("untitled-attachment")}]`;
           const isPdf =
             attachment.isPDFAttachment && attachment.isPDFAttachment();
           attachmentInfo.push(

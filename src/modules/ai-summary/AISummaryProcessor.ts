@@ -8,6 +8,7 @@ import type {
   AISummaryProcessResult,
 } from "../../types/ai-summary";
 import { getProviderManager } from "../providers";
+import { getString } from "../../utils/locale";
 
 export class AISummaryProcessor {
 
@@ -22,7 +23,7 @@ export class AISummaryProcessor {
   ): Promise<AISummaryProcessResult> {
     const startTime = Date.now();
     const itemKey = item.key;
-    const itemTitle = (item.getField?.("title") as string) || "Untitled";
+    const itemTitle = (item.getField?.("title") as string) || getString("untitled");
 
     try {
       // 检查是否已取消
@@ -124,7 +125,7 @@ export class AISummaryProcessor {
       .join(", ");
 
     return {
-      title: getField("title") || "Untitled",
+      title: getField("title") || getString("untitled"),
       authors: authors || "Unknown",
       year: getField("date")?.substring(0, 4) || "",
       abstract: getField("abstractNote") || "",
@@ -359,7 +360,7 @@ export class AISummaryProcessor {
     let noteTitle = template.noteTitle;
     noteTitle = noteTitle.replace(
       /{{title}}/g,
-      (item.getField?.("title") as string) || "Untitled",
+      (item.getField?.("title") as string) || getString("untitled"),
     );
 
     // 构建笔记内容（HTML 格式）

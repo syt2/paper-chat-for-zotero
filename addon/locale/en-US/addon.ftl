@@ -98,3 +98,43 @@ paperchat-chat-copy = Copy
 paperchat-guide-toolbar-title = Start Chatting with AI
 paperchat-guide-toolbar-description = Click here to open the AI chat panel and discuss your documents with AI
 paperchat-guide-got-it = Got it
+
+# Chat Panel - Panel Title
+paperchat-chat-panel-title = Paper Chat
+
+# Mention Selector
+paperchat-mention-no-match = No matching resources
+paperchat-mention-group-items = Items
+paperchat-mention-group-attachments = Attachments
+paperchat-mention-group-notes = Notes
+paperchat-mention-loading = Loading...
+
+# Default titles
+paperchat-untitled = Untitled
+paperchat-untitled-attachment = Untitled Attachment
+paperchat-untitled-note = Untitled Note
+
+# AI Summary Task Window
+paperchat-aisummary-window-title = AI Summary Tasks
+paperchat-aisummary-section-queue = Current Queue
+paperchat-aisummary-section-history = History
+paperchat-aisummary-no-tasks = No tasks in queue
+paperchat-aisummary-no-history = No history
+paperchat-aisummary-status-pending = Pending
+paperchat-aisummary-status-running = Processing...
+paperchat-aisummary-status-completed = Completed
+paperchat-aisummary-status-failed = Failed
+
+# AI Summary Progress Status
+paperchat-aisummary-progress-running = Processing { $processed }/{ $total }...
+paperchat-aisummary-progress-paused = Paused ({ $processed }/{ $total })
+paperchat-aisummary-progress-completed = Completed: { $success } success, { $failed } failed
+paperchat-aisummary-progress-error = Error: { $error }
+
+# Common
+paperchat-unknown = Unknown
+
+# Tool call status
+paperchat-tool-status-calling = Calling...
+paperchat-tool-status-done = Done
+paperchat-tool-status-error = Error
