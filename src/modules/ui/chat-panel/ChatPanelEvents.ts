@@ -982,44 +982,81 @@ function setupMentionSelector(context: ChatPanelContext): void {
 
   // Track the position where @ was typed
   let mentionStartPos = -1;
+  // Track if we're in IME composition mode
+  let isComposing = false;
 
-  // Handle input events - detect @ typing
-  messageInput.addEventListener("input", async (e: Event) => {
-    const inputEvent = e as InputEvent;
+  // Helper function to update filter based on current input state
+  const updateMentionFilter = (immediate: boolean = false) => {
+    if (!mentionSelector.isVisible()) return;
+
     const cursorPos = messageInput.selectionStart;
     const text = messageInput.value;
+    const beforeCursor = text.substring(0, cursorPos);
+    const atPos = beforeCursor.lastIndexOf("@");
 
-    // Check if @ was just typed
-    if (inputEvent.data === "@") {
+    // @ was deleted or cursor moved before @
+    if (atPos === -1 || (mentionStartPos >= 0 && atPos < mentionStartPos - 1)) {
+      mentionSelector.hide();
+      mentionStartPos = -1;
+      return;
+    }
+
+    // Extract query after @
+    const query = beforeCursor.substring(atPos + 1);
+
+    // If query contains space or newline, close popup (user finished mention)
+    if (/[\s\n]/.test(query)) {
+      mentionSelector.hide();
+      mentionStartPos = -1;
+      return;
+    }
+
+    // Update filter
+    if (immediate) {
+      mentionSelector.filterImmediate(query);
+    } else {
+      mentionSelector.filter(query);
+    }
+  };
+
+  // Handle IME composition events (for Chinese/Japanese/Korean input)
+  messageInput.addEventListener("compositionstart", () => {
+    isComposing = true;
+  });
+
+  messageInput.addEventListener("compositionend", () => {
+    isComposing = false;
+    // After IME composition ends, update filter with the composed text
+    if (mentionSelector.isVisible()) {
+      updateMentionFilter(true); // immediate update for IME
+    }
+  });
+
+  // Handle input events - detect @ typing
+  messageInput.addEventListener("input", (e: Event) => {
+    const inputEvent = e as InputEvent;
+    const cursorPos = messageInput.selectionStart;
+
+    // Skip filter updates during IME composition (wait for compositionend)
+    if (isComposing) {
+      // Only trigger popup for explicit @ input during composition, and only if not already visible
+      if (!mentionSelector.isVisible() && inputEvent.data === "@") {
+        mentionStartPos = cursorPos;
+        mentionSelector.show();
+      }
+      return;
+    }
+
+    // Check if @ was just typed (and popup not already visible)
+    if (inputEvent.data === "@" && !mentionSelector.isVisible()) {
       mentionStartPos = cursorPos;
-      await mentionSelector.show();
+      mentionSelector.show();
       return;
     }
 
     // If popup is visible, update the filter
     if (mentionSelector.isVisible()) {
-      const beforeCursor = text.substring(0, cursorPos);
-      const atPos = beforeCursor.lastIndexOf("@");
-
-      // @ was deleted or cursor moved before @
-      if (atPos === -1 || atPos < mentionStartPos - 1) {
-        mentionSelector.hide();
-        mentionStartPos = -1;
-        return;
-      }
-
-      // Extract query after @
-      const query = beforeCursor.substring(atPos + 1);
-
-      // If query contains space or newline, close popup (user finished mention)
-      if (/[\s\n]/.test(query)) {
-        mentionSelector.hide();
-        mentionStartPos = -1;
-        return;
-      }
-
-      // Update filter
-      mentionSelector.filter(query);
+      updateMentionFilter(false);
     }
   });
 
@@ -1061,6 +1098,22 @@ function setupMentionSelector(context: ChatPanelContext): void {
         mentionSelector.hide();
         mentionStartPos = -1;
         break;
+
+      case "ArrowLeft":
+      case "ArrowRight":
+      case "Home":
+      case "End":
+        // Cursor movement keys - update filter after cursor moves
+        setTimeout(() => updateMentionFilter(true), 0);
+        break;
+    }
+  });
+
+  // Handle mouse clicks that might change cursor position
+  messageInput.addEventListener("click", () => {
+    if (mentionSelector.isVisible()) {
+      // Use setTimeout to let the cursor position update first
+      setTimeout(() => updateMentionFilter(true), 0);
     }
   });
 

@@ -64,7 +64,15 @@ export function createMentionSelector(
 }
 
 /**
+ * Yield control back to the event loop
+ */
+function yieldToMain(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/**
  * Load all mentionable resources from Zotero
+ * Uses chunking to prevent blocking the UI thread
  */
 export async function loadMentionResources(): Promise<MentionResource[]> {
   const resources: MentionResource[] = [];
@@ -72,8 +80,16 @@ export async function loadMentionResources(): Promise<MentionResource[]> {
 
   try {
     const allItems = await Zotero.Items.getAll(libraryID);
+    const CHUNK_SIZE = 100; // Process 100 items at a time
 
-    for (const item of allItems) {
+    for (let i = 0; i < allItems.length; i++) {
+      const item = allItems[i];
+
+      // Yield to main thread every CHUNK_SIZE items to prevent UI blocking
+      if (i > 0 && i % CHUNK_SIZE === 0) {
+        await yieldToMain();
+      }
+
       if (item.isAttachment?.()) {
         // Attachment resource
         const parentID = item.parentID;
@@ -138,24 +154,36 @@ export async function loadMentionResources(): Promise<MentionResource[]> {
 
 /**
  * Filter resources based on query string
+ * Returns resources sorted by type (items → attachments → notes) to match render order
  */
 export function filterResources(
   resources: MentionResource[],
   query: string,
 ): MentionResource[] {
+  let filtered: MentionResource[];
+
   if (!query) {
-    // Return first 20 items when no query
-    return resources.slice(0, 20);
+    // Return first items when no query
+    filtered = resources.slice(0, 60); // Get more to ensure enough after grouping
+  } else {
+    const lowerQuery = query.toLowerCase();
+    filtered = resources.filter((r) => {
+      const titleMatch = r.title.toLowerCase().includes(lowerQuery);
+      const parentMatch = r.parentTitle?.toLowerCase().includes(lowerQuery);
+      return titleMatch || parentMatch;
+    });
   }
 
-  const lowerQuery = query.toLowerCase();
-  const filtered = resources.filter((r) => {
-    const titleMatch = r.title.toLowerCase().includes(lowerQuery);
-    const parentMatch = r.parentTitle?.toLowerCase().includes(lowerQuery);
-    return titleMatch || parentMatch;
-  });
+  // Sort by type to match render order: items → attachments → notes
+  // This ensures selectedIndex matches the visual display order
+  const typeOrder: Record<MentionResourceType, number> = {
+    item: 0,
+    attachment: 1,
+    note: 2,
+  };
+  filtered.sort((a, b) => typeOrder[a.type] - typeOrder[b.type]);
 
-  // Return max 20 filtered results
+  // Return max 20 results
   return filtered.slice(0, 20);
 }
 
@@ -364,6 +392,9 @@ export class MentionSelector {
   private theme: ThemeColors;
   private onSelect: OnMentionSelectCallback;
   private resourcesLoaded: boolean = false;
+  private isLoading: boolean = false;
+  private pendingQuery: string | null = null;
+  private filterDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     popup: HTMLElement,
@@ -386,19 +417,59 @@ export class MentionSelector {
    * Show the selector popup
    */
   async show(): Promise<void> {
-    // Load resources if not loaded
-    if (!this.resourcesLoaded) {
-      this.state.resources = await loadMentionResources();
-      this.resourcesLoaded = true;
+    // Prevent concurrent show calls
+    if (this.isLoading) {
+      return;
     }
 
+    // Mark as visible immediately so subsequent inputs are handled
     this.state.isVisible = true;
     this.state.query = "";
     this.state.selectedIndex = 0;
-    this.state.filteredResources = filterResources(this.state.resources, "");
-
     this.popup.style.display = "block";
+
+    // Load resources if not loaded
+    if (!this.resourcesLoaded) {
+      this.isLoading = true;
+      // Show loading state
+      this.renderLoading();
+
+      try {
+        this.state.resources = await loadMentionResources();
+        this.resourcesLoaded = true;
+      } finally {
+        this.isLoading = false;
+      }
+
+      // Apply any pending query that came in during loading
+      const queryToApply = this.pendingQuery ?? "";
+      this.pendingQuery = null;
+      this.state.query = queryToApply;
+      this.state.filteredResources = filterResources(
+        this.state.resources,
+        queryToApply,
+      );
+    } else {
+      this.state.filteredResources = filterResources(this.state.resources, "");
+    }
+
     this.render();
+  }
+
+  /**
+   * Render loading state
+   */
+  private renderLoading(): void {
+    const doc = this.popup.ownerDocument!;
+    this.popup.textContent = "";
+    const loadingMsg = createElement(doc, "div", {
+      padding: "12px",
+      fontSize: "12px",
+      color: this.theme.textMuted,
+      textAlign: "center",
+    });
+    loadingMsg.textContent = "Loading...";
+    this.popup.appendChild(loadingMsg);
   }
 
   /**
@@ -407,6 +478,13 @@ export class MentionSelector {
   hide(): void {
     this.state.isVisible = false;
     this.popup.style.display = "none";
+    this.pendingQuery = null;
+
+    // Clear any pending debounce
+    if (this.filterDebounceTimer) {
+      clearTimeout(this.filterDebounceTimer);
+      this.filterDebounceTimer = null;
+    }
   }
 
   /**
@@ -417,9 +495,64 @@ export class MentionSelector {
   }
 
   /**
-   * Update filter query
+   * Update filter query (with debouncing for performance)
    */
   filter(query: string): void {
+    // Skip if popup is not visible
+    if (!this.state.isVisible) {
+      return;
+    }
+
+    // If still loading, save the query for later
+    if (this.isLoading) {
+      this.pendingQuery = query;
+      return;
+    }
+
+    // Clear any pending debounce
+    if (this.filterDebounceTimer) {
+      clearTimeout(this.filterDebounceTimer);
+    }
+
+    // Debounce filter for performance (50ms delay)
+    this.filterDebounceTimer = setTimeout(() => {
+      // Double-check visibility before executing
+      if (!this.state.isVisible) {
+        this.filterDebounceTimer = null;
+        return;
+      }
+      this.state.query = query;
+      this.state.filteredResources = filterResources(
+        this.state.resources,
+        query,
+      );
+      this.state.selectedIndex = 0;
+      this.render();
+      this.filterDebounceTimer = null;
+    }, 50);
+  }
+
+  /**
+   * Update filter query immediately (no debounce, for IME composition end)
+   */
+  filterImmediate(query: string): void {
+    // Skip if popup is not visible
+    if (!this.state.isVisible) {
+      return;
+    }
+
+    // If still loading, save the query for later
+    if (this.isLoading) {
+      this.pendingQuery = query;
+      return;
+    }
+
+    // Clear any pending debounce
+    if (this.filterDebounceTimer) {
+      clearTimeout(this.filterDebounceTimer);
+      this.filterDebounceTimer = null;
+    }
+
     this.state.query = query;
     this.state.filteredResources = filterResources(this.state.resources, query);
     this.state.selectedIndex = 0;
