@@ -384,10 +384,32 @@ class AISummaryService {
         const pane = Zotero.getActiveZoteroPane();
         const selectedItems = pane?.getSelectedItems() as Zotero.Item[] | undefined;
         if (selectedItems && selectedItems.length > 0) {
+          const processedKeys = new Set<string>();
           for (const item of selectedItems) {
-            // 跳过附件和笔记
-            if (item.isAttachment?.() || item.isNote?.()) continue;
-            this.addItemToQueue(item);
+            // 跳过笔记
+            if (item.isNote?.()) continue;
+
+            // 如果是 PDF 附件，获取其父条目
+            if (item.isPDFAttachment?.()) {
+              const parentID = item.parentItemID;
+              if (parentID) {
+                const parent = Zotero.Items.get(parentID);
+                if (parent && !parent.isNote?.() && !processedKeys.has(parent.key)) {
+                  processedKeys.add(parent.key);
+                  this.addItemToQueue(parent);
+                }
+              }
+              continue;
+            }
+
+            // 跳过非 PDF 附件
+            if (item.isAttachment?.()) continue;
+
+            // 普通条目
+            if (!processedKeys.has(item.key)) {
+              processedKeys.add(item.key);
+              this.addItemToQueue(item);
+            }
           }
           // 打开任务窗口
           this.onOpenTaskWindow?.();
@@ -397,10 +419,19 @@ class AISummaryService {
         const pane = Zotero.getActiveZoteroPane();
         const selectedItems = pane?.getSelectedItems() as Zotero.Item[] | undefined;
         if (!selectedItems || selectedItems.length === 0) return false;
-        // 至少有一个非附件非笔记的条目
-        return selectedItems.some(
-          (item: Zotero.Item) => !item.isAttachment?.() && !item.isNote?.(),
-        );
+        // 至少有一个：非附件非笔记的条目，或者是有父条目的 PDF 附件
+        return selectedItems.some((item: Zotero.Item) => {
+          // 跳过笔记
+          if (item.isNote?.()) return false;
+          // PDF 附件：检查是否有父条目
+          if (item.isPDFAttachment?.()) {
+            return !!item.parentItemID;
+          }
+          // 非 PDF 附件：跳过
+          if (item.isAttachment?.()) return false;
+          // 普通条目：显示
+          return true;
+        });
       },
     });
 
