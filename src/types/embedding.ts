@@ -142,6 +142,25 @@ export interface ItemIndexStatus {
 }
 
 /**
+ * Access record for LRU eviction tracking
+ * Stored separately from vectors for efficient access time updates
+ */
+export interface AccessRecord {
+  /** Unique ID: `${itemKey}_${modelId}` */
+  id: string;
+  /** Zotero item key */
+  itemKey: string;
+  /** Embedding model identifier */
+  modelId: string;
+  /** Last access timestamp (updated on search) */
+  lastAccessedAt: number;
+  /** First indexed timestamp */
+  indexedAt: number;
+  /** Number of chunks for this item (for size estimation) */
+  chunkCount: number;
+}
+
+/**
  * Embedding model information
  */
 export interface EmbeddingModelInfo {

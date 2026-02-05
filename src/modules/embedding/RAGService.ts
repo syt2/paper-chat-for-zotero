@@ -20,6 +20,9 @@ import {
 import { getVectorStore, VectorStore } from "./VectorStore";
 import { splitText } from "./ChunkSplitter";
 
+/** Number of items to delete when quota is exceeded */
+const ITEMS_TO_DELETE_ON_QUOTA = 5;
+
 export class RAGService {
   private providerFactory: EmbeddingProviderFactory;
   private vectorStore: VectorStore;
@@ -161,8 +164,8 @@ export class RAGService {
         createdAt: Date.now(),
       }));
 
-      // 5. Store in vector database
-      await this.vectorStore.upsert(entries);
+      // 5. Store in vector database (with quota handling)
+      await this.upsertWithQuotaHandling(entries, itemKey, modelId, chunks.length);
 
       ztoolkit.log(`[RAGService] Indexed item: ${itemKey} with model: ${modelId}`);
     } catch (error) {
@@ -174,6 +177,104 @@ export class RAGService {
     } finally {
       this.indexingInProgress.delete(indexKey);
     }
+  }
+
+  /**
+   * Upsert entries with automatic quota handling
+   * If quota is exceeded, delete oldest items and retry
+   */
+  private async upsertWithQuotaHandling(
+    entries: VectorEntry[],
+    itemKey: string,
+    modelId: string,
+    totalChunkCount: number,
+  ): Promise<void> {
+    const maxRetries = 10; // Max 10 rounds of deletion (50 items total)
+    let retries = 0;
+
+    while (retries < maxRetries) {
+      try {
+        await this.vectorStore.upsert(entries);
+
+        // Success - update access record
+        await this.vectorStore.upsertAccessRecord(itemKey, modelId, totalChunkCount);
+        return;
+      } catch (error) {
+        // Check if it's a quota error
+        if (this.isQuotaError(error)) {
+          retries++;
+          ztoolkit.log(
+            `[RAGService] Quota exceeded, attempting cleanup (retry ${retries}/${maxRetries})`,
+          );
+
+          // Get oldest items from access_records (LRU tracking)
+          const oldestItems = await this.vectorStore.getOldestItems(
+            ITEMS_TO_DELETE_ON_QUOTA,
+          );
+
+          // If no access records exist, data is inconsistent - clear everything and retry
+          if (oldestItems.length === 0) {
+            ztoolkit.log(
+              "[RAGService] No access records found, clearing all data to recover",
+            );
+            await this.vectorStore.clear();
+            await this.vectorStore.clearAccessRecords();
+            // Retry will happen in next loop iteration with empty database
+            continue;
+          }
+
+          // Delete oldest items (skip current item being indexed)
+          let deleted = 0;
+          for (const item of oldestItems) {
+            if (item.itemKey !== itemKey) {
+              await this.vectorStore.deleteByModel(item.itemKey, item.modelId);
+              await this.vectorStore.deleteAccessRecord(item.itemKey, item.modelId);
+              deleted++;
+              ztoolkit.log(
+                `[RAGService] Evicted old index: ${item.itemKey} (last accessed: ${new Date(item.lastAccessedAt).toLocaleDateString()})`,
+              );
+            }
+          }
+
+          if (deleted === 0) {
+            // All oldest items are the current item, cannot recover
+            throw new Error(
+              "Storage quota exceeded and cannot delete current item",
+            );
+          }
+
+          // Retry will happen in next loop iteration
+        } else {
+          // Not a quota error, rethrow
+          throw error;
+        }
+      }
+    }
+
+    throw new Error(
+      `Storage quota exceeded after ${maxRetries} cleanup attempts`,
+    );
+  }
+
+  /**
+   * Check if an error is a quota exceeded error
+   */
+  private isQuotaError(error: unknown): boolean {
+    if (error instanceof Error) {
+      // IndexedDB quota error detection
+      // - Standard: error.name === "QuotaExceededError"
+      // - Firefox/Gecko: may use different naming
+      const name = error.name.toLowerCase();
+      const message = error.message.toLowerCase();
+
+      return (
+        name === "quotaexceedederror" ||
+        name.includes("quota") ||
+        message.includes("quota exceeded") ||
+        message.includes("storage quota")
+      );
+    }
+    return false;
   }
 
   /**
@@ -207,6 +308,11 @@ export class RAGService {
         topK,
         itemKeys: [itemKey],
         modelId,
+      });
+
+      // Update last accessed time (fire and forget, don't block search)
+      this.vectorStore.updateLastAccessed(itemKey, modelId).catch(() => {
+        // Ignore errors from access record update
       });
 
       return results;
@@ -250,6 +356,14 @@ export class RAGService {
         modelId,
       });
 
+      // Update last accessed time for all items with results (fire and forget)
+      const itemsWithResults = new Set(results.map((r) => r.itemKey));
+      for (const itemKey of itemsWithResults) {
+        this.vectorStore.updateLastAccessed(itemKey, modelId).catch(() => {
+          // Ignore errors from access record update
+        });
+      }
+
       return results;
     } catch (error) {
       ztoolkit.log(
@@ -287,6 +401,7 @@ export class RAGService {
    */
   async removeIndex(itemKey: string): Promise<void> {
     await this.vectorStore.delete(itemKey);
+    await this.vectorStore.deleteAllAccessRecords(itemKey);
     ztoolkit.log(`[RAGService] Removed index for item: ${itemKey}`);
   }
 
@@ -295,6 +410,7 @@ export class RAGService {
    */
   async removeIndexByModel(itemKey: string, modelId: string): Promise<void> {
     await this.vectorStore.deleteByModel(itemKey, modelId);
+    await this.vectorStore.deleteAccessRecord(itemKey, modelId);
     ztoolkit.log(`[RAGService] Removed index for item: ${itemKey}, model: ${modelId}`);
   }
 
@@ -303,6 +419,7 @@ export class RAGService {
    */
   async clearAllIndexes(): Promise<void> {
     await this.vectorStore.clear();
+    await this.vectorStore.clearAccessRecords();
     ztoolkit.log("[RAGService] All indexes cleared");
   }
 

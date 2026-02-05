@@ -10,12 +10,14 @@ import type {
   SemanticSearchResult,
   SemanticSearchOptions,
   ItemIndexStatus,
+  AccessRecord,
 } from "../../types/embedding";
 import { cosineSimilarity } from "./utils/cosine";
 
 const DB_NAME = "pdf-ai-talk-rag";
 const DB_VERSION = 1;
 const STORE_NAME = "vectors";
+const ACCESS_STORE_NAME = "access_records";
 
 export class VectorStore {
   private db: IDBDatabase | null = null;
@@ -51,20 +53,36 @@ export class VectorStore {
         const db = (event.target as IDBOpenDBRequest).result;
 
         // Create vectors store
-        const store = db.createObjectStore(STORE_NAME, { keyPath: "id" });
+        const vectors = db.createObjectStore(STORE_NAME, { keyPath: "id" });
 
         // Index for querying by itemKey + modelId (most common query pattern)
-        store.createIndex("itemKey_modelId", ["itemKey", "modelId"], {
+        vectors.createIndex("itemKey_modelId", ["itemKey", "modelId"], {
           unique: false,
         });
 
         // Index for querying by itemKey only (for listing all models for an item)
-        store.createIndex("itemKey", "itemKey", { unique: false });
+        vectors.createIndex("itemKey", "itemKey", { unique: false });
 
         // Index for querying by modelId only (for stats)
-        store.createIndex("modelId", "modelId", { unique: false });
+        vectors.createIndex("modelId", "modelId", { unique: false });
 
-        ztoolkit.log("[VectorStore] Database schema created/upgraded");
+        // Create access_records store for LRU tracking
+        const accessStore = db.createObjectStore(ACCESS_STORE_NAME, {
+          keyPath: "id",
+        });
+
+        // Index for querying by lastAccessedAt (for LRU eviction)
+        accessStore.createIndex("lastAccessedAt", "lastAccessedAt", {
+          unique: false,
+        });
+
+        // Index for querying by modelId
+        accessStore.createIndex("modelId", "modelId", { unique: false });
+
+        // Index for querying by itemKey
+        accessStore.createIndex("itemKey", "itemKey", { unique: false });
+
+        ztoolkit.log("[VectorStore] Database schema created");
       };
     });
 
@@ -407,6 +425,226 @@ export class VectorStore {
 
       request.onsuccess = () => {
         resolve(request.result);
+      };
+
+      request.onerror = () => {
+        reject(request.error);
+      };
+    });
+  }
+
+  // ===========================================
+  // Access Records Methods (for LRU tracking)
+  // ===========================================
+
+  /**
+   * Create or update an access record
+   */
+  async upsertAccessRecord(
+    itemKey: string,
+    modelId: string,
+    chunkCount: number,
+  ): Promise<void> {
+    const db = await this.ensureInit();
+    const now = Date.now();
+    const id = `${itemKey}_${modelId}`;
+
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(ACCESS_STORE_NAME, "readwrite");
+      const store = transaction.objectStore(ACCESS_STORE_NAME);
+
+      // First try to get existing record to preserve indexedAt
+      const getRequest = store.get(id);
+
+      getRequest.onsuccess = () => {
+        const existing = getRequest.result as AccessRecord | undefined;
+        const record: AccessRecord = {
+          id,
+          itemKey,
+          modelId,
+          lastAccessedAt: now,
+          indexedAt: existing?.indexedAt ?? now,
+          chunkCount,
+        };
+        store.put(record);
+      };
+
+      transaction.oncomplete = () => {
+        resolve();
+      };
+
+      transaction.onerror = () => {
+        reject(transaction.error);
+      };
+    });
+  }
+
+  /**
+   * Update last accessed time for an item
+   */
+  async updateLastAccessed(itemKey: string, modelId: string): Promise<void> {
+    const db = await this.ensureInit();
+    const id = `${itemKey}_${modelId}`;
+
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(ACCESS_STORE_NAME, "readwrite");
+      const store = transaction.objectStore(ACCESS_STORE_NAME);
+      const getRequest = store.get(id);
+
+      getRequest.onsuccess = () => {
+        const record = getRequest.result as AccessRecord | undefined;
+        if (record) {
+          record.lastAccessedAt = Date.now();
+          store.put(record);
+        }
+      };
+
+      transaction.oncomplete = () => {
+        resolve();
+      };
+
+      transaction.onerror = () => {
+        reject(transaction.error);
+      };
+    });
+  }
+
+  /**
+   * Get oldest items by last accessed time (for LRU eviction)
+   * @param limit Number of items to return
+   * @param modelId Optional: filter by model ID
+   */
+  async getOldestItems(
+    limit: number,
+    modelId?: string,
+  ): Promise<AccessRecord[]> {
+    const db = await this.ensureInit();
+
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(ACCESS_STORE_NAME, "readonly");
+      const store = transaction.objectStore(ACCESS_STORE_NAME);
+      const index = store.index("lastAccessedAt");
+      const results: AccessRecord[] = [];
+
+      // Open cursor in ascending order (oldest first)
+      const request = index.openCursor(null, "next");
+
+      request.onsuccess = (event) => {
+        const cursor = (event.target as IDBRequest<IDBCursorWithValue>).result;
+
+        if (cursor && results.length < limit) {
+          const record = cursor.value as AccessRecord;
+
+          // Filter by modelId if specified
+          if (!modelId || record.modelId === modelId) {
+            results.push(record);
+          }
+
+          cursor.continue();
+        }
+      };
+
+      transaction.oncomplete = () => {
+        resolve(results);
+      };
+
+      transaction.onerror = () => {
+        reject(transaction.error);
+      };
+    });
+  }
+
+  /**
+   * Delete access record for an item
+   */
+  async deleteAccessRecord(itemKey: string, modelId: string): Promise<void> {
+    const db = await this.ensureInit();
+    const id = `${itemKey}_${modelId}`;
+
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(ACCESS_STORE_NAME, "readwrite");
+      const store = transaction.objectStore(ACCESS_STORE_NAME);
+      const request = store.delete(id);
+
+      request.onsuccess = () => {
+        resolve();
+      };
+
+      request.onerror = () => {
+        reject(request.error);
+      };
+    });
+  }
+
+  /**
+   * Delete all access records for an item (all models)
+   */
+  async deleteAllAccessRecords(itemKey: string): Promise<void> {
+    const db = await this.ensureInit();
+
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(ACCESS_STORE_NAME, "readwrite");
+      const store = transaction.objectStore(ACCESS_STORE_NAME);
+      const index = store.index("itemKey");
+      const request = index.openCursor(IDBKeyRange.only(itemKey));
+
+      request.onsuccess = (event) => {
+        const cursor = (event.target as IDBRequest<IDBCursorWithValue>).result;
+        if (cursor) {
+          cursor.delete();
+          cursor.continue();
+        }
+      };
+
+      transaction.oncomplete = () => {
+        resolve();
+      };
+
+      transaction.onerror = () => {
+        reject(transaction.error);
+      };
+    });
+  }
+
+  /**
+   * Get access record for an item
+   */
+  async getAccessRecord(
+    itemKey: string,
+    modelId: string,
+  ): Promise<AccessRecord | null> {
+    const db = await this.ensureInit();
+    const id = `${itemKey}_${modelId}`;
+
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(ACCESS_STORE_NAME, "readonly");
+      const store = transaction.objectStore(ACCESS_STORE_NAME);
+      const request = store.get(id);
+
+      request.onsuccess = () => {
+        resolve(request.result ?? null);
+      };
+
+      request.onerror = () => {
+        reject(request.error);
+      };
+    });
+  }
+
+  /**
+   * Clear all access records
+   */
+  async clearAccessRecords(): Promise<void> {
+    const db = await this.ensureInit();
+
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(ACCESS_STORE_NAME, "readwrite");
+      const store = transaction.objectStore(ACCESS_STORE_NAME);
+      const request = store.clear();
+
+      request.onsuccess = () => {
+        ztoolkit.log("[VectorStore] All access records cleared");
+        resolve();
       };
 
       request.onerror = () => {
