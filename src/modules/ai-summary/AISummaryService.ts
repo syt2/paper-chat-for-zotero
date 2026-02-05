@@ -374,7 +374,7 @@ class AISummaryService {
    * 注册右键菜单
    */
   private registerContextMenu(): void {
-    // 生成 AI 摘要菜单项
+    // 生成 AI 摘要菜单项（条目列表右键菜单）
     ztoolkit.Menu.register("item", {
       tag: "menuitem",
       id: "paperchat-aisummary-menuitem",
@@ -415,7 +415,100 @@ class AISummaryService {
       },
     });
 
+    // PDF 阅读器右键菜单
+    this.registerReaderContextMenu();
+
     ztoolkit.log("[AISummaryService] Context menu registered");
+  }
+
+  /**
+   * 注册 PDF 阅读器右键菜单
+   */
+  private registerReaderContextMenu(): void {
+    // 检查 Zotero.Reader API 是否可用
+    if (!Zotero.Reader?.registerEventListener) {
+      ztoolkit.log("[AISummaryService] Zotero.Reader.registerEventListener not available");
+      return;
+    }
+
+    // PDF 阅读器视图右键菜单（选中文本或空白处右键）
+    Zotero.Reader.registerEventListener(
+      "createViewContextMenu",
+      (event: {
+        append: (options: { label: string; onCommand: () => void }) => void;
+        reader: { itemID?: number };
+      }) => {
+        const { append, reader } = event;
+
+        // 获取当前 PDF 对应的父条目
+        const parentItem = this.getParentItemFromReader(reader);
+        if (!parentItem) return;
+
+        append({
+          label: "Generate AI Summary",
+          onCommand: () => {
+            this.addItemToQueue(parentItem);
+            this.onOpenTaskWindow?.();
+          },
+        });
+      },
+      addon.data.config.addonRef,
+    );
+
+    // PDF 阅读器标注右键菜单（标注上右键）
+    Zotero.Reader.registerEventListener(
+      "createAnnotationContextMenu",
+      (event: {
+        append: (options: { label: string; onCommand: () => void }) => void;
+        reader: { itemID?: number };
+      }) => {
+        const { append, reader } = event;
+
+        // 获取当前 PDF 对应的父条目
+        const parentItem = this.getParentItemFromReader(reader);
+        if (!parentItem) return;
+
+        append({
+          label: "Generate AI Summary",
+          onCommand: () => {
+            this.addItemToQueue(parentItem);
+            this.onOpenTaskWindow?.();
+          },
+        });
+      },
+      addon.data.config.addonRef,
+    );
+
+    ztoolkit.log("[AISummaryService] Reader context menu registered");
+  }
+
+  /**
+   * 从 Reader 获取父条目（论文条目）
+   */
+  private getParentItemFromReader(reader: { itemID?: number }): Zotero.Item | null {
+    if (!reader.itemID) return null;
+
+    const item = Zotero.Items.get(reader.itemID);
+    if (!item) return null;
+
+    // 如果是 PDF 附件，获取其父条目
+    if (item.isAttachment?.()) {
+      const parentID = item.parentItemID;
+      if (parentID) {
+        const parent = Zotero.Items.get(parentID);
+        if (parent && !parent.isNote?.()) {
+          return parent;
+        }
+      }
+      return null;
+    }
+
+    // 非附件且非笔记
+    if (!item.isNote?.()) {
+      return item;
+    }
+
+    return null;
   }
 }
 
