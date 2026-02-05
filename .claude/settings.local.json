@@ -32,7 +32,8 @@
       "Bash(git log:*)",
       "Bash(git -C:*)",
       "Bash(npm run lint:check:*)",
-      "Bash(npm run lint:fix:*)"
+      "Bash(npm run lint:fix:*)",
+      "Bash(npx madge:*)"
     ]
   }
 }

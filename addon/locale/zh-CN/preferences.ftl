@@ -82,3 +82,9 @@ pref-aisummary-template = 模板
 pref-aisummary-include-annotations = 包含用户高亮和笔记
 pref-aisummary-run-now = 生成摘要
 pref-aisummary-desc = 为文献库中未处理的论文生成AI摘要笔记（每次最多10篇）。
+
+# Semantic Search Settings
+pref-semantic-search-settings = 语义搜索
+pref-enable-semantic-search = 启用语义搜索
+pref-semantic-search-available = 使用 { $provider } Embedding
+pref-semantic-search-unavailable = 无可用 Embedding 服务。请配置 Gemini 或 OpenAI API Key。

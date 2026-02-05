@@ -12,6 +12,11 @@ import {
   getAISummaryService,
   openTaskWindow,
 } from "./modules/ai-summary";
+import {
+  destroyRAGService,
+  destroyVectorStore,
+  destroyEmbeddingProviderFactory,
+} from "./modules/embedding";
 
 async function onStartup() {
   await Promise.all([
@@ -86,6 +91,10 @@ function onShutdown(): void {
   // Destroy AISummary
   destroyAISummaryService();
   getAISummaryManager().destroy();
+  // Destroy Embedding/RAG
+  destroyRAGService();
+  destroyEmbeddingProviderFactory();
+  destroyVectorStore();
   addon.data.dialog?.window?.close();
   addon.data.alive = false;
   // @ts-expect-error - Plugin instance is not typed

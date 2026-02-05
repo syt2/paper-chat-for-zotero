@@ -12,6 +12,7 @@ import type {
 } from "../../../types/tool";
 import { SECTION_ALIASES } from "./constants";
 import { parsePageRange } from "./paperParser";
+import { getRAGService } from "../../embedding";
 
 /**
  * 执行 get_paper_section
@@ -49,12 +50,63 @@ export function executeGetPaperSection(
 
 /**
  * 执行 search_paper_content
+ * 支持语义搜索（如果 RAG 服务可用）和关键词搜索（降级方案）
  */
-export function executeSearchPaperContent(
+export async function executeSearchPaperContent(
   args: SearchPaperContentArgs,
   paperStructure: PaperStructureExtended,
-): string {
+  itemKey?: string,
+): Promise<string> {
   const { query, max_results = 5 } = args;
+
+  // 尝试使用语义搜索
+  if (itemKey) {
+    const ragService = getRAGService();
+    try {
+      if (await ragService.isAvailable()) {
+        // 确保已索引
+        if (!await ragService.isIndexed(itemKey)) {
+          ztoolkit.log(`[searchPaperContent] Indexing paper: ${itemKey}`);
+          await ragService.indexPaper(itemKey, paperStructure.fullText);
+        }
+
+        // 执行语义搜索
+        const semanticResults = await ragService.searchPaper(query, itemKey, max_results);
+
+        if (semanticResults.length > 0) {
+          // 格式化语义搜索结果
+          const formatted = semanticResults
+            .map((r, i) => {
+              const truncated =
+                r.text.length > 500 ? r.text.substring(0, 500) + "..." : r.text;
+              const pageInfo = r.page ? ` Page ${r.page}` : "";
+              return `[Result ${i + 1}] (Score: ${(r.score * 100).toFixed(1)}%${pageInfo})\n${truncated}`;
+            })
+            .join("\n\n---\n\n");
+
+          return `Found ${semanticResults.length} semantically relevant passages for "${query}":\n\n${formatted}`;
+        }
+      }
+    } catch (error) {
+      ztoolkit.log(
+        "[searchPaperContent] Semantic search failed, falling back to keyword search:",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  // 降级到关键词搜索
+  return executeKeywordSearch(query, max_results, paperStructure);
+}
+
+/**
+ * 执行关键词搜索（降级方案）
+ */
+function executeKeywordSearch(
+  query: string,
+  max_results: number,
+  paperStructure: PaperStructureExtended,
+): string {
   const queryLower = query.toLowerCase();
   const results: Array<{ text: string; score: number; section: string }> = [];
 

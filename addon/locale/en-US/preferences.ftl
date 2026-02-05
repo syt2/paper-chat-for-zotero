@@ -82,3 +82,9 @@ pref-aisummary-template = Template
 pref-aisummary-include-annotations = Include user highlights and notes
 pref-aisummary-run-now = Generate Summaries
 pref-aisummary-desc = Generate AI summaries for unprocessed papers in your library (up to 10 per run).
+
+# Semantic Search Settings
+pref-semantic-search-settings = Semantic Search
+pref-enable-semantic-search = Enable semantic search
+pref-semantic-search-available = Using { $provider } Embedding
+pref-semantic-search-unavailable = No embedding service available. Please configure Gemini or OpenAI API Key.

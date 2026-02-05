@@ -21,6 +21,7 @@ import {
 import { getPref, setPref } from "../../utils/prefs";
 import { getAISummaryManager } from "../ai-summary";
 import { DEFAULT_TEMPLATES } from "../ai-summary/defaultTemplates";
+import { getEmbeddingProviderFactory } from "../embedding";
 
 // Current selected provider ID
 let currentProviderId: string = "paperchat";
@@ -79,6 +80,9 @@ export async function initializePrefsUI(): Promise<void> {
 
   // Initialize AISummary settings
   initAISummarySettings(doc);
+
+  // Initialize Semantic Search settings
+  await initSemanticSearchSettings(doc);
 }
 
 /**
@@ -152,6 +156,9 @@ export function bindPrefEvents(): void {
 
   // Bind AISummary settings events
   bindAISummarySettingsEvents(doc);
+
+  // Bind Semantic Search settings events
+  bindSemanticSearchSettingsEvents(doc);
 }
 
 /**
@@ -348,4 +355,56 @@ function bindAISummarySettingsEvents(doc: Document): void {
   aiSummaryManager.setOnProgressUpdate(() => {
     updateAISummaryStatus(doc);
   });
+}
+
+/**
+ * Initialize Semantic Search settings
+ */
+async function initSemanticSearchSettings(doc: Document): Promise<void> {
+  const checkbox = doc.getElementById(
+    "pref-enable-semantic-search-checkbox",
+  ) as XUL.Checkbox | null;
+  if (checkbox) {
+    // Default to true
+    const enabled = getPref("enableSemanticSearch") ?? true;
+    checkbox.checked = enabled;
+  }
+
+  // Update status display
+  await updateSemanticSearchStatus(doc);
+}
+
+/**
+ * Update Semantic Search status display
+ */
+async function updateSemanticSearchStatus(doc: Document): Promise<void> {
+  const statusLabel = doc.getElementById(
+    "pref-semantic-search-status",
+  ) as HTMLElement | null;
+  if (!statusLabel) return;
+
+  try {
+    const factory = getEmbeddingProviderFactory();
+    const status = await factory.getStatus();
+
+    statusLabel.textContent = status.message;
+    statusLabel.style.color = status.available ? "#008000" : "#c00";
+  } catch (error) {
+    statusLabel.textContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
+    statusLabel.style.color = "#c00";
+  }
+}
+
+/**
+ * Bind Semantic Search settings events
+ */
+function bindSemanticSearchSettingsEvents(doc: Document): void {
+  const checkbox = doc.getElementById(
+    "pref-enable-semantic-search-checkbox",
+  ) as XUL.Checkbox | null;
+  if (checkbox) {
+    checkbox.addEventListener("command", () => {
+      setPref("enableSemanticSearch", checkbox.checked);
+    });
+  }
 }

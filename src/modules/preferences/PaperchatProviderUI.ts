@@ -7,6 +7,7 @@ import { getProviderManager, BUILTIN_PROVIDERS } from "../providers";
 import type { PaperChatProviderConfig } from "../../types/provider";
 import { formatModelLabel } from "./ModelsFetcher";
 import { clearElement } from "./utils";
+import { isEmbeddingModel } from "../embedding/providers/PaperChatEmbedding";
 
 /**
  * Populate PaperChat panel with settings from provider config
@@ -91,15 +92,18 @@ export function populatePaperchatModels(
     });
   }
 
-  modelList.forEach((model) => {
+  // Filter out embedding models (they are used for RAG, not for chat)
+  const chatModels = modelList.filter((model) => !isEmbeddingModel(model));
+
+  chatModels.forEach((model) => {
     const menuitem = doc.createXULElement("menuitem");
     menuitem.setAttribute("label", formatModelLabel(model, "paperchat"));
     menuitem.setAttribute("value", model);
     modelPopup.appendChild(menuitem);
   });
 
-  // Set current model from provider config
-  const currentModel = config?.defaultModel || modelList[0];
+  // Set current model from provider config (use first chat model as fallback)
+  const currentModel = config?.defaultModel || chatModels[0] || modelList[0];
   modelSelect.value = currentModel;
 }
 

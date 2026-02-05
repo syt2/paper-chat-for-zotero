@@ -1241,7 +1241,7 @@ export class PdfToolManager {
         if (!this.isSearchPaperContentArgs(args)) {
           return "Error: Invalid arguments for search_paper_content. Required: query (string)";
         }
-        return executeSearchPaperContent(args, paperStructure);
+        return executeSearchPaperContent(args, paperStructure, targetItemKey ?? undefined);
       case "get_paper_metadata":
         return executeGetPaperMetadata(paperStructure);
       case "get_pages":
@@ -1399,7 +1399,7 @@ export class PdfToolManager {
 
   /**
    * 执行 search_across_papers 工具
-   * 在多篇论文中搜索内容
+   * 在多篇论文中搜索内容（支持语义搜索）
    */
   private async executeSearchAcrossPapers(
     args: SearchAcrossPapersArgs,
@@ -1422,6 +1422,61 @@ export class PdfToolManager {
     const results: string[] = [];
     results.push(`=== Search Results for "${query}" across ${papersMap.size} papers ===\n`);
 
+    // 尝试使用语义搜索
+    const { getRAGService } = await import("../../embedding");
+    const ragService = getRAGService();
+    const useSemanticSearch = await ragService.isAvailable();
+
+    if (useSemanticSearch) {
+      // 确保所有论文都已索引
+      for (const [key, structure] of papersMap) {
+        if (!await ragService.isIndexed(key)) {
+          ztoolkit.log(`[searchAcrossPapers] Indexing paper: ${key}`);
+          await ragService.indexPaper(key, structure.fullText);
+        }
+      }
+
+      // 执行跨论文语义搜索
+      const semanticResults = await ragService.searchAcrossPapers(
+        query,
+        Array.from(papersMap.keys()),
+        { topK: maxResultsPerPaper * papersMap.size },
+      );
+
+      if (semanticResults.length > 0) {
+        // 按论文分组结果
+        const resultsByPaper = new Map<string, typeof semanticResults>();
+        for (const result of semanticResults) {
+          const paperResults = resultsByPaper.get(result.itemKey) || [];
+          if (paperResults.length < maxResultsPerPaper) {
+            paperResults.push(result);
+            resultsByPaper.set(result.itemKey, paperResults);
+          }
+        }
+
+        for (const [key, structure] of papersMap) {
+          const title = structure.metadata.title || key;
+          results.push(`\n--- Paper [${key}]: ${title} ---\n`);
+
+          const paperResults = resultsByPaper.get(key);
+          if (paperResults && paperResults.length > 0) {
+            results.push(`Found ${paperResults.length} semantically relevant match(es):\n`);
+            paperResults.forEach((match, i) => {
+              const truncated =
+                match.text.length > 500 ? match.text.substring(0, 500) + "..." : match.text;
+              const pageInfo = match.page ? ` (Page ${match.page})` : "";
+              results.push(`${i + 1}. [Score: ${(match.score * 100).toFixed(1)}%${pageInfo}] ${truncated}\n`);
+            });
+          } else {
+            results.push("No semantic matches found in this paper.\n");
+          }
+        }
+
+        return results.join("\n");
+      }
+    }
+
+    // 降级到关键词搜索
     const queryLower = query.toLowerCase();
 
     for (const [key, structure] of papersMap) {
