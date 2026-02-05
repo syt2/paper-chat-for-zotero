@@ -28,19 +28,23 @@ function hasPdfAttachment(item: Zotero.Item): boolean {
     return item.isPDFAttachment && item.isPDFAttachment();
   }
 
-  // 检查子附件
-  if (!item.getAttachments) return false;
-
-  const attachmentIDs = item.getAttachments();
-  for (const attachmentID of attachmentIDs) {
-    const attachment = Zotero.Items.get(attachmentID);
-    if (
-      attachment &&
-      attachment.isPDFAttachment &&
-      attachment.isPDFAttachment()
-    ) {
-      return true;
+  // 只有非附件 item 才能调用 getAttachments()
+  // 注意：getAttachments 方法在附件上调用会抛出错误
+  try {
+    const attachmentIDs = item.getAttachments();
+    for (const attachmentID of attachmentIDs) {
+      const attachment = Zotero.Items.get(attachmentID);
+      if (
+        attachment &&
+        attachment.isPDFAttachment &&
+        attachment.isPDFAttachment()
+      ) {
+        return true;
+      }
     }
+  } catch {
+    // getAttachments() 在某些 item 类型上不可用
+    return false;
   }
   return false;
 }
@@ -240,16 +244,21 @@ export function executeGetItemNotes(
       const parentItem = Zotero.Items.get(parentID);
       if (parentItem) {
         item = parentItem;
+      } else {
+        return `Error: Cannot get notes for attachment "${targetItemKey}" - parent item not found.`;
       }
+    } else {
+      return `Error: Cannot get notes for standalone attachment "${targetItemKey}". Attachments don't have notes directly.`;
     }
   }
 
-  // 确保 item 有 getNotes 方法
-  if (!item.getNotes) {
-    return `Error: Cannot get notes for item "${targetItemKey}".`;
+  // 获取笔记 (使用 try-catch 以防其他意外情况)
+  let noteIDs: number[];
+  try {
+    noteIDs = item.getNotes();
+  } catch (error) {
+    return `Error: Cannot get notes for item "${targetItemKey}": ${error instanceof Error ? error.message : String(error)}`;
   }
-
-  const noteIDs = item.getNotes();
   if (noteIDs.length === 0) {
     return `No notes found for item "${targetItemKey}".`;
   }

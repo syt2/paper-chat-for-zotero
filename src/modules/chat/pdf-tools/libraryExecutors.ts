@@ -125,7 +125,11 @@ export async function executeGetAnnotations(
       const parentItem = Zotero.Items.get(parentID);
       if (parentItem) {
         item = parentItem;
+      } else {
+        return `Error: Cannot get annotations for attachment "${targetItemKey}" - parent item not found.`;
       }
+    } else {
+      return `Error: Cannot get annotations for standalone attachment "${targetItemKey}".`;
     }
   }
 
@@ -138,8 +142,13 @@ export async function executeGetAnnotations(
     }
   }
 
-  // 获取所有附件
-  const attachmentIDs = item.getAttachments ? item.getAttachments() : [];
+  // 获取所有附件 (使用 try-catch 以防意外)
+  let attachmentIDs: number[] = [];
+  try {
+    attachmentIDs = item.getAttachments ? item.getAttachments() : [];
+  } catch (error) {
+    return `Error: Cannot get attachments for item "${targetItemKey}": ${error instanceof Error ? error.message : String(error)}`;
+  }
   const annotations: Array<{
     key: string;
     type: string;

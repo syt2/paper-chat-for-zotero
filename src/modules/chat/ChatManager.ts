@@ -998,11 +998,17 @@ export class ChatManager {
             assistantMessage.content = callingDisplay;
             this.onStreamingUpdate?.(callingDisplay);
 
-            // 执行工具
-            const toolResult = await pdfToolManager.executeToolCall(
-              toolCall,
-              paperStructure || undefined,
-            );
+            // 执行工具（包装 try-catch 防止意外异常中断聊天）
+            let toolResult: string;
+            try {
+              toolResult = await pdfToolManager.executeToolCall(
+                toolCall,
+                paperStructure || undefined,
+              );
+            } catch (error) {
+              toolResult = `Error: Tool execution failed: ${error instanceof Error ? error.message : String(error)}`;
+              ztoolkit.log(`[Streaming Tool Calling] Tool ${toolName} threw error:`, error);
+            }
 
             ztoolkit.log(
               `[Streaming Tool Calling] Result (truncated): ${toolResult.substring(0, 200)}...`,
@@ -1149,11 +1155,17 @@ export class ChatManager {
             assistantMessage.content = callingDisplay;
             this.onStreamingUpdate?.(callingDisplay);
 
-            // 执行工具
-            const toolResult = await pdfToolManager.executeToolCall(
-              toolCall,
-              paperStructure || undefined,
-            );
+            // 执行工具（包装 try-catch 防止意外异常中断聊天）
+            let toolResult: string;
+            try {
+              toolResult = await pdfToolManager.executeToolCall(
+                toolCall,
+                paperStructure || undefined,
+              );
+            } catch (error) {
+              toolResult = `Error: Tool execution failed: ${error instanceof Error ? error.message : String(error)}`;
+              ztoolkit.log(`[Tool Calling] Tool ${toolName} threw error:`, error);
+            }
 
             ztoolkit.log(
               `[Tool Calling] Tool result (truncated): ${toolResult.substring(0, 200)}...`,

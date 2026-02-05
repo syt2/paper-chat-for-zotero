@@ -184,23 +184,36 @@ export class PdfToolManager {
       if (pdfText) {
         structure = this.parsePaperStructure(pdfText);
       }
-    } else if (item.getAttachments) {
-      // 如果 item 是普通条目，获取其 PDF 附件
-      const attachmentIDs = item.getAttachments();
-      for (const attachmentID of attachmentIDs) {
-        const attachment = Zotero.Items.get(attachmentID);
-        if (
-          attachment &&
-          attachment.isPDFAttachment &&
-          attachment.isPDFAttachment()
-        ) {
-          // 提取 PDF 文本
-          const pdfText = await attachment.attachmentText;
-          if (pdfText) {
-            structure = this.parsePaperStructure(pdfText);
-            break;
+    } else if (item.isAttachment && item.isAttachment()) {
+      // 非 PDF 附件，无法提取
+      ztoolkit.log(
+        `[PdfToolManager] Item ${itemKey} is a non-PDF attachment, cannot extract structure`,
+      );
+    } else {
+      // 普通条目，获取其 PDF 附件
+      // 注意：getAttachments() 只能在非附件 item 上调用
+      try {
+        const attachmentIDs = item.getAttachments();
+        for (const attachmentID of attachmentIDs) {
+          const attachment = Zotero.Items.get(attachmentID);
+          if (
+            attachment &&
+            attachment.isPDFAttachment &&
+            attachment.isPDFAttachment()
+          ) {
+            // 提取 PDF 文本
+            const pdfText = await attachment.attachmentText;
+            if (pdfText) {
+              structure = this.parsePaperStructure(pdfText);
+              break;
+            }
           }
         }
+      } catch (error) {
+        ztoolkit.log(
+          `[PdfToolManager] Error getting attachments for ${itemKey}:`,
+          error instanceof Error ? error.message : String(error),
+        );
       }
     }
 
