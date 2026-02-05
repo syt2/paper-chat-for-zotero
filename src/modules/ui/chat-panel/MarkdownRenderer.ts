@@ -329,10 +329,11 @@ export function buildDOMFromTokens(
 
       case "blockquote_open": {
         const bq = doc.createElementNS(HTML_NS, "blockquote") as HTMLElement;
-        bq.style.borderLeft = `3px solid ${chatColors.blockquoteBorder}`;
+        const darkBq = isDarkMode();
+        bq.style.borderLeft = `3px solid ${darkBq ? "#444" : chatColors.blockquoteBorder}`;
         bq.style.paddingLeft = "10px";
         bq.style.margin = "10px 0";
-        bq.style.color = chatColors.blockquoteText;
+        bq.style.color = darkBq ? "#a0a0a0" : chatColors.blockquoteText;
         parent.appendChild(bq);
         stack.push(bq);
         break;
@@ -386,8 +387,9 @@ export function buildDOMFromTokens(
 
       case "hr": {
         const hr = doc.createElementNS(HTML_NS, "hr") as HTMLElement;
+        const darkHr = isDarkMode();
         hr.style.border = "none";
-        hr.style.borderTop = `1px solid ${chatColors.hrBorder}`;
+        hr.style.borderTop = `1px solid ${darkHr ? "#444" : chatColors.hrBorder}`;
         hr.style.margin = "15px 0";
         parent.appendChild(hr);
         break;
@@ -439,9 +441,10 @@ export function buildDOMFromTokens(
 
       case "th_open": {
         const th = doc.createElementNS(HTML_NS, "th") as HTMLElement;
-        th.style.border = `1px solid ${chatColors.tableBorder}`;
+        const darkTh = isDarkMode();
+        th.style.border = `1px solid ${darkTh ? "#444" : chatColors.tableBorder}`;
         th.style.padding = "8px";
-        th.style.background = chatColors.tableBg;
+        th.style.background = darkTh ? "#2d2d2d" : chatColors.tableBg;
         th.style.fontWeight = "bold";
         th.style.textAlign = "left";
         parent.appendChild(th);
@@ -454,7 +457,8 @@ export function buildDOMFromTokens(
 
       case "td_open": {
         const td = doc.createElementNS(HTML_NS, "td") as HTMLElement;
-        td.style.border = `1px solid ${chatColors.tableBorder}`;
+        const darkTd = isDarkMode();
+        td.style.border = `1px solid ${darkTd ? "#444" : chatColors.tableBorder}`;
         td.style.padding = "8px";
         parent.appendChild(td);
         stack.push(td);
@@ -533,7 +537,9 @@ export function renderInlineTokens(
 
       case "code_inline": {
         const codeInline = doc.createElementNS(HTML_NS, "code") as HTMLElement;
-        codeInline.style.background = chatColors.codeInlineBg;
+        const darkInline = isDarkMode();
+        codeInline.style.background = darkInline ? "#343942" : "#f0f0f0";
+        codeInline.style.color = darkInline ? "#e6e6e6" : "#24292e";
         codeInline.style.padding = "2px 6px";
         codeInline.style.borderRadius = "3px";
         codeInline.style.fontFamily = "monospace";
@@ -547,7 +553,8 @@ export function renderInlineTokens(
         const a = doc.createElementNS(HTML_NS, "a") as HTMLAnchorElement;
         const href = token.attrGet("href");
         if (href) a.href = href;
-        a.style.color = chatColors.markdownLink;
+        const darkLink = isDarkMode();
+        a.style.color = darkLink ? "#58a6ff" : chatColors.markdownLink;
         a.style.textDecoration = "underline";
         current.appendChild(a);
         stack.push(a);
