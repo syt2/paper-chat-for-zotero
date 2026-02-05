@@ -276,6 +276,14 @@ export class AISummaryProcessor {
   }
 
   /**
+   * Get language instruction based on Zotero locale
+   */
+  private getLanguageInstruction(): string {
+    const locale = Zotero.locale || "en-US";
+    return `IMPORTANT: You MUST respond in the language specified by locale code "${locale}". Write your entire response in that language.`;
+  }
+
+  /**
    * 调用 AI (带超时)
    */
   private async callAI(
@@ -299,14 +307,20 @@ export class AISummaryProcessor {
 
     const now = Date.now();
 
-    if (template.systemPrompt) {
-      messages.push({
-        id: `aisummary-system-${now}`,
-        role: "system",
-        content: template.systemPrompt,
-        timestamp: now,
-      });
-    }
+    // Get language instruction based on Zotero locale
+    const languageInstruction = this.getLanguageInstruction();
+
+    // Combine system prompt with language instruction
+    const systemContent = template.systemPrompt
+      ? `${template.systemPrompt}\n\n${languageInstruction}`
+      : languageInstruction;
+
+    messages.push({
+      id: `aisummary-system-${now}`,
+      role: "system",
+      content: systemContent,
+      timestamp: now,
+    });
     messages.push({
       id: `aisummary-user-${now}`,
       role: "user",
