@@ -21,7 +21,7 @@ export function openTaskWindow(): void {
   if (!mainWindow) return;
 
   const win = mainWindow.openDialog(
-    "about:blank",
+    `chrome://${addon.data.config.addonRef}/content/aisummary-tasks.xhtml`,
     "paperchat-aisummary-tasks",
     "chrome,centerscreen,resizable=yes,width=500,height=600",
   );
@@ -54,21 +54,13 @@ function buildTaskWindowContent(win: Window): void {
   // 设置标题
   doc.title = getString("aisummary-window-title");
 
-  // 清空并重建文档
-  while (doc.documentElement.firstChild) {
-    doc.documentElement.removeChild(doc.documentElement.firstChild);
-  }
-
-  // 创建 head
-  const head = doc.createElement("head");
+  // 添加样式到已有的 head
   const style = doc.createElement("style");
   style.textContent = getStyles();
-  head.appendChild(style);
-  doc.documentElement.appendChild(head);
+  doc.head.appendChild(style);
 
-  // 创建 body
-  const body = doc.createElement("body");
-  doc.documentElement.appendChild(body);
+  // 使用已有的 body
+  const body = doc.body;
 
   // 构建内容结构
   const container = doc.createElement("div");
@@ -329,6 +321,10 @@ function getStyles(): string {
       box-sizing: border-box;
       margin: 0;
       padding: 0;
+    }
+
+    html, body {
+      height: 100%;
     }
 
     body {

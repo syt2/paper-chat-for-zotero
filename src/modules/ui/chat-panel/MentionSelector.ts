@@ -5,6 +5,7 @@
 
 import type { ThemeColors } from "./types";
 import { createElement } from "./ChatPanelBuilder";
+import { getCurrentTheme } from "./ChatPanelTheme";
 import { chatColors } from "../../../utils/colors";
 import { getString } from "../../../utils/locale";
 import { getItemTitle } from "../../../utils/common";
@@ -202,6 +203,10 @@ export function renderMentionPopup(
   const doc = popup.ownerDocument!;
   popup.textContent = "";
 
+  // Update popup container theme
+  popup.style.background = theme.dropdownBg;
+  popup.style.borderColor = theme.borderColor;
+
   if (filteredResources.length === 0) {
     const emptyMsg = createElement(doc, "div", {
       padding: "12px",
@@ -227,15 +232,18 @@ export function renderMentionPopup(
   ) => {
     if (groupResources.length === 0) return;
 
-    // Group header
+    // Group header - sticky with clear visual separation
     const header = createElement(doc, "div", {
-      padding: "6px 12px",
+      padding: "4px 12px",
       fontSize: "10px",
       fontWeight: "600",
       color: theme.textMuted,
       background: theme.buttonBg,
-      textTransform: "uppercase",
       letterSpacing: "0.5px",
+      position: "sticky",
+      top: "0",
+      zIndex: "1",
+      borderBottom: `1px solid ${theme.borderColor}`,
     });
     header.textContent = groupLabel;
     popup.appendChild(header);
@@ -248,10 +256,11 @@ export function renderMentionPopup(
         display: "flex",
         alignItems: "center",
         gap: "8px",
-        padding: "8px 12px",
+        padding: "6px 12px",
         cursor: "pointer",
         background: isSelected ? theme.dropdownItemHoverBg : "transparent",
         fontSize: "12px",
+        borderBottom: `1px solid ${theme.borderColor}20`,
       });
       item.setAttribute("data-mention-index", String(currentIndex));
       item.setAttribute("data-resource-key", resource.key);
@@ -260,6 +269,7 @@ export function renderMentionPopup(
       const icon = createElement(doc, "span", {
         fontSize: "14px",
         flexShrink: "0",
+        opacity: "0.8",
       });
       icon.textContent = resource.icon;
 
@@ -269,7 +279,7 @@ export function renderMentionPopup(
         overflow: "hidden",
         display: "flex",
         flexDirection: "column",
-        gap: "2px",
+        gap: "1px",
       });
 
       // Main title
@@ -278,6 +288,7 @@ export function renderMentionPopup(
         overflow: "hidden",
         textOverflow: "ellipsis",
         whiteSpace: "nowrap",
+        fontSize: "12px",
       });
       title.textContent = resource.title;
       titleContainer.appendChild(title);
@@ -286,10 +297,11 @@ export function renderMentionPopup(
       if (resource.parentTitle) {
         const parent = createElement(doc, "span", {
           fontSize: "10px",
-          color: theme.textMuted,
+          color: theme.textSecondary,
           overflow: "hidden",
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
+          opacity: "0.7",
         });
         parent.textContent = `↳ ${resource.parentTitle}`;
         titleContainer.appendChild(parent);
@@ -391,7 +403,6 @@ export function createResourceTag(
 export class MentionSelector {
   private popup: HTMLElement;
   private state: MentionSelectorState;
-  private theme: ThemeColors;
   private onSelect: OnMentionSelectCallback;
   private resourcesLoaded: boolean = false;
   private isLoading: boolean = false;
@@ -400,11 +411,10 @@ export class MentionSelector {
 
   constructor(
     popup: HTMLElement,
-    theme: ThemeColors,
+    _theme: ThemeColors,
     onSelect: OnMentionSelectCallback,
   ) {
     this.popup = popup;
-    this.theme = theme;
     this.onSelect = onSelect;
     this.state = {
       isVisible: false,
@@ -462,12 +472,15 @@ export class MentionSelector {
    * Render loading state
    */
   private renderLoading(): void {
+    const theme = getCurrentTheme();
     const doc = this.popup.ownerDocument!;
     this.popup.textContent = "";
+    this.popup.style.background = theme.dropdownBg;
+    this.popup.style.borderColor = theme.borderColor;
     const loadingMsg = createElement(doc, "div", {
       padding: "12px",
       fontSize: "12px",
-      color: this.theme.textMuted,
+      color: theme.textMuted,
       textAlign: "center",
     });
     loadingMsg.textContent = getString("mention-loading");
@@ -625,7 +638,7 @@ export class MentionSelector {
       this.popup,
       this.state.filteredResources,
       this.state.selectedIndex,
-      this.theme,
+      getCurrentTheme(),
       (resource) => {
         this.onSelect(resource);
         this.hide();

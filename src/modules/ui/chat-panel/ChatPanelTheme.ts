@@ -198,6 +198,15 @@ export function applyThemeToContainer(container: HTMLElement): void {
     historyDropdown.style.borderColor = theme.borderColor;
   }
 
+  // Mention popup
+  const mentionPopup = container.querySelector(
+    "#chat-mention-popup",
+  ) as HTMLElement;
+  if (mentionPopup) {
+    mentionPopup.style.background = theme.dropdownBg;
+    mentionPopup.style.borderColor = theme.borderColor;
+  }
+
   // Update existing message bubbles
   container
     .querySelectorAll(".assistant-message .chat-bubble")
