@@ -13,13 +13,17 @@ import { BUILTIN_PROVIDERS } from "../../providers/ProviderManager";
 
 // Preferred embedding models in priority order
 const PREFERRED_MODELS = [
+  'text-embedding-v4',
   "text-embedding-3-small",
   "text-embedding-3-large",
   "text-embedding-ada-002",
 ];
 
-// Batch size for embedding requests
-const BATCH_SIZE = 2048;
+// Embedding API limits batch size to 10
+const BATCH_SIZE = 10;
+
+// Use reduced dimensions for cost-efficient RAG
+const EMBEDDING_DIMENSIONS = 1024;
 
 /**
  * Check if a model name indicates it's an embedding model
@@ -71,7 +75,7 @@ function selectBestModel(availableModels: string[]): string | null {
 export class PaperChatEmbedding implements EmbeddingProvider {
   readonly name = "PaperChat Embedding";
   readonly type: EmbeddingProviderType = "paperchat";
-  readonly dimension = 0; // Unknown until first embedding
+  readonly dimension = EMBEDDING_DIMENSIONS;
 
   private baseUrl: string;
   private selectedModel: string;
@@ -145,6 +149,7 @@ export class PaperChatEmbedding implements EmbeddingProvider {
       body: JSON.stringify({
         model: this.selectedModel,
         input: texts,
+        dimensions: EMBEDDING_DIMENSIONS,
       }),
     });
 
