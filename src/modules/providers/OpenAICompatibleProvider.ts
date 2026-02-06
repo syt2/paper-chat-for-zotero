@@ -242,10 +242,78 @@ export class OpenAICompatibleProvider extends BaseProvider {
       );
     }
 
+    // Fallback: when finish_reason is "tool_calls" but no structured tool_calls,
+    // try parsing XML-formatted tool calls from content
+    if (
+      finishReason === "tool_calls" &&
+      (!message?.tool_calls || message.tool_calls.length === 0)
+    ) {
+      const xmlToolCalls = this.parseXmlToolCalls(message?.content || "");
+      if (xmlToolCalls.length > 0) {
+        ztoolkit.log(
+          "[chatCompletionWithTools] Parsed",
+          xmlToolCalls.length,
+          "tool calls from XML fallback",
+        );
+        const cleanContent = (message?.content || "")
+          .replace(/<function_calls>[\s\S]*?<\/function_calls>/g, "")
+          .trim();
+        return { content: cleanContent, toolCalls: xmlToolCalls };
+      }
+    }
+
     return {
       content: message?.content || "",
       toolCalls: message?.tool_calls,
     };
+  }
+
+  /**
+   * Parse XML-formatted tool calls from content string.
+   * Some backends (e.g. Anthropic→OpenAI adapters) may emit tool calls
+   * as XML in the content field instead of structured tool_calls.
+   */
+  private parseXmlToolCalls(content: string): ToolCall[] {
+    try {
+      const blockMatch = content.match(
+        /<function_calls>([\s\S]*?)<\/function_calls>/,
+      );
+      if (!blockMatch) return [];
+
+      const block = blockMatch[1];
+      const invokeRegex =
+        /<invoke\s+name="([^"]+)">([\s\S]*?)<\/invoke>/g;
+      const toolCalls: ToolCall[] = [];
+      let invokeMatch: RegExpExecArray | null;
+      let index = 0;
+
+      while ((invokeMatch = invokeRegex.exec(block)) !== null) {
+        const functionName = invokeMatch[1];
+        const paramsBlock = invokeMatch[2];
+        const paramRegex =
+          /<parameter\s+name="([^"]+)">([\s\S]*?)<\/parameter>/g;
+        const params: Record<string, string> = {};
+        let paramMatch: RegExpExecArray | null;
+
+        while ((paramMatch = paramRegex.exec(paramsBlock)) !== null) {
+          params[paramMatch[1]] = paramMatch[2];
+        }
+
+        toolCalls.push({
+          id: `xml_call_${index}`,
+          type: "function",
+          function: {
+            name: functionName,
+            arguments: JSON.stringify(params),
+          },
+        });
+        index++;
+      }
+
+      return toolCalls;
+    } catch {
+      return [];
+    }
   }
 
   /**
