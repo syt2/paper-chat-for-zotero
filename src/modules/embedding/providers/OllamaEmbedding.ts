@@ -7,6 +7,7 @@
 
 import type { EmbeddingProvider } from "../../../types/embedding";
 import { EMBEDDING_MODELS } from "../../../types/embedding";
+import { getErrorMessage } from "../../../utils/common";
 
 const MODEL_INFO = EMBEDDING_MODELS.ollama;
 
@@ -139,7 +140,7 @@ export class OllamaEmbedding implements EmbeddingProvider {
     } catch (error) {
       ztoolkit.log(
         "[OllamaEmbedding] testConnection failed:",
-        error instanceof Error ? error.message : String(error),
+        getErrorMessage(error),
       );
       return false;
     }

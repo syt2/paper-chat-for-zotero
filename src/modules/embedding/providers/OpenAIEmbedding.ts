@@ -6,6 +6,7 @@
 
 import type { EmbeddingProvider } from "../../../types/embedding";
 import { EMBEDDING_MODELS } from "../../../types/embedding";
+import { getErrorMessage } from "../../../utils/common";
 
 const MODEL_INFO = EMBEDDING_MODELS.openai;
 const BATCH_SIZE = 2048; // OpenAI supports up to 2048 texts per batch
@@ -93,7 +94,7 @@ export class OpenAIEmbedding implements EmbeddingProvider {
     } catch (error) {
       ztoolkit.log(
         "[OpenAIEmbedding] testConnection failed:",
-        error instanceof Error ? error.message : String(error),
+        getErrorMessage(error),
       );
       return false;
     }

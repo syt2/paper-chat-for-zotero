@@ -7,6 +7,7 @@
 
 import type { EmbeddingProvider } from "../../../types/embedding";
 import { EMBEDDING_MODELS } from "../../../types/embedding";
+import { getErrorMessage } from "../../../utils/common";
 
 const MODEL_INFO = EMBEDDING_MODELS.gemini;
 const BATCH_SIZE = 100; // Gemini supports up to 100 texts per batch
@@ -100,7 +101,7 @@ export class GeminiEmbedding implements EmbeddingProvider {
     } catch (error) {
       ztoolkit.log(
         "[GeminiEmbedding] testConnection failed:",
-        error instanceof Error ? error.message : String(error),
+        getErrorMessage(error),
       );
       return false;
     }

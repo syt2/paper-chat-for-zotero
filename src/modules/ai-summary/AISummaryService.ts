@@ -9,6 +9,7 @@
 
 import { getAISummaryManager } from "./AISummaryManager";
 import { getString } from "../../utils/locale";
+import { getErrorMessage, getItemTitle } from "../../utils/common";
 
 // 任务状态
 export type TaskStatus = "pending" | "running" | "completed" | "failed";
@@ -206,7 +207,7 @@ class AISummaryService {
       clearTimeout(this.pendingTimers.get(itemKey)!);
     }
 
-    const title = (item.getField?.("title") as string) || getString("untitled");
+    const title = getItemTitle(item);
     ztoolkit.log(`[AISummaryService] Scheduling AI Summary for "${title}" in ${this.delayMs / 1000}s`);
 
     // 只保存 itemKey 和 libraryID，在回调时重新获取 item
@@ -232,7 +233,7 @@ class AISummaryService {
     if (this.isDestroyed) return;
 
     const itemKey = item.key;
-    const title = (item.getField?.("title") as string) || getString("untitled");
+    const title = getItemTitle(item);
 
     // 检查是否已在队列中
     if (this.taskQueue.some((t) => t.itemKey === itemKey)) {
@@ -306,7 +307,7 @@ class AISummaryService {
       }
     } catch (error) {
       pendingTask.status = "failed";
-      pendingTask.error = error instanceof Error ? error.message : String(error);
+      pendingTask.error = getErrorMessage(error);
     }
 
     pendingTask.completedAt = Date.now();

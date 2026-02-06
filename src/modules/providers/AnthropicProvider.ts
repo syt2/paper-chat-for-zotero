@@ -3,6 +3,7 @@
  * Uses Anthropic Messages API format (different from OpenAI)
  */
 
+import { getErrorMessage } from "../../utils/common";
 import { BaseProvider } from "./BaseProvider";
 import type {
   ChatMessage,
@@ -127,7 +128,7 @@ export class AnthropicProvider extends BaseProvider {
     } catch (error) {
       ztoolkit.log(
         `[${this.getName()}] testConnection error:`,
-        error instanceof Error ? error.message : String(error),
+        getErrorMessage(error),
       );
       return false;
     }

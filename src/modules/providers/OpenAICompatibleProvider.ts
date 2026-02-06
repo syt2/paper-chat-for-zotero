@@ -2,6 +2,7 @@
  * OpenAICompatibleProvider - For OpenAI, DeepSeek, Mistral, Groq, OpenRouter, Custom
  */
 
+import { getErrorMessage } from "../../utils/common";
 import { BaseProvider } from "./BaseProvider";
 import type {
   ChatMessage,
@@ -116,7 +117,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
     } catch (error) {
       ztoolkit.log(
         `[${this.getName()}] testConnection error:`,
-        error instanceof Error ? error.message : String(error),
+        getErrorMessage(error),
       );
       return false;
     }
@@ -139,7 +140,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
     } catch (error) {
       ztoolkit.log(
         `[${this.getName()}] getAvailableModels error:`,
-        error instanceof Error ? error.message : String(error),
+        getErrorMessage(error),
       );
     }
     return this._config.availableModels || [];

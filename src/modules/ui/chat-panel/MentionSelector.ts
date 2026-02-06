@@ -7,6 +7,7 @@ import type { ThemeColors } from "./types";
 import { createElement } from "./ChatPanelBuilder";
 import { chatColors } from "../../../utils/colors";
 import { getString } from "../../../utils/locale";
+import { getItemTitle } from "../../../utils/common";
 
 // Resource types that can be mentioned
 export type MentionResourceType = "item" | "attachment" | "note";
@@ -141,7 +142,7 @@ export async function loadMentionResources(): Promise<MentionResource[]> {
         resources.push({
           type: "item",
           key: item.key,
-          title: (item.getField?.("title") as string) || getString("untitled"),
+          title: getItemTitle(item),
           icon: "📄",
         });
       }

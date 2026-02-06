@@ -13,6 +13,7 @@ import type {
 import { SECTION_ALIASES } from "./constants";
 import { parsePageRange } from "./paperParser";
 import { getRAGService } from "../../embedding";
+import { getErrorMessage } from "../../../utils/common";
 
 /**
  * 执行 get_paper_section
@@ -90,7 +91,7 @@ export async function executeSearchPaperContent(
     } catch (error) {
       ztoolkit.log(
         "[searchPaperContent] Semantic search failed, falling back to keyword search:",
-        error instanceof Error ? error.message : String(error),
+        getErrorMessage(error),
       );
     }
   }

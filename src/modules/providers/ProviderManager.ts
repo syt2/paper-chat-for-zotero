@@ -19,6 +19,7 @@ import { AnthropicProvider } from "./AnthropicProvider";
 import { GeminiProvider } from "./GeminiProvider";
 import { PaperChatProvider } from "./PaperChatProvider";
 import { config } from "../../../package.json";
+import { getErrorMessage } from "../../utils/common";
 
 /**
  * Built-in provider metadata with comprehensive model lists
@@ -953,7 +954,7 @@ export class ProviderManager {
    * Check if an error should trigger fallback to next provider
    */
   isRetryableError(error: unknown): boolean {
-    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorMessage = getErrorMessage(error);
     return RETRYABLE_ERROR_PATTERNS.some((pattern) => pattern.test(errorMessage));
   }
 

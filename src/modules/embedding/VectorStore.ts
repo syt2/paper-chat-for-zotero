@@ -13,6 +13,7 @@ import type {
   AccessRecord,
 } from "../../types/embedding";
 import { cosineSimilarity } from "./utils/cosine";
+import { getErrorMessage } from "../../utils/common";
 
 const DB_NAME = "pdf-ai-talk-rag";
 const DB_VERSION = 1;
@@ -196,7 +197,7 @@ export class VectorStore {
             // Skip entries with dimension mismatch (shouldn't happen if modelId is correct)
             ztoolkit.log(
               "[VectorStore] Similarity calculation error:",
-              error instanceof Error ? error.message : String(error),
+              getErrorMessage(error),
             );
           }
 

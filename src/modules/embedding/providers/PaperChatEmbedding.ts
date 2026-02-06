@@ -8,6 +8,7 @@
 import type { EmbeddingProvider, EmbeddingProviderType } from "../../../types/embedding";
 import { getAuthManager } from "../../auth";
 import { getPref } from "../../../utils/prefs";
+import { getErrorMessage } from "../../../utils/common";
 import { BUILTIN_PROVIDERS } from "../../providers/ProviderManager";
 
 // Preferred embedding models in priority order
@@ -174,7 +175,7 @@ export class PaperChatEmbedding implements EmbeddingProvider {
     } catch (error) {
       ztoolkit.log(
         "[PaperChatEmbedding] testConnection failed:",
-        error instanceof Error ? error.message : String(error),
+        getErrorMessage(error),
       );
       return false;
     }

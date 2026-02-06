@@ -10,6 +10,7 @@ import type {
   AISummaryTemplate,
 } from "../../types/ai-summary";
 import { DEFAULT_AISUMMARY_CONFIG } from "../../types/ai-summary";
+import { getDataPath } from "../../utils/common";
 
 export class AISummaryStorage {
   private storagePath: string = "";
@@ -21,8 +22,7 @@ export class AISummaryStorage {
   async init(): Promise<void> {
     if (this.initialized) return;
 
-    const dataDir = Zotero.DataDirectory.dir;
-    this.storagePath = PathUtils.join(dataDir, "paper-chat", "ai-summary");
+    this.storagePath = getDataPath("ai-summary");
 
     // 确保目录存在
     if (!(await IOUtils.exists(this.storagePath))) {

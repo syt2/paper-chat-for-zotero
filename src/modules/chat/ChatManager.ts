@@ -26,6 +26,7 @@ import { getProviderManager } from "../providers";
 import { getAuthManager } from "../auth";
 import { getString } from "../../utils/locale";
 import { getPref } from "../../utils/prefs";
+import { getErrorMessage, getItemTitleSmart, generateTimestampId } from "../../utils/common";
 import { checkAndMigrate } from "./migration/migrateV1Sessions";
 
 /**
@@ -57,30 +58,7 @@ function providerSupportsStreamingToolCalling(
     typeof provider.streamChatCompletionWithTools === "function"
   );
 }
-/**
- * 获取 item 的正确标题（处理附件情况）
- * 如果 item 是附件，返回父条目的标题
- */
-function getItemTitle(item: Zotero.Item): string {
-  // 如果是附件，尝试获取父条目的标题
-  if (item.isAttachment && item.isAttachment()) {
-    const parentID = item.parentItemID;
-    if (parentID) {
-      const parent = Zotero.Items.get(parentID);
-      if (parent) {
-        return (
-          (parent.getField("title") as string) ||
-          item.attachmentFilename ||
-          getString("untitled")
-        );
-      }
-    }
-    // 没有父条目，返回文件名
-    return item.attachmentFilename || getString("untitled");
-  }
-  // 普通条目，直接返回标题
-  return (item.getField("title") as string) || getString("untitled");
-}
+// 使用 common.ts 中的 getItemTitleSmart 获取 item 标题
 
 export class ChatManager {
   private sessionStorage: SessionStorageService;
@@ -387,7 +365,7 @@ export class ChatManager {
     const item = options.item;
     const hasCurrentItem = item !== null && item !== undefined && item.id !== 0;
     const itemKey = hasCurrentItem ? item!.key : null;
-    const itemTitle = hasCurrentItem ? getItemTitle(item!) : null;
+    const itemTitle = hasCurrentItem ? getItemTitleSmart(item!) : null;
 
     ztoolkit.log(
       "[ChatManager] sendMessage called, hasCurrentItem:",
@@ -666,7 +644,7 @@ export class ChatManager {
       const errorMessage: ChatMessage = {
         id: this.generateId(),
         role: "error",
-        content: error instanceof Error ? error.message : String(error),
+        content: getErrorMessage(error),
         timestamp: Date.now(),
       };
       this.currentSession!.messages.push(errorMessage);
@@ -705,7 +683,7 @@ export class ChatManager {
     const paperContextPrompt = pdfToolManager.generatePaperContextPrompt(
       paperStructure || undefined,
       hasCurrentItem ? item.key : undefined,
-      hasCurrentItem ? getItemTitle(item) : undefined,
+      hasCurrentItem ? getItemTitleSmart(item) : undefined,
       hasCurrentItem,
     );
 
@@ -775,7 +753,7 @@ export class ChatManager {
       const errorMessage: ChatMessage = {
         id: this.generateId(),
         role: "error",
-        content: error instanceof Error ? error.message : String(error),
+        content: getErrorMessage(error),
         timestamp: Date.now(),
       };
       this.currentSession!.messages.push(errorMessage);
@@ -1006,7 +984,7 @@ export class ChatManager {
                 paperStructure || undefined,
               );
             } catch (error) {
-              toolResult = `Error: Tool execution failed: ${error instanceof Error ? error.message : String(error)}`;
+              toolResult = `Error: Tool execution failed: ${getErrorMessage(error)}`;
               ztoolkit.log(`[Streaming Tool Calling] Tool ${toolName} threw error:`, error);
             }
 
@@ -1163,7 +1141,7 @@ export class ChatManager {
                 paperStructure || undefined,
               );
             } catch (error) {
-              toolResult = `Error: Tool execution failed: ${error instanceof Error ? error.message : String(error)}`;
+              toolResult = `Error: Tool execution failed: ${getErrorMessage(error)}`;
               ztoolkit.log(`[Tool Calling] Tool ${toolName} threw error:`, error);
             }
 
@@ -1283,7 +1261,7 @@ export class ChatManager {
    * 生成唯一ID
    */
   private generateId(): string {
-    return `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    return generateTimestampId();
   }
 
   /**

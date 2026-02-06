@@ -11,6 +11,7 @@
  */
 
 import type { ChatSession, SessionIndex, SessionMeta } from "../../types/chat";
+import { filterValidMessages, getDataPath, generateShortId } from "../../utils/common";
 
 // 最大 session 数量限制
 const MAX_SESSIONS = 1000;
@@ -27,9 +28,8 @@ export class SessionStorageService {
     if (this.initialized) return;
 
     try {
-      // 获取Zotero数据目录
-      const dataDir = Zotero.DataDirectory.dir;
-      this.storagePath = PathUtils.join(dataDir, "paper-chat", "sessions");
+      // 获取存储目录
+      this.storagePath = getDataPath("sessions");
 
       // 确保目录存在
       if (!(await IOUtils.exists(this.storagePath))) {
@@ -217,9 +217,7 @@ export class SessionStorageService {
    * 生成新的 session ID (timestamp-uuid 格式)
    */
   private generateSessionId(): string {
-    const timestamp = Date.now();
-    const uuid = Math.random().toString(36).substring(2, 8);
-    return `${timestamp}-${uuid}`;
+    return `${Date.now()}-${generateShortId()}`;
   }
 
   /**
@@ -286,20 +284,9 @@ export class SessionStorageService {
       if (await IOUtils.exists(filePath)) {
         const data = (await IOUtils.readJSON(filePath)) as ChatSession;
 
-        // 过滤掉空内容的消息（修复历史数据问题）
-        // 保留以下消息：
-        // - tool 消息：可能有空 content 但包含有效的工具结果
-        // - system 消息：系统提示
-        // - 带 tool_calls 的 assistant 消息：content 可能为空但有工具调用
-        // - 有实际内容的消息
+        // 过滤无效消息（修复历史数据问题）
         if (data.messages) {
-          data.messages = data.messages.filter(
-            (msg) =>
-              msg.role === "tool" ||
-              msg.role === "system" ||
-              (msg.tool_calls && msg.tool_calls.length > 0) ||
-              (msg.content && msg.content.trim() !== ""),
-          );
+          data.messages = filterValidMessages(data.messages);
         }
 
         ztoolkit.log("Session loaded:", sessionId);
@@ -451,8 +438,7 @@ export class SessionStorageService {
    * 检查是否有旧格式数据需要迁移
    */
   async hasLegacyData(): Promise<boolean> {
-    const dataDir = Zotero.DataDirectory.dir;
-    const legacyPath = PathUtils.join(dataDir, "paper-chat", "conversations");
+    const legacyPath = getDataPath("conversations");
     return IOUtils.exists(legacyPath);
   }
 
@@ -460,7 +446,6 @@ export class SessionStorageService {
    * 获取旧格式数据目录路径
    */
   getLegacyStoragePath(): string {
-    const dataDir = Zotero.DataDirectory.dir;
-    return PathUtils.join(dataDir, "paper-chat", "conversations");
+    return getDataPath("conversations");
   }
 }

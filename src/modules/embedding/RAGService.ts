@@ -13,6 +13,7 @@ import type {
   TextChunk,
 } from "../../types/embedding";
 import { getPref } from "../../utils/prefs";
+import { getErrorMessage } from "../../utils/common";
 import {
   getEmbeddingProviderFactory,
   EmbeddingProviderFactory,
@@ -171,7 +172,7 @@ export class RAGService {
     } catch (error) {
       ztoolkit.log(
         `[RAGService] Failed to index item ${itemKey}:`,
-        error instanceof Error ? error.message : String(error),
+        getErrorMessage(error),
       );
       throw error;
     } finally {
@@ -319,7 +320,7 @@ export class RAGService {
     } catch (error) {
       ztoolkit.log(
         "[RAGService] Search failed:",
-        error instanceof Error ? error.message : String(error),
+        getErrorMessage(error),
       );
       return [];
     }
@@ -368,7 +369,7 @@ export class RAGService {
     } catch (error) {
       ztoolkit.log(
         "[RAGService] Cross-paper search failed:",
-        error instanceof Error ? error.message : String(error),
+        getErrorMessage(error),
       );
       return [];
     }

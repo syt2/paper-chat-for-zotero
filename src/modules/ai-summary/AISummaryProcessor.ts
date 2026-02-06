@@ -9,6 +9,7 @@ import type {
 } from "../../types/ai-summary";
 import { getProviderManager } from "../providers";
 import { getString } from "../../utils/locale";
+import { getErrorMessage, getItemTitle } from "../../utils/common";
 
 export class AISummaryProcessor {
 
@@ -23,7 +24,7 @@ export class AISummaryProcessor {
   ): Promise<AISummaryProcessResult> {
     const startTime = Date.now();
     const itemKey = item.key;
-    const itemTitle = (item.getField?.("title") as string) || getString("untitled");
+    const itemTitle = getItemTitle(item);
 
     try {
       // 检查是否已取消
@@ -90,7 +91,7 @@ export class AISummaryProcessor {
       };
     } catch (error) {
       const errorMessage =
-        error instanceof Error ? error.message : String(error);
+        getErrorMessage(error);
       ztoolkit.log(`[AISummary] Error processing ${itemTitle}:`, errorMessage);
 
       return {
@@ -358,10 +359,7 @@ export class AISummaryProcessor {
 
     // 构建笔记标题
     let noteTitle = template.noteTitle;
-    noteTitle = noteTitle.replace(
-      /{{title}}/g,
-      (item.getField?.("title") as string) || getString("untitled"),
-    );
+    noteTitle = noteTitle.replace(/{{title}}/g, getItemTitle(item));
 
     // 构建笔记内容（HTML 格式）
     const htmlContent = this.formatContentAsHtml(noteTitle, content);

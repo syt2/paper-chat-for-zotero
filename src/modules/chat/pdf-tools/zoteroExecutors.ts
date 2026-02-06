@@ -9,6 +9,7 @@ import type {
   GetNoteContentArgs,
 } from "../../../types/tool";
 import { getString } from "../../../utils/locale";
+import { getErrorMessage } from "../../../utils/common";
 
 /**
  * 根据 itemKey 获取 Zotero Item
@@ -258,7 +259,7 @@ export function executeGetItemNotes(
   try {
     noteIDs = item.getNotes();
   } catch (error) {
-    return `Error: Cannot get notes for item "${targetItemKey}": ${error instanceof Error ? error.message : String(error)}`;
+    return `Error: Cannot get notes for item "${targetItemKey}": ${getErrorMessage(error)}`;
   }
   if (noteIDs.length === 0) {
     return `No notes found for item "${targetItemKey}".`;

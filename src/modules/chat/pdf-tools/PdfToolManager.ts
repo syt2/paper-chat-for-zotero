@@ -82,6 +82,7 @@ import {
   executeBatchUpdateTags,
 } from "./libraryExecutors";
 import { getPref } from "../../../utils/prefs";
+import { getErrorMessage } from "../../../utils/common";
 
 // 缓存条目类型
 interface CacheEntry {
@@ -212,7 +213,7 @@ export class PdfToolManager {
       } catch (error) {
         ztoolkit.log(
           `[PdfToolManager] Error getting attachments for ${itemKey}:`,
-          error instanceof Error ? error.message : String(error),
+          getErrorMessage(error),
         );
       }
     }

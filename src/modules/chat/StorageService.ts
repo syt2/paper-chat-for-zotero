@@ -8,6 +8,7 @@
  */
 
 import type { LegacyChatSession, StoredSessionMeta } from "../../types/chat";
+import { filterValidMessages, getDataPath } from "../../utils/common";
 
 // 使用旧版类型
 type ChatSession = LegacyChatSession;
@@ -29,9 +30,8 @@ export class StorageService {
     if (this.initialized) return;
 
     try {
-      // 获取Zotero数据目录
-      const dataDir = Zotero.DataDirectory.dir;
-      this.storagePath = PathUtils.join(dataDir, "paper-chat", "conversations");
+      // 获取存储目录
+      this.storagePath = getDataPath("conversations");
 
       // 确保目录存在
       if (!(await IOUtils.exists(this.storagePath))) {
@@ -246,20 +246,9 @@ export class StorageService {
       if (await IOUtils.exists(filePath)) {
         const data = (await IOUtils.readJSON(filePath)) as ChatSession;
 
-        // 过滤掉空内容的消息（修复历史数据问题）
-        // 保留以下消息：
-        // - tool 消息：可能有空 content 但包含有效的工具结果
-        // - system 消息：系统提示
-        // - 带 tool_calls 的 assistant 消息：content 可能为空但有工具调用
-        // - 有实际内容的消息
+        // 过滤无效消息（修复历史数据问题）
         if (data.messages) {
-          data.messages = data.messages.filter(
-            (msg) =>
-              msg.role === "tool" ||
-              msg.role === "system" ||
-              (msg.tool_calls && msg.tool_calls.length > 0) ||
-              (msg.content && msg.content.trim() !== ""),
-          );
+          data.messages = filterValidMessages(data.messages);
         }
 
         ztoolkit.log("Session loaded:", itemId);

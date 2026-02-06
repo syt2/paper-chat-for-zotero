@@ -2,6 +2,7 @@
  * GeminiProvider - Google AI Gemini API implementation
  */
 
+import { getErrorMessage } from "../../utils/common";
 import { BaseProvider } from "./BaseProvider";
 import type { ChatMessage, StreamCallbacks } from "../../types/chat";
 import type { PdfAttachment } from "../../types/provider";
@@ -109,7 +110,7 @@ export class GeminiProvider extends BaseProvider {
     } catch (error) {
       ztoolkit.log(
         `[${this.getName()}] testConnection error:`,
-        error instanceof Error ? error.message : String(error),
+        getErrorMessage(error),
       );
       return false;
     }
@@ -143,7 +144,7 @@ export class GeminiProvider extends BaseProvider {
     } catch (error) {
       ztoolkit.log(
         `[${this.getName()}] getAvailableModels error:`,
-        error instanceof Error ? error.message : String(error),
+        getErrorMessage(error),
       );
     }
     return this._config.availableModels || [];

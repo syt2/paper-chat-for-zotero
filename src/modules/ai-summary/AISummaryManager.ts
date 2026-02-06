@@ -16,6 +16,7 @@ import { AISummaryProcessor } from "./AISummaryProcessor";
 import { AISummaryStorage } from "./AISummaryStorage";
 import { getTemplateById } from "./defaultTemplates";
 import { getString } from "../../utils/locale";
+import { getItemTitle } from "../../utils/common";
 
 export class AISummaryManager {
   private config: AISummaryConfig = { ...DEFAULT_AISUMMARY_CONFIG };
@@ -328,8 +329,7 @@ export class AISummaryManager {
 
       // 更新进度
       this.progress.currentItemKey = itemKey;
-      this.progress.currentItemTitle =
-        (item.getField?.("title") as string) || getString("untitled");
+      this.progress.currentItemTitle = getItemTitle(item);
       this.onProgressUpdate?.(this.progress);
 
       // 处理条目

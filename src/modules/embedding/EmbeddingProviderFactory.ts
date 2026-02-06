@@ -16,6 +16,7 @@ import { getAuthManager } from "../auth";
 import { GeminiEmbedding } from "./providers/GeminiEmbedding";
 import { OpenAIEmbedding } from "./providers/OpenAIEmbedding";
 import { OllamaEmbedding } from "./providers/OllamaEmbedding";
+import { getErrorMessage } from "../../utils/common";
 import {
   PaperChatEmbedding,
   getAvailableEmbeddingModels,
@@ -167,7 +168,7 @@ export class EmbeddingProviderFactory {
         } catch (error) {
           ztoolkit.log(
             "[EmbeddingProviderFactory] PaperChat embedding failed:",
-            error instanceof Error ? error.message : String(error),
+            getErrorMessage(error),
           );
         }
         return null;

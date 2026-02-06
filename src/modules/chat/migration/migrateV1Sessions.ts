@@ -11,6 +11,7 @@ import type {
   SessionIndex,
   SessionMeta,
 } from "../../../types/chat";
+import { getDataPath, generateShortId } from "../../../utils/common";
 
 // 迁移标记文件名
 const MIGRATION_MARKER = ".v2-migrated";
@@ -19,9 +20,8 @@ const MIGRATION_MARKER = ".v2-migrated";
  * 检测是否需要迁移
  */
 export async function needsMigration(): Promise<boolean> {
-  const dataDir = Zotero.DataDirectory.dir;
-  const legacyPath = PathUtils.join(dataDir, "paper-chat", "conversations");
-  const newPath = PathUtils.join(dataDir, "paper-chat", "sessions");
+  const legacyPath = getDataPath("conversations");
+  const newPath = getDataPath("sessions");
   const markerPath = PathUtils.join(newPath, MIGRATION_MARKER);
 
   // 如果已经有迁移标记，不需要迁移
@@ -45,9 +45,7 @@ export async function needsMigration(): Promise<boolean> {
  * 生成新的 session ID
  */
 function generateSessionId(): string {
-  const timestamp = Date.now();
-  const uuid = Math.random().toString(36).substring(2, 8);
-  return `${timestamp}-${uuid}`;
+  return `${Date.now()}-${generateShortId()}`;
 }
 
 /**
@@ -124,9 +122,8 @@ export async function migrate(): Promise<{
   migratedCount: number;
   errorCount: number;
 }> {
-  const dataDir = Zotero.DataDirectory.dir;
-  const legacyPath = PathUtils.join(dataDir, "paper-chat", "conversations");
-  const newPath = PathUtils.join(dataDir, "paper-chat", "sessions");
+  const legacyPath = getDataPath("conversations");
+  const newPath = getDataPath("sessions");
 
   let migratedCount = 0;
   let errorCount = 0;

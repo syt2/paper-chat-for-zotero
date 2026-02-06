@@ -25,6 +25,7 @@ import type {
   BatchUpdateTagsArgs,
 } from "../../../types/tool";
 import { getString } from "../../../utils/locale";
+import { getErrorMessage, getItemTitleSmart } from "../../../utils/common";
 
 /**
  * 根据 itemKey 获取 Zotero Item
@@ -35,26 +36,7 @@ function getItemByKey(itemKey: string): Zotero.Item | null {
   return item || null;
 }
 
-/**
- * 获取 item 的正确标题（处理附件情况）
- */
-function getItemTitle(item: Zotero.Item): string {
-  if (item.isAttachment && item.isAttachment()) {
-    const parentID = item.parentItemID;
-    if (parentID) {
-      const parent = Zotero.Items.get(parentID);
-      if (parent) {
-        return (
-          (parent.getField("title") as string) ||
-          item.attachmentFilename ||
-          getString("untitled")
-        );
-      }
-    }
-    return item.attachmentFilename || getString("untitled");
-  }
-  return (item.getField("title") as string) || getString("untitled");
-}
+// 使用 common.ts 中的 getItemTitleSmart 获取 item 标题
 
 /**
  * 清理 HTML 标签，获取纯文本
@@ -148,7 +130,7 @@ export async function executeGetAnnotations(
   try {
     attachmentIDs = item.getAttachments ? item.getAttachments() : [];
   } catch (error) {
-    return `Error: Cannot get attachments for item "${targetItemKey}": ${error instanceof Error ? error.message : String(error)}`;
+    return `Error: Cannot get attachments for item "${targetItemKey}": ${getErrorMessage(error)}`;
   }
   const annotations: Array<{
     key: string;
@@ -233,11 +215,11 @@ export async function executeGetAnnotations(
     if (annotationType !== "all") filters.push(`type: ${annotationType}`);
     if (selectedOnly) filters.push("selected only");
     const filterStr = filters.length > 0 ? ` (${filters.join(", ")})` : "";
-    return `No annotations found for item "${getItemTitle(item)}"${filterStr}.`;
+    return `No annotations found for item "${getItemTitleSmart(item)}"${filterStr}.`;
   }
 
   // 格式化输出
-  const title = getItemTitle(item);
+  const title = getItemTitleSmart(item);
   const filters: string[] = [];
   if (annotationType !== "all") filters.push(`type: ${annotationType}`);
   if (selectedOnly) filters.push("selected only");
@@ -358,7 +340,7 @@ export async function executeSearchItems(
   // 格式化结果
   const results = items.map((item: Zotero.Item, index: number) => {
     const itemKey = item.key;
-    const title = getItemTitle(item);
+    const title = getItemTitleSmart(item);
     const year = item.getField("year") || "";
     const creators = item.getCreators();
     const firstAuthor =
@@ -467,7 +449,7 @@ export async function executeGetCollectionItems(
   // 格式化结果
   const results = limitedItems.map((item: Zotero.Item, index: number) => {
     const itemKey = item.key;
-    const title = getItemTitle(item);
+    const title = getItemTitleSmart(item);
     const year = item.getField("year") || "";
     const type = item.itemType;
 
@@ -558,7 +540,7 @@ export async function executeSearchByTag(
   // 格式化结果
   const results = items.map((item: Zotero.Item, index: number) => {
     const itemKey = item.key;
-    const title = getItemTitle(item);
+    const title = getItemTitleSmart(item);
     const year = item.getField("year") || "";
     const itemTags = item
       .getTags()
@@ -621,7 +603,7 @@ export async function executeGetRecent(args: GetRecentArgs): Promise<string> {
   // 格式化结果
   const results = sortedItems.map((item: Zotero.Item, index: number) => {
     const itemKey = item.key;
-    const title = getItemTitle(item);
+    const title = getItemTitleSmart(item);
     const year = item.getField("year") || "";
     const type = item.itemType;
     const dateAdded = item.dateAdded
@@ -695,7 +677,7 @@ export async function executeSearchNotes(
     if (parentID) {
       const parentItem = Zotero.Items.get(parentID);
       if (parentItem) {
-        parentInfo = ` (from: ${getItemTitle(parentItem)})`;
+        parentInfo = ` (from: ${getItemTitleSmart(parentItem)})`;
       }
     }
 

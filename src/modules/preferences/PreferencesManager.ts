@@ -23,6 +23,7 @@ import { getString } from "../../utils/locale";
 import { getAISummaryManager } from "../ai-summary";
 import { DEFAULT_TEMPLATES } from "../ai-summary/defaultTemplates";
 import { getEmbeddingProviderFactory } from "../embedding";
+import { getErrorMessage } from "../../utils/common";
 
 // Current selected provider ID
 let currentProviderId: string = "paperchat";
@@ -354,7 +355,7 @@ function bindAISummarySettingsEvents(doc: Document): void {
         ) as HTMLElement | null;
         if (statusLabel) {
           statusLabel.textContent = getString("aisummary-progress-error", {
-            args: { error: error instanceof Error ? error.message : String(error) },
+            args: { error: getErrorMessage(error) },
           });
           statusLabel.style.color = "#c00";
         }
@@ -402,7 +403,7 @@ async function updateSemanticSearchStatus(doc: Document): Promise<void> {
     statusLabel.style.color = status.available ? "#008000" : "#c00";
   } catch (error) {
     statusLabel.textContent = getString("aisummary-progress-error", {
-      args: { error: error instanceof Error ? error.message : String(error) },
+      args: { error: getErrorMessage(error) },
     });
     statusLabel.style.color = "#c00";
   }
