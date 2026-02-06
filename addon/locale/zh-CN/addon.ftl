@@ -131,6 +131,20 @@ paperchat-aisummary-progress-paused = 已暂停 ({ $processed }/{ $total })
 paperchat-aisummary-progress-completed = 完成: { $success } 成功, { $failed } 失败
 paperchat-aisummary-progress-error = 错误: { $error }
 
+# AI Summary Templates
+paperchat-aisummary-template-summary-name = 简要摘要
+paperchat-aisummary-template-summary-prefix = AI 摘要
+paperchat-aisummary-template-findings-name = 核心发现
+paperchat-aisummary-template-findings-prefix = 核心发现
+paperchat-aisummary-template-methodology-name = 方法分析
+paperchat-aisummary-template-methodology-prefix = 方法分析
+paperchat-aisummary-template-literature-name = 文献笔记
+paperchat-aisummary-template-literature-prefix = 文献笔记
+
+# AI Summary Menu
+paperchat-aisummary-menu-generate = 生成 AI 摘要
+paperchat-aisummary-menu-tasks = AI 摘要任务
+
 # Common
 paperchat-unknown = 未知
 

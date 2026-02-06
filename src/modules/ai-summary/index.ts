@@ -5,7 +5,7 @@
 export { AISummaryManager, getAISummaryManager, initAISummary } from "./AISummaryManager";
 export { AISummaryProcessor } from "./AISummaryProcessor";
 export { AISummaryStorage } from "./AISummaryStorage";
-export { DEFAULT_TEMPLATES, getTemplateById, getAllTemplates } from "./defaultTemplates";
+export { getTemplateById, getAllTemplates } from "./defaultTemplates";
 export {
   getAISummaryService,
   initAISummaryService,

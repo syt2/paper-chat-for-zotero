@@ -82,6 +82,9 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
 
   // Register toolbar button for chat panel
   registerToolbarButton();
+
+  // Register AISummary menus (must be after createZToolkit)
+  getAISummaryService().registerMenus();
 }
 
 async function onMainWindowUnload(_win: Window): Promise<void> {
@@ -91,6 +94,7 @@ async function onMainWindowUnload(_win: Window): Promise<void> {
 
 function onShutdown(): void {
   ztoolkit.unregisterAll();
+  getAISummaryService().unregisterMenus();
   unregisterChatPanel();
   destroyProviderManager();
   destroyAuthManager();

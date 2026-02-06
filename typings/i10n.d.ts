@@ -3,6 +3,8 @@
 /* eslint-disable */
 // @ts-nocheck
 export type FluentMessageId =
+  | 'paperchat-aisummary-menu-generate'
+  | 'paperchat-aisummary-menu-tasks'
   | 'paperchat-aisummary-no-history'
   | 'paperchat-aisummary-no-tasks'
   | 'paperchat-aisummary-progress-completed'
@@ -15,6 +17,14 @@ export type FluentMessageId =
   | 'paperchat-aisummary-status-failed'
   | 'paperchat-aisummary-status-pending'
   | 'paperchat-aisummary-status-running'
+  | 'paperchat-aisummary-template-findings-name'
+  | 'paperchat-aisummary-template-findings-prefix'
+  | 'paperchat-aisummary-template-literature-name'
+  | 'paperchat-aisummary-template-literature-prefix'
+  | 'paperchat-aisummary-template-methodology-name'
+  | 'paperchat-aisummary-template-methodology-prefix'
+  | 'paperchat-aisummary-template-summary-name'
+  | 'paperchat-aisummary-template-summary-prefix'
   | 'paperchat-aisummary-window-title'
   | 'paperchat-api-error-2fa-not-supported'
   | 'paperchat-api-error-create-token-failed'

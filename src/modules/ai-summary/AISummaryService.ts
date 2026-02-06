@@ -50,15 +50,87 @@ class AISummaryService {
   private initialized: boolean = false;
 
   /**
-   * 初始化服务
+   * 初始化服务（notifier + Reader 菜单，在 onStartup 中调用）
    */
   init(): void {
     if (this.initialized) return;
     this.initialized = true;
-    this.isDestroyed = false; // 重置销毁标志（以防重新初始化）
+    this.isDestroyed = false;
     this.registerItemNotifier();
-    this.registerContextMenu();
+    this.registerReaderContextMenu();
     ztoolkit.log("[AISummaryService] Initialized");
+  }
+
+  /**
+   * 注册 ztoolkit 菜单（在 onMainWindowLoad 中调用，确保 ztoolkit 实例已就绪）
+   */
+  registerMenus(): void {
+    // 条目列表右键菜单
+    ztoolkit.Menu.register("item", {
+      tag: "menuitem",
+      id: "paperchat-aisummary-menuitem",
+      label: getString("aisummary-menu-generate"),
+      icon: `chrome://${addon.data.config.addonRef}/content/icons/favicon.svg`,
+      commandListener: (_event) => {
+        const pane = Zotero.getActiveZoteroPane();
+        const selectedItems = pane?.getSelectedItems() as Zotero.Item[] | undefined;
+        if (selectedItems && selectedItems.length > 0) {
+          const processedKeys = new Set<string>();
+          for (const item of selectedItems) {
+            if (item.isNote?.()) continue;
+            if (item.isPDFAttachment?.()) {
+              const parentID = item.parentItemID;
+              if (parentID) {
+                const parent = Zotero.Items.get(parentID);
+                if (parent && !parent.isNote?.() && !processedKeys.has(parent.key)) {
+                  processedKeys.add(parent.key);
+                  this.addItemToQueue(parent);
+                }
+              }
+              continue;
+            }
+            if (item.isAttachment?.()) continue;
+            if (!processedKeys.has(item.key)) {
+              processedKeys.add(item.key);
+              this.addItemToQueue(item);
+            }
+          }
+          this.onOpenTaskWindow?.();
+        }
+      },
+      getVisibility: (_elem, _ev) => {
+        const pane = Zotero.getActiveZoteroPane();
+        const selectedItems = pane?.getSelectedItems() as Zotero.Item[] | undefined;
+        if (!selectedItems || selectedItems.length === 0) return false;
+        return selectedItems.some((item: Zotero.Item) => {
+          if (item.isNote?.()) return false;
+          if (item.isPDFAttachment?.()) return !!item.parentItemID;
+          if (item.isAttachment?.()) return false;
+          return true;
+        });
+      },
+    });
+
+    // 工具菜单
+    ztoolkit.Menu.register("menuTools", {
+      tag: "menuitem",
+      id: "paperchat-aisummary-tasks-menuitem",
+      label: getString("aisummary-menu-tasks"),
+      icon: `chrome://${addon.data.config.addonRef}/content/icons/favicon.svg`,
+      commandListener: () => {
+        this.onOpenTaskWindow?.();
+      },
+    });
+
+    ztoolkit.log("[AISummaryService] Menus registered");
+  }
+
+  /**
+   * 取消注册 ztoolkit 菜单
+   */
+  unregisterMenus(): void {
+    ztoolkit.Menu.unregister("paperchat-aisummary-menuitem");
+    ztoolkit.Menu.unregister("paperchat-aisummary-tasks-menuitem");
   }
 
   /**
@@ -373,89 +445,7 @@ class AISummaryService {
   }
 
   /**
-   * 注册右键菜单
-   */
-  private registerContextMenu(): void {
-    // 生成 AI 摘要菜单项（条目列表右键菜单）
-    ztoolkit.Menu.register("item", {
-      tag: "menuitem",
-      id: "paperchat-aisummary-menuitem",
-      label: "Generate AI Summary",
-      icon: `chrome://${addon.data.config.addonRef}/content/icons/favicon.svg`,
-      commandListener: (_event) => {
-        const pane = Zotero.getActiveZoteroPane();
-        const selectedItems = pane?.getSelectedItems() as Zotero.Item[] | undefined;
-        if (selectedItems && selectedItems.length > 0) {
-          const processedKeys = new Set<string>();
-          for (const item of selectedItems) {
-            // 跳过笔记
-            if (item.isNote?.()) continue;
-
-            // 如果是 PDF 附件，获取其父条目
-            if (item.isPDFAttachment?.()) {
-              const parentID = item.parentItemID;
-              if (parentID) {
-                const parent = Zotero.Items.get(parentID);
-                if (parent && !parent.isNote?.() && !processedKeys.has(parent.key)) {
-                  processedKeys.add(parent.key);
-                  this.addItemToQueue(parent);
-                }
-              }
-              continue;
-            }
-
-            // 跳过非 PDF 附件
-            if (item.isAttachment?.()) continue;
-
-            // 普通条目
-            if (!processedKeys.has(item.key)) {
-              processedKeys.add(item.key);
-              this.addItemToQueue(item);
-            }
-          }
-          // 打开任务窗口
-          this.onOpenTaskWindow?.();
-        }
-      },
-      getVisibility: (_elem, _ev) => {
-        const pane = Zotero.getActiveZoteroPane();
-        const selectedItems = pane?.getSelectedItems() as Zotero.Item[] | undefined;
-        if (!selectedItems || selectedItems.length === 0) return false;
-        // 至少有一个：非附件非笔记的条目，或者是有父条目的 PDF 附件
-        return selectedItems.some((item: Zotero.Item) => {
-          // 跳过笔记
-          if (item.isNote?.()) return false;
-          // PDF 附件：检查是否有父条目
-          if (item.isPDFAttachment?.()) {
-            return !!item.parentItemID;
-          }
-          // 非 PDF 附件：跳过
-          if (item.isAttachment?.()) return false;
-          // 普通条目：显示
-          return true;
-        });
-      },
-    });
-
-    // 工具菜单 - 查看任务列表
-    ztoolkit.Menu.register("menuTools", {
-      tag: "menuitem",
-      id: "paperchat-aisummary-tasks-menuitem",
-      label: "AI Summary Tasks",
-      icon: `chrome://${addon.data.config.addonRef}/content/icons/favicon.svg`,
-      commandListener: () => {
-        this.onOpenTaskWindow?.();
-      },
-    });
-
-    // PDF 阅读器右键菜单
-    this.registerReaderContextMenu();
-
-    ztoolkit.log("[AISummaryService] Context menu registered");
-  }
-
-  /**
-   * 注册 PDF 阅读器右键菜单
+   * 注册 PDF 阅读器右键菜单（通过 Zotero.Reader API，不依赖 ztoolkit）
    */
   private registerReaderContextMenu(): void {
     // 检查 Zotero.Reader API 是否可用
@@ -478,7 +468,7 @@ class AISummaryService {
         if (!parentItem) return;
 
         append({
-          label: "Generate AI Summary",
+          label: getString("aisummary-menu-generate"),
           onCommand: () => {
             this.addItemToQueue(parentItem);
             this.onOpenTaskWindow?.();
@@ -502,7 +492,7 @@ class AISummaryService {
         if (!parentItem) return;
 
         append({
-          label: "Generate AI Summary",
+          label: getString("aisummary-menu-generate"),
           onCommand: () => {
             this.addItemToQueue(parentItem);
             this.onOpenTaskWindow?.();

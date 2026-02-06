@@ -131,6 +131,20 @@ paperchat-aisummary-progress-paused = Paused ({ $processed }/{ $total })
 paperchat-aisummary-progress-completed = Completed: { $success } success, { $failed } failed
 paperchat-aisummary-progress-error = Error: { $error }
 
+# AI Summary Templates
+paperchat-aisummary-template-summary-name = Brief Summary
+paperchat-aisummary-template-summary-prefix = AI Summary
+paperchat-aisummary-template-findings-name = Key Findings
+paperchat-aisummary-template-findings-prefix = Key Findings
+paperchat-aisummary-template-methodology-name = Methodology Analysis
+paperchat-aisummary-template-methodology-prefix = Methodology
+paperchat-aisummary-template-literature-name = Literature Note
+paperchat-aisummary-template-literature-prefix = Literature Note
+
+# AI Summary Menu
+paperchat-aisummary-menu-generate = Generate AI Summary
+paperchat-aisummary-menu-tasks = AI Summary Tasks
+
 # Common
 paperchat-unknown = Unknown
 

@@ -21,7 +21,7 @@ import {
 import { getPref, setPref } from "../../utils/prefs";
 import { getString } from "../../utils/locale";
 import { getAISummaryManager } from "../ai-summary";
-import { DEFAULT_TEMPLATES } from "../ai-summary/defaultTemplates";
+import { getAllTemplates } from "../ai-summary/defaultTemplates";
 import { getEmbeddingProviderFactory } from "../embedding";
 import { getErrorMessage } from "../../utils/common";
 
@@ -235,7 +235,8 @@ function populateAISummaryTemplates(
   }
 
   // Add templates
-  for (const template of DEFAULT_TEMPLATES) {
+  const templates = getAllTemplates();
+  for (const template of templates) {
     const menuitem = doc.createXULElement("menuitem");
     menuitem.setAttribute("label", template.name);
     menuitem.setAttribute("value", template.id);
@@ -245,8 +246,8 @@ function populateAISummaryTemplates(
   // Set selected value
   if (selectedTemplateId) {
     templateSelect.value = selectedTemplateId;
-  } else if (DEFAULT_TEMPLATES.length > 0) {
-    templateSelect.value = DEFAULT_TEMPLATES[0].id;
+  } else if (templates.length > 0) {
+    templateSelect.value = templates[0].id;
   }
 }
 
