@@ -602,10 +602,10 @@ export class MentionSelector {
    */
   selectCurrent(): void {
     const resource = this.state.filteredResources[this.state.selectedIndex];
+    this.hide();
     if (resource) {
       this.onSelect(resource);
     }
-    this.hide();
   }
 
   /**
@@ -640,8 +640,8 @@ export class MentionSelector {
       this.state.selectedIndex,
       getCurrentTheme(),
       (resource) => {
-        this.onSelect(resource);
         this.hide();
+        this.onSelect(resource);
       },
     );
   }
