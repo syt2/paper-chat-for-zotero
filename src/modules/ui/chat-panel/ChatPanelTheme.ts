@@ -217,27 +217,56 @@ export function applyThemeToContainer(container: HTMLElement): void {
 
 /**
  * Setup theme change listener
+ * Uses both matchMedia and MutationObserver for reliable theme detection
  * @returns cleanup function to remove the listener
  */
 export function setupThemeListener(onThemeChange: () => void): () => void {
   const win = Zotero.getMainWindow();
-  if (!win?.matchMedia) {
+  if (!win) {
     return () => {};
   }
 
-  const mediaQuery = win.matchMedia("(prefers-color-scheme: dark)");
-  if (!mediaQuery) {
-    return () => {};
-  }
+  const cleanups: (() => void)[] = [];
 
-  const handler = () => {
-    updateCurrentTheme();
-    onThemeChange();
+  // 追踪最后一次主题状态，用于防止重复触发
+  let lastThemeState = isDarkMode();
+
+  // 统一的主题变化处理函数，带防重复检查
+  const handleThemeChange = () => {
+    const newThemeState = isDarkMode();
+    if (newThemeState !== lastThemeState) {
+      lastThemeState = newThemeState;
+      updateCurrentTheme();
+      onThemeChange();
+    }
   };
 
-  mediaQuery.addEventListener("change", handler);
+  // 1. 监听系统主题变化 (prefers-color-scheme)
+  if (win.matchMedia) {
+    const mediaQuery = win.matchMedia("(prefers-color-scheme: dark)");
+    if (mediaQuery) {
+      mediaQuery.addEventListener("change", handleThemeChange);
+      cleanups.push(() => mediaQuery.removeEventListener("change", handleThemeChange));
+    }
+  }
 
+  // 2. 使用 MutationObserver 监听 documentElement 的类名/属性变化
+  // Zotero/Firefox 可能通过修改 document 的 class 或 data 属性来切换主题
+  const MutationObserverClass = (win as unknown as { MutationObserver?: typeof MutationObserver }).MutationObserver;
+  if (MutationObserverClass) {
+    const observer = new MutationObserverClass(handleThemeChange);
+
+    // 监听 html 元素的属性变化（class, data-* 等）
+    observer.observe(win.document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class", "data-theme", "data-color-scheme"],
+    });
+
+    cleanups.push(() => observer.disconnect());
+  }
+
+  // 返回统一的清理函数
   return () => {
-    mediaQuery.removeEventListener("change", handler);
+    cleanups.forEach((cleanup) => cleanup());
   };
 }

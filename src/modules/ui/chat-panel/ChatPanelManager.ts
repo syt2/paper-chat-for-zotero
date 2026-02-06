@@ -572,8 +572,9 @@ function showSidebarPanel(): void {
       }
     });
 
-    // 延迟重新检测主题，因为启动时窗口可能还没完全应用暗黑模式
-    // 使用多次检测确保主题正确应用
+    // 启动时延迟检测主题，因为窗口可能还没完全应用暗黑模式
+    // 使用 requestAnimationFrame + setTimeout 确保在 DOM 完全渲染后检测
+    // MutationObserver 会处理后续的动态变化
     const reapplyTheme = () => {
       updateCurrentTheme();
       if (chatContainer) {
@@ -583,10 +584,10 @@ function showSidebarPanel(): void {
         applyThemeToContainer(floatingContainer);
       }
     };
-    // 多次延迟检测，确保在窗口完全加载后正确应用主题
-    setTimeout(reapplyTheme, 0);
+    // 立即检测一次
+    win.requestAnimationFrame(reapplyTheme);
+    // 延迟 100ms 再检测一次，确保暗黑模式已应用
     setTimeout(reapplyTheme, 100);
-    setTimeout(reapplyTheme, 500);
   }
 
   // Add sidebar observer

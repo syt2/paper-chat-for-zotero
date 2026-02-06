@@ -287,9 +287,18 @@ export class SessionStorageService {
         const data = (await IOUtils.readJSON(filePath)) as ChatSession;
 
         // 过滤掉空内容的消息（修复历史数据问题）
+        // 保留以下消息：
+        // - tool 消息：可能有空 content 但包含有效的工具结果
+        // - system 消息：系统提示
+        // - 带 tool_calls 的 assistant 消息：content 可能为空但有工具调用
+        // - 有实际内容的消息
         if (data.messages) {
           data.messages = data.messages.filter(
-            (msg) => msg.content && msg.content.trim() !== "",
+            (msg) =>
+              msg.role === "tool" ||
+              msg.role === "system" ||
+              (msg.tool_calls && msg.tool_calls.length > 0) ||
+              (msg.content && msg.content.trim() !== ""),
           );
         }
 
