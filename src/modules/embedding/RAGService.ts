@@ -258,22 +258,34 @@ export class RAGService {
   }
 
   /**
-   * Check if an error is a quota exceeded error
+   * Check if an error is a storage quota/disk full error
+   * Supports both IndexedDB and SQLite error formats
    */
   private isQuotaError(error: unknown): boolean {
     if (error instanceof Error) {
-      // IndexedDB quota error detection
-      // - Standard: error.name === "QuotaExceededError"
-      // - Firefox/Gecko: may use different naming
       const name = error.name.toLowerCase();
       const message = error.message.toLowerCase();
 
-      return (
+      // IndexedDB quota error detection
+      if (
         name === "quotaexceedederror" ||
         name.includes("quota") ||
         message.includes("quota exceeded") ||
         message.includes("storage quota")
-      );
+      ) {
+        return true;
+      }
+
+      // SQLite disk full error detection
+      // SQLITE_FULL error code: database or disk is full
+      if (
+        message.includes("sqlite_full") ||
+        message.includes("disk is full") ||
+        message.includes("database is full") ||
+        message.includes("no space left")
+      ) {
+        return true;
+      }
     }
     return false;
   }
