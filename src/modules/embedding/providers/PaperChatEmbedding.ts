@@ -5,6 +5,7 @@
  * Automatically selects embedding model from available models
  */
 
+import pLimit from "p-limit";
 import type { EmbeddingProvider, EmbeddingProviderType } from "../../../types/embedding";
 import { getAuthManager } from "../../auth";
 import { getPref } from "../../../utils/prefs";
@@ -21,8 +22,10 @@ const PREFERRED_MODELS = [
 
 // Embedding API limits batch size to 10
 const BATCH_SIZE = 10;
+// Maximum concurrent batch requests
+const MAX_CONCURRENCY = 5;
 
-// Use reduced dimensions for cost-efficient RAG
+// text-embedding-v4 output dimensions (supports: 2048, 1536, 1024, 768, 512, 256, 128, 64)
 const EMBEDDING_DIMENSIONS = 1024;
 
 /**
@@ -122,18 +125,34 @@ export class PaperChatEmbedding implements EmbeddingProvider {
       return [];
     }
 
-    // Split into batches if needed
+    // Split into batches and run with limited concurrency
     if (texts.length > BATCH_SIZE) {
-      const results: number[][] = [];
+      const limit = pLimit(MAX_CONCURRENCY);
+      const batches: string[][] = [];
       for (let i = 0; i < texts.length; i += BATCH_SIZE) {
-        const batch = texts.slice(i, i + BATCH_SIZE);
-        const batchResults = await this.embedBatchInternal(batch);
-        results.push(...batchResults);
+        batches.push(texts.slice(i, i + BATCH_SIZE));
       }
-      return results;
+      try {
+        const batchResults = await Promise.all(
+          batches.map((batch) => limit(() => this.embedWithRetry(batch))),
+        );
+        return batchResults.flat();
+      } catch (error) {
+        limit.clearQueue();
+        throw error;
+      }
     }
 
-    return this.embedBatchInternal(texts);
+    return this.embedWithRetry(texts);
+  }
+
+  private async embedWithRetry(texts: string[], retries = 2): Promise<number[][]> {
+    try {
+      return await this.embedBatchInternal(texts);
+    } catch (error) {
+      if (retries <= 1) throw error;
+      return await this.embedWithRetry(texts, retries - 1);
+    }
   }
 
   private async embedBatchInternal(texts: string[]): Promise<number[][]> {
