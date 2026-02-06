@@ -27,7 +27,7 @@ import { getAuthManager } from "../auth";
 import { getString } from "../../utils/locale";
 import { getPref } from "../../utils/prefs";
 import { getErrorMessage, getItemTitleSmart, generateTimestampId } from "../../utils/common";
-import { checkAndMigrate } from "./migration/migrateV1Sessions";
+// V1 migration now handled by migrateToSQLite.ts at startup
 
 /**
  * Type guard: check if provider supports tool calling
@@ -88,10 +88,7 @@ export class ChatManager {
   async init(): Promise<void> {
     if (this.initialized) return;
 
-    // 执行迁移检查
-    await checkAndMigrate();
-
-    // 初始化存储服务
+    // 初始化存储服务 (migration handled at startup in hooks.ts)
     await this.sessionStorage.init();
 
     // 加载活动 session

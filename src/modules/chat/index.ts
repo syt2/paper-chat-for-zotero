@@ -13,6 +13,12 @@ export {
   generatePaperContextPrompt,
 } from "./pdf-tools";
 export { checkAndMigrate } from "./migration/migrateV1Sessions";
+export { checkAndMigrateToV3 } from "./migration/migrateToSQLite";
+export {
+  getStorageDatabase,
+  destroyStorageDatabase,
+  StorageDatabase,
+} from "./db/StorageDatabase";
 
 // Re-export types
 export type {

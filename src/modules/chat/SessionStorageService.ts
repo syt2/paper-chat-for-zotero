@@ -1,149 +1,59 @@
 /**
- * SessionStorageService - 独立 Session 存储服务
+ * SessionStorageService - SQLite-backed Session Storage
  *
  * 职责:
- * 1. 文件系统存储: {dataDir}/paper-chat/sessions/
- * 2. 索引管理: session-index.json
- * 3. CRUD 操作
- * 4. 空 session 自动清理
- * 5. 最大 1000 session 限制
- * 6. 索引损坏自动恢复
+ * 1. SQLite 存储 (via StorageDatabase)
+ * 2. CRUD 操作
+ * 3. 空 session 自动清理
+ * 4. 最大 1000 session 限制
+ *
+ * Public API unchanged from file-based version.
  */
 
-import type { ChatSession, SessionIndex, SessionMeta } from "../../types/chat";
-import { filterValidMessages, getDataPath, generateShortId } from "../../utils/common";
+import type { ChatSession, SessionMeta } from "../../types/chat";
+import { filterValidMessages, generateShortId } from "../../utils/common";
+import { getStorageDatabase } from "./db/StorageDatabase";
 
 // 最大 session 数量限制
 const MAX_SESSIONS = 1000;
 
 export class SessionStorageService {
-  private storagePath: string = "";
   private initialized: boolean = false;
-  private indexCache: SessionIndex | null = null;
+  private activeSessionIdCache: string | null = null;
 
   /**
-   * 初始化存储目录
+   * 初始化存储服务
    */
   async init(): Promise<void> {
     if (this.initialized) return;
 
     try {
-      // 获取存储目录
-      this.storagePath = getDataPath("sessions");
+      const db = await getStorageDatabase().ensureInit();
 
-      // 确保目录存在
-      if (!(await IOUtils.exists(this.storagePath))) {
-        await IOUtils.makeDirectory(this.storagePath, {
-          createAncestors: true,
-        });
-      }
+      // Load activeSessionId from settings
+      const rows = (await db.queryAsync(
+        "SELECT value FROM settings WHERE key = ?",
+        ["active_session_id"],
+      )) || [];
 
-      // 加载或重建索引
-      await this.loadOrRebuildIndex();
+      this.activeSessionIdCache = rows.length > 0 ? rows[0].value : null;
 
       this.initialized = true;
-      ztoolkit.log("SessionStorageService initialized:", this.storagePath);
+      ztoolkit.log("[SessionStorageService] Initialized (SQLite)");
     } catch (error) {
-      ztoolkit.log("SessionStorageService init error:", error);
+      ztoolkit.log("[SessionStorageService] Init error:", error);
       throw error;
     }
-  }
-
-  /**
-   * 获取索引文件路径
-   */
-  private getIndexPath(): string {
-    return PathUtils.join(this.storagePath, "session-index.json");
-  }
-
-  /**
-   * 获取 session 文件路径
-   */
-  private getSessionPath(sessionId: string): string {
-    return PathUtils.join(this.storagePath, `${sessionId}.json`);
-  }
-
-  /**
-   * 加载或重建索引
-   */
-  private async loadOrRebuildIndex(): Promise<void> {
-    const indexPath = this.getIndexPath();
-
-    try {
-      if (await IOUtils.exists(indexPath)) {
-        this.indexCache = (await IOUtils.readJSON(indexPath)) as SessionIndex;
-        ztoolkit.log(
-          "Session index loaded, sessions count:",
-          this.indexCache.sessions.length,
-        );
-        return;
-      }
-    } catch {
-      ztoolkit.log("Session index file invalid, rebuilding...");
-    }
-
-    // 重建索引
-    await this.rebuildIndexFromFiles();
-  }
-
-  /**
-   * 从文件重建索引
-   */
-  async rebuildIndexFromFiles(): Promise<void> {
-    const children = await IOUtils.getChildren(this.storagePath);
-
-    // 过滤出 session 文件（排除索引文件）
-    const sessionFiles = children.filter(
-      (f) => f.endsWith(".json") && !f.endsWith("session-index.json"),
-    );
-
-    // 并行读取所有 session 文件
-    const metaPromises = sessionFiles.map(async (filePath) => {
-      try {
-        const data = (await IOUtils.readJSON(filePath)) as ChatSession;
-        return this.buildSessionMeta(data);
-      } catch {
-        // 忽略无效的 JSON 文件
-        return null;
-      }
-    });
-
-    const results = await Promise.all(metaPromises);
-    const sessions = results.filter(
-      (meta): meta is SessionMeta => meta !== null,
-    );
-
-    // 按更新时间排序
-    sessions.sort((a, b) => b.updatedAt - a.updatedAt);
-
-    this.indexCache = {
-      sessions,
-      activeSessionId: sessions.length > 0 ? sessions[0].id : null,
-    };
-
-    await this.saveIndex();
-    ztoolkit.log("Session index rebuilt, sessions count:", sessions.length);
-  }
-
-  /**
-   * 保存索引
-   */
-  private async saveIndex(): Promise<void> {
-    if (!this.indexCache) return;
-    const indexPath = this.getIndexPath();
-    await IOUtils.writeJSON(indexPath, this.indexCache);
   }
 
   /**
    * 构建 session 元数据
    */
   private buildSessionMeta(session: ChatSession): SessionMeta {
-    // 获取最后一条消息预览
     let lastMessagePreview = "";
     let lastMessageTime = session.updatedAt || Date.now();
 
     if (session.messages && session.messages.length > 0) {
-      // 从后往前找第一条有内容的消息（跳过 tool 消息和空消息）
       for (let i = session.messages.length - 1; i >= 0; i--) {
         const msg = session.messages[i];
         if (msg.content && msg.role !== "tool") {
@@ -164,53 +74,6 @@ export class SessionStorageService {
       lastMessagePreview,
       lastMessageTime,
     };
-  }
-
-  /**
-   * 更新索引中的单个条目
-   */
-  private async updateIndexEntry(session: ChatSession): Promise<void> {
-    if (!this.indexCache) {
-      this.indexCache = { sessions: [], activeSessionId: null };
-    }
-
-    const meta = this.buildSessionMeta(session);
-
-    // 查找并更新或添加
-    const existingIndex = this.indexCache.sessions.findIndex(
-      (m) => m.id === session.id,
-    );
-    if (existingIndex >= 0) {
-      this.indexCache.sessions[existingIndex] = meta;
-    } else {
-      this.indexCache.sessions.push(meta);
-    }
-
-    // 按更新时间排序
-    this.indexCache.sessions.sort((a, b) => b.updatedAt - a.updatedAt);
-
-    await this.saveIndex();
-  }
-
-  /**
-   * 从索引中删除条目
-   */
-  private async removeIndexEntry(sessionId: string): Promise<void> {
-    if (!this.indexCache) return;
-
-    this.indexCache.sessions = this.indexCache.sessions.filter(
-      (m) => m.id !== sessionId,
-    );
-
-    // 如果删除的是活动 session，切换到最近的
-    if (this.indexCache.activeSessionId === sessionId) {
-      this.indexCache.activeSessionId =
-        this.indexCache.sessions.length > 0
-          ? this.indexCache.sessions[0].id
-          : null;
-    }
-
-    await this.saveIndex();
   }
 
   /**
@@ -237,13 +100,13 @@ export class SessionStorageService {
       messages: [],
     };
 
-    // 保存 session 文件
+    // 保存 session
     await this.saveSession(session);
 
     // 设置为活动 session
     await this.setActiveSession(sessionId);
 
-    ztoolkit.log("New session created:", sessionId);
+    ztoolkit.log("[SessionStorageService] New session created:", sessionId);
     return session;
   }
 
@@ -254,20 +117,57 @@ export class SessionStorageService {
     await this.init();
 
     try {
-      const filePath = this.getSessionPath(session.id);
+      const db = await getStorageDatabase().ensureInit();
       session.updatedAt = Date.now();
 
-      await IOUtils.writeJSON(filePath, session);
+      const meta = this.buildSessionMeta(session);
 
-      // 更新索引
-      await this.updateIndexEntry(session);
+      await db.queryAsync("BEGIN TRANSACTION");
+      try {
+        // Upsert session
+        await db.queryAsync(
+          `INSERT OR REPLACE INTO sessions
+           (id, created_at, updated_at, last_active_item_key, last_active_item_keys, messages, context_summary, context_state)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            session.id,
+            session.createdAt,
+            session.updatedAt,
+            session.lastActiveItemKey || null,
+            session.lastActiveItemKeys ? JSON.stringify(session.lastActiveItemKeys) : null,
+            JSON.stringify(session.messages),
+            session.contextSummary ? JSON.stringify(session.contextSummary) : null,
+            session.contextState ? JSON.stringify(session.contextState) : null,
+          ],
+        );
+
+        // Upsert session_meta
+        await db.queryAsync(
+          `INSERT OR REPLACE INTO session_meta
+           (id, created_at, updated_at, message_count, last_message_preview, last_message_time)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [
+            meta.id,
+            meta.createdAt,
+            meta.updatedAt,
+            meta.messageCount,
+            meta.lastMessagePreview,
+            meta.lastMessageTime,
+          ],
+        );
+
+        await db.queryAsync("COMMIT");
+      } catch (error) {
+        try { await db.queryAsync("ROLLBACK"); } catch { /* ignore */ }
+        throw error;
+      }
 
       // 检查是否超过最大限制
       await this.enforceMaxSessions();
 
-      ztoolkit.log("Session saved:", session.id);
+      ztoolkit.log("[SessionStorageService] Session saved:", session.id);
     } catch (error) {
-      ztoolkit.log("Save session error:", error);
+      ztoolkit.log("[SessionStorageService] Save session error:", error);
       throw error;
     }
   }
@@ -279,23 +179,37 @@ export class SessionStorageService {
     await this.init();
 
     try {
-      const filePath = this.getSessionPath(sessionId);
+      const db = await getStorageDatabase().ensureInit();
+      const rows = (await db.queryAsync(
+        "SELECT * FROM sessions WHERE id = ?",
+        [sessionId],
+      )) || [];
 
-      if (await IOUtils.exists(filePath)) {
-        const data = (await IOUtils.readJSON(filePath)) as ChatSession;
-
-        // 过滤无效消息（修复历史数据问题）
-        if (data.messages) {
-          data.messages = filterValidMessages(data.messages);
-        }
-
-        ztoolkit.log("Session loaded:", sessionId);
-        return data;
+      if (rows.length === 0) {
+        return null;
       }
 
-      return null;
+      const row = rows[0];
+      const session: ChatSession = {
+        id: row.id,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        lastActiveItemKey: row.last_active_item_key || null,
+        lastActiveItemKeys: row.last_active_item_keys ? JSON.parse(row.last_active_item_keys) : undefined,
+        messages: row.messages ? JSON.parse(row.messages) : [],
+        contextSummary: row.context_summary ? JSON.parse(row.context_summary) : undefined,
+        contextState: row.context_state ? JSON.parse(row.context_state) : undefined,
+      };
+
+      // 过滤无效消息（修复历史数据问题）
+      if (session.messages) {
+        session.messages = filterValidMessages(session.messages);
+      }
+
+      ztoolkit.log("[SessionStorageService] Session loaded:", sessionId);
+      return session;
     } catch (error) {
-      ztoolkit.log("Load session error:", error);
+      ztoolkit.log("[SessionStorageService] Load session error:", error);
       return null;
     }
   }
@@ -307,18 +221,26 @@ export class SessionStorageService {
     await this.init();
 
     try {
-      const filePath = this.getSessionPath(sessionId);
+      const db = await getStorageDatabase().ensureInit();
 
-      if (await IOUtils.exists(filePath)) {
-        await IOUtils.remove(filePath);
+      // Explicitly delete from both tables (don't rely on CASCADE alone,
+      // since PRAGMA foreign_keys may not persist across reconnections)
+      await db.queryAsync("DELETE FROM session_meta WHERE id = ?", [sessionId]);
+      await db.queryAsync("DELETE FROM sessions WHERE id = ?", [sessionId]);
 
-        // 更新索引
-        await this.removeIndexEntry(sessionId);
+      // If deleted session was active, switch to most recent
+      if (this.activeSessionIdCache === sessionId) {
+        const metaRows = (await db.queryAsync(
+          "SELECT id FROM session_meta ORDER BY updated_at DESC LIMIT 1",
+        )) || [];
 
-        ztoolkit.log("Session deleted:", sessionId);
+        const newActiveId = metaRows.length > 0 ? metaRows[0].id : null;
+        await this.setActiveSession(newActiveId);
       }
+
+      ztoolkit.log("[SessionStorageService] Session deleted:", sessionId);
     } catch (error) {
-      ztoolkit.log("Delete session error:", error);
+      ztoolkit.log("[SessionStorageService] Delete session error:", error);
       throw error;
     }
   }
@@ -329,8 +251,24 @@ export class SessionStorageService {
   async listSessions(): Promise<SessionMeta[]> {
     await this.init();
 
-    // 直接返回缓存的索引
-    return [...(this.indexCache?.sessions || [])];
+    try {
+      const db = await getStorageDatabase().ensureInit();
+      const rows = (await db.queryAsync(
+        "SELECT * FROM session_meta ORDER BY updated_at DESC",
+      )) || [];
+
+      return rows.map((row: any) => ({
+        id: row.id,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        messageCount: row.message_count,
+        lastMessagePreview: row.last_message_preview,
+        lastMessageTime: row.last_message_time,
+      }));
+    } catch (error) {
+      ztoolkit.log("[SessionStorageService] List sessions error:", error);
+      return [];
+    }
   }
 
   /**
@@ -339,7 +277,7 @@ export class SessionStorageService {
   async getActiveSession(): Promise<ChatSession | null> {
     await this.init();
 
-    const activeId = this.indexCache?.activeSessionId;
+    const activeId = this.activeSessionIdCache;
     if (!activeId) {
       return null;
     }
@@ -348,10 +286,10 @@ export class SessionStorageService {
   }
 
   /**
-   * 获取活动 session ID
+   * 获取活动 session ID (同步方法)
    */
   getActiveSessionId(): string | null {
-    return this.indexCache?.activeSessionId || null;
+    return this.activeSessionIdCache;
   }
 
   /**
@@ -360,12 +298,25 @@ export class SessionStorageService {
   async setActiveSession(sessionId: string | null): Promise<void> {
     await this.init();
 
-    if (!this.indexCache) {
-      this.indexCache = { sessions: [], activeSessionId: null };
-    }
+    try {
+      const db = await getStorageDatabase().ensureInit();
 
-    this.indexCache.activeSessionId = sessionId;
-    await this.saveIndex();
+      if (sessionId) {
+        await db.queryAsync(
+          "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+          ["active_session_id", sessionId],
+        );
+      } else {
+        await db.queryAsync(
+          "DELETE FROM settings WHERE key = ?",
+          ["active_session_id"],
+        );
+      }
+
+      this.activeSessionIdCache = sessionId;
+    } catch (error) {
+      ztoolkit.log("[SessionStorageService] Set active session error:", error);
+    }
   }
 
   /**
@@ -374,55 +325,76 @@ export class SessionStorageService {
   async cleanupEmptySessions(): Promise<number> {
     await this.init();
 
-    if (!this.indexCache) return 0;
+    try {
+      const db = await getStorageDatabase().ensureInit();
+      const activeId = this.activeSessionIdCache;
 
-    const emptySessionIds = this.indexCache.sessions
-      .filter((meta) => meta.messageCount === 0)
-      .map((meta) => meta.id);
+      // Find empty sessions (excluding active)
+      let query = "SELECT id FROM session_meta WHERE message_count = 0";
+      const params: unknown[] = [];
 
-    // 保留活动 session，即使它是空的
-    const activeId = this.indexCache.activeSessionId;
-    const sessionsToDelete = emptySessionIds.filter((id) => id !== activeId);
+      if (activeId) {
+        query += " AND id != ?";
+        params.push(activeId);
+      }
 
-    for (const sessionId of sessionsToDelete) {
-      await this.deleteSession(sessionId);
+      const rows = (await db.queryAsync(query, params)) || [];
+
+      for (const row of rows) {
+        await db.queryAsync("DELETE FROM session_meta WHERE id = ?", [row.id]);
+        await db.queryAsync("DELETE FROM sessions WHERE id = ?", [row.id]);
+      }
+
+      ztoolkit.log("[SessionStorageService] Cleaned up empty sessions:", rows.length);
+      return rows.length;
+    } catch (error) {
+      ztoolkit.log("[SessionStorageService] Cleanup error:", error);
+      return 0;
     }
-
-    ztoolkit.log("Cleaned up empty sessions:", sessionsToDelete.length);
-    return sessionsToDelete.length;
   }
 
   /**
    * 强制执行最大 session 数量限制
    */
   private async enforceMaxSessions(): Promise<void> {
-    if (!this.indexCache) return;
+    try {
+      const db = await getStorageDatabase().ensureInit();
 
-    if (this.indexCache.sessions.length <= MAX_SESSIONS) return;
+      const countRows = (await db.queryAsync(
+        "SELECT COUNT(*) as count FROM session_meta",
+      )) || [];
 
-    // 按更新时间排序（最新的在前）
-    const sortedSessions = [...this.indexCache.sessions].sort(
-      (a, b) => b.updatedAt - a.updatedAt,
-    );
+      const totalCount = countRows[0]?.count || 0;
+      if (totalCount <= MAX_SESSIONS) return;
 
-    // 保留最新的 MAX_SESSIONS 个
-    const sessionsToDelete = sortedSessions.slice(MAX_SESSIONS);
+      // Find sessions to delete: oldest beyond MAX_SESSIONS, excluding active
+      const activeId = this.activeSessionIdCache;
+      const toDeleteRows = (await db.queryAsync(
+        `SELECT id FROM session_meta
+         WHERE id != ?
+         ORDER BY updated_at DESC
+         LIMIT -1 OFFSET ?`,
+        [activeId || "", MAX_SESSIONS - 1],
+      )) || [];
 
-    for (const meta of sessionsToDelete) {
-      // 不删除活动 session
-      if (meta.id === this.indexCache.activeSessionId) continue;
-      await this.deleteSession(meta.id);
+      for (const row of toDeleteRows) {
+        await db.queryAsync("DELETE FROM session_meta WHERE id = ?", [row.id]);
+        await db.queryAsync("DELETE FROM sessions WHERE id = ?", [row.id]);
+      }
+
+      if (toDeleteRows.length > 0) {
+        ztoolkit.log(
+          "[SessionStorageService] Enforced max sessions limit, deleted:",
+          toDeleteRows.length,
+        );
+      }
+    } catch (error) {
+      ztoolkit.log("[SessionStorageService] Enforce max sessions error:", error);
     }
-
-    ztoolkit.log(
-      "Enforced max sessions limit, deleted:",
-      sessionsToDelete.length,
-    );
   }
 
   /**
    * 获取或创建活动 session
-   * 如果没有活动 session，则创建一个新的
    */
   async getOrCreateActiveSession(): Promise<ChatSession> {
     await this.init();
@@ -438,7 +410,11 @@ export class SessionStorageService {
    * 检查是否有旧格式数据需要迁移
    */
   async hasLegacyData(): Promise<boolean> {
-    const legacyPath = getDataPath("conversations");
+    const legacyPath = PathUtils.join(
+      Zotero.DataDirectory.dir,
+      "paper-chat",
+      "conversations",
+    );
     return IOUtils.exists(legacyPath);
   }
 
@@ -446,6 +422,10 @@ export class SessionStorageService {
    * 获取旧格式数据目录路径
    */
   getLegacyStoragePath(): string {
-    return getDataPath("conversations");
+    return PathUtils.join(
+      Zotero.DataDirectory.dir,
+      "paper-chat",
+      "conversations",
+    );
   }
 }

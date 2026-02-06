@@ -17,6 +17,8 @@ import {
   destroyVectorStore,
   destroyEmbeddingProviderFactory,
 } from "./modules/embedding";
+import { getStorageDatabase, destroyStorageDatabase } from "./modules/chat/db/StorageDatabase";
+import { checkAndMigrateToV3 } from "./modules/chat/migration/migrateToSQLite";
 
 async function onStartup() {
   await Promise.all([
@@ -26,6 +28,10 @@ async function onStartup() {
   ]);
 
   initLocale();
+
+  // Initialize StorageDatabase + run migration
+  await getStorageDatabase().init();
+  await checkAndMigrateToV3();
 
   // Register preference pane
   Zotero.PreferencePanes.register({
@@ -95,6 +101,8 @@ function onShutdown(): void {
   destroyRAGService();
   destroyEmbeddingProviderFactory();
   destroyVectorStore();
+  // Destroy StorageDatabase
+  destroyStorageDatabase();
   addon.data.dialog?.window?.close();
   addon.data.alive = false;
   // @ts-expect-error - Plugin instance is not typed
