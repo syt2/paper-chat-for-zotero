@@ -670,7 +670,7 @@ export class PdfToolManager {
         function: {
           name: "get_paper_section",
           description:
-            "Get the content of a specific section from a paper. Use this when you need to read a particular part of the paper like introduction, methodology, results, etc.",
+            "Get the content of a specific section from a paper. NOTE: Section detection works best for English papers with standard headings (Introduction, Methodology, Results, etc.). For non-English papers or if section not found, use search_paper_content instead with relevant keywords.",
           parameters: {
             type: "object",
             properties: {
@@ -701,7 +701,7 @@ export class PdfToolManager {
         function: {
           name: "search_paper_content",
           description:
-            "Search for specific content or keywords in a paper. Use this when you need to find information about a specific topic, term, or concept mentioned in the paper.",
+            "Search for specific content in a paper using semantic search. This is the most versatile search tool - it works well with ALL languages (English, Chinese, etc.) and can find conceptually related content even without exact keyword matches. Prefer this tool for non-English papers or when looking for concepts rather than exact terms.",
           parameters: {
             type: "object",
             properties: {
@@ -813,7 +813,7 @@ export class PdfToolManager {
         function: {
           name: "get_outline",
           description:
-            "Get a paper's outline/table of contents showing the document structure with section headings.",
+            "Get a paper's outline/table of contents showing the document structure with section headings. NOTE: Outline detection works best for English papers with standard academic headings. For non-English papers, the outline may be incomplete or missing - use search_paper_content to find specific content instead.",
           parameters: {
             type: "object",
             properties: {
@@ -827,7 +827,7 @@ export class PdfToolManager {
         function: {
           name: "list_sections",
           description:
-            "List all detected sections in a paper with their character counts. Use this to understand what sections are available.",
+            "List all detected sections in a paper with their character counts. NOTE: Section detection works best for English papers with standard academic headings. For non-English papers, sections may not be detected properly - use search_paper_content with relevant keywords as a more reliable alternative.",
           parameters: {
             type: "object",
             properties: {
@@ -897,7 +897,7 @@ export class PdfToolManager {
           function: {
             name: "search_across_papers",
             description:
-              "Search for content across all selected papers simultaneously. Returns matches from each paper.",
+              "Search for content across all selected papers simultaneously using semantic search. Works well with ALL languages and can find conceptually related content. Returns matches from each paper.",
             parameters: {
               type: "object",
               properties: {
