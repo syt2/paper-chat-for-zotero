@@ -41,6 +41,10 @@ Currently, no paper is selected in the reader. You can only access Zotero librar
 
 To access PDF content tools, the user needs to open a paper in the PDF reader.
 You can help the user by listing available papers with list_all_items or answering questions about their Zotero library.
+
+=== MENTION FORMAT ===
+Users may reference Zotero items using @[title](key:XXX) format in their messages.
+The "key" is the Zotero item key - use it directly with tools (e.g., itemKey, noteKey).
 \n`;
     return prompt;
   }
@@ -112,6 +116,10 @@ When comparing papers, always specify which paper(s) you're referring to using t
 - get_item_metadata: Get bibliographic metadata of any Zotero item (no PDF needed)
 - get_item_notes: Get all notes/annotations for an item
 - get_note_content: Get the full content of a specific note
+
+=== MENTION FORMAT ===
+Users may reference Zotero items using @[title](key:XXX) format in their messages.
+The "key" is the Zotero item key - use it directly with tools (e.g., itemKey, noteKey).
 
 === IMPORTANT NOTES ===
 1. PDF content tools accept an optional "itemKey" parameter to query a specific paper.

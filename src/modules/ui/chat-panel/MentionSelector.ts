@@ -398,14 +398,14 @@ export function createResourceTag(
 }
 
 /**
- * Find an @[...] mention at the given cursor position.
+ * Find an @[...] or @[...](key:XXX) mention at the given cursor position.
  * Returns the mention's range and title, or null if cursor is not in a mention.
  */
 export function findMentionAtCursor(
   text: string,
   cursorPos: number,
 ): { start: number; end: number; title: string } | null {
-  const mentionRegex = /@\[([^\]]*)\]/g;
+  const mentionRegex = /@\[([^\]]*)\](?:\(key:[^)]*\))?/g;
   let match;
   while ((match = mentionRegex.exec(text)) !== null) {
     const start = match.index;

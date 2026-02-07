@@ -1259,10 +1259,10 @@ function insertMentionIntoInput(
 
   if (atPos === -1) return;
 
-  // Build the mention text
-  const mentionText = `@[${resource.title}] `;
+  // Build the mention text with key for AI
+  const mentionText = `@[${resource.title}](key:${resource.key}) `;
 
-  // Replace @query with @[title]
+  // Replace @query with @[title](key:xxx)
   const beforeAt = text.substring(0, atPos);
   const afterCursor = text.substring(cursorPos);
 
@@ -1286,7 +1286,7 @@ function replaceMentionInInput(
   resource: MentionResource,
 ): void {
   const text = input.value;
-  const mentionText = `@[${resource.title}] `;
+  const mentionText = `@[${resource.title}](key:${resource.key}) `;
   const before = text.substring(0, range.start);
   // Skip trailing space after the old mention if present
   let afterStart = range.end;
