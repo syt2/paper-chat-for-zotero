@@ -19,7 +19,7 @@ import { getProviderManager } from "../../providers";
 import { getPref, setPref } from "../../../utils/prefs";
 import { formatModelLabel } from "../../preferences/ModelsFetcher";
 import type { PanelMode } from "./ChatPanelManager";
-import { MentionSelector, type MentionResource } from "./MentionSelector";
+import { MentionSelector, type MentionResource, findMentionAtCursor } from "./MentionSelector";
 
 // Import getActiveReaderItem from the manager module to avoid circular dependency
 // This is set by ChatPanelManager during initialization
@@ -970,8 +970,14 @@ function setupMentionSelector(context: ChatPanelContext): void {
     mentionPopup,
     theme,
     (resource: MentionResource) => {
-      // Insert @[title] into input
-      insertMentionIntoInput(messageInput, resource);
+      if (editingMentionRange) {
+        // Replace existing mention
+        replaceMentionInInput(messageInput, editingMentionRange, resource);
+        editingMentionRange = null;
+      } else {
+        // Insert new mention
+        insertMentionIntoInput(messageInput, resource);
+      }
       // Add resource to chat context
       chatManager.addItemToSelection(resource.key);
       ztoolkit.log(
@@ -982,8 +988,39 @@ function setupMentionSelector(context: ChatPanelContext): void {
 
   // Track the position where @ was typed
   let mentionStartPos = -1;
+  // Track if we're editing an existing @[...] mention
+  let editingMentionRange: { start: number; end: number } | null = null;
   // Track if we're in IME composition mode
   let isComposing = false;
+
+  // Helper to close popup and reset state
+  const closeMentionPopup = () => {
+    mentionSelector.hide();
+    mentionStartPos = -1;
+    editingMentionRange = null;
+  };
+
+  // Check if cursor is inside an existing @[...] mention and reopen popup
+  const checkCursorInMention = async () => {
+    if (mentionSelector.isVisible()) return;
+    const cursorPos = messageInput.selectionStart;
+    const text = messageInput.value;
+    const mention = findMentionAtCursor(text, cursorPos);
+    if (!mention) return;
+
+    editingMentionRange = { start: mention.start, end: mention.end };
+    mentionStartPos = mention.start + 1;
+    try {
+      await mentionSelector.show();
+      // Verify edit mode wasn't cancelled while loading resources
+      if (editingMentionRange) {
+        mentionSelector.filterImmediate(mention.title);
+      }
+    } catch {
+      // Resource loading failed, reset state
+      closeMentionPopup();
+    }
+  };
 
   // Helper function to update filter based on current input state
   const updateMentionFilter = (immediate: boolean = false) => {
@@ -996,8 +1033,7 @@ function setupMentionSelector(context: ChatPanelContext): void {
 
     // @ was deleted or cursor moved before @
     if (atPos === -1 || (mentionStartPos >= 0 && atPos < mentionStartPos - 1)) {
-      mentionSelector.hide();
-      mentionStartPos = -1;
+      closeMentionPopup();
       return;
     }
 
@@ -1006,8 +1042,7 @@ function setupMentionSelector(context: ChatPanelContext): void {
 
     // If query contains space or newline, close popup (user finished mention)
     if (/[\s\n]/.test(query)) {
-      mentionSelector.hide();
-      mentionStartPos = -1;
+      closeMentionPopup();
       return;
     }
 
@@ -1037,6 +1072,12 @@ function setupMentionSelector(context: ChatPanelContext): void {
     const inputEvent = e as InputEvent;
     const cursorPos = messageInput.selectionStart;
 
+    // If editing an existing mention and user types, close popup
+    if (editingMentionRange && mentionSelector.isVisible()) {
+      closeMentionPopup();
+      // Fall through to check if user typed a new @
+    }
+
     // Skip filter updates during IME composition (wait for compositionend)
     if (isComposing) {
       // Only trigger popup for explicit @ input during composition, and only if not already visible
@@ -1060,8 +1101,33 @@ function setupMentionSelector(context: ChatPanelContext): void {
     }
   });
 
-  // Handle keydown events for navigation
+  // Handle keydown events for mention navigation and shortcuts
   messageInput.addEventListener("keydown", (e: KeyboardEvent) => {
+    // Cmd+Backspace (Mac) or Ctrl+Backspace (Windows) to delete @[...] mention
+    if (e.key === "Backspace" && (e.metaKey || e.ctrlKey)) {
+      const cursorPos = messageInput.selectionStart;
+      const text = messageInput.value;
+      const mention = findMentionAtCursor(text, cursorPos);
+      if (mention) {
+        e.preventDefault();
+        e.stopPropagation();
+        // Close popup first to prevent input event side effects
+        if (mentionSelector.isVisible()) {
+          closeMentionPopup();
+        }
+        // Delete the mention and any trailing space
+        let deleteEnd = mention.end;
+        if (text[deleteEnd] === " ") deleteEnd++;
+        const before = text.substring(0, mention.start);
+        const after = text.substring(deleteEnd);
+        messageInput.value = before + after;
+        messageInput.setSelectionRange(mention.start, mention.start);
+        // Trigger input event for auto-resize
+        messageInput.dispatchEvent(new Event("input", { bubbles: true }));
+        return;
+      }
+    }
+
     if (!mentionSelector.isVisible()) return;
 
     switch (e.key) {
@@ -1083,6 +1149,7 @@ function setupMentionSelector(context: ChatPanelContext): void {
         e.stopPropagation();
         mentionSelector.selectCurrent();
         mentionStartPos = -1;
+        editingMentionRange = null;
         break;
 
       case "Tab":
@@ -1090,21 +1157,33 @@ function setupMentionSelector(context: ChatPanelContext): void {
         e.stopPropagation();
         mentionSelector.selectCurrent();
         mentionStartPos = -1;
+        editingMentionRange = null;
         break;
 
       case "Escape":
         e.preventDefault();
         e.stopPropagation();
-        mentionSelector.hide();
-        mentionStartPos = -1;
+        closeMentionPopup();
         break;
 
       case "ArrowLeft":
       case "ArrowRight":
       case "Home":
       case "End":
-        // Cursor movement keys - update filter after cursor moves
-        setTimeout(() => updateMentionFilter(true), 0);
+        if (editingMentionRange) {
+          // In edit mode: close popup if cursor leaves the mention
+          setTimeout(() => {
+            const pos = messageInput.selectionStart;
+            const txt = messageInput.value;
+            const m = findMentionAtCursor(txt, pos);
+            if (!m) {
+              closeMentionPopup();
+            }
+          }, 0);
+        } else {
+          // Normal mode: update filter after cursor moves
+          setTimeout(() => updateMentionFilter(true), 0);
+        }
         break;
     }
   });
@@ -1112,8 +1191,22 @@ function setupMentionSelector(context: ChatPanelContext): void {
   // Handle mouse clicks that might change cursor position
   messageInput.addEventListener("click", () => {
     if (mentionSelector.isVisible()) {
-      // Use setTimeout to let the cursor position update first
-      setTimeout(() => updateMentionFilter(true), 0);
+      setTimeout(() => {
+        if (editingMentionRange) {
+          // In edit mode: keep popup open if cursor is still in the mention
+          const cursorPos = messageInput.selectionStart;
+          const text = messageInput.value;
+          const mention = findMentionAtCursor(text, cursorPos);
+          if (!mention) {
+            closeMentionPopup();
+          }
+        } else {
+          updateMentionFilter(true);
+        }
+      }, 0);
+    } else {
+      // Check if cursor landed inside an existing mention
+      setTimeout(() => checkCursorInMention(), 0);
     }
   });
 
@@ -1125,8 +1218,7 @@ function setupMentionSelector(context: ChatPanelContext): void {
       !mentionPopup.contains(target) &&
       target !== messageInput
     ) {
-      mentionSelector.hide();
-      mentionStartPos = -1;
+      closeMentionPopup();
     }
   });
 
@@ -1134,10 +1226,17 @@ function setupMentionSelector(context: ChatPanelContext): void {
   messageInput.addEventListener("blur", () => {
     setTimeout(() => {
       if (mentionSelector.isVisible() && !mentionPopup.matches(":hover")) {
-        mentionSelector.hide();
-        mentionStartPos = -1;
+        closeMentionPopup();
       }
     }, 150);
+  });
+
+  // Detect cursor movement into existing mentions (via arrow keys)
+  messageInput.addEventListener("keyup", (e: KeyboardEvent) => {
+    if (mentionSelector.isVisible()) return;
+    if (["ArrowLeft", "ArrowRight", "Home", "End", "Backspace", "Delete"].includes(e.key)) {
+      checkCursorInMention();
+    }
   });
 
   ztoolkit.log("[MentionSelector] Setup complete");
@@ -1171,6 +1270,33 @@ function insertMentionIntoInput(
 
   // Move cursor after the mention
   const newCursorPos = atPos + mentionText.length;
+  input.setSelectionRange(newCursorPos, newCursorPos);
+  input.focus();
+
+  // Trigger input event for auto-resize
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+/**
+ * Replace an existing @[...] mention in the input with a new resource
+ */
+function replaceMentionInInput(
+  input: HTMLTextAreaElement,
+  range: { start: number; end: number },
+  resource: MentionResource,
+): void {
+  const text = input.value;
+  const mentionText = `@[${resource.title}] `;
+  const before = text.substring(0, range.start);
+  // Skip trailing space after the old mention if present
+  let afterStart = range.end;
+  if (text[afterStart] === " ") afterStart++;
+  const after = text.substring(afterStart);
+
+  input.value = before + mentionText + after;
+
+  // Move cursor after the new mention
+  const newCursorPos = range.start + mentionText.length;
   input.setSelectionRange(newCursorPos, newCursorPos);
   input.focus();
 
