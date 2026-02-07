@@ -90,6 +90,7 @@ export type PaperToolName =
   | "search_notes"
   | "create_note"
   | "batch_update_tags"
+  | "add_item"
   // 多文档比较工具
   | "compare_papers"
   | "search_across_papers";
@@ -235,6 +236,12 @@ export interface BatchUpdateTagsArgs {
   addTags?: string; // 要添加的标签（逗号分隔）
   removeTags?: string; // 要移除的标签（逗号分隔）
   limit?: number; // 最多影响的条目数
+}
+
+// 通过标识符添加条目的参数
+export interface AddItemArgs {
+  identifier: string; // DOI, ISBN, PMID, arXiv ID
+  collection_key?: string; // 可选，指定添加到的分类
 }
 
 // ========== 多文档比较工具参数类型 ==========

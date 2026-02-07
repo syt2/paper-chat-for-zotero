@@ -23,6 +23,7 @@ import type {
   SearchNotesArgs,
   CreateNoteArgs,
   BatchUpdateTagsArgs,
+  AddItemArgs,
 } from "../../../types/tool";
 import { getString } from "../../../utils/locale";
 import { getErrorMessage, getItemTitleSmart } from "../../../utils/common";
@@ -844,4 +845,100 @@ export async function executeBatchUpdateTags(
   }
 
   return `Batch tag update completed!\nItems affected: ${items.length}${itemIDs.length > limitedLimit ? ` (limited from ${itemIDs.length})` : ""}\n${parts.join("\n")}`;
+}
+
+// ==================== add_item ====================
+
+/**
+ * 执行 add_item - 通过标识符（DOI/ISBN/PMID/arXiv ID）添加条目到 Zotero 库
+ */
+export async function executeAddItem(args: AddItemArgs): Promise<string> {
+  const { identifier, collection_key } = args;
+
+  if (!identifier || identifier.trim() === "") {
+    return "Error: identifier is required.";
+  }
+
+  // 解析标识符
+  const identifiers = Zotero.Utilities.extractIdentifiers(identifier);
+  if (!identifiers || identifiers.length === 0) {
+    return `Error: Could not recognize a valid identifier from "${identifier}". Supported formats: DOI (e.g. 10.1038/nature12373), ISBN, PMID, arXiv ID.`;
+  }
+
+  const parsedIdentifier = identifiers[0];
+
+  const libraryID = Zotero.Libraries.userLibraryID;
+
+  // 确定 collections
+  let collections: number[] = [];
+  if (collection_key) {
+    const collection = Zotero.Collections.getByLibraryAndKey(
+      libraryID,
+      collection_key,
+    );
+    if (!collection) {
+      return `Error: Collection with key "${collection_key}" not found.`;
+    }
+    collections = [collection.id];
+  }
+
+  try {
+    // 创建 Translate.Search 实例
+    const translate = new (Zotero.Translate as any).Search();
+    translate.setIdentifier(parsedIdentifier);
+
+    // 获取翻译器
+    const translators = await translate.getTranslators();
+    if (!translators || translators.length === 0) {
+      return `Error: No translators found for identifier "${identifier}". The identifier may be invalid or the lookup service is unavailable.`;
+    }
+
+    translate.setTranslator(translators);
+
+    // 执行翻译（创建条目）
+    const items: Zotero.Item[] = await translate.translate({
+      libraryID,
+      collections,
+    });
+
+    if (!items || items.length === 0) {
+      return `Error: Could not retrieve metadata for identifier "${identifier}". The identifier may be invalid or the item could not be found.`;
+    }
+
+    // 格式化成功信息
+    const results = items.map((item: Zotero.Item) => {
+      const title = getItemTitleSmart(item);
+      const creators = item.getCreators();
+      const authors = creators
+        .map(
+          (c: { firstName?: string; lastName?: string; name?: string }) =>
+            c.lastName
+              ? `${c.lastName}${c.firstName ? ", " + c.firstName : ""}`
+              : c.name || "",
+        )
+        .filter(Boolean);
+      const year = item.getField("year") || "";
+      const type = item.itemType;
+
+      const parts = [`Title: ${title}`];
+      if (authors.length > 0) {
+        parts.push(
+          `Authors: ${authors.length > 3 ? authors.slice(0, 3).join("; ") + " et al." : authors.join("; ")}`,
+        );
+      }
+      if (year) parts.push(`Year: ${year}`);
+      parts.push(`Type: ${type}`);
+      parts.push(`Item Key: ${item.key}`);
+      if (collection_key) {
+        parts.push(`Added to collection: ${collection_key}`);
+      }
+      return parts.join("\n");
+    });
+
+    return `Successfully added ${items.length} item(s) to the Zotero library:\n\n${results.join("\n\n")}`;
+  } catch (error) {
+    const msg = getErrorMessage(error);
+    ztoolkit.log("[add_item] Error:", msg);
+    return `Error: Failed to add item for identifier "${identifier}". ${msg}`;
+  }
 }

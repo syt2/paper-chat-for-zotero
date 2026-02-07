@@ -45,6 +45,7 @@ import type {
   SearchNotesArgs,
   CreateNoteArgs,
   BatchUpdateTagsArgs,
+  AddItemArgs,
   // 多文档比较工具类型
   ComparePapersArgs,
   SearchAcrossPapersArgs,
@@ -80,6 +81,7 @@ import {
   executeSearchNotes,
   executeCreateNote,
   executeBatchUpdateTags,
+  executeAddItem,
 } from "./libraryExecutors";
 import { getPref } from "../../../utils/prefs";
 import { getErrorMessage } from "../../../utils/common";
@@ -655,6 +657,30 @@ export class PdfToolManager {
             },
           },
         },
+        {
+          type: "function",
+          function: {
+            name: "add_item",
+            description:
+              "Add a new item to the Zotero library by identifier (DOI, ISBN, PMID, arXiv ID). Uses Zotero's built-in metadata lookup.",
+            parameters: {
+              type: "object",
+              properties: {
+                identifier: {
+                  type: "string",
+                  description:
+                    "The identifier to look up. Supports DOI (e.g. 10.1038/nature12373), ISBN, PMID, or arXiv ID.",
+                },
+                collection_key: {
+                  type: "string",
+                  description:
+                    "Optional. The key of a collection to add the item to. Use get_collections to find available collections.",
+                },
+              },
+              required: ["identifier"],
+            },
+          },
+        },
       );
     }
 
@@ -1071,6 +1097,14 @@ export class PdfToolManager {
     );
   }
 
+  private isAddItemArgs(args: unknown): args is AddItemArgs {
+    return (
+      typeof args === "object" &&
+      args !== null &&
+      typeof (args as AddItemArgs).identifier === "string"
+    );
+  }
+
   // === 多文档比较工具的类型守卫 ===
 
   private isComparePapersArgs(args: unknown): args is ComparePapersArgs {
@@ -1202,6 +1236,17 @@ export class PdfToolManager {
           return "Error: Invalid arguments for batch_update_tags. Required: query (string)";
         }
         return executeBatchUpdateTags(args);
+      }
+
+      case "add_item": {
+        const canWrite3 = getPref("enableAIWriteOperations") as boolean;
+        if (!canWrite3) {
+          return "Error: AI write operations are disabled. The user needs to enable 'Allow AI to create notes and modify tags' in settings.";
+        }
+        if (!this.isAddItemArgs(args)) {
+          return "Error: Invalid arguments for add_item. Required: identifier (string)";
+        }
+        return executeAddItem(args);
       }
 
       // === 多文档比较工具 ===
