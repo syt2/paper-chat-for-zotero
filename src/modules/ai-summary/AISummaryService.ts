@@ -106,10 +106,23 @@ class AISummaryService {
         const pane = Zotero.getActiveZoteroPane();
         const selectedItems = pane?.getSelectedItems() as Zotero.Item[] | undefined;
         if (!selectedItems || selectedItems.length === 0) return false;
+        const processedTag = getAISummaryManager().getConfig().markProcessedTag;
+        // Show menu only if at least one eligible item hasn't been processed
         return selectedItems.some((item: Zotero.Item) => {
           if (item.isNote?.()) return false;
-          if (item.isPDFAttachment?.()) return !!item.parentItemID;
-          if (item.isAttachment?.()) return false;
+          if (item.isAttachment?.() && !item.isPDFAttachment?.()) return false;
+          // For PDF attachments, check the parent item
+          let targetItem: Zotero.Item | undefined = item;
+          if (item.isPDFAttachment?.()) {
+            const parentID = item.parentItemID;
+            if (!parentID) return false;
+            targetItem = Zotero.Items.get(parentID) as Zotero.Item | undefined;
+            if (!targetItem || targetItem.isNote?.()) return false;
+          }
+          // Hide if already processed
+          if (processedTag && targetItem.hasTag(processedTag)) {
+            return false;
+          }
           return true;
         });
       },
