@@ -47,6 +47,10 @@ class AISummaryService {
   private onTaskUpdate?: (tasks: AISummaryTask[], history: AISummaryTask[]) => void;
   private onOpenTaskWindow?: () => void;
 
+  // Reader 事件监听器引用，用于取消注册
+  private readerViewMenuHandler?: (event: any) => void;
+  private readerAnnotationMenuHandler?: (event: any) => void;
+
   private initialized: boolean = false;
 
   /**
@@ -141,6 +145,7 @@ class AISummaryService {
     this.initialized = false;
     this.isDestroyed = true;
     this.unregisterItemNotifier();
+    this.unregisterReaderContextMenu();
     this.clearAllPendingTimers();
     // 清空回调，防止销毁后仍被调用
     this.onTaskUpdate = undefined;
@@ -455,54 +460,80 @@ class AISummaryService {
     }
 
     // PDF 阅读器视图右键菜单（选中文本或空白处右键）
+    this.readerViewMenuHandler = (event: {
+      append: (options: { label: string; onCommand: () => void }) => void;
+      reader: { itemID?: number };
+    }) => {
+      const { append, reader } = event;
+
+      const parentItem = this.getParentItemFromReader(reader);
+      if (!parentItem) return;
+
+      append({
+        label: getString("aisummary-menu-generate"),
+        onCommand: () => {
+          this.addItemToQueue(parentItem);
+          this.onOpenTaskWindow?.();
+        },
+      });
+    };
+
     Zotero.Reader.registerEventListener(
       "createViewContextMenu",
-      (event: {
-        append: (options: { label: string; onCommand: () => void }) => void;
-        reader: { itemID?: number };
-      }) => {
-        const { append, reader } = event;
-
-        // 获取当前 PDF 对应的父条目
-        const parentItem = this.getParentItemFromReader(reader);
-        if (!parentItem) return;
-
-        append({
-          label: getString("aisummary-menu-generate"),
-          onCommand: () => {
-            this.addItemToQueue(parentItem);
-            this.onOpenTaskWindow?.();
-          },
-        });
-      },
+      this.readerViewMenuHandler,
       addon.data.config.addonRef,
     );
 
     // PDF 阅读器标注右键菜单（标注上右键）
+    this.readerAnnotationMenuHandler = (event: {
+      append: (options: { label: string; onCommand: () => void }) => void;
+      reader: { itemID?: number };
+    }) => {
+      const { append, reader } = event;
+
+      const parentItem = this.getParentItemFromReader(reader);
+      if (!parentItem) return;
+
+      append({
+        label: getString("aisummary-menu-generate"),
+        onCommand: () => {
+          this.addItemToQueue(parentItem);
+          this.onOpenTaskWindow?.();
+        },
+      });
+    };
+
     Zotero.Reader.registerEventListener(
       "createAnnotationContextMenu",
-      (event: {
-        append: (options: { label: string; onCommand: () => void }) => void;
-        reader: { itemID?: number };
-      }) => {
-        const { append, reader } = event;
-
-        // 获取当前 PDF 对应的父条目
-        const parentItem = this.getParentItemFromReader(reader);
-        if (!parentItem) return;
-
-        append({
-          label: getString("aisummary-menu-generate"),
-          onCommand: () => {
-            this.addItemToQueue(parentItem);
-            this.onOpenTaskWindow?.();
-          },
-        });
-      },
+      this.readerAnnotationMenuHandler,
       addon.data.config.addonRef,
     );
 
     ztoolkit.log("[AISummaryService] Reader context menu registered");
+  }
+
+  /**
+   * 取消注册 PDF 阅读器右键菜单
+   */
+  private unregisterReaderContextMenu(): void {
+    if (!Zotero.Reader?.unregisterEventListener) return;
+
+    if (this.readerViewMenuHandler) {
+      Zotero.Reader.unregisterEventListener(
+        "createViewContextMenu",
+        this.readerViewMenuHandler,
+      );
+      this.readerViewMenuHandler = undefined;
+    }
+    if (this.readerAnnotationMenuHandler) {
+      Zotero.Reader.unregisterEventListener(
+        "createAnnotationContextMenu",
+        this.readerAnnotationMenuHandler,
+      );
+      this.readerAnnotationMenuHandler = undefined;
+    }
+
+    ztoolkit.log("[AISummaryService] Reader context menu unregistered");
   }
 
   /**
