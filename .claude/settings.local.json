@@ -33,7 +33,9 @@
       "Bash(git -C:*)",
       "Bash(npm run lint:check:*)",
       "Bash(npm run lint:fix:*)",
-      "Bash(npx madge:*)"
+      "Bash(npx madge:*)",
+      "Bash(gh api:*)",
+      "Bash(git reset:*)"
     ]
   }
 }
