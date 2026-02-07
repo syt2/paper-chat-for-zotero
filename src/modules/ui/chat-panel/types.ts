@@ -33,6 +33,9 @@ export interface ThemeColors {
   inlineCodeColor: string;
   codeBlockBg: string;
   codeBlockColor: string;
+  // User accent (bar, bubble, send button)
+  userBubbleBg: string;
+  userBubbleText: string;
   // Other
   scrollbarThumb: string;
   scrollbarThumbHover: string;

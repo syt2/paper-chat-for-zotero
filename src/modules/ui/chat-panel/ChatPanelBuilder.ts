@@ -4,7 +4,6 @@
 
 import { config } from "../../../../package.json";
 import { getString } from "../../../utils/locale";
-import { chatColors } from "../../../utils/colors";
 import type { ThemeColors } from "./types";
 import { HTML_NS } from "./types";
 
@@ -121,8 +120,8 @@ export function createChatContainer(
       alignItems: "center",
       justifyContent: "space-between",
       padding: "10px 14px",
-      background: chatColors.userBubble,
-      color: "#fff",
+      background: theme.userBubbleBg,
+      color: theme.userBubbleText,
       fontSize: "12px",
     },
     { id: "chat-user-bar" },
@@ -133,8 +132,8 @@ export function createChatContainer(
     doc,
     "button",
     {
-      background: "rgba(255, 255, 255, 0.2)",
-      border: "1px solid rgba(255, 255, 255, 0.3)",
+      background: "rgba(0, 0, 0, 0.06)",
+      border: "1px solid rgba(0, 0, 0, 0.1)",
       borderRadius: "4px",
       padding: "6px",
       cursor: "pointer",
@@ -151,7 +150,7 @@ export function createChatContainer(
     width: "16px",
     height: "16px",
     opacity: "0.9",
-    filter: "brightness(0) invert(1)",
+    filter: "brightness(0) invert(0.3)",
   });
   (userBarSettingsIcon as HTMLImageElement).src =
     `chrome://${config.addonRef}/content/icons/config.svg`;
@@ -190,11 +189,11 @@ export function createChatContainer(
     doc,
     "button",
     {
-      background: "rgba(255, 255, 255, 0.2)",
-      border: "1px solid rgba(255, 255, 255, 0.3)",
+      background: "rgba(0, 0, 0, 0.06)",
+      border: "1px solid rgba(0, 0, 0, 0.1)",
       borderRadius: "4px",
       padding: "5px 14px",
-      color: "#fff",
+      color: theme.userBubbleText,
       fontSize: "12px",
       cursor: "pointer",
     },
@@ -563,8 +562,8 @@ export function createChatContainer(
     {
       width: "32px",
       height: "32px",
-      background: chatColors.userBubble,
-      color: "#fff",
+      background: theme.userBubbleBg,
+      color: theme.userBubbleText,
       border: "none",
       borderRadius: "50%",
       cursor: "pointer",

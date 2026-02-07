@@ -11,10 +11,10 @@
 
 export const colors = {
   // Primary accent colors
-  primary: "#667eea",
-  primaryDark: "#764ba2",
-  primaryLight: "#f0f4ff",
-  primaryBorder: "#d0d7ff",
+  primary: "#6b7280",
+  primaryDark: "#4b5563",
+  primaryLight: "#f3f4f6",
+  primaryBorder: "#d1d5db",
 
   // Status colors
   success: "#2e7d32",
@@ -57,7 +57,7 @@ export const colors = {
   badgeText: "#1976d2",
 
   // Gradient for user messages
-  userGradient: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+  userGradient: "linear-gradient(135deg, #6b7280 0%, #4b5563 100%)",
 } as const;
 
 // ============================================

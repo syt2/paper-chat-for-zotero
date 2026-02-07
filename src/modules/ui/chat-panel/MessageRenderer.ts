@@ -103,8 +103,8 @@ export function createMessageElement(
   let bubbleStyle: Record<string, string>;
   if (msg.role === "user") {
     bubbleStyle = {
-      background: chatColors.userBubble,
-      color: chatColors.userBubbleText,
+      background: theme.userBubbleBg,
+      color: theme.userBubbleText,
       borderBottomRightRadius: "4px",
     };
   } else if (msg.role === "error") {

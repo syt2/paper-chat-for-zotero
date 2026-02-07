@@ -12,7 +12,7 @@ export const lightTheme: ThemeColors = {
   inputAreaBg: "#fff",
   inputBg: "#fff",
   assistantBubbleBg: "#fff",
-  attachmentPreviewBg: "#f0f4ff",
+  attachmentPreviewBg: "#f3f4f6",
   buttonBg: "#f5f5f5",
   buttonHoverBg: "#e8e8e8",
   dropdownBg: "#fff",
@@ -20,7 +20,7 @@ export const lightTheme: ThemeColors = {
   hoverBg: "#f0f0f0",
   borderColor: "#e0e0e0",
   inputBorderColor: "#ddd",
-  inputFocusBorderColor: "#667eea",
+  inputFocusBorderColor: "#6b7280",
   textPrimary: "#333",
   textSecondary: "#555",
   textMuted: "#888",
@@ -28,6 +28,8 @@ export const lightTheme: ThemeColors = {
   inlineCodeColor: "#e83e8c",
   codeBlockBg: "#1e1e1e",
   codeBlockColor: "#d4d4d4",
+  userBubbleBg: "#e5e7eb",
+  userBubbleText: "#374151",
   scrollbarThumb: "#c1c1c1",
   scrollbarThumbHover: "#a1a1a1",
   copyBtnBg: "rgba(0,0,0,0.1)",
@@ -49,7 +51,7 @@ export const darkTheme: ThemeColors = {
   hoverBg: "#383838",
   borderColor: "#444",
   inputBorderColor: "#555",
-  inputFocusBorderColor: "#667eea",
+  inputFocusBorderColor: "#6b7280",
   textPrimary: "#e0e0e0",
   textSecondary: "#ccc",
   textMuted: "#999",
@@ -57,6 +59,8 @@ export const darkTheme: ThemeColors = {
   inlineCodeColor: "#ff79c6",
   codeBlockBg: "#0d0d0d",
   codeBlockColor: "#d4d4d4",
+  userBubbleBg: "linear-gradient(135deg, #6b7280 0%, #4b5563 100%)",
+  userBubbleText: "#ffffff",
   scrollbarThumb: "#555",
   scrollbarThumbHover: "#666",
   copyBtnBg: "rgba(255,255,255,0.1)",
@@ -207,7 +211,53 @@ export function applyThemeToContainer(container: HTMLElement): void {
     mentionPopup.style.borderColor = theme.borderColor;
   }
 
-  // Update existing message bubbles
+  // User bar
+  const userBar = container.querySelector("#chat-user-bar") as HTMLElement;
+  if (userBar) {
+    userBar.style.background = theme.userBubbleBg;
+    userBar.style.color = theme.userBubbleText;
+  }
+
+  // User bar buttons (action btn + settings btn) - adapt to light/dark bg
+  const isDark = theme === darkTheme;
+  const btnBg = isDark ? "rgba(255, 255, 255, 0.2)" : "rgba(0, 0, 0, 0.06)";
+  const btnBorder = isDark ? "rgba(255, 255, 255, 0.3)" : "rgba(0, 0, 0, 0.1)";
+
+  const userActionBtn = container.querySelector("#chat-user-action-btn") as HTMLElement;
+  if (userActionBtn) {
+    userActionBtn.style.background = btnBg;
+    userActionBtn.style.borderColor = btnBorder;
+    userActionBtn.style.color = theme.userBubbleText;
+  }
+
+  const userBarSettingsBtn = container.querySelector("#chat-user-bar-settings-btn") as HTMLElement;
+  if (userBarSettingsBtn) {
+    userBarSettingsBtn.style.background = btnBg;
+    userBarSettingsBtn.style.borderColor = btnBorder;
+    // Update icon filter
+    const icon = userBarSettingsBtn.querySelector("img") as HTMLElement;
+    if (icon) {
+      icon.style.filter = isDark ? "brightness(0) invert(1)" : "brightness(0) invert(0.3)";
+    }
+  }
+
+  // Send button
+  const sendButton = container.querySelector("#chat-send-button") as HTMLElement;
+  if (sendButton) {
+    sendButton.style.background = theme.userBubbleBg;
+    sendButton.style.color = theme.userBubbleText;
+  }
+
+  // Update existing user message bubbles
+  container
+    .querySelectorAll(".user-message .chat-bubble")
+    .forEach((bubble: Element) => {
+      const el = bubble as HTMLElement;
+      el.style.background = theme.userBubbleBg;
+      el.style.color = theme.userBubbleText;
+    });
+
+  // Update existing assistant message bubbles
   container
     .querySelectorAll(".assistant-message .chat-bubble")
     .forEach((bubble: Element) => {
