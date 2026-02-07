@@ -68,6 +68,12 @@ export class ChatManager {
   private currentItemKeys: string[] = []; // 多文档支持
   private initialized: boolean = false;
 
+  // Sessions that currently have an in-flight send/stream operation.
+  // switchSession() reuses these objects instead of loading from DB,
+  // so that isSessionActive() returns true and UI updates resume
+  // when the user switches back to a session that is still streaming.
+  private streamingSessions = new Map<string, ChatSession>();
+
   // UI回调
   private onMessageUpdate?: (messages: ChatMessage[]) => void;
   private onStreamingUpdate?: (content: string) => void;
@@ -131,6 +137,15 @@ export class ChatManager {
   private isPaperChatProvider(): boolean {
     const provider = this.getActiveProvider();
     return provider?.getName() === "PaperChat";
+  }
+
+  /**
+   * Check if the given session is still the active/displayed session.
+   * Used to guard UI callbacks so we don't update the UI for a session
+   * the user has navigated away from.
+   */
+  private isSessionActive(session: ChatSession): boolean {
+    return this.currentSession === session;
   }
 
   /**
@@ -255,7 +270,13 @@ export class ChatManager {
    */
   async switchSession(sessionId: string): Promise<ChatSession | null> {
     await this.init();
-    const session = await this.sessionStorage.loadSession(sessionId);
+
+    // If the target session is currently streaming, reuse its in-memory
+    // object so that isSessionActive(sendingSession) returns true and
+    // live streaming updates resume on the UI.
+    const session = this.streamingSessions.get(sessionId)
+      ?? await this.sessionStorage.loadSession(sessionId);
+
     if (session) {
       this.currentSession = session;
       await this.sessionStorage.setActiveSession(sessionId);
@@ -277,6 +298,7 @@ export class ChatManager {
 
     // 清理 ContextManager 中的相关状态
     getContextManager().onSessionDeleted(sessionId);
+    this.streamingSessions.delete(sessionId);
 
     // 如果删除的是当前 session，切换到最近的或创建新的
     if (this.currentSession?.id === sessionId) {
@@ -337,8 +359,10 @@ export class ChatManager {
   private async insertItemSwitchNotice(
     newItemKey: string,
     newItemTitle: string,
+    session?: ChatSession,
   ): Promise<void> {
-    if (!this.currentSession) return;
+    const target = session ?? this.currentSession;
+    if (!target) return;
 
     const notice: ChatMessage = {
       id: this.generateId(),
@@ -348,9 +372,9 @@ export class ChatManager {
       isSystemNotice: true,
     };
 
-    this.currentSession.messages.push(notice);
-    await this.sessionStorage.insertMessage(this.currentSession.id, notice);
-    this.currentSession.lastActiveItemKey = newItemKey;
+    target.messages.push(notice);
+    await this.sessionStorage.insertMessage(target.id, notice);
+    target.lastActiveItemKey = newItemKey;
   }
 
   /**
@@ -382,12 +406,17 @@ export class ChatManager {
         await this.sessionStorage.getOrCreateActiveSession();
     }
 
+    // Capture a stable reference to the session we're sending in.
+    // This ensures DB writes and in-memory mutations target the correct
+    // session even if the user switches sessions mid-stream.
+    const sendingSession = this.currentSession;
+
     // 检查是否需要插入 item 切换通知
-    if (itemKey !== this.currentSession.lastActiveItemKey) {
+    if (itemKey !== sendingSession.lastActiveItemKey) {
       if (hasCurrentItem) {
         // 切换到新 item
-        await this.insertItemSwitchNotice(itemKey!, itemTitle!);
-      } else if (this.currentSession.lastActiveItemKey !== null) {
+        await this.insertItemSwitchNotice(itemKey!, itemTitle!, sendingSession);
+      } else if (sendingSession.lastActiveItemKey !== null) {
         // 从有 item 切换到无 item
         const notice: ChatMessage = {
           id: this.generateId(),
@@ -396,9 +425,9 @@ export class ChatManager {
           timestamp: Date.now(),
           isSystemNotice: true,
         };
-        this.currentSession.messages.push(notice);
-        await this.sessionStorage.insertMessage(this.currentSession.id, notice);
-        this.currentSession.lastActiveItemKey = null;
+        sendingSession.messages.push(notice);
+        await this.sessionStorage.insertMessage(sendingSession.id, notice);
+        sendingSession.lastActiveItemKey = null;
       }
       // 更新当前 itemKey
       this.currentItemKey = itemKey;
@@ -424,9 +453,11 @@ export class ChatManager {
         ),
         timestamp: Date.now(),
       };
-      this.currentSession.messages.push(errorMessage);
-      await this.sessionStorage.insertMessage(this.currentSession.id, errorMessage);
-      this.onMessageUpdate?.(this.currentSession.messages);
+      sendingSession.messages.push(errorMessage);
+      await this.sessionStorage.insertMessage(sendingSession.id, errorMessage);
+      if (this.isSessionActive(sendingSession)) {
+        this.onMessageUpdate?.(sendingSession.messages);
+      }
       return;
     }
 
@@ -521,10 +552,12 @@ export class ChatManager {
       selectedText: options.selectedText,
     };
 
-    this.currentSession.messages.push(userMessage);
-    await this.sessionStorage.insertMessage(this.currentSession.id, userMessage);
-    this.currentSession.updatedAt = Date.now();
-    this.onMessageUpdate?.(this.currentSession.messages);
+    sendingSession.messages.push(userMessage);
+    await this.sessionStorage.insertMessage(sendingSession.id, userMessage);
+    sendingSession.updatedAt = Date.now();
+    if (this.isSessionActive(sendingSession)) {
+      this.onMessageUpdate?.(sendingSession.messages);
+    }
 
     // 创建 AI 消息占位
     const assistantMessage: ChatMessage = {
@@ -534,14 +567,16 @@ export class ChatManager {
       timestamp: Date.now(),
     };
 
-    this.currentSession.messages.push(assistantMessage);
-    await this.sessionStorage.insertMessage(this.currentSession.id, assistantMessage);
-    this.onMessageUpdate?.(this.currentSession.messages);
+    sendingSession.messages.push(assistantMessage);
+    await this.sessionStorage.insertMessage(sendingSession.id, assistantMessage);
+    if (this.isSessionActive(sendingSession)) {
+      this.onMessageUpdate?.(sendingSession.messages);
+    }
 
     // 获取上下文管理器并过滤消息
     const contextManager = getContextManager();
     const { messages: filteredMessages, summaryTriggered } =
-      contextManager.filterMessages(this.currentSession);
+      contextManager.filterMessages(sendingSession);
 
     // 从过滤后的消息中排除最后一条 (assistant 占位)
     const messagesForApi = filteredMessages.filter(
@@ -550,7 +585,7 @@ export class ChatManager {
 
     ztoolkit.log(
       "[API Request] Original message count:",
-      this.currentSession.messages.length,
+      sendingSession.messages.length,
     );
     ztoolkit.log(
       "[API Request] Filtered message count:",
@@ -558,108 +593,122 @@ export class ChatManager {
     );
     ztoolkit.log("[API Request] Use tool calling:", useToolCalling);
 
-    // 如果启用 tool calling
-    if (useToolCalling && providerSupportsToolCalling(provider)) {
-      ztoolkit.log("[Tool Calling] Using tool calling mode");
-      await this.sendMessageWithToolCalling(
-        provider,
-        messagesForApi,
-        assistantMessage,
-        pdfWasAttached,
-        summaryTriggered,
-        hasCurrentItem,
-        item!,
-      );
-      return;
-    }
-
-    // 传统模式：流式调用（带自动降级）
-    const providerManager = getProviderManager();
-
+    // Register the session as actively streaming so that switchSession()
+    // can reuse this in-memory object and resume UI updates.
+    this.streamingSessions.set(sendingSession.id, sendingSession);
     try {
-      await providerManager.executeWithFallback(async (currentProvider) => {
-        // 重置 assistant 消息内容（降级时需要清空之前的部分内容）
-        assistantMessage.content = "";
-
-        return new Promise<void>((resolve, reject) => {
-          const callbacks: StreamCallbacks = {
-            onChunk: (chunk: string) => {
-              assistantMessage.content += chunk;
-              this.onStreamingUpdate?.(assistantMessage.content);
-            },
-            onComplete: async (fullContent: string) => {
-              assistantMessage.content = fullContent;
-              assistantMessage.timestamp = Date.now();
-              this.currentSession!.updatedAt = Date.now();
-
-              await this.sessionStorage.updateMessageContent(this.currentSession!.id, assistantMessage.id, fullContent);
-              await this.sessionStorage.updateSessionMeta(this.currentSession!);
-              this.onMessageUpdate?.(this.currentSession!.messages);
-
-              if (pdfWasAttached) {
-                this.onPdfAttached?.();
-              }
-              this.onMessageComplete?.();
-
-              // 异步触发摘要生成（不阻塞主流程）
-              if (summaryTriggered) {
-                contextManager
-                  .generateSummaryAsync(this.currentSession!, async () => {
-                    await this.sessionStorage.updateSessionMeta(this.currentSession!);
-                  })
-                  .catch((err) => {
-                    ztoolkit.log("[ChatManager] Summary generation failed:", err);
-                  });
-              }
-
-              resolve();
-            },
-            onError: async (error: Error) => {
-              ztoolkit.log("[API Error]", error.message);
-
-              // 对于 PaperChat 的认证错误，尝试刷新 token
-              if (this.isAuthError(error) && currentProvider.getName() === "PaperChat") {
-                try {
-                  const authManager = getAuthManager();
-                  await authManager.ensurePluginToken(true);
-                  ztoolkit.log("[API Retry] Token refreshed, but will use fallback mechanism");
-                } catch (refreshError) {
-                  ztoolkit.log("[API Retry] Failed to refresh token:", refreshError);
-                }
-              }
-
-              // 拒绝 Promise，让 executeWithFallback 处理降级
-              reject(error);
-            },
-          };
-
-          currentProvider.streamChatCompletion(messagesForApi, callbacks, pdfAttachment);
-        });
-      });
-    } catch (error) {
-      // 所有 provider 都失败了
-      ztoolkit.log("[ChatManager] All providers failed:", error);
-
-      // 移除 assistant 占位消息（使用 id 精确定位，避免误删 fallback notice）
-      const assistantIndex = this.currentSession!.messages.findIndex(
-        (m) => m.id === assistantMessage.id
-      );
-      if (assistantIndex !== -1) {
-        this.currentSession!.messages.splice(assistantIndex, 1);
-        await this.sessionStorage.deleteMessage(this.currentSession!.id, assistantMessage.id);
+      // 如果启用 tool calling
+      if (useToolCalling && providerSupportsToolCalling(provider)) {
+        ztoolkit.log("[Tool Calling] Using tool calling mode");
+        await this.sendMessageWithToolCalling(
+          provider,
+          messagesForApi,
+          assistantMessage,
+          pdfWasAttached,
+          summaryTriggered,
+          hasCurrentItem,
+          item!,
+          sendingSession,
+        );
+        return;
       }
 
-      const errorMessage: ChatMessage = {
-        id: this.generateId(),
-        role: "error",
-        content: getErrorMessage(error),
-        timestamp: Date.now(),
-      };
-      this.currentSession!.messages.push(errorMessage);
-      await this.sessionStorage.insertMessage(this.currentSession!.id, errorMessage);
+      // 传统模式：流式调用（带自动降级）
+      const providerManager = getProviderManager();
 
-      this.onError?.(error instanceof Error ? error : new Error(String(error)));
-      this.onMessageUpdate?.(this.currentSession!.messages);
+      try {
+        await providerManager.executeWithFallback(async (currentProvider) => {
+          // 重置 assistant 消息内容（降级时需要清空之前的部分内容）
+          assistantMessage.content = "";
+
+          return new Promise<void>((resolve, reject) => {
+            const callbacks: StreamCallbacks = {
+              onChunk: (chunk: string) => {
+                assistantMessage.content += chunk;
+                if (this.isSessionActive(sendingSession)) {
+                  this.onStreamingUpdate?.(assistantMessage.content);
+                }
+              },
+              onComplete: async (fullContent: string) => {
+                assistantMessage.content = fullContent;
+                assistantMessage.timestamp = Date.now();
+                sendingSession.updatedAt = Date.now();
+
+                await this.sessionStorage.updateMessageContent(sendingSession.id, assistantMessage.id, fullContent);
+                await this.sessionStorage.updateSessionMeta(sendingSession);
+                if (this.isSessionActive(sendingSession)) {
+                  this.onMessageUpdate?.(sendingSession.messages);
+
+                  if (pdfWasAttached) {
+                    this.onPdfAttached?.();
+                  }
+                  this.onMessageComplete?.();
+                }
+
+                // 异步触发摘要生成（不阻塞主流程）
+                if (summaryTriggered) {
+                  contextManager
+                    .generateSummaryAsync(sendingSession, async () => {
+                      await this.sessionStorage.updateSessionMeta(sendingSession);
+                    })
+                    .catch((err) => {
+                      ztoolkit.log("[ChatManager] Summary generation failed:", err);
+                    });
+                }
+
+                resolve();
+              },
+              onError: async (error: Error) => {
+                ztoolkit.log("[API Error]", error.message);
+
+                // 对于 PaperChat 的认证错误，尝试刷新 token
+                if (this.isAuthError(error) && currentProvider.getName() === "PaperChat") {
+                  try {
+                    const authManager = getAuthManager();
+                    await authManager.ensurePluginToken(true);
+                    ztoolkit.log("[API Retry] Token refreshed, but will use fallback mechanism");
+                  } catch (refreshError) {
+                    ztoolkit.log("[API Retry] Failed to refresh token:", refreshError);
+                  }
+                }
+
+                // 拒绝 Promise，让 executeWithFallback 处理降级
+                reject(error);
+              },
+            };
+
+            currentProvider.streamChatCompletion(messagesForApi, callbacks, pdfAttachment);
+          });
+        });
+      } catch (error) {
+        // 所有 provider 都失败了
+        ztoolkit.log("[ChatManager] All providers failed:", error);
+
+        // 移除 assistant 占位消息（使用 id 精确定位，避免误删 fallback notice）
+        const assistantIndex = sendingSession.messages.findIndex(
+          (m) => m.id === assistantMessage.id
+        );
+        if (assistantIndex !== -1) {
+          sendingSession.messages.splice(assistantIndex, 1);
+          await this.sessionStorage.deleteMessage(sendingSession.id, assistantMessage.id);
+        }
+
+        const errorMessage: ChatMessage = {
+          id: this.generateId(),
+          role: "error",
+          content: getErrorMessage(error),
+          timestamp: Date.now(),
+        };
+        sendingSession.messages.push(errorMessage);
+        await this.sessionStorage.insertMessage(sendingSession.id, errorMessage);
+
+        if (this.isSessionActive(sendingSession)) {
+          this.onError?.(error instanceof Error ? error : new Error(String(error)));
+          this.onMessageUpdate?.(sendingSession.messages);
+        }
+      }
+    } finally {
+      this.streamingSessions.delete(sendingSession.id);
     }
   }
 
@@ -676,6 +725,7 @@ export class ChatManager {
     summaryTriggered: boolean,
     hasCurrentItem: boolean,
     item: Zotero.Item,
+    sendingSession: ChatSession,
   ): Promise<void> {
     const pdfToolManager = getPdfToolManager();
     const providerManager = getProviderManager();
@@ -733,6 +783,7 @@ export class ChatManager {
             summaryTriggered,
             tools,
             paperStructure,
+            sendingSession,
           );
         } else {
           ztoolkit.log(`[Tool Calling] Using non-streaming mode with ${currentProvider.getName()}`);
@@ -744,6 +795,7 @@ export class ChatManager {
             summaryTriggered,
             tools,
             paperStructure,
+            sendingSession,
           );
         }
       });
@@ -752,12 +804,12 @@ export class ChatManager {
       ztoolkit.log("[Tool Calling] All providers failed:", error);
 
       // 移除 assistant 占位消息（使用 id 精确定位，避免误删 fallback notice）
-      const assistantIndex = this.currentSession!.messages.findIndex(
+      const assistantIndex = sendingSession.messages.findIndex(
         (m) => m.id === assistantMessage.id
       );
       if (assistantIndex !== -1) {
-        this.currentSession!.messages.splice(assistantIndex, 1);
-        await this.sessionStorage.deleteMessage(this.currentSession!.id, assistantMessage.id);
+        sendingSession.messages.splice(assistantIndex, 1);
+        await this.sessionStorage.deleteMessage(sendingSession.id, assistantMessage.id);
       }
 
       const errorMessage: ChatMessage = {
@@ -766,11 +818,13 @@ export class ChatManager {
         content: getErrorMessage(error),
         timestamp: Date.now(),
       };
-      this.currentSession!.messages.push(errorMessage);
-      await this.sessionStorage.insertMessage(this.currentSession!.id, errorMessage);
+      sendingSession.messages.push(errorMessage);
+      await this.sessionStorage.insertMessage(sendingSession.id, errorMessage);
 
-      this.onError?.(error instanceof Error ? error : new Error(String(error)));
-      this.onMessageUpdate?.(this.currentSession!.messages);
+      if (this.isSessionActive(sendingSession)) {
+        this.onError?.(error instanceof Error ? error : new Error(String(error)));
+        this.onMessageUpdate?.(sendingSession.messages);
+      }
     }
   }
 
@@ -862,6 +916,7 @@ export class ChatManager {
     paperStructure: Awaited<
       ReturnType<typeof getPdfToolManager.prototype.extractAndParsePaper>
     >,
+    sendingSession: ChatSession,
   ): Promise<void> {
     const pdfToolManager = getPdfToolManager();
     const contextManager = getContextManager();
@@ -900,7 +955,9 @@ export class ChatManager {
               roundContent += text;
               // 实时更新：显示累积内容 + 本轮文本
               assistantMessage.content = displayBeforeThisRound + roundContent;
-              this.onStreamingUpdate?.(assistantMessage.content);
+              if (this.isSessionActive(sendingSession)) {
+                this.onStreamingUpdate?.(assistantMessage.content);
+              }
             },
             onToolCallStart: ({ index, id, name }) => {
               pendingToolCalls.set(index, { id, name, arguments: "" });
@@ -985,7 +1042,9 @@ export class ChatManager {
               accumulatedDisplay +
               this.formatToolCallCard(toolName, toolArgs, "calling");
             assistantMessage.content = callingDisplay;
-            this.onStreamingUpdate?.(callingDisplay);
+            if (this.isSessionActive(sendingSession)) {
+              this.onStreamingUpdate?.(callingDisplay);
+            }
 
             // 执行工具（包装 try-catch 防止意外异常中断聊天）
             let toolResult: string;
@@ -1021,7 +1080,9 @@ export class ChatManager {
               toolResult,
             );
             assistantMessage.content = accumulatedDisplay;
-            this.onStreamingUpdate?.(accumulatedDisplay);
+            if (this.isSessionActive(sendingSession)) {
+              this.onStreamingUpdate?.(accumulatedDisplay);
+            }
           }
 
           // 继续下一轮
@@ -1033,21 +1094,23 @@ export class ChatManager {
         accumulatedDisplay += result.content || "";
         assistantMessage.content = accumulatedDisplay;
         assistantMessage.timestamp = Date.now();
-        this.currentSession!.updatedAt = Date.now();
+        sendingSession.updatedAt = Date.now();
 
-        await this.sessionStorage.updateMessageContent(this.currentSession!.id, assistantMessage.id, accumulatedDisplay);
-        await this.sessionStorage.updateSessionMeta(this.currentSession!);
-        this.onMessageUpdate?.(this.currentSession!.messages);
+        await this.sessionStorage.updateMessageContent(sendingSession.id, assistantMessage.id, accumulatedDisplay);
+        await this.sessionStorage.updateSessionMeta(sendingSession);
+        if (this.isSessionActive(sendingSession)) {
+          this.onMessageUpdate?.(sendingSession.messages);
 
-        if (pdfWasAttached) {
-          this.onPdfAttached?.();
+          if (pdfWasAttached) {
+            this.onPdfAttached?.();
+          }
+          this.onMessageComplete?.();
         }
-        this.onMessageComplete?.();
 
         if (summaryTriggered) {
           contextManager
-            .generateSummaryAsync(this.currentSession!, async () => {
-              await this.sessionStorage.updateSessionMeta(this.currentSession!);
+            .generateSummaryAsync(sendingSession, async () => {
+              await this.sessionStorage.updateSessionMeta(sendingSession);
             })
             .catch((err) => {
               ztoolkit.log("[ChatManager] Summary generation failed:", err);
@@ -1063,11 +1126,13 @@ export class ChatManager {
         "\n\nI apologize, but I was unable to complete the request within the allowed number of iterations.";
       assistantMessage.content = accumulatedDisplay;
       assistantMessage.timestamp = Date.now();
-      this.currentSession!.updatedAt = Date.now();
-      await this.sessionStorage.updateMessageContent(this.currentSession!.id, assistantMessage.id, accumulatedDisplay);
-      await this.sessionStorage.updateSessionMeta(this.currentSession!);
-      this.onMessageUpdate?.(this.currentSession!.messages);
-      this.onMessageComplete?.();
+      sendingSession.updatedAt = Date.now();
+      await this.sessionStorage.updateMessageContent(sendingSession.id, assistantMessage.id, accumulatedDisplay);
+      await this.sessionStorage.updateSessionMeta(sendingSession);
+      if (this.isSessionActive(sendingSession)) {
+        this.onMessageUpdate?.(sendingSession.messages);
+        this.onMessageComplete?.();
+      }
     } catch (error) {
       ztoolkit.log("[Streaming Tool Calling] Error:", error);
       // 重新抛出错误，让外层的 executeWithFallback 处理降级
@@ -1089,6 +1154,7 @@ export class ChatManager {
     paperStructure: Awaited<
       ReturnType<typeof getPdfToolManager.prototype.extractAndParsePaper>
     >,
+    sendingSession: ChatSession,
   ): Promise<void> {
     const pdfToolManager = getPdfToolManager();
     const contextManager = getContextManager();
@@ -1144,7 +1210,9 @@ export class ChatManager {
               accumulatedDisplay +
               this.formatToolCallCard(toolName, toolArgs, "calling");
             assistantMessage.content = callingDisplay;
-            this.onStreamingUpdate?.(callingDisplay);
+            if (this.isSessionActive(sendingSession)) {
+              this.onStreamingUpdate?.(callingDisplay);
+            }
 
             // 执行工具（包装 try-catch 防止意外异常中断聊天）
             let toolResult: string;
@@ -1180,7 +1248,9 @@ export class ChatManager {
               toolResult,
             );
             assistantMessage.content = accumulatedDisplay;
-            this.onStreamingUpdate?.(accumulatedDisplay);
+            if (this.isSessionActive(sendingSession)) {
+              this.onStreamingUpdate?.(accumulatedDisplay);
+            }
           }
 
           continue;
@@ -1190,21 +1260,23 @@ export class ChatManager {
         accumulatedDisplay += result.content || "";
         assistantMessage.content = accumulatedDisplay;
         assistantMessage.timestamp = Date.now();
-        this.currentSession!.updatedAt = Date.now();
+        sendingSession.updatedAt = Date.now();
 
-        await this.sessionStorage.updateMessageContent(this.currentSession!.id, assistantMessage.id, accumulatedDisplay);
-        await this.sessionStorage.updateSessionMeta(this.currentSession!);
-        this.onMessageUpdate?.(this.currentSession!.messages);
+        await this.sessionStorage.updateMessageContent(sendingSession.id, assistantMessage.id, accumulatedDisplay);
+        await this.sessionStorage.updateSessionMeta(sendingSession);
+        if (this.isSessionActive(sendingSession)) {
+          this.onMessageUpdate?.(sendingSession.messages);
 
-        if (pdfWasAttached) {
-          this.onPdfAttached?.();
+          if (pdfWasAttached) {
+            this.onPdfAttached?.();
+          }
+          this.onMessageComplete?.();
         }
-        this.onMessageComplete?.();
 
         if (summaryTriggered) {
           contextManager
-            .generateSummaryAsync(this.currentSession!, async () => {
-              await this.sessionStorage.updateSessionMeta(this.currentSession!);
+            .generateSummaryAsync(sendingSession, async () => {
+              await this.sessionStorage.updateSessionMeta(sendingSession);
             })
             .catch((err) => {
               ztoolkit.log("[ChatManager] Summary generation failed:", err);
@@ -1220,11 +1292,13 @@ export class ChatManager {
         "\n\nI apologize, but I was unable to complete the request within the allowed number of iterations.";
       assistantMessage.content = accumulatedDisplay;
       assistantMessage.timestamp = Date.now();
-      this.currentSession!.updatedAt = Date.now();
-      await this.sessionStorage.updateMessageContent(this.currentSession!.id, assistantMessage.id, accumulatedDisplay);
-      await this.sessionStorage.updateSessionMeta(this.currentSession!);
-      this.onMessageUpdate?.(this.currentSession!.messages);
-      this.onMessageComplete?.();
+      sendingSession.updatedAt = Date.now();
+      await this.sessionStorage.updateMessageContent(sendingSession.id, assistantMessage.id, accumulatedDisplay);
+      await this.sessionStorage.updateSessionMeta(sendingSession);
+      if (this.isSessionActive(sendingSession)) {
+        this.onMessageUpdate?.(sendingSession.messages);
+        this.onMessageComplete?.();
+      }
     } catch (error) {
       ztoolkit.log("[Tool Calling] Error:", error);
       // 重新抛出错误，让外层的 executeWithFallback 处理降级
@@ -1290,6 +1364,7 @@ export class ChatManager {
     this.currentSession = null;
     this.currentItemKey = null;
     this.currentItemKeys = [];
+    this.streamingSessions.clear();
     this.initialized = false;
   }
 }
