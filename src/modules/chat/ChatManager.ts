@@ -157,8 +157,10 @@ export class ChatManager {
     const providerManager = getProviderManager();
     providerManager.setOnFallback((from, to, error) => {
       ztoolkit.log(`[ChatManager] Provider fallback: ${from} -> ${to}, error: ${error.message}`);
-      // 在聊天消息中插入降级通知
-      this.insertFallbackNotice(from, to);
+      // 在聊天消息中插入降级通知 (fire-and-forget)
+      this.insertFallbackNotice(from, to).catch((err) => {
+        ztoolkit.log("[ChatManager] Failed to persist fallback notice:", err);
+      });
       // 通知 UI 层（如果需要额外处理）
       this.onFallbackNotice?.(from, to);
     });
@@ -306,13 +308,14 @@ export class ChatManager {
       timestamp: Date.now(),
     };
     this.currentSession!.messages.push(errorMessage);
+    await this.sessionStorage.insertMessage(this.currentSession!.id, errorMessage);
     this.onMessageUpdate?.(this.currentSession!.messages);
   }
 
   /**
    * 插入降级通知消息到聊天界面
    */
-  private insertFallbackNotice(fromProvider: string, toProvider: string): void {
+  private async insertFallbackNotice(fromProvider: string, toProvider: string): Promise<void> {
     if (!this.currentSession) return;
 
     const notice: ChatMessage = {
@@ -324,16 +327,17 @@ export class ChatManager {
     };
 
     this.currentSession.messages.push(notice);
+    await this.sessionStorage.insertMessage(this.currentSession.id, notice);
     this.onMessageUpdate?.(this.currentSession.messages);
   }
 
   /**
    * 插入 item 切换的 system-notice 消息
    */
-  private insertItemSwitchNotice(
+  private async insertItemSwitchNotice(
     newItemKey: string,
     newItemTitle: string,
-  ): void {
+  ): Promise<void> {
     if (!this.currentSession) return;
 
     const notice: ChatMessage = {
@@ -345,6 +349,7 @@ export class ChatManager {
     };
 
     this.currentSession.messages.push(notice);
+    await this.sessionStorage.insertMessage(this.currentSession.id, notice);
     this.currentSession.lastActiveItemKey = newItemKey;
   }
 
@@ -381,7 +386,7 @@ export class ChatManager {
     if (itemKey !== this.currentSession.lastActiveItemKey) {
       if (hasCurrentItem) {
         // 切换到新 item
-        this.insertItemSwitchNotice(itemKey!, itemTitle!);
+        await this.insertItemSwitchNotice(itemKey!, itemTitle!);
       } else if (this.currentSession.lastActiveItemKey !== null) {
         // 从有 item 切换到无 item
         const notice: ChatMessage = {
@@ -392,6 +397,7 @@ export class ChatManager {
           isSystemNotice: true,
         };
         this.currentSession.messages.push(notice);
+        await this.sessionStorage.insertMessage(this.currentSession.id, notice);
         this.currentSession.lastActiveItemKey = null;
       }
       // 更新当前 itemKey
@@ -419,6 +425,7 @@ export class ChatManager {
         timestamp: Date.now(),
       };
       this.currentSession.messages.push(errorMessage);
+      await this.sessionStorage.insertMessage(this.currentSession.id, errorMessage);
       this.onMessageUpdate?.(this.currentSession.messages);
       return;
     }
@@ -515,6 +522,7 @@ export class ChatManager {
     };
 
     this.currentSession.messages.push(userMessage);
+    await this.sessionStorage.insertMessage(this.currentSession.id, userMessage);
     this.currentSession.updatedAt = Date.now();
     this.onMessageUpdate?.(this.currentSession.messages);
 
@@ -527,6 +535,7 @@ export class ChatManager {
     };
 
     this.currentSession.messages.push(assistantMessage);
+    await this.sessionStorage.insertMessage(this.currentSession.id, assistantMessage);
     this.onMessageUpdate?.(this.currentSession.messages);
 
     // 获取上下文管理器并过滤消息
@@ -583,7 +592,8 @@ export class ChatManager {
               assistantMessage.timestamp = Date.now();
               this.currentSession!.updatedAt = Date.now();
 
-              await this.sessionStorage.saveSession(this.currentSession!);
+              await this.sessionStorage.updateMessageContent(this.currentSession!.id, assistantMessage.id, fullContent);
+              await this.sessionStorage.updateSessionMeta(this.currentSession!);
               this.onMessageUpdate?.(this.currentSession!.messages);
 
               if (pdfWasAttached) {
@@ -595,7 +605,7 @@ export class ChatManager {
               if (summaryTriggered) {
                 contextManager
                   .generateSummaryAsync(this.currentSession!, async () => {
-                    await this.sessionStorage.saveSession(this.currentSession!);
+                    await this.sessionStorage.updateSessionMeta(this.currentSession!);
                   })
                   .catch((err) => {
                     ztoolkit.log("[ChatManager] Summary generation failed:", err);
@@ -636,6 +646,7 @@ export class ChatManager {
       );
       if (assistantIndex !== -1) {
         this.currentSession!.messages.splice(assistantIndex, 1);
+        await this.sessionStorage.deleteMessage(this.currentSession!.id, assistantMessage.id);
       }
 
       const errorMessage: ChatMessage = {
@@ -645,6 +656,7 @@ export class ChatManager {
         timestamp: Date.now(),
       };
       this.currentSession!.messages.push(errorMessage);
+      await this.sessionStorage.insertMessage(this.currentSession!.id, errorMessage);
 
       this.onError?.(error instanceof Error ? error : new Error(String(error)));
       this.onMessageUpdate?.(this.currentSession!.messages);
@@ -745,6 +757,7 @@ export class ChatManager {
       );
       if (assistantIndex !== -1) {
         this.currentSession!.messages.splice(assistantIndex, 1);
+        await this.sessionStorage.deleteMessage(this.currentSession!.id, assistantMessage.id);
       }
 
       const errorMessage: ChatMessage = {
@@ -754,6 +767,7 @@ export class ChatManager {
         timestamp: Date.now(),
       };
       this.currentSession!.messages.push(errorMessage);
+      await this.sessionStorage.insertMessage(this.currentSession!.id, errorMessage);
 
       this.onError?.(error instanceof Error ? error : new Error(String(error)));
       this.onMessageUpdate?.(this.currentSession!.messages);
@@ -1021,7 +1035,8 @@ export class ChatManager {
         assistantMessage.timestamp = Date.now();
         this.currentSession!.updatedAt = Date.now();
 
-        await this.sessionStorage.saveSession(this.currentSession!);
+        await this.sessionStorage.updateMessageContent(this.currentSession!.id, assistantMessage.id, accumulatedDisplay);
+        await this.sessionStorage.updateSessionMeta(this.currentSession!);
         this.onMessageUpdate?.(this.currentSession!.messages);
 
         if (pdfWasAttached) {
@@ -1032,7 +1047,7 @@ export class ChatManager {
         if (summaryTriggered) {
           contextManager
             .generateSummaryAsync(this.currentSession!, async () => {
-              await this.sessionStorage.saveSession(this.currentSession!);
+              await this.sessionStorage.updateSessionMeta(this.currentSession!);
             })
             .catch((err) => {
               ztoolkit.log("[ChatManager] Summary generation failed:", err);
@@ -1049,7 +1064,8 @@ export class ChatManager {
       assistantMessage.content = accumulatedDisplay;
       assistantMessage.timestamp = Date.now();
       this.currentSession!.updatedAt = Date.now();
-      await this.sessionStorage.saveSession(this.currentSession!);
+      await this.sessionStorage.updateMessageContent(this.currentSession!.id, assistantMessage.id, accumulatedDisplay);
+      await this.sessionStorage.updateSessionMeta(this.currentSession!);
       this.onMessageUpdate?.(this.currentSession!.messages);
       this.onMessageComplete?.();
     } catch (error) {
@@ -1176,7 +1192,8 @@ export class ChatManager {
         assistantMessage.timestamp = Date.now();
         this.currentSession!.updatedAt = Date.now();
 
-        await this.sessionStorage.saveSession(this.currentSession!);
+        await this.sessionStorage.updateMessageContent(this.currentSession!.id, assistantMessage.id, accumulatedDisplay);
+        await this.sessionStorage.updateSessionMeta(this.currentSession!);
         this.onMessageUpdate?.(this.currentSession!.messages);
 
         if (pdfWasAttached) {
@@ -1187,7 +1204,7 @@ export class ChatManager {
         if (summaryTriggered) {
           contextManager
             .generateSummaryAsync(this.currentSession!, async () => {
-              await this.sessionStorage.saveSession(this.currentSession!);
+              await this.sessionStorage.updateSessionMeta(this.currentSession!);
             })
             .catch((err) => {
               ztoolkit.log("[ChatManager] Summary generation failed:", err);
@@ -1204,7 +1221,8 @@ export class ChatManager {
       assistantMessage.content = accumulatedDisplay;
       assistantMessage.timestamp = Date.now();
       this.currentSession!.updatedAt = Date.now();
-      await this.sessionStorage.saveSession(this.currentSession!);
+      await this.sessionStorage.updateMessageContent(this.currentSession!.id, assistantMessage.id, accumulatedDisplay);
+      await this.sessionStorage.updateSessionMeta(this.currentSession!);
       this.onMessageUpdate?.(this.currentSession!.messages);
       this.onMessageComplete?.();
     } catch (error) {
@@ -1227,7 +1245,8 @@ export class ChatManager {
     this.currentSession.lastActiveItemKeys = [];
     this.currentSession.updatedAt = Date.now();
 
-    await this.sessionStorage.saveSession(this.currentSession);
+    await this.sessionStorage.deleteAllMessages(this.currentSession.id);
+    await this.sessionStorage.updateSessionMeta(this.currentSession);
     this.onMessageUpdate?.(this.currentSession.messages);
 
     ztoolkit.log("Current session cleared");
@@ -1266,7 +1285,7 @@ export class ChatManager {
    */
   async destroy(): Promise<void> {
     if (this.currentSession) {
-      await this.sessionStorage.saveSession(this.currentSession);
+      await this.sessionStorage.updateSessionMeta(this.currentSession);
     }
     this.currentSession = null;
     this.currentItemKey = null;

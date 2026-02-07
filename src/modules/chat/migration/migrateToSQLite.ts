@@ -85,22 +85,48 @@ async function insertSession(
 ): Promise<void> {
   const meta = buildSessionMeta(session);
 
+  // Insert session row (no messages column in v2 schema)
   await db.queryAsync(
     `INSERT OR REPLACE INTO sessions
-     (id, created_at, updated_at, last_active_item_key, last_active_item_keys, messages, context_summary, context_state)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+     (id, created_at, updated_at, last_active_item_key, last_active_item_keys, context_summary, context_state)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
     [
       session.id,
       session.createdAt,
       session.updatedAt,
       session.lastActiveItemKey || null,
       session.lastActiveItemKeys ? JSON.stringify(session.lastActiveItemKeys) : null,
-      JSON.stringify(session.messages || []),
       session.contextSummary ? JSON.stringify(session.contextSummary) : null,
       session.contextState ? JSON.stringify(session.contextState) : null,
     ],
   );
 
+  // Insert messages into the messages table (one row per message)
+  const messages = session.messages || [];
+  for (let seq = 0; seq < messages.length; seq++) {
+    const msg = messages[seq];
+    await db.queryAsync(
+      `INSERT INTO messages (id, session_id, seq, role, content, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, is_system_notice)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        msg.id,
+        session.id,
+        seq,
+        msg.role,
+        msg.content || "",
+        msg.images ? JSON.stringify(msg.images) : null,
+        msg.files ? JSON.stringify(msg.files) : null,
+        msg.timestamp || Date.now(),
+        msg.pdfContext ? 1 : null,
+        msg.selectedText || null,
+        msg.tool_calls ? JSON.stringify(msg.tool_calls) : null,
+        msg.tool_call_id || null,
+        msg.isSystemNotice ? 1 : null,
+      ],
+    );
+  }
+
+  // Insert session_meta
   await db.queryAsync(
     `INSERT OR REPLACE INTO session_meta
      (id, created_at, updated_at, message_count, last_message_preview, last_message_time)

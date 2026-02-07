@@ -7,10 +7,11 @@
  * 3. 空 session 自动清理
  * 4. 最大 1000 session 限制
  *
- * Public API unchanged from file-based version.
+ * Messages are stored in a separate `messages` table (one row per message).
+ * Push → INSERT, splice → DELETE, content update → UPDATE.
  */
 
-import type { ChatSession, SessionMeta } from "../../types/chat";
+import type { ChatMessage, ChatSession, SessionMeta } from "../../types/chat";
 import { filterValidMessages, generateShortId } from "../../utils/common";
 import { getStorageDatabase } from "./db/StorageDatabase";
 
@@ -83,6 +84,226 @@ export class SessionStorageService {
     return `${Date.now()}-${generateShortId()}`;
   }
 
+  // ============================================
+  // Message-level operations
+  // ============================================
+
+  /**
+   * 插入单条消息 (push 操作)
+   */
+  async insertMessage(sessionId: string, message: ChatMessage): Promise<void> {
+    await this.init();
+
+    try {
+      const db = await getStorageDatabase().ensureInit();
+
+      // Get the next seq number for this session
+      const seqRows = (await db.queryAsync(
+        "SELECT COALESCE(MAX(seq), -1) as max_seq FROM messages WHERE session_id = ?",
+        [sessionId],
+      )) || [];
+      const nextSeq = (seqRows[0]?.max_seq ?? -1) + 1;
+
+      await db.queryAsync(
+        `INSERT INTO messages (id, session_id, seq, role, content, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, is_system_notice)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          message.id,
+          sessionId,
+          nextSeq,
+          message.role,
+          message.content || "",
+          message.images ? JSON.stringify(message.images) : null,
+          message.files ? JSON.stringify(message.files) : null,
+          message.timestamp || Date.now(),
+          message.pdfContext ? 1 : null,
+          message.selectedText || null,
+          message.tool_calls ? JSON.stringify(message.tool_calls) : null,
+          message.tool_call_id || null,
+          message.isSystemNotice ? 1 : null,
+        ],
+      );
+
+      // Incrementally update session_meta
+      const now = Date.now();
+      const preview = (message.role !== "tool" && message.content)
+        ? message.content.substring(0, 50) + (message.content.length > 50 ? "..." : "")
+        : undefined;
+
+      if (preview !== undefined) {
+        await db.queryAsync(
+          `UPDATE session_meta SET
+            message_count = message_count + 1,
+            last_message_preview = ?,
+            last_message_time = ?,
+            updated_at = ?
+          WHERE id = ?`,
+          [preview, message.timestamp || now, now, sessionId],
+        );
+      } else {
+        await db.queryAsync(
+          `UPDATE session_meta SET
+            message_count = message_count + 1,
+            updated_at = ?
+          WHERE id = ?`,
+          [now, sessionId],
+        );
+      }
+
+      // Update sessions.updated_at
+      await db.queryAsync(
+        "UPDATE sessions SET updated_at = ? WHERE id = ?",
+        [now, sessionId],
+      );
+    } catch (error) {
+      ztoolkit.log("[SessionStorageService] Insert message error:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * 删除单条消息 (splice 操作 — 错误恢复时删除 assistant 占位)
+   */
+  async deleteMessage(sessionId: string, messageId: string): Promise<void> {
+    await this.init();
+
+    try {
+      const db = await getStorageDatabase().ensureInit();
+      const now = Date.now();
+
+      await db.queryAsync(
+        "DELETE FROM messages WHERE id = ? AND session_id = ?",
+        [messageId, sessionId],
+      );
+
+      await db.queryAsync(
+        `UPDATE session_meta SET
+          message_count = MAX(0, message_count - 1),
+          updated_at = ?
+        WHERE id = ?`,
+        [now, sessionId],
+      );
+
+      await db.queryAsync(
+        "UPDATE sessions SET updated_at = ? WHERE id = ?",
+        [now, sessionId],
+      );
+    } catch (error) {
+      ztoolkit.log("[SessionStorageService] Delete message error:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * 删除所有消息 (clearCurrentSession)
+   */
+  async deleteAllMessages(sessionId: string): Promise<void> {
+    await this.init();
+
+    try {
+      const db = await getStorageDatabase().ensureInit();
+      const now = Date.now();
+
+      await db.queryAsync(
+        "DELETE FROM messages WHERE session_id = ?",
+        [sessionId],
+      );
+
+      await db.queryAsync(
+        `UPDATE session_meta SET
+          message_count = 0,
+          last_message_preview = '',
+          last_message_time = ?,
+          updated_at = ?
+        WHERE id = ?`,
+        [now, now, sessionId],
+      );
+
+      await db.queryAsync(
+        "UPDATE sessions SET updated_at = ? WHERE id = ?",
+        [now, sessionId],
+      );
+    } catch (error) {
+      ztoolkit.log("[SessionStorageService] Delete all messages error:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * 更新消息内容 (streaming 完成后更新 assistant message 的最终内容)
+   */
+  async updateMessageContent(sessionId: string, messageId: string, content: string): Promise<void> {
+    await this.init();
+
+    try {
+      const db = await getStorageDatabase().ensureInit();
+
+      await db.queryAsync(
+        "UPDATE messages SET content = ?, timestamp = ? WHERE id = ? AND session_id = ?",
+        [content, Date.now(), messageId, sessionId],
+      );
+
+      // Update session_meta preview with the latest content
+      const preview = content.substring(0, 50) + (content.length > 50 ? "..." : "");
+      const now = Date.now();
+
+      await db.queryAsync(
+        `UPDATE session_meta SET
+          last_message_preview = ?,
+          last_message_time = ?,
+          updated_at = ?
+        WHERE id = ?`,
+        [preview, now, now, sessionId],
+      );
+    } catch (error) {
+      ztoolkit.log("[SessionStorageService] Update message content error:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * 仅更新 session 元数据 (不涉及 messages)
+   */
+  async updateSessionMeta(session: ChatSession): Promise<void> {
+    await this.init();
+
+    try {
+      const db = await getStorageDatabase().ensureInit();
+      session.updatedAt = Date.now();
+
+      await db.queryAsync(
+        `UPDATE sessions SET
+          updated_at = ?,
+          last_active_item_key = ?,
+          last_active_item_keys = ?,
+          context_summary = ?,
+          context_state = ?
+        WHERE id = ?`,
+        [
+          session.updatedAt,
+          session.lastActiveItemKey || null,
+          session.lastActiveItemKeys ? JSON.stringify(session.lastActiveItemKeys) : null,
+          session.contextSummary ? JSON.stringify(session.contextSummary) : null,
+          session.contextState ? JSON.stringify(session.contextState) : null,
+          session.id,
+        ],
+      );
+
+      // Also keep session_meta.updated_at in sync
+      await db.queryAsync(
+        "UPDATE session_meta SET updated_at = ? WHERE id = ?",
+        [session.updatedAt, session.id],
+      );
+    } catch (error) {
+      ztoolkit.log("[SessionStorageService] Update session meta error:", error);
+      throw error;
+    }
+  }
+
+  // ============================================
+  // Session-level CRUD
+  // ============================================
+
   /**
    * 创建新 session
    */
@@ -100,7 +321,7 @@ export class SessionStorageService {
       messages: [],
     };
 
-    // 保存 session
+    // 保存 session (full write — no messages to insert)
     await this.saveSession(session);
 
     // 设置为活动 session
@@ -111,7 +332,7 @@ export class SessionStorageService {
   }
 
   /**
-   * 保存 session
+   * 保存 session (全量写入 — 用于 create/migration/destroy)
    */
   async saveSession(session: ChatSession): Promise<void> {
     await this.init();
@@ -124,22 +345,52 @@ export class SessionStorageService {
 
       await db.queryAsync("BEGIN TRANSACTION");
       try {
-        // Upsert session
+        // Upsert session (no messages column)
         await db.queryAsync(
           `INSERT OR REPLACE INTO sessions
-           (id, created_at, updated_at, last_active_item_key, last_active_item_keys, messages, context_summary, context_state)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, created_at, updated_at, last_active_item_key, last_active_item_keys, context_summary, context_state)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
           [
             session.id,
             session.createdAt,
             session.updatedAt,
             session.lastActiveItemKey || null,
             session.lastActiveItemKeys ? JSON.stringify(session.lastActiveItemKeys) : null,
-            JSON.stringify(session.messages),
             session.contextSummary ? JSON.stringify(session.contextSummary) : null,
             session.contextState ? JSON.stringify(session.contextState) : null,
           ],
         );
+
+        // Replace all messages: delete existing, then insert
+        await db.queryAsync(
+          "DELETE FROM messages WHERE session_id = ?",
+          [session.id],
+        );
+
+        if (session.messages && session.messages.length > 0) {
+          for (let seq = 0; seq < session.messages.length; seq++) {
+            const msg = session.messages[seq];
+            await db.queryAsync(
+              `INSERT INTO messages (id, session_id, seq, role, content, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, is_system_notice)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                msg.id,
+                session.id,
+                seq,
+                msg.role,
+                msg.content || "",
+                msg.images ? JSON.stringify(msg.images) : null,
+                msg.files ? JSON.stringify(msg.files) : null,
+                msg.timestamp || Date.now(),
+                msg.pdfContext ? 1 : null,
+                msg.selectedText || null,
+                msg.tool_calls ? JSON.stringify(msg.tool_calls) : null,
+                msg.tool_call_id || null,
+                msg.isSystemNotice ? 1 : null,
+              ],
+            );
+          }
+        }
 
         // Upsert session_meta
         await db.queryAsync(
@@ -180,31 +431,52 @@ export class SessionStorageService {
 
     try {
       const db = await getStorageDatabase().ensureInit();
-      const rows = (await db.queryAsync(
-        "SELECT * FROM sessions WHERE id = ?",
+
+      // 1. Load session row (without messages)
+      const sessionRows = (await db.queryAsync(
+        "SELECT id, created_at, updated_at, last_active_item_key, last_active_item_keys, context_summary, context_state FROM sessions WHERE id = ?",
         [sessionId],
       )) || [];
 
-      if (rows.length === 0) {
+      if (sessionRows.length === 0) {
         return null;
       }
 
-      const row = rows[0];
+      const row = sessionRows[0];
+
+      // 2. Load messages from messages table
+      const messageRows = (await db.queryAsync(
+        "SELECT * FROM messages WHERE session_id = ? ORDER BY seq ASC",
+        [sessionId],
+      )) || [];
+
+      const messages: ChatMessage[] = messageRows.map((m: any) => {
+        const msg: ChatMessage = {
+          id: m.id,
+          role: m.role,
+          content: m.content || "",
+          timestamp: m.timestamp,
+        };
+        if (m.images) msg.images = JSON.parse(m.images);
+        if (m.files) msg.files = JSON.parse(m.files);
+        if (m.pdf_context) msg.pdfContext = true;
+        if (m.selected_text) msg.selectedText = m.selected_text;
+        if (m.tool_calls) msg.tool_calls = JSON.parse(m.tool_calls);
+        if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
+        if (m.is_system_notice) msg.isSystemNotice = true;
+        return msg;
+      });
+
       const session: ChatSession = {
         id: row.id,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
         lastActiveItemKey: row.last_active_item_key || null,
         lastActiveItemKeys: row.last_active_item_keys ? JSON.parse(row.last_active_item_keys) : undefined,
-        messages: row.messages ? JSON.parse(row.messages) : [],
+        messages: filterValidMessages(messages),
         contextSummary: row.context_summary ? JSON.parse(row.context_summary) : undefined,
         contextState: row.context_state ? JSON.parse(row.context_state) : undefined,
       };
-
-      // 过滤无效消息（修复历史数据问题）
-      if (session.messages) {
-        session.messages = filterValidMessages(session.messages);
-      }
 
       ztoolkit.log("[SessionStorageService] Session loaded:", sessionId);
       return session;
@@ -223,8 +495,9 @@ export class SessionStorageService {
     try {
       const db = await getStorageDatabase().ensureInit();
 
-      // Explicitly delete from both tables (don't rely on CASCADE alone,
+      // Explicitly delete from all tables (don't rely on CASCADE alone,
       // since PRAGMA foreign_keys may not persist across reconnections)
+      await db.queryAsync("DELETE FROM messages WHERE session_id = ?", [sessionId]);
       await db.queryAsync("DELETE FROM session_meta WHERE id = ?", [sessionId]);
       await db.queryAsync("DELETE FROM sessions WHERE id = ?", [sessionId]);
 
@@ -341,6 +614,7 @@ export class SessionStorageService {
       const rows = (await db.queryAsync(query, params)) || [];
 
       for (const row of rows) {
+        await db.queryAsync("DELETE FROM messages WHERE session_id = ?", [row.id]);
         await db.queryAsync("DELETE FROM session_meta WHERE id = ?", [row.id]);
         await db.queryAsync("DELETE FROM sessions WHERE id = ?", [row.id]);
       }
@@ -378,6 +652,7 @@ export class SessionStorageService {
       )) || [];
 
       for (const row of toDeleteRows) {
+        await db.queryAsync("DELETE FROM messages WHERE session_id = ?", [row.id]);
         await db.queryAsync("DELETE FROM session_meta WHERE id = ?", [row.id]);
         await db.queryAsync("DELETE FROM sessions WHERE id = ?", [row.id]);
       }
