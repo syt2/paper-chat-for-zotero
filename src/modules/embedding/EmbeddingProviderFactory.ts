@@ -17,6 +17,7 @@ import { GeminiEmbedding } from "./providers/GeminiEmbedding";
 import { OpenAIEmbedding } from "./providers/OpenAIEmbedding";
 import { OllamaEmbedding } from "./providers/OllamaEmbedding";
 import { getErrorMessage } from "../../utils/common";
+import { getString } from "../../utils/locale";
 import {
   PaperChatEmbedding,
   getAvailableEmbeddingModels,
@@ -58,7 +59,7 @@ export class EmbeddingProviderFactory {
         return {
           available: true,
           provider: "paperchat",
-          message: `✅ 使用 PaperChat Embedding (${embeddingModels[0]})`,
+          message: `✅ ${getString("pref-embedding-status-paperchat", { args: { model: embeddingModels[0] } })}`,
         };
       }
     }
@@ -72,7 +73,7 @@ export class EmbeddingProviderFactory {
       return {
         available: true,
         provider: "gemini",
-        message: "✅ 使用 Gemini Embedding (免费)",
+        message: `✅ ${getString("pref-embedding-status-gemini")}`,
       };
     }
 
@@ -85,7 +86,7 @@ export class EmbeddingProviderFactory {
           return {
             available: true,
             provider: "ollama",
-            message: "✅ 使用 Ollama 本地 Embedding",
+            message: `✅ ${getString("pref-embedding-status-ollama")}`,
           };
         } else {
           // Ollama is running but no embedding model - continue checking other providers
@@ -105,7 +106,7 @@ export class EmbeddingProviderFactory {
       return {
         available: true,
         provider: "openai",
-        message: "✅ 使用 OpenAI Embedding",
+        message: `✅ ${getString("pref-embedding-status-openai")}`,
       };
     }
 
@@ -115,15 +116,14 @@ export class EmbeddingProviderFactory {
       return {
         available: false,
         provider: null,
-        message:
-          "⚠️ Ollama 已运行但未安装 Embedding 模型\n请运行: ollama pull nomic-embed-text",
+        message: `⚠️ ${getString("pref-embedding-unavailable-ollama")}`,
       };
     }
 
     return {
       available: false,
       provider: null,
-      message: "⚠️ 无可用 Embedding 服务\n请登录 PaperChat 或配置 API Key",
+      message: `⚠️ ${getString("pref-embedding-unavailable-none")}`,
     };
   }
 
