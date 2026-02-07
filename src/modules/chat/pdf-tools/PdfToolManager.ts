@@ -1257,7 +1257,7 @@ export class PdfToolManager {
         }
         return executeSearchPaperContent(args, paperStructure, targetItemKey ?? undefined);
       case "get_paper_metadata":
-        return executeGetPaperMetadata(paperStructure);
+        return executeGetPaperMetadata(paperStructure, targetItemKey ?? undefined);
       case "get_pages":
         if (!this.isGetPagesArgs(args)) {
           return "Error: Invalid arguments for get_pages. Required: pages (string)";

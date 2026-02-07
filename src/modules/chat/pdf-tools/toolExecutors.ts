@@ -169,42 +169,103 @@ function executeKeywordSearch(
 }
 
 /**
+ * 从 Zotero item key 解析出顶层条目（如果是附件或笔记则取 parent）
+ */
+function resolveTopLevelItem(itemKey: string): Zotero.Item | null {
+  const libraryID = Zotero.Libraries.userLibraryID;
+  const item = Zotero.Items.getByLibraryAndKey(libraryID, itemKey);
+  if (!item) return null;
+
+  // If it's an attachment (e.g. PDF) or a note, get the parent item
+  if ((item.isAttachment?.() || item.isNote?.()) && item.parentItemID) {
+    const parent = Zotero.Items.get(item.parentItemID);
+    return parent || null;
+  }
+
+  return item;
+}
+
+/**
  * 执行 get_paper_metadata
  */
 export function executeGetPaperMetadata(
   paperStructure: PaperStructureExtended,
+  itemKey?: string,
 ): string {
-  const { metadata, sections, pageCount } = paperStructure;
-
+  const { sections, pageCount } = paperStructure;
   const parts: string[] = [];
 
-  if (metadata.title) {
-    parts.push(`Title: ${metadata.title}`);
+  // Try to get metadata from Zotero item
+  const item = itemKey ? resolveTopLevelItem(itemKey) : null;
+
+  if (item) {
+    // Use Zotero item metadata (authoritative)
+    parts.push(`Item Key: ${item.key}`);
+
+    const title = item.getField("title");
+    if (title) parts.push(`Title: ${title}`);
+
+    const creators = item.getCreators();
+    if (creators && creators.length > 0) {
+      const authorNames = creators.map(
+        (c: { name?: string; firstName?: string; lastName?: string }) => {
+          if (c.name) return c.name;
+          return `${c.firstName || ""} ${c.lastName || ""}`.trim();
+        },
+      );
+      parts.push(`Authors: ${authorNames.join(", ")}`);
+    }
+
+    const year = item.getField("year");
+    if (year) parts.push(`Year: ${year}`);
+
+    const doi = item.getField("DOI");
+    if (doi) parts.push(`DOI: ${doi}`);
+
+    const url = item.getField("url");
+    if (url) parts.push(`URL: ${url}`);
+
+    const publication = item.getField("publicationTitle");
+    if (publication) parts.push(`Publication: ${publication}`);
+
+    const conferenceName = item.getField("conferenceName");
+    if (conferenceName) parts.push(`Conference: ${conferenceName}`);
+
+    parts.push(`Pages: ${pageCount}`);
+
+    const abstractText = item.getField("abstractNote");
+    if (abstractText) {
+      const truncated =
+        abstractText.length > 2000
+          ? abstractText.substring(0, 2000) + "..."
+          : abstractText;
+      parts.push(`\nAbstract:\n${truncated}`);
+    }
+
+    const tags = item.getTags();
+    if (tags && tags.length > 0) {
+      const tagNames = tags.map((t: { tag: string }) => t.tag);
+      parts.push(`\nTags: ${tagNames.join(", ")}`);
+    }
+  } else {
+    // Fallback: use PDF-parsed metadata
+    const { metadata } = paperStructure;
+    if (metadata.title) parts.push(`Title: ${metadata.title}`);
+    if (metadata.authors && metadata.authors.length > 0) {
+      parts.push(`Authors: ${metadata.authors.join(", ")}`);
+    }
+    if (metadata.year) parts.push(`Year: ${metadata.year}`);
+    if (metadata.doi) parts.push(`DOI: ${metadata.doi}`);
+    parts.push(`Pages: ${pageCount}`);
+    if (metadata.abstract) {
+      parts.push(`\nAbstract:\n${metadata.abstract}`);
+    }
+    if (metadata.keywords && metadata.keywords.length > 0) {
+      parts.push(`\nKeywords: ${metadata.keywords.join(", ")}`);
+    }
   }
 
-  if (metadata.authors && metadata.authors.length > 0) {
-    parts.push(`Authors: ${metadata.authors.join(", ")}`);
-  }
-
-  if (metadata.year) {
-    parts.push(`Year: ${metadata.year}`);
-  }
-
-  if (metadata.doi) {
-    parts.push(`DOI: ${metadata.doi}`);
-  }
-
-  parts.push(`Pages: ${pageCount}`);
-
-  if (metadata.abstract) {
-    parts.push(`\nAbstract:\n${metadata.abstract}`);
-  }
-
-  if (metadata.keywords && metadata.keywords.length > 0) {
-    parts.push(`\nKeywords: ${metadata.keywords.join(", ")}`);
-  }
-
-  // 添加章节结构
+  // Paper structure from PDF parsing (always available)
   const sectionList = sections
     .filter((s) => s.normalizedName !== "full_text")
     .map((s) => `  - ${s.name} (${s.content.length} chars)`)
