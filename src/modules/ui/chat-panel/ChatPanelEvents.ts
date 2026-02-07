@@ -28,9 +28,8 @@ let getActiveReaderItemFn: (() => Zotero.Item | null) | null = null;
 // Toggle panel mode function reference (set by ChatPanelManager)
 let togglePanelModeFn: (() => void) | null = null;
 
-// 发送锁（使用 Promise 实现更可靠的锁机制，防止竞态条件）
-let sendLock: Promise<void> | null = null;
-let resolveSendLock: (() => void) | null = null;
+// 发送锁（按 session 分配，防止同一 session 内重复发送，同时允许切换 session 后正常发送）
+const sessionSendLocks = new Set<string>();
 
 /**
  * Set the getActiveReaderItem function reference
@@ -154,7 +153,9 @@ export function setupEventHandlers(context: ChatPanelContext): void {
 
       e.preventDefault();
       // Block Enter key while sending (lock mechanism handles duplicate prevention)
-      if (sendLock) {
+      const currentSessionForKey = chatManager.getActiveSession();
+      const currentLockId = currentSessionForKey?.id ?? "__no_session__";
+      if (sessionSendLocks.has(currentLockId)) {
         ztoolkit.log("Enter key blocked - message is being sent");
         return;
       }
@@ -211,6 +212,9 @@ export function setupEventHandlers(context: ChatPanelContext): void {
 
     // Create a new session
     const newSession = await chatManager.createNewSession();
+
+    // 新 session 没有锁，同步按钮状态（解除旧 session 可能遗留的 disabled）
+    syncSendButtonState(sendButton, chatManager);
 
     // Update current item from reader if available
     const item = getActiveReaderItem();
@@ -333,6 +337,8 @@ export function setupEventHandlers(context: ChatPanelContext): void {
         historyDropdown.style.display = "none";
 
         const loadedSession = await chatManager.switchSession(session.id);
+        // 切换 session 后同步按钮状态
+        syncSendButtonState(sendButton, chatManager);
         if (loadedSession) {
           // Restore the item key from session
           const itemKey = loadedSession.lastActiveItemKey;
@@ -518,28 +524,39 @@ export function updateAttachmentsPreviewDisplay(
 }
 
 /**
- * 获取发送锁（防止竞态条件）
+ * 获取发送锁（按 session 分配，防止竞态条件）
  * @returns 是否成功获取锁
  */
-function acquireSendLock(): boolean {
-  if (sendLock) {
-    return false; // 锁已被占用
+function acquireSendLock(sessionId: string): boolean {
+  if (sessionSendLocks.has(sessionId)) {
+    return false;
   }
-  sendLock = new Promise<void>((resolve) => {
-    resolveSendLock = resolve;
-  });
+  sessionSendLocks.add(sessionId);
   return true;
 }
 
 /**
  * 释放发送锁
  */
-function releaseSendLock(): void {
-  if (resolveSendLock) {
-    resolveSendLock();
-    resolveSendLock = null;
-  }
-  sendLock = null;
+function releaseSendLock(sessionId: string): void {
+  sessionSendLocks.delete(sessionId);
+}
+
+/**
+ * 根据当前 session 的锁状态，同步 sendButton 的 disabled 样式
+ * 抽取为独立函数，避免在多处重复 button 样式逻辑
+ */
+function syncSendButtonState(
+  sendButton: HTMLButtonElement | null,
+  chatManager: ChatPanelContext["chatManager"],
+): void {
+  if (!sendButton) return;
+  const activeSession = chatManager.getActiveSession();
+  const activeSessionId = activeSession?.id ?? "__no_session__";
+  const isLocked = sessionSendLocks.has(activeSessionId);
+  sendButton.disabled = isLocked;
+  sendButton.style.opacity = isLocked ? "0.5" : "1";
+  sendButton.style.cursor = isLocked ? "not-allowed" : "pointer";
 }
 
 /**
@@ -552,115 +569,111 @@ async function sendMessage(
   sendButton: HTMLButtonElement | null,
   _attachmentsPreview: HTMLElement | null,
 ): Promise<void> {
-  // 使用锁机制防止重复发送
-  if (!acquireSendLock()) {
-    ztoolkit.log("[sendMessage] Already sending, skipping");
-    return;
-  }
-
-  const content = messageInput?.value?.trim();
-  if (!content) {
-    releaseSendLock();
-    return;
-  }
-
   const { chatManager, authManager } = context;
 
-  // Get active reader item first (used for PDF attachment)
-  const activeReaderItem = getActiveReaderItem();
+  // 获取当前 session ID，用于按 session 分配锁
+  const session = chatManager.getActiveSession();
+  const sessionId = session?.id ?? "__no_session__";
 
-  // Use current item or fall back to active reader
-  let item = context.getCurrentItem();
-  if (!item) {
-    item = activeReaderItem;
-    if (item) {
-      context.setCurrentItem(item);
-    }
-  }
-
-  // Check provider authentication/readiness
-  const providerManager = getProviderManager();
-  const activeProviderId = providerManager.getActiveProviderId();
-  const activeProvider = providerManager.getActiveProvider();
-
-  if (activeProviderId === "paperchat") {
-    // For PaperChat, prompt login if not logged in
-    if (!authManager.isLoggedIn()) {
-      const success = await showAuthDialog("login");
-      if (!success) {
-        releaseSendLock();
-        return;
-      }
-      context.updateUserBar();
-    }
-    // After login, ensure API key is available
-    if (!activeProvider?.isReady()) {
-      // Try to refresh the plugin token
-      await authManager.ensurePluginToken(true);
-      if (!activeProvider?.isReady()) {
-        ztoolkit.log(
-          "PaperChat provider still not ready after token refresh, forcing logout",
-        );
-        // Session is invalid and auto-relogin failed, force logout
-        await authManager.logout();
-        context.updateUserBar();
-        // Show error in chat
-        chatManager.showErrorMessage(getString("chat-error-session-expired"));
-        // Prompt login again
-        const success = await showAuthDialog("login");
-        if (!success) {
-          releaseSendLock();
-          return;
-        }
-        context.updateUserBar();
-        // Check again after re-login
-        if (!activeProvider?.isReady()) {
-          chatManager.showErrorMessage(getString("chat-error-no-provider"));
-          releaseSendLock();
-          return;
-        }
-      }
-    }
-  } else if (!activeProvider?.isReady()) {
-    ztoolkit.log("Provider not ready:", activeProviderId);
-    releaseSendLock();
+  // 使用锁机制防止同一 session 内重复发送
+  if (!acquireSendLock(sessionId)) {
+    ztoolkit.log("[sendMessage] Already sending in session", sessionId, ", skipping");
     return;
   }
 
-  // Disable send button
-  if (sendButton) {
-    sendButton.disabled = true;
-    sendButton.style.opacity = "0.5";
-    sendButton.style.cursor = "not-allowed";
-  }
-
-  // Get attachment state before clearing
-  const attachmentState = context.getAttachmentState();
-  // Auto-detect PDF: attach if we have an active reader item with PDF
-  const shouldAttachPdf = activeReaderItem !== null;
-
-  // Clear input immediately after getting the content
-  if (messageInput) {
-    messageInput.value = "";
-    messageInput.style.height = "auto";
-  }
-  context.clearAttachments();
-  context.updateAttachmentsPreview();
-
-  // Build attachment options (shared between global and item chat)
-  const attachmentOptions = {
-    images:
-      attachmentState.pendingImages.length > 0
-        ? attachmentState.pendingImages
-        : undefined,
-    files:
-      attachmentState.pendingFiles.length > 0
-        ? attachmentState.pendingFiles
-        : undefined,
-    selectedText: attachmentState.pendingSelectedText || undefined,
-  };
-
+  // acquire 后立即进 try/finally，确保所有路径都能释放锁并同步按钮状态
   try {
+    const content = messageInput?.value?.trim();
+    if (!content) {
+      return;
+    }
+
+    // Get active reader item first (used for PDF attachment)
+    const activeReaderItem = getActiveReaderItem();
+
+    // Use current item or fall back to active reader
+    let item = context.getCurrentItem();
+    if (!item) {
+      item = activeReaderItem;
+      if (item) {
+        context.setCurrentItem(item);
+      }
+    }
+
+    // Check provider authentication/readiness
+    const providerManager = getProviderManager();
+    const activeProviderId = providerManager.getActiveProviderId();
+    const activeProvider = providerManager.getActiveProvider();
+
+    if (activeProviderId === "paperchat") {
+      // For PaperChat, prompt login if not logged in
+      if (!authManager.isLoggedIn()) {
+        const success = await showAuthDialog("login");
+        if (!success) {
+          return;
+        }
+        context.updateUserBar();
+      }
+      // After login, ensure API key is available
+      if (!activeProvider?.isReady()) {
+        // Try to refresh the plugin token
+        await authManager.ensurePluginToken(true);
+        if (!activeProvider?.isReady()) {
+          ztoolkit.log(
+            "PaperChat provider still not ready after token refresh, forcing logout",
+          );
+          // Session is invalid and auto-relogin failed, force logout
+          await authManager.logout();
+          context.updateUserBar();
+          // Show error in chat
+          chatManager.showErrorMessage(getString("chat-error-session-expired"));
+          // Prompt login again
+          const success = await showAuthDialog("login");
+          if (!success) {
+            return;
+          }
+          context.updateUserBar();
+          // Check again after re-login
+          if (!activeProvider?.isReady()) {
+            chatManager.showErrorMessage(getString("chat-error-no-provider"));
+            return;
+          }
+        }
+      }
+    } else if (!activeProvider?.isReady()) {
+      ztoolkit.log("Provider not ready:", activeProviderId);
+      return;
+    }
+
+    // Disable send button (reflect current session's lock state)
+    syncSendButtonState(sendButton, chatManager);
+
+    // Get attachment state before clearing
+    const attachmentState = context.getAttachmentState();
+    // Auto-detect PDF: attach if we have an active reader item with PDF
+    const shouldAttachPdf = activeReaderItem !== null;
+
+    // Clear input immediately after getting the content
+    if (messageInput) {
+      messageInput.value = "";
+      messageInput.style.height = "auto";
+    }
+    context.clearAttachments();
+    context.updateAttachmentsPreview();
+
+    // Build attachment options (shared between global and item chat)
+    const attachmentOptions = {
+      images:
+        attachmentState.pendingImages.length > 0
+          ? attachmentState.pendingImages
+          : undefined,
+      files:
+        attachmentState.pendingFiles.length > 0
+          ? attachmentState.pendingFiles
+          : undefined,
+      selectedText: attachmentState.pendingSelectedText || undefined,
+    };
+
     // Determine target item: use active reader if attaching PDF, otherwise use chat context
     let targetItem = item;
     if (shouldAttachPdf) {
@@ -684,14 +697,10 @@ async function sendMessage(
   } catch (error) {
     ztoolkit.log("Error in sendMessage:", error);
   } finally {
-    // Re-enable send button and release lock
-    if (sendButton) {
-      sendButton.disabled = false;
-      sendButton.style.opacity = "1";
-      sendButton.style.cursor = "pointer";
-    }
+    releaseSendLock(sessionId);
+    // 根据当前活跃 session 的锁状态同步按钮（而非无条件恢复，避免覆盖其他 session 的 disabled 状态）
+    syncSendButtonState(sendButton, chatManager);
     messageInput?.focus();
-    releaseSendLock();
   }
 }
 
