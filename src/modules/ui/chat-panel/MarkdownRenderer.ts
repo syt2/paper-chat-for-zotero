@@ -4,6 +4,7 @@
 
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js";
+import katex from "katex";
 import { chatColors } from "../../../utils/colors";
 import { HTML_NS } from "./types";
 import { isDarkMode } from "./ChatPanelTheme";
@@ -16,6 +17,159 @@ const md = new MarkdownIt({
   typographer: true,
   linkify: true,
 });
+
+/**
+ * Markdown-it plugin for math expressions ($...$ and $$...$$)
+ */
+function mathPlugin(mdInstance: MarkdownIt) {
+  // Inline math: $...$ and $$...$$
+  mdInstance.inline.ruler.after(
+    "escape",
+    "math_inline",
+    (state, silent) => {
+      const src = state.src;
+      const pos = state.pos;
+
+      if (src.charCodeAt(pos) !== 0x24 /* $ */) return false;
+
+      // Determine delimiter: $$ or $
+      const isDouble =
+        pos + 1 < state.posMax &&
+        src.charCodeAt(pos + 1) === 0x24;
+      const delimLen = isDouble ? 2 : 1;
+
+      // Find closing delimiter
+      let end = pos + delimLen;
+      while (end <= state.posMax - delimLen) {
+        if (src.charCodeAt(end) === 0x24) {
+          // Count preceding backslashes for escape detection:
+          // odd = escaped $, even = real closing $
+          let backslashCount = 0;
+          let bsPos = end - 1;
+          while (
+            bsPos >= pos + delimLen &&
+            src.charCodeAt(bsPos) === 0x5c
+          ) {
+            backslashCount++;
+            bsPos--;
+          }
+          if (backslashCount % 2 !== 0) {
+            end++;
+            continue;
+          }
+
+          if (isDouble) {
+            // Need two consecutive $ for closing $$
+            if (
+              end + 1 < state.posMax &&
+              src.charCodeAt(end + 1) === 0x24
+            ) {
+              break;
+            }
+            // Single $ inside $$...$$ content, skip
+            end++;
+            continue;
+          } else {
+            break;
+          }
+        }
+        end++;
+      }
+
+      // Verify closing delimiter was found
+      if (isDouble) {
+        if (
+          end > state.posMax - delimLen ||
+          src.charCodeAt(end + 1) !== 0x24
+        ) {
+          return false;
+        }
+      } else {
+        if (end >= state.posMax) return false;
+      }
+
+      const content = src.slice(pos + delimLen, end);
+      if (!content.trim()) return false;
+
+      if (!silent) {
+        const token = state.push("math_inline", "math", 0);
+        token.content = content;
+        token.markup = isDouble ? "$$" : "$";
+      }
+
+      state.pos = end + delimLen;
+      return true;
+    },
+  );
+
+  // Block math: $$...$$
+  mdInstance.block.ruler.after(
+    "blockquote",
+    "math_block",
+    (state, startLine, endLine, silent) => {
+      const startPos =
+        state.bMarks[startLine] + state.tShift[startLine];
+      const maxPos = state.eMarks[startLine];
+
+      if (startPos + 2 > maxPos) return false;
+      if (
+        state.src.charCodeAt(startPos) !== 0x24 ||
+        state.src.charCodeAt(startPos + 1) !== 0x24
+      ) {
+        return false;
+      }
+
+      const afterOpening = state.src
+        .slice(startPos + 2, maxPos)
+        .trim();
+
+      // Single-line: $$...$$ on same line
+      if (afterOpening.endsWith("$$") && afterOpening.length > 2) {
+        if (silent) return true;
+        const token = state.push("math_block", "math", 0);
+        token.content = afterOpening.slice(0, -2).trim();
+        token.markup = "$$";
+        token.map = [startLine, startLine + 1];
+        state.line = startLine + 1;
+        return true;
+      }
+
+      // Multi-line: find closing $$
+      let nextLine = startLine + 1;
+      let found = false;
+      while (nextLine < endLine) {
+        const lineStart =
+          state.bMarks[nextLine] + state.tShift[nextLine];
+        const lineEnd = state.eMarks[nextLine];
+        const line = state.src.slice(lineStart, lineEnd).trim();
+        if (line === "$$") {
+          found = true;
+          break;
+        }
+        nextLine++;
+      }
+
+      if (!found) return false;
+      if (silent) return true;
+
+      let content = afterOpening ? afterOpening + "\n" : "";
+      for (let i = startLine + 1; i < nextLine; i++) {
+        const lineStart = state.bMarks[i] + state.tShift[i];
+        const lineEnd = state.eMarks[i];
+        content += state.src.slice(lineStart, lineEnd) + "\n";
+      }
+
+      const token = state.push("math_block", "math", 0);
+      token.content = content.trim();
+      token.markup = "$$";
+      token.map = [startLine, nextLine + 1];
+      state.line = nextLine + 1;
+      return true;
+    },
+  );
+}
+
+md.use(mathPlugin);
 
 /**
  * Tool call card styles
@@ -91,7 +245,7 @@ function renderToolCallCards(
       if (textBefore) {
         // Render preceding markdown
         const textContainer = doc.createElementNS(HTML_NS, "div") as HTMLElement;
-        const tokens = md.parse(textBefore, {});
+        const tokens = md.parse(preprocessMathDelimiters(textBefore), {});
         const builtContent = buildDOMFromTokens(doc, tokens);
         while (builtContent.firstChild) {
           textContainer.appendChild(builtContent.firstChild);
@@ -238,6 +392,108 @@ function renderToolCallCards(
 }
 
 /**
+ * Preprocess math delimiters: convert \(...\) and \[...\] to $...$ and $$...$$
+ */
+function preprocessMathDelimiters(content: string): string {
+  const preserved: string[] = [];
+  let processed = content;
+
+  // Protect fenced code blocks
+  processed = processed.replace(/```[\s\S]*?```/g, (match) => {
+    preserved.push(match);
+    return `\x00PRESERVE_${preserved.length - 1}\x00`;
+  });
+  // Protect inline code
+  processed = processed.replace(/`[^`]+`/g, (match) => {
+    preserved.push(match);
+    return `\x00PRESERVE_${preserved.length - 1}\x00`;
+  });
+
+  // Convert \[...\] to $$...$$ (block math)
+  processed = processed.replace(
+    /\\\[([\s\S]*?)\\\]/g,
+    (_, math) => `$$${math}$$`,
+  );
+  // Convert \(...\) to $...$ (inline math)
+  processed = processed.replace(
+    /\\\((.*?)\\\)/g,
+    (_, math) => `$${math}$`,
+  );
+
+  // Restore preserved blocks
+  processed = processed.replace(
+    /\x00PRESERVE_(\d+)\x00/g,
+    (_, idx) => preserved[parseInt(idx)],
+  );
+
+  return processed;
+}
+
+/**
+ * Render math expression to DOM element using KaTeX with MathML output
+ * MathML is natively supported by Firefox/Zotero, so no CSS needed
+ */
+function renderMathToElement(
+  doc: Document,
+  parent: HTMLElement,
+  content: string,
+  displayMode: boolean,
+): void {
+  try {
+    const html = katex.renderToString(content, {
+      displayMode,
+      output: "mathml",
+      throwOnError: false,
+      strict: false,
+    });
+
+    // Parse KaTeX output into XHTML-compatible DOM nodes
+    const parser = new DOMParser();
+    const wrapper = `<span xmlns="${HTML_NS}">${html}</span>`;
+    const mathDoc = parser.parseFromString(
+      wrapper,
+      "application/xhtml+xml",
+    );
+
+    if (mathDoc.querySelector("parsererror")) {
+      renderMathFallback(doc, parent, content, displayMode);
+      return;
+    }
+
+    const sourceNode = mathDoc.documentElement;
+    const children = Array.from(sourceNode.childNodes);
+    for (const child of children) {
+      if (child) {
+        parent.appendChild(doc.importNode(child, true));
+      }
+    }
+  } catch {
+    renderMathFallback(doc, parent, content, displayMode);
+  }
+}
+
+/**
+ * Fallback: show raw LaTeX in styled code element
+ */
+function renderMathFallback(
+  doc: Document,
+  parent: HTMLElement,
+  content: string,
+  displayMode: boolean,
+): void {
+  const code = doc.createElementNS(HTML_NS, "code") as HTMLElement;
+  const dark = isDarkMode();
+  code.style.background = dark ? "#343942" : "#f0f0f0";
+  code.style.color = dark ? "#e6e6e6" : "#24292e";
+  code.style.padding = "2px 6px";
+  code.style.borderRadius = "3px";
+  code.style.fontFamily = "monospace";
+  code.style.fontSize = "0.9em";
+  code.textContent = displayMode ? `$$${content}$$` : `$${content}$`;
+  parent.appendChild(code);
+}
+
+/**
  * Render markdown content to DOM elements directly
  * This avoids XHTML parsing issues by building elements programmatically
  */
@@ -254,7 +510,8 @@ export function renderMarkdownToElement(
 
   // If there's remaining content after tool cards, render it as markdown
   if (remainingContent) {
-    const tokens = md.parse(remainingContent, {});
+    const preprocessed = preprocessMathDelimiters(remainingContent);
+    const tokens = md.parse(preprocessed, {});
     const container = buildDOMFromTokens(doc, tokens);
 
     while (container.firstChild) {
@@ -481,6 +738,19 @@ export function buildDOMFromTokens(
       case "hardbreak":
         parent.appendChild(doc.createElementNS(HTML_NS, "br"));
         break;
+
+      case "math_block": {
+        const mathDiv = doc.createElementNS(
+          HTML_NS,
+          "div",
+        ) as HTMLElement;
+        mathDiv.style.textAlign = "center";
+        mathDiv.style.margin = "12px 0";
+        mathDiv.style.overflowX = "auto";
+        renderMathToElement(doc, mathDiv, token.content, true);
+        parent.appendChild(mathDiv);
+        break;
+      }
     }
   }
 
@@ -563,6 +833,19 @@ export function renderInlineTokens(
       case "link_close":
         stack.pop();
         break;
+
+      case "math_inline": {
+        const mathSpan = doc.createElementNS(
+          HTML_NS,
+          "span",
+        ) as HTMLElement;
+        // Always use displayMode: false for inline math to avoid
+        // <math display="block"> which breaks paragraph flow in Firefox.
+        // Block-level display math is handled by math_block tokens.
+        renderMathToElement(doc, mathSpan, token.content, false);
+        current.appendChild(mathSpan);
+        break;
+      }
 
       case "softbreak":
         current.appendChild(doc.createTextNode(" "));
