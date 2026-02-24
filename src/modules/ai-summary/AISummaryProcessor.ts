@@ -7,6 +7,7 @@ import type {
   AISummaryConfig,
   AISummaryProcessResult,
 } from "../../types/ai-summary";
+import katex from "katex";
 import { getProviderManager } from "../providers";
 import { getString } from "../../utils/locale";
 import { getErrorMessage, getItemTitle } from "../../utils/common";
@@ -408,8 +409,11 @@ export class AISummaryProcessor {
     // 转义标题
     const safeTitle = escapeHtml(title);
 
-    // 转换 markdown 风格的标题（先转义再处理 markdown）
-    let html = content
+    // 渲染数学公式为 MathML（在 markdown 转换之前）
+    const { processed, preserved } = this.renderMathInContent(content);
+
+    // 转换 markdown 风格的标题（数学公式已用占位符保护）
+    let html = processed
       .replace(/^## (.+)$/gm, "<h2>$1</h2>")
       .replace(/^### (.+)$/gm, "<h3>$1</h3>")
       .replace(/^- (.+)$/gm, "<li>$1</li>")
@@ -419,9 +423,97 @@ export class AISummaryProcessor {
     // 包装列表项
     html = html.replace(/(<li>.*<\/li>)+/g, "<ul>$&</ul>");
 
+    // 恢复被保护的内容（代码块 + MathML）
+    html = html.replace(
+      // eslint-disable-next-line no-control-regex
+      /\x00PRESERVE_(\d+)\x00/g,
+      (_, idx) => preserved[parseInt(idx)],
+    );
+
     // 添加标题
     html = `<h1>${safeTitle}</h1><p>${html}</p>`;
 
     return html;
+  }
+
+  /**
+   * 渲染数学公式为 MathML，保护代码块和数学输出不被后续处理破坏
+   * 返回处理后的内容和被保护的片段数组
+   */
+  private renderMathInContent(content: string): {
+    processed: string;
+    preserved: string[];
+  } {
+    const preserved: string[] = [];
+    let processed = content;
+
+    // 保护 fenced 代码块
+    processed = processed.replace(/```[\s\S]*?```/g, (match) => {
+      preserved.push(match);
+      return `\x00PRESERVE_${preserved.length - 1}\x00`;
+    });
+    // 保护行内代码
+    processed = processed.replace(/`[^`]+`/g, (match) => {
+      preserved.push(match);
+      return `\x00PRESERVE_${preserved.length - 1}\x00`;
+    });
+
+    // 转换 \[...\] → $$...$$ 和 \(...\) → $...$
+    processed = processed.replace(
+      /\\\[([\s\S]*?)\\\]/g,
+      (_, math) => `$$${math}$$`,
+    );
+    processed = processed.replace(
+      /\\\((.*?)\\\)/g,
+      (_, math) => `$${math}$`,
+    );
+
+    // 替换 $$...$$ 为 KaTeX MathML（display 模式），先处理双 $
+    processed = processed.replace(
+      /\$\$([\s\S]+?)\$\$/g,
+      (match, math) => {
+        const trimmed = (math as string).trim();
+        if (!trimmed) return match;
+        const mathml = this.renderKatexToMathML(trimmed, true);
+        if (!mathml) return match;
+        preserved.push(mathml);
+        return `\x00PRESERVE_${preserved.length - 1}\x00`;
+      },
+    );
+
+    // 替换 $...$ 为 KaTeX MathML（inline 模式），不跨行
+    processed = processed.replace(
+      /\$([^$\n]+?)\$/g,
+      (match, math) => {
+        const trimmed = (math as string).trim();
+        if (!trimmed) return match;
+        const mathml = this.renderKatexToMathML(trimmed, false);
+        if (!mathml) return match;
+        preserved.push(mathml);
+        return `\x00PRESERVE_${preserved.length - 1}\x00`;
+      },
+    );
+
+    return { processed, preserved };
+  }
+
+  /**
+   * 用 KaTeX 将 LaTeX 渲染为 MathML 字符串
+   * 返回 null 表示渲染失败
+   */
+  private renderKatexToMathML(
+    content: string,
+    displayMode: boolean,
+  ): string | null {
+    try {
+      return katex.renderToString(content, {
+        displayMode,
+        output: "mathml",
+        throwOnError: false,
+        strict: false,
+      });
+    } catch {
+      return null;
+    }
   }
 }
