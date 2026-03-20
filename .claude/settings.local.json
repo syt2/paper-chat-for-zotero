@@ -35,7 +35,9 @@
       "Bash(npm run lint:fix:*)",
       "Bash(npx madge:*)",
       "Bash(gh api:*)",
-      "Bash(git reset:*)"
+      "Bash(git reset:*)",
+      "mcp__plugin_context7_context7__resolve-library-id",
+      "mcp__plugin_context7_context7__query-docs"
     ]
   }
 }

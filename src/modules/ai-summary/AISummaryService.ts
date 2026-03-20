@@ -106,7 +106,8 @@ class AISummaryService {
         const pane = Zotero.getActiveZoteroPane();
         const selectedItems = pane?.getSelectedItems() as Zotero.Item[] | undefined;
         if (!selectedItems || selectedItems.length === 0) return false;
-        const processedTag = getAISummaryManager().getConfig().markProcessedTag;
+        const config = getAISummaryManager().getConfig();
+        const processedTag = config.markProcessedTag;
         // Show menu only if at least one eligible item hasn't been processed
         return selectedItems.some((item: Zotero.Item) => {
           if (item.isNote?.()) return false;
@@ -121,6 +122,10 @@ class AISummaryService {
           }
           // Hide if already processed
           if (processedTag && targetItem.hasTag(processedTag)) {
+            return false;
+          }
+          // Hide if filterHasPdf is enabled and item has no PDF
+          if (config.filterHasPdf && !this.hasPdfAttachment(targetItem)) {
             return false;
           }
           return true;
