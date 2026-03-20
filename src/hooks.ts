@@ -1,7 +1,7 @@
 import { getString, initLocale } from "./utils/locale";
 import { registerPrefsScripts } from "./modules/preferences";
 import { createZToolkit } from "./utils/ztoolkit";
-import { registerToolbarButton, unregisterChatPanel } from "./modules/ui";
+import { registerToolbarButton, unregisterChatPanel, togglePanel } from "./modules/ui";
 import { getAuthManager, destroyAuthManager } from "./modules/auth";
 import { destroyProviderManager } from "./modules/providers";
 import {
@@ -85,6 +85,17 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
 
   // Register AISummary menus (must be after createZToolkit)
   getAISummaryService().registerMenus();
+
+  // Register Chat Panel menu in Tools menu
+  ztoolkit.Menu.register("menuTools", {
+    tag: "menuitem",
+    id: "paperchat-chat-menuitem",
+    label: getString("chat-menu-open"),
+    icon: `chrome://${addon.data.config.addonRef}/content/icons/favicon.svg`,
+    commandListener: () => {
+      togglePanel();
+    },
+  });
 }
 
 async function onMainWindowUnload(_win: Window): Promise<void> {
@@ -94,6 +105,7 @@ async function onMainWindowUnload(_win: Window): Promise<void> {
 
 function onShutdown(): void {
   ztoolkit.unregisterAll();
+  ztoolkit.Menu.unregister("paperchat-chat-menuitem");
   getAISummaryService().unregisterMenus();
   unregisterChatPanel();
   destroyProviderManager();

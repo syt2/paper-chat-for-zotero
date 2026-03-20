@@ -82,6 +82,7 @@ export type FluentMessageId =
   | 'paperchat-chat-error-session-expired'
   | 'paperchat-chat-history'
   | 'paperchat-chat-input-placeholder'
+  | 'paperchat-chat-menu-open'
   | 'paperchat-chat-message-count'
   | 'paperchat-chat-new-chat'
   | 'paperchat-chat-no-history'
