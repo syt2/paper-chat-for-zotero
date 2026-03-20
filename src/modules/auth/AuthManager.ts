@@ -652,13 +652,29 @@ export class AuthManager {
       );
 
       if (existingToken && !forceRefresh) {
+        // getTokens 返回的 key 是掩码形式，需要通过 getTokenKey 获取真实 key
+        const keyResult = await this.withSessionRetry(
+          () => this.authService.getTokenKey(existingToken.id),
+          "getTokenKey",
+        );
+        if (keyResult.success && keyResult.data?.key) {
+          this.state.token = existingToken;
+          this.state.apiKey = `sk-${keyResult.data.key}`;
+          setPref("apiKey", this.state.apiKey);
+          this.authService.setAccessToken(this.state.apiKey);
+          ztoolkit.log(
+            "[AuthManager] Using existing plugin token:",
+            this.state.apiKey.substring(0, 10) + "...",
+          );
+          return;
+        }
+        // 如果获取 key 失败，回退到列表中的 key（掩码形式）
         this.state.token = existingToken;
         this.state.apiKey = `sk-${existingToken.key}`;
         setPref("apiKey", this.state.apiKey);
-        // 同时更新 authService 的 accessToken
         this.authService.setAccessToken(this.state.apiKey);
         ztoolkit.log(
-          "[AuthManager] Using existing plugin token:",
+          "[AuthManager] Using existing plugin token (fallback):",
           this.state.apiKey.substring(0, 10) + "...",
         );
         return;
@@ -686,17 +702,24 @@ export class AuthManager {
     );
 
     if (createResult.success) {
-      // 重新获取Token列表以获取完整信息（createToken API 不返回 data）
+      // 重新获取Token列表找到新创建的Token ID
       const newTokensResult = await this.authService.getTokens(0, 100);
       if (newTokensResult.success && newTokensResult.data) {
         const newToken = newTokensResult.data.items?.find(
           (t) => t.name === PLUGIN_TOKEN_NAME && t.status === 1,
         );
         if (newToken) {
+          // 通过 getTokenKey 获取真实 key
+          const keyResult = await this.withSessionRetry(
+            () => this.authService.getTokenKey(newToken.id),
+            "getTokenKey",
+          );
+          const realKey = keyResult.success && keyResult.data?.key
+            ? keyResult.data.key
+            : newToken.key;
           this.state.token = newToken;
-          this.state.apiKey = `sk-${newToken.key}`;
+          this.state.apiKey = `sk-${realKey}`;
           setPref("apiKey", this.state.apiKey);
-          // 同时更新 authService 的 accessToken
           this.authService.setAccessToken(this.state.apiKey);
           ztoolkit.log(
             "[AuthManager] Plugin token created and saved:",

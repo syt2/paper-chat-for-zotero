@@ -459,6 +459,29 @@ export class AuthService {
     return result.data;
   }
 
+  async getTokenKey(id: number): Promise<ApiResponse<{ key: string }>> {
+    const url = `${this.baseUrl}/api/token/${id}/key`;
+    const result = await this.request<ApiResponse<{ key: string }>>("POST", url);
+
+    if (result.error) {
+      return { success: false, message: result.error };
+    }
+
+    if (result.status >= 400 || !result.data?.success) {
+      return {
+        success: false,
+        message: this.parseErrorMessage(
+          result.data,
+          getString("api-error-get-token-failed", {
+            args: { status: result.status },
+          }),
+        ),
+      };
+    }
+
+    return result.data;
+  }
+
   async getTokens(
     page: number = 0,
     pageSize: number = 10,

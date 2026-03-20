@@ -42,6 +42,7 @@ paperchat-api-error-login-failed = 登录失败: { $status }
 paperchat-api-error-2fa-not-supported = 此账号启用了两步验证，插件暂不支持两步验证登录，请在网页端关闭两步验证后重试
 paperchat-api-error-logout-failed = 登出失败: { $status }
 paperchat-api-error-get-user-failed = 获取用户信息失败: { $status }
+paperchat-api-error-get-token-failed = 获取Token失败: { $status }
 paperchat-api-error-get-tokens-failed = 获取Token列表失败: { $status }
 paperchat-api-error-create-token-failed = 创建Token失败: { $status }
 paperchat-api-error-delete-token-failed = 删除Token失败: { $status }

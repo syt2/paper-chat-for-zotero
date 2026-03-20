@@ -29,6 +29,7 @@ export type FluentMessageId =
   | 'paperchat-api-error-2fa-not-supported'
   | 'paperchat-api-error-create-token-failed'
   | 'paperchat-api-error-delete-token-failed'
+  | 'paperchat-api-error-get-token-failed'
   | 'paperchat-api-error-get-tokens-failed'
   | 'paperchat-api-error-get-user-failed'
   | 'paperchat-api-error-login-failed'

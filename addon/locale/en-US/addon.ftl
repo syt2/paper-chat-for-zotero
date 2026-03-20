@@ -42,6 +42,7 @@ paperchat-api-error-login-failed = Login failed: { $status }
 paperchat-api-error-2fa-not-supported = This account has 2FA enabled. The plugin does not support 2FA login. Please disable 2FA on the website and try again.
 paperchat-api-error-logout-failed = Logout failed: { $status }
 paperchat-api-error-get-user-failed = Failed to get user info: { $status }
+paperchat-api-error-get-token-failed = Failed to get token: { $status }
 paperchat-api-error-get-tokens-failed = Failed to get token list: { $status }
 paperchat-api-error-create-token-failed = Failed to create token: { $status }
 paperchat-api-error-delete-token-failed = Failed to delete token: { $status }
