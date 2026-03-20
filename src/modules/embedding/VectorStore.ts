@@ -17,7 +17,12 @@ import { cosineSimilarity } from "./utils/cosine";
 import { getErrorMessage } from "../../utils/common";
 
 const DB_DIR = "paper-chat";
-const DB_NAME = "paper-chat/vectors";
+const DB_FILE = "vectors";
+
+/** Build DB name with platform-correct separator */
+function getDBName(): string {
+  return PathUtils.join(DB_DIR, DB_FILE);
+}
 
 /**
  * Minimal type definition for Zotero.DBConnection
@@ -55,7 +60,7 @@ export class VectorStore {
       await IOUtils.makeDirectory(subDir, { ignoreExisting: true });
 
       // Create database connection
-      const db: ZoteroDBConnection = new Zotero.DBConnection(DB_NAME);
+      const db: ZoteroDBConnection = new Zotero.DBConnection(getDBName());
       this.db = db;
 
       // Create vectors table

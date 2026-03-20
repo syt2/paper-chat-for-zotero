@@ -29,11 +29,7 @@ async function onStartup() {
 
   initLocale();
 
-  // Initialize StorageDatabase + run migration
-  await getStorageDatabase().init();
-  await checkAndMigrateToV3();
-
-  // Register preference pane
+  // Register preference pane first — must not be blocked by storage/migration errors
   Zotero.PreferencePanes.register({
     pluginID: addon.data.config.addonID,
     id: "paperchat-prefpane",
@@ -46,18 +42,27 @@ async function onStartup() {
   const authManager = getAuthManager();
   await authManager.initialize();
 
-  // Initialize AISummary
-  await initAISummary();
-
-  // Initialize AISummary Service (item notifier + context menu)
-  initAISummaryService();
-
-  // 注入打开任务窗口的回调（避免循环依赖）
-  getAISummaryService().setOnOpenTaskWindow(openTaskWindow);
-
+  // Register UI (toolbar button, menus) before potentially-failing storage init
   await Promise.all(
     Zotero.getMainWindows().map((win) => onMainWindowLoad(win)),
   );
+
+  // Initialize StorageDatabase + run migration (non-blocking for UI)
+  try {
+    await getStorageDatabase().init();
+    await checkAndMigrateToV3();
+  } catch (error) {
+    ztoolkit.log("[Startup] StorageDatabase init failed:", error);
+  }
+
+  // Initialize AISummary (non-blocking for UI)
+  try {
+    await initAISummary();
+    initAISummaryService();
+    getAISummaryService().setOnOpenTaskWindow(openTaskWindow);
+  } catch (error) {
+    ztoolkit.log("[Startup] AISummary init failed:", error);
+  }
 
   addon.data.initialized = true;
 }

@@ -10,8 +10,13 @@
 import { getErrorMessage } from "../../../utils/common";
 
 const DB_DIR = "paper-chat";
-const DB_NAME = "paper-chat/storage";
+const DB_FILE = "storage";
 const SCHEMA_VERSION = 2;
+
+/** Build DB name with platform-correct separator (/ on Mac, \ on Windows) */
+function getDBName(): string {
+  return PathUtils.join(DB_DIR, DB_FILE);
+}
 
 /**
  * Minimal type definition for Zotero.DBConnection
@@ -50,7 +55,7 @@ export class StorageDatabase {
       // Create database connection (assign to local var first;
       // only set this.db after all initialization succeeds to prevent
       // concurrent callers from seeing a partially-initialized DB)
-      const db: ZoteroDBConnection = new Zotero.DBConnection(DB_NAME);
+      const db: ZoteroDBConnection = new Zotero.DBConnection(getDBName());
 
       // Enable WAL mode for better concurrent read performance
       await db.queryAsync("PRAGMA journal_mode=WAL");
