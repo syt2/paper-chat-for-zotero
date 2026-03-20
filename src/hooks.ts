@@ -38,24 +38,20 @@ async function onStartup() {
     image: `chrome://${addon.data.config.addonRef}/content/icons/favicon.svg`,
   });
 
-  // Initialize auth manager
-  const authManager = getAuthManager();
-  await authManager.initialize();
-
-  // Register UI (toolbar button, menus) before potentially-failing storage init
-  await Promise.all(
-    Zotero.getMainWindows().map((win) => onMainWindowLoad(win)),
-  );
-
-  // Initialize StorageDatabase + run migration (non-blocking for UI)
+  // Initialize StorageDatabase + run migration
+  // Wrapped in try/catch so that DB failure on Windows does not block UI registration
   try {
     await getStorageDatabase().init();
     await checkAndMigrateToV3();
   } catch (error) {
-    ztoolkit.log("[Startup] StorageDatabase init failed:", error);
+    ztoolkit.log("[Startup] StorageDatabase init failed (will retry on first use):", error);
   }
 
-  // Initialize AISummary (non-blocking for UI)
+  // Initialize auth manager
+  const authManager = getAuthManager();
+  await authManager.initialize();
+
+  // Initialize AISummary
   try {
     await initAISummary();
     initAISummaryService();
@@ -63,6 +59,11 @@ async function onStartup() {
   } catch (error) {
     ztoolkit.log("[Startup] AISummary init failed:", error);
   }
+
+  // Register UI (toolbar button, menus) — must always run
+  await Promise.all(
+    Zotero.getMainWindows().map((win) => onMainWindowLoad(win)),
+  );
 
   addon.data.initialized = true;
 }

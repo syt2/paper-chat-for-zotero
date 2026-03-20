@@ -19,9 +19,9 @@ import { getErrorMessage } from "../../utils/common";
 const DB_DIR = "paper-chat";
 const DB_FILE = "vectors";
 
-/** Build DB name with platform-correct separator */
+/** Build DB name relative to Zotero data directory */
 function getDBName(): string {
-  return PathUtils.join(DB_DIR, DB_FILE);
+  return `${DB_DIR}/${DB_FILE}`;
 }
 
 /**
@@ -56,6 +56,9 @@ export class VectorStore {
     try {
       // Ensure subdirectory exists
       const dataDir = Zotero.DataDirectory.dir;
+      if (!dataDir) {
+        throw new Error(`Zotero.DataDirectory.dir is not set: "${dataDir}"`);
+      }
       const subDir = PathUtils.join(dataDir, DB_DIR);
       await IOUtils.makeDirectory(subDir, { ignoreExisting: true });
 

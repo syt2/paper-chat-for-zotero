@@ -13,9 +13,9 @@ const DB_DIR = "paper-chat";
 const DB_FILE = "storage";
 const SCHEMA_VERSION = 2;
 
-/** Build DB name with platform-correct separator (/ on Mac, \ on Windows) */
+/** Build DB name relative to Zotero data directory */
 function getDBName(): string {
-  return PathUtils.join(DB_DIR, DB_FILE);
+  return `${DB_DIR}/${DB_FILE}`;
 }
 
 /**
@@ -41,7 +41,11 @@ export class StorageDatabase {
       return this.initPromise;
     }
 
-    this.initPromise = this.initDatabase();
+    this.initPromise = this.initDatabase().catch((err) => {
+      // Reset so next call retries instead of returning the failed promise
+      this.initPromise = null;
+      throw err;
+    });
     return this.initPromise;
   }
 
@@ -49,6 +53,9 @@ export class StorageDatabase {
     try {
       // Ensure subdirectory exists
       const dataDir = Zotero.DataDirectory.dir;
+      if (!dataDir) {
+        throw new Error(`Zotero.DataDirectory.dir is not set: "${dataDir}"`);
+      }
       const subDir = PathUtils.join(dataDir, DB_DIR);
       await IOUtils.makeDirectory(subDir, { ignoreExisting: true });
 
