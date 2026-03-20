@@ -81,7 +81,11 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
   doc.documentElement?.appendChild(styles);
 
   // Register toolbar button for chat panel
-  registerToolbarButton();
+  try {
+    registerToolbarButton();
+  } catch (error) {
+    ztoolkit.log("Failed to register toolbar button:", error);
+  }
 
   // Register AISummary menus (must be after createZToolkit)
   getAISummaryService().registerMenus();
