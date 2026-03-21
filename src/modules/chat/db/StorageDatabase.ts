@@ -13,10 +13,9 @@ const DB_DIR = "paper-chat";
 const DB_FILE = "storage";
 const SCHEMA_VERSION = 2;
 
-/** Build DB name relative to Zotero data directory (Windows needs backslash) */
-function getDBName(): string {
-  const sep = Zotero.isWin ? "\\" : "/";
-  return `${DB_DIR}${sep}${DB_FILE}`;
+/** Build absolute DB path so Zotero.DBConnection doesn't parse subdirectory names */
+function getDBPath(): string {
+  return PathUtils.join(Zotero.DataDirectory.dir, DB_DIR, DB_FILE);
 }
 
 /**
@@ -63,7 +62,7 @@ export class StorageDatabase {
       // Create database connection (assign to local var first;
       // only set this.db after all initialization succeeds to prevent
       // concurrent callers from seeing a partially-initialized DB)
-      const db: ZoteroDBConnection = new Zotero.DBConnection(getDBName());
+      const db: ZoteroDBConnection = new Zotero.DBConnection(getDBPath());
 
       // Enable WAL mode for better concurrent read performance
       await db.queryAsync("PRAGMA journal_mode=WAL");

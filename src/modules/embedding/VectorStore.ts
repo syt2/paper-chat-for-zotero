@@ -19,10 +19,9 @@ import { getErrorMessage } from "../../utils/common";
 const DB_DIR = "paper-chat";
 const DB_FILE = "vectors";
 
-/** Build DB name relative to Zotero data directory (Windows needs backslash) */
-function getDBName(): string {
-  const sep = Zotero.isWin ? "\\" : "/";
-  return `${DB_DIR}${sep}${DB_FILE}`;
+/** Build absolute DB path so Zotero.DBConnection doesn't parse subdirectory names */
+function getDBPath(): string {
+  return PathUtils.join(Zotero.DataDirectory.dir, DB_DIR, DB_FILE);
 }
 
 /**
@@ -64,7 +63,7 @@ export class VectorStore {
       await IOUtils.makeDirectory(subDir, { ignoreExisting: true });
 
       // Create database connection
-      const db: ZoteroDBConnection = new Zotero.DBConnection(getDBName());
+      const db: ZoteroDBConnection = new Zotero.DBConnection(getDBPath());
       this.db = db;
 
       // Create vectors table
