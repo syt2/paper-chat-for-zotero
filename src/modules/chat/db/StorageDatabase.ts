@@ -13,9 +13,10 @@ const DB_DIR = "paper-chat";
 const DB_FILE = "storage";
 const SCHEMA_VERSION = 2;
 
-/** Build DB name relative to Zotero data directory */
+/** Build DB name relative to Zotero data directory (Windows needs backslash) */
 function getDBName(): string {
-  return `${DB_DIR}/${DB_FILE}`;
+  const sep = Zotero.isWin ? "\\" : "/";
+  return `${DB_DIR}${sep}${DB_FILE}`;
 }
 
 /**
