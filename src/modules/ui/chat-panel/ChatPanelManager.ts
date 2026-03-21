@@ -631,6 +631,11 @@ function showSidebarPanel(): void {
     initializeChatContent();
     contentInitialized = true;
   } else {
+    // Re-bind callbacks to point to the sidebar container
+    // (they may have been redirected to a floating window container)
+    const manager = getChatManager();
+    const context = createContext(chatContainer);
+    setupChatManagerCallbacks(manager, context, chatContainer);
     refreshChatForCurrentItem();
   }
 
