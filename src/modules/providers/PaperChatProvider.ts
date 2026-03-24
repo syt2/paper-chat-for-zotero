@@ -3,7 +3,11 @@
  * Uses composition with OpenAICompatibleProvider for API calls
  */
 
-import type { ChatMessage, StreamCallbacks } from "../../types/chat";
+import type {
+  ChatMessage,
+  StreamCallbacks,
+  StreamToolCallingCallbacks,
+} from "../../types/chat";
 import type {
   AIProvider,
   ApiKeyProviderConfig,
@@ -119,5 +123,22 @@ export class PaperChatProvider implements AIProvider {
   ): Promise<{ content: string; toolCalls?: ToolCall[] }> {
     this._delegate.updateConfig(this.createDelegateConfig());
     return this._delegate.chatCompletionWithTools(messages, tools);
+  }
+
+  /**
+   * Stream chat completion with tool calling support
+   * Delegates to the internal OpenAICompatibleProvider
+   */
+  async streamChatCompletionWithTools(
+    messages: ChatMessage[],
+    tools: ToolDefinition[],
+    callbacks: StreamToolCallingCallbacks,
+  ): Promise<void> {
+    this._delegate.updateConfig(this.createDelegateConfig());
+    return this._delegate.streamChatCompletionWithTools(
+      messages,
+      tools,
+      callbacks,
+    );
   }
 }
