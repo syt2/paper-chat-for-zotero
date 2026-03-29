@@ -10,6 +10,8 @@ import type { UserInfo, TokenInfo, AuthState } from "../../types/auth";
 import { getPref, setPref } from "../../utils/prefs";
 import { BUILTIN_PROVIDERS, getProviderManager } from "../providers";
 import { getString } from "../../utils/locale";
+import { AUTO_MODEL, resolveAutoModel, fetchPaperchatRatios } from "../preferences/ModelsFetcher";
+import { isEmbeddingModel } from "../embedding/providers/PaperChatEmbedding";
 
 // 密码加密/解密（使用简单的 XOR 加密 + Base64 编码）
 // 加密密钥基于插件 ID 和用户 profile 路径生成，比纯 Base64 更安全
@@ -83,6 +85,9 @@ type CallbackListeners = {
 // 插件专用Token名称
 const PLUGIN_TOKEN_NAME = "Paper-Chat-Plugin";
 
+// 模型列表自动刷新间隔（1小时）
+const MODEL_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
+
 export class AuthManager {
   private authService: AuthService;
   private state: AuthState;
@@ -93,6 +98,7 @@ export class AuthManager {
     onError: [],
   };
   private isAutoReloginInProgress = false; // 防止无限循环
+  private modelRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
     this.authService = new AuthService();
@@ -480,6 +486,7 @@ export class AuthManager {
 
       this.state.isLoggedIn = true;
       this.notifyLoginStatusChange(true);
+      this.startModelRefreshTimer();
 
       return { success: true, message: getString("api-success-login") };
     }
@@ -565,6 +572,7 @@ export class AuthManager {
    * 用户登出
    */
   async logout(): Promise<void> {
+    this.stopModelRefreshTimer();
     await this.authService.logout();
 
     // 清除状态
@@ -733,6 +741,7 @@ export class AuthManager {
   /**
    * 获取模型列表并设置默认模型
    * 在登录成功后调用，确保使用服务端支持的模型
+   * 如果已选模型不可用，自动切换到下一个可用模型并通知用户
    */
   private async fetchAndSetDefaultModel(): Promise<void> {
     const apiKey = this.getApiKey();
@@ -745,12 +754,14 @@ export class AuthManager {
     ztoolkit.log("[AuthManager] Fetching models from:", url);
 
     try {
-      const response = await fetch(url, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-        },
-      });
+      // Fetch models and ratios in parallel
+      const [response] = await Promise.all([
+        fetch(url, {
+          method: "GET",
+          headers: { Authorization: `Bearer ${apiKey}` },
+        }),
+        fetchPaperchatRatios(apiKey),
+      ]);
 
       if (!response.ok) {
         ztoolkit.log("[AuthManager] Failed to fetch models:", response.status);
@@ -762,43 +773,98 @@ export class AuthManager {
       };
 
       if (result.data && Array.isArray(result.data)) {
-        const models = result.data.map((m) => m.id).sort();
-        ztoolkit.log("[AuthManager] Fetched models count:", models.length);
+        const allModels = result.data.map((m) => m.id).sort();
+        // Cache ALL models (embedding models are read from cache by RAG)
+        setPref("paperchatModelsCache", JSON.stringify(allModels));
+        // Filter out embedding models for chat model selection
+        const chatModels = allModels.filter((m) => !isEmbeddingModel(m));
+        ztoolkit.log("[AuthManager] Chat models:", chatModels.length, "/ total:", allModels.length);
 
-        if (models.length > 0) {
-          // 缓存模型列表
-          setPref("paperchatModelsCache", JSON.stringify(models));
+        if (chatModels.length > 0) {
 
-          // 获取当前模型设置
           const currentModel = getPref("model") as string;
+          const providerManager = getProviderManager();
 
-          // 如果当前模型不在列表中，设置默认模型
-          if (!currentModel || !models.includes(currentModel)) {
-            // 优先使用 claude-haiku-4-5-20251001，否则用第一个
-            const preferredModel = "claude-haiku-4-5-20251001";
-            const defaultModel = models.includes(preferredModel)
-              ? preferredModel
-              : models[0];
-            setPref("model", defaultModel);
-            ztoolkit.log("[AuthManager] Set default model to:", defaultModel);
-
-            // 更新 provider 配置
-            const providerManager = getProviderManager();
+          // "auto" is always valid — just update the available models list
+          if (currentModel === AUTO_MODEL) {
             providerManager.updateProviderConfig("paperchat", {
-              defaultModel: defaultModel,
-              availableModels: models,
+              availableModels: chatModels,
+            });
+            return;
+          }
+
+          // If current model is no longer available, auto-fallback
+          if (currentModel && !chatModels.includes(currentModel)) {
+            const newModel = resolveAutoModel(chatModels) || chatModels[0];
+            setPref("model", newModel);
+            providerManager.updateProviderConfig("paperchat", {
+              defaultModel: newModel,
+              availableModels: chatModels,
+            });
+            ztoolkit.log(
+              `[AuthManager] Model "${currentModel}" unavailable, switched to "${newModel}"`,
+            );
+            // Notify user
+            this.showModelSwitchNotification(currentModel, newModel);
+          } else if (!currentModel) {
+            // No model selected yet — pick cheapest
+            const newModel = resolveAutoModel(chatModels) || chatModels[0];
+            setPref("model", newModel);
+            providerManager.updateProviderConfig("paperchat", {
+              defaultModel: newModel,
+              availableModels: chatModels,
             });
           } else {
-            // 只更新可用模型列表
-            const providerManager = getProviderManager();
+            // Current model is still valid — just update available models
             providerManager.updateProviderConfig("paperchat", {
-              availableModels: models,
+              availableModels: chatModels,
             });
           }
         }
       }
     } catch (e) {
       ztoolkit.log("[AuthManager] Failed to fetch models:", e);
+    }
+  }
+
+  /**
+   * Show a ProgressWindow notification when model is auto-switched
+   */
+  private showModelSwitchNotification(oldModel: string, newModel: string): void {
+    try {
+      const msg = getString("chat-model-switched", {
+        args: { old: oldModel, new: newModel },
+      });
+      new ztoolkit.ProgressWindow("Paper Chat")
+        .createLine({ text: msg, type: "default" })
+        .show();
+    } catch (e) {
+      ztoolkit.log("[AuthManager] Failed to show notification:", e);
+    }
+  }
+
+  /**
+   * Start periodic model list refresh (every 1 hour)
+   */
+  private startModelRefreshTimer(): void {
+    this.stopModelRefreshTimer();
+    this.modelRefreshTimer = setInterval(() => {
+      if (this.state.isLoggedIn) {
+        ztoolkit.log("[AuthManager] Periodic model refresh");
+        this.fetchAndSetDefaultModel().catch((e) => {
+          ztoolkit.log("[AuthManager] Periodic model refresh failed:", e);
+        });
+      }
+    }, MODEL_REFRESH_INTERVAL_MS);
+  }
+
+  /**
+   * Stop periodic model list refresh
+   */
+  private stopModelRefreshTimer(): void {
+    if (this.modelRefreshTimer) {
+      clearInterval(this.modelRefreshTimer);
+      this.modelRefreshTimer = null;
     }
   }
 
@@ -873,6 +939,12 @@ export class AuthManager {
       await this.refreshUserInfo();
       if (this.state.isLoggedIn) {
         await this.ensurePluginToken();
+        // Refresh model list on startup (non-blocking — don't delay UI registration)
+        this.fetchAndSetDefaultModel().catch((e) => {
+          ztoolkit.log("[AuthManager] Startup model refresh failed:", e);
+        });
+        // Start periodic refresh
+        this.startModelRefreshTimer();
         ztoolkit.log("[AuthManager] Session restored and refreshed via API");
       } else {
         ztoolkit.log("[AuthManager] Failed to restore session from API");
@@ -911,7 +983,7 @@ export class AuthManager {
    * 销毁
    */
   destroy(): void {
-    // Nothing to clean up
+    this.stopModelRefreshTimer();
   }
 }
 

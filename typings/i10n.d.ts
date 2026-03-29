@@ -84,6 +84,8 @@ export type FluentMessageId =
   | 'paperchat-chat-input-placeholder'
   | 'paperchat-chat-menu-open'
   | 'paperchat-chat-message-count'
+  | 'paperchat-chat-model-auto'
+  | 'paperchat-chat-model-switched'
   | 'paperchat-chat-new-chat'
   | 'paperchat-chat-no-history'
   | 'paperchat-chat-no-messages'

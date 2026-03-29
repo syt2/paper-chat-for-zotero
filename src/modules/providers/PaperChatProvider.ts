@@ -19,6 +19,7 @@ import { getAuthManager } from "../auth";
 import { OpenAICompatibleProvider } from "./OpenAICompatibleProvider";
 import { BUILTIN_PROVIDERS } from "./ProviderManager";
 import { getPref } from "../../utils/prefs";
+import { AUTO_MODEL, resolveAutoModel } from "../preferences/ModelsFetcher";
 
 export class PaperChatProvider implements AIProvider {
   private _config: PaperChatProviderConfig;
@@ -31,7 +32,16 @@ export class PaperChatProvider implements AIProvider {
 
   private createDelegateConfig(): ApiKeyProviderConfig {
     const authManager = getAuthManager();
-    const defaultModel = BUILTIN_PROVIDERS.paperchat.defaultModels[0];
+    const availableModels =
+      this._config.availableModels ||
+      BUILTIN_PROVIDERS.paperchat.defaultModels;
+    const fallbackModel = BUILTIN_PROVIDERS.paperchat.defaultModels[0];
+
+    // Resolve "auto" to the cheapest available model
+    let model = this._config.defaultModel;
+    if (model === AUTO_MODEL || !model) {
+      model = resolveAutoModel(availableModels) || fallbackModel;
+    }
 
     return {
       id: this._config.id,
@@ -42,10 +52,8 @@ export class PaperChatProvider implements AIProvider {
       order: this._config.order,
       apiKey: authManager.getApiKey() || "",
       baseUrl: BUILTIN_PROVIDERS.paperchat.defaultBaseUrl,
-      defaultModel: this._config.defaultModel || defaultModel,
-      availableModels:
-        this._config.availableModels ||
-        BUILTIN_PROVIDERS.paperchat.defaultModels,
+      defaultModel: model,
+      availableModels,
       maxTokens: this._config.maxTokens || 4096,
       temperature: this._config.temperature ?? 0.7,
       systemPrompt: this._config.systemPrompt || "",

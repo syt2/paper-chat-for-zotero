@@ -17,7 +17,7 @@ import { showAuthDialog } from "../AuthDialog";
 import { getString } from "../../../utils/locale";
 import { getProviderManager } from "../../providers";
 import { getPref, setPref } from "../../../utils/prefs";
-import { formatModelLabel } from "../../preferences/ModelsFetcher";
+import { formatModelLabel, AUTO_MODEL } from "../../preferences/ModelsFetcher";
 import type { PanelMode } from "./ChatPanelManager";
 import { MentionSelector, type MentionResource, findMentionAtCursor } from "./MentionSelector";
 
@@ -799,13 +799,16 @@ export function updateModelSelectorDisplay(container: HTMLElement): void {
   const currentModel = getPref("model") as string;
 
   if (activeProvider && currentModel) {
-    // Show provider name + model (truncated)
     const providerName = activeProvider.getName();
-    const modelShort =
-      currentModel.length > 20
-        ? currentModel.substring(0, 18) + "..."
-        : currentModel;
-    modelSelectorText.textContent = `${providerName}: ${modelShort}`;
+    if (currentModel === AUTO_MODEL) {
+      modelSelectorText.textContent = `${providerName}: ${getString("chat-model-auto")}`;
+    } else {
+      const modelShort =
+        currentModel.length > 20
+          ? currentModel.substring(0, 18) + "..."
+          : currentModel;
+      modelSelectorText.textContent = `${providerName}: ${modelShort}`;
+    }
   } else if (activeProvider) {
     modelSelectorText.textContent = activeProvider.getName();
   } else {
@@ -849,6 +852,50 @@ function populateModelDropdown(
     const config = provider.config;
     const models = config.availableModels || [];
     const isActiveProvider = config.id === activeProviderId;
+
+    // Add "Auto" option for paperchat provider
+    if (config.id === "paperchat") {
+      const isAutoSelected = isActiveProvider && currentModel === AUTO_MODEL;
+      const autoItem = createElement(doc, "div", {
+        padding: "8px 12px",
+        fontSize: "12px",
+        color: isAutoSelected ? theme.inputFocusBorderColor : theme.textPrimary,
+        cursor: "pointer",
+        background: isAutoSelected ? theme.dropdownItemHoverBg : "transparent",
+        display: "flex",
+        alignItems: "center",
+        gap: "8px",
+      });
+      if (isAutoSelected) {
+        const check = createElement(doc, "span", {
+          color: theme.inputFocusBorderColor,
+          fontWeight: "bold",
+        });
+        check.textContent = "✓";
+        autoItem.appendChild(check);
+      }
+      const autoLabel = createElement(doc, "span", {
+        fontStyle: "italic",
+      });
+      autoLabel.textContent = getString("chat-model-auto");
+      autoItem.appendChild(autoLabel);
+      autoItem.addEventListener("mouseenter", () => {
+        if (!isAutoSelected) autoItem.style.background = theme.dropdownItemHoverBg;
+      });
+      autoItem.addEventListener("mouseleave", () => {
+        if (!isAutoSelected) autoItem.style.background = "transparent";
+      });
+      autoItem.addEventListener("click", () => {
+        if (!isActiveProvider) providerManager.setActiveProvider(config.id);
+        setPref("model", AUTO_MODEL);
+        providerManager.updateProviderConfig(config.id, { defaultModel: AUTO_MODEL });
+        updateModelSelectorDisplay(container);
+        dropdown.style.display = "none";
+        context.updateUserBar();
+        ztoolkit.log("Model switched to: auto");
+      });
+      dropdown.appendChild(autoItem);
+    }
 
     if (models.length === 0) {
       // No models - show placeholder

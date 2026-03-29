@@ -11,11 +11,33 @@ import { showMessage } from "./utils";
 // Store model ratios for PaperChat
 let paperchatModelRatios: Record<string, number> = {};
 
+/** Special value stored in pref("model") to indicate auto-selection */
+export const AUTO_MODEL = "auto";
+
 /**
  * Get the model ratios map
  */
 export function getModelRatios(): Record<string, number> {
   return paperchatModelRatios;
+}
+
+/**
+ * Resolve "auto" to the cheapest available model by ratio.
+ * If ratios are unavailable, returns the first model in the list.
+ */
+export function resolveAutoModel(availableModels: string[]): string | null {
+  if (availableModels.length === 0) return null;
+
+  // Sort by ratio ascending (cheapest first), models without ratio go last
+  const sorted = [...availableModels].sort((a, b) => {
+    const ra = paperchatModelRatios[a];
+    const rb = paperchatModelRatios[b];
+    if (ra === undefined && rb === undefined) return 0;
+    if (ra === undefined) return 1;
+    if (rb === undefined) return -1;
+    return ra - rb;
+  });
+  return sorted[0];
 }
 
 /**
