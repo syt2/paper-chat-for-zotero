@@ -222,6 +222,21 @@ export function createMessageElement(
     }
   }
 
+  // Add reasoning section for assistant messages (before content)
+  if (msg.role === "assistant") {
+    if (msg.reasoning) {
+      // Completed message with reasoning - show collapsed
+      const reasoningContainer = createReasoningContainer(doc, theme, msg.reasoning, false);
+      bubble.appendChild(reasoningContainer);
+    } else if (isLastAssistant) {
+      // Streaming placeholder - hidden by default, shown when reasoning arrives
+      const reasoningContainer = createReasoningContainer(doc, theme, "", true);
+      reasoningContainer.id = "chat-streaming-reasoning-container";
+      reasoningContainer.style.display = "none";
+      bubble.appendChild(reasoningContainer);
+    }
+  }
+
   bubble.appendChild(content);
 
   // Add copy button
@@ -231,6 +246,84 @@ export function createMessageElement(
   bubble.appendChild(copyBtn);
   wrapper.appendChild(bubble);
   return wrapper;
+}
+
+/**
+ * Create a collapsible reasoning/thinking container
+ * Uses inline styles only (Zotero's XHTML context doesn't reliably support <style> injection)
+ */
+function createReasoningContainer(
+  doc: Document,
+  theme: ThemeColors,
+  reasoning: string,
+  isStreaming: boolean,
+): HTMLElement {
+  const container = createElement(doc, "div", {
+    marginBottom: "8px",
+    borderLeft: `3px solid ${theme.borderColor}`,
+    borderRadius: "4px",
+  });
+
+  // Header with toggle
+  const header = createElement(doc, "div", {
+    display: "flex",
+    alignItems: "center",
+    gap: "6px",
+    padding: "6px 10px",
+    cursor: "pointer",
+    userSelect: "none",
+    fontSize: "12px",
+    color: theme.textMuted,
+    opacity: "0.7",
+  });
+  header.addEventListener("mouseenter", () => { header.style.opacity = "1"; });
+  header.addEventListener("mouseleave", () => { header.style.opacity = "0.7"; });
+
+  const arrow = createElement(doc, "span", {
+    fontSize: "10px",
+    display: "inline-block",
+    transition: "transform 0.2s",
+    transform: isStreaming ? "rotate(90deg)" : "rotate(0deg)",
+  });
+  arrow.textContent = "\u25B6";
+
+  const label = createElement(doc, "span", {});
+  label.textContent = "\uD83D\uDCAD Thinking";
+
+  header.appendChild(arrow);
+  header.appendChild(label);
+
+  // Body
+  const body = createElement(doc, "div", {
+    padding: "4px 10px 8px 10px",
+    fontSize: "13px",
+    lineHeight: "1.5",
+    color: theme.textMuted,
+    opacity: "0.75",
+    whiteSpace: "pre-wrap",
+    wordWrap: "break-word",
+    overflow: "hidden",
+    display: isStreaming ? "block" : "none",
+  });
+
+  if (isStreaming) {
+    body.id = "chat-streaming-reasoning";
+  } else {
+    body.textContent = reasoning;
+  }
+
+  // Toggle handler — uses inline display style
+  let collapsed = !isStreaming;
+  header.addEventListener("click", () => {
+    collapsed = !collapsed;
+    body.style.display = collapsed ? "none" : "block";
+    arrow.style.transform = collapsed ? "rotate(0deg)" : "rotate(90deg)";
+  });
+
+  container.appendChild(header);
+  container.appendChild(body);
+
+  return container;
 }
 
 /**

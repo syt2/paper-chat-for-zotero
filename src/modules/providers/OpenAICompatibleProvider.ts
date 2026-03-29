@@ -325,7 +325,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
     tools: ToolDefinition[],
     callbacks: StreamToolCallingCallbacks,
   ): Promise<void> {
-    const { onTextDelta, onToolCallStart, onToolCallDelta, onComplete, onError } =
+    const { onTextDelta, onReasoningDelta, onToolCallStart, onToolCallDelta, onComplete, onError } =
       callbacks;
 
     if (!this.isReady()) {
@@ -388,6 +388,12 @@ export class OpenAICompatibleProvider extends BaseProvider {
             case "text_delta":
               fullContent += event.text;
               onTextDelta(event.text);
+              break;
+
+            case "reasoning_delta":
+              if (onReasoningDelta) {
+                onReasoningDelta(event.text);
+              }
               break;
 
             case "tool_call_start":

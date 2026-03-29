@@ -11,7 +11,7 @@ import { getErrorMessage } from "../../../utils/common";
 
 const DB_DIR = "paper-chat";
 const DB_FILE = "storage";
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 /** Build absolute DB path so Zotero.DBConnection doesn't parse subdirectory names */
 function getDBPath(): string {
@@ -145,6 +145,7 @@ export class StorageDatabase {
         seq INTEGER NOT NULL,
         role TEXT NOT NULL,
         content TEXT NOT NULL DEFAULT '',
+        reasoning TEXT,
         images TEXT,
         files TEXT,
         timestamp INTEGER NOT NULL,
@@ -189,7 +190,7 @@ export class StorageDatabase {
     )) || [];
 
     if (rows.length === 0) {
-      // Fresh install — tables already created with v2 schema
+      // Fresh install — tables already created with current schema
       await db.queryAsync(
         "INSERT INTO schema_version (id, version, updated_at) VALUES (1, ?, ?)",
         [SCHEMA_VERSION, Date.now()],
@@ -198,6 +199,9 @@ export class StorageDatabase {
       const currentVersion = rows[0].version;
       if (currentVersion < 2) {
         await this.devUpgradeToV2(db);
+      }
+      if (currentVersion < 3) {
+        await this.upgradeToV3(db);
       }
     }
   }
@@ -329,6 +333,40 @@ export class StorageDatabase {
       try { await db.queryAsync("ROLLBACK"); } catch { /* ignore */ }
       ztoolkit.log("[StorageDatabase] Schema upgrade failed:", getErrorMessage(error));
       throw error;
+    }
+  }
+
+  /**
+   * Upgrade schema v2 → v3: add reasoning column to messages table
+   */
+  private async upgradeToV3(db: ZoteroDBConnection): Promise<void> {
+    ztoolkit.log("[StorageDatabase] Upgrading schema v2 → v3...");
+
+    try {
+      // Add reasoning column (nullable, no default needed)
+      await db.queryAsync(
+        "ALTER TABLE messages ADD COLUMN reasoning TEXT",
+      );
+
+      await db.queryAsync(
+        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
+        [3, Date.now()],
+      );
+
+      ztoolkit.log("[StorageDatabase] Schema upgrade v2 → v3 completed");
+    } catch (error) {
+      // If column already exists (e.g. from a fresh install), ignore the error
+      const msg = getErrorMessage(error);
+      if (msg.includes("duplicate column") || msg.includes("already exists")) {
+        ztoolkit.log("[StorageDatabase] reasoning column already exists, updating version");
+        await db.queryAsync(
+          "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
+          [3, Date.now()],
+        );
+      } else {
+        ztoolkit.log("[StorageDatabase] Schema upgrade v2 → v3 failed:", msg);
+        throw error;
+      }
     }
   }
 

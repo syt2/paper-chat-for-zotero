@@ -699,6 +699,21 @@ function setupChatManagerCallbacks(
         }
       }
     },
+    onReasoningUpdate: (reasoning) => {
+      if (container) {
+        const reasoningEl = container.querySelector("#chat-streaming-reasoning");
+        if (reasoningEl) {
+          reasoningEl.textContent = reasoning;
+          // Show the reasoning container when content arrives
+          const reasoningContainer = container.querySelector(
+            "#chat-streaming-reasoning-container",
+          ) as HTMLElement;
+          if (reasoningContainer && reasoning) {
+            reasoningContainer.style.display = "block";
+          }
+        }
+      }
+    },
     onError: (error) => {
       ztoolkit.log("[ChatPanel] API Error:", error.message);
       context.appendError(error.message);

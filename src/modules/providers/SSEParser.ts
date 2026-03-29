@@ -13,6 +13,7 @@ export type SSEFormat = "openai" | "anthropic" | "gemini";
 
 export interface SSEParserCallbacks {
   onText: (text: string) => void;
+  onReasoning?: (text: string) => void;
   onDone: () => void;
   onError?: (error: Error) => void;
 }
@@ -21,6 +22,7 @@ export interface SSEParserCallbacks {
 
 export type SSEToolCallingEvent =
   | { type: "text_delta"; text: string }
+  | { type: "reasoning_delta"; text: string }
   | { type: "tool_call_start"; index: number; id: string; name: string }
   | { type: "tool_call_delta"; index: number; argumentsDelta: string }
   | { type: "done"; stopReason: string }
@@ -36,6 +38,7 @@ interface OpenAIStreamDelta {
   choices?: Array<{
     delta?: {
       content?: string | null;
+      reasoning_content?: string | null;
       tool_calls?: Array<{
         index: number;
         id?: string;
@@ -143,6 +146,11 @@ function parseOpenAIToolCallingEvent(
 
   const delta = choice.delta;
   if (!delta) return null;
+
+  // Reasoning content (e.g. DeepSeek-Reasoner)
+  if (delta.reasoning_content) {
+    return { type: "reasoning_delta", text: delta.reasoning_content };
+  }
 
   // 文本内容
   if (delta.content) {
@@ -263,7 +271,7 @@ export async function parseSSEStream(
   format: SSEFormat,
   callbacks: SSEParserCallbacks,
 ): Promise<void> {
-  const { onText, onDone, onError } = callbacks;
+  const { onText, onReasoning, onDone, onError } = callbacks;
   const extractContent = contentExtractors[format];
   const decoder = new TextDecoder();
   let buffer = "";
@@ -287,6 +295,17 @@ export async function parseSSEStream(
 
         try {
           const parsed = JSON.parse(data);
+
+          // For OpenAI format, check reasoning_content before regular content
+          if (format === "openai" && onReasoning) {
+            const openaiData = parsed as OpenAIStreamDelta;
+            const reasoningContent = openaiData.choices?.[0]?.delta?.reasoning_content;
+            if (reasoningContent) {
+              onReasoning(reasoningContent);
+              continue;
+            }
+          }
+
           const text = extractContent(parsed);
           if (text) {
             onText(text);

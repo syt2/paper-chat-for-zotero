@@ -77,6 +77,7 @@ export class ChatManager {
   // UI回调
   private onMessageUpdate?: (messages: ChatMessage[]) => void;
   private onStreamingUpdate?: (content: string) => void;
+  private onReasoningUpdate?: (reasoning: string) => void;
   private onError?: (error: Error) => void;
   private onPdfAttached?: () => void;
   private onMessageComplete?: () => void;
@@ -154,6 +155,7 @@ export class ChatManager {
   setCallbacks(callbacks: {
     onMessageUpdate?: (messages: ChatMessage[]) => void;
     onStreamingUpdate?: (content: string) => void;
+    onReasoningUpdate?: (reasoning: string) => void;
     onError?: (error: Error) => void;
     onPdfAttached?: () => void;
     onMessageComplete?: () => void;
@@ -162,6 +164,7 @@ export class ChatManager {
   }): void {
     this.onMessageUpdate = callbacks.onMessageUpdate;
     this.onStreamingUpdate = callbacks.onStreamingUpdate;
+    this.onReasoningUpdate = callbacks.onReasoningUpdate;
     this.onError = callbacks.onError;
     this.onPdfAttached = callbacks.onPdfAttached;
     this.onMessageComplete = callbacks.onMessageComplete;
@@ -620,6 +623,7 @@ export class ChatManager {
         await providerManager.executeWithFallback(async (currentProvider) => {
           // 重置 assistant 消息内容（降级时需要清空之前的部分内容）
           assistantMessage.content = "";
+          assistantMessage.reasoning = "";
 
           return new Promise<void>((resolve, reject) => {
             const callbacks: StreamCallbacks = {
@@ -629,12 +633,23 @@ export class ChatManager {
                   this.onStreamingUpdate?.(assistantMessage.content);
                 }
               },
+              onReasoningChunk: (chunk: string) => {
+                assistantMessage.reasoning = (assistantMessage.reasoning || "") + chunk;
+                if (this.isSessionActive(sendingSession)) {
+                  this.onReasoningUpdate?.(assistantMessage.reasoning);
+                }
+              },
               onComplete: async (fullContent: string) => {
                 assistantMessage.content = fullContent;
                 assistantMessage.timestamp = Date.now();
                 sendingSession.updatedAt = Date.now();
 
-                await this.sessionStorage.updateMessageContent(sendingSession.id, assistantMessage.id, fullContent);
+                // Clean up empty reasoning
+                if (!assistantMessage.reasoning) {
+                  delete assistantMessage.reasoning;
+                }
+
+                await this.sessionStorage.updateMessageContent(sendingSession.id, assistantMessage.id, fullContent, assistantMessage.reasoning);
                 await this.sessionStorage.updateSessionMeta(sendingSession);
                 if (this.isSessionActive(sendingSession)) {
                   this.onMessageUpdate?.(sendingSession.messages);
@@ -769,6 +784,7 @@ export class ChatManager {
 
         // 重置 assistant 消息内容（降级时需要清空之前的部分内容）
         assistantMessage.content = "";
+        assistantMessage.reasoning = "";
 
         // 检查是否支持流式 tool calling
         if (providerSupportsStreamingToolCalling(currentProvider)) {
@@ -959,6 +975,12 @@ export class ChatManager {
                 this.onStreamingUpdate?.(assistantMessage.content);
               }
             },
+            onReasoningDelta: (text) => {
+              assistantMessage.reasoning = (assistantMessage.reasoning || "") + text;
+              if (this.isSessionActive(sendingSession)) {
+                this.onReasoningUpdate?.(assistantMessage.reasoning);
+              }
+            },
             onToolCallStart: ({ index, id, name }) => {
               pendingToolCalls.set(index, { id, name, arguments: "" });
               ztoolkit.log(
@@ -1096,7 +1118,12 @@ export class ChatManager {
         assistantMessage.timestamp = Date.now();
         sendingSession.updatedAt = Date.now();
 
-        await this.sessionStorage.updateMessageContent(sendingSession.id, assistantMessage.id, accumulatedDisplay);
+        // Clean up empty reasoning
+        if (!assistantMessage.reasoning) {
+          delete assistantMessage.reasoning;
+        }
+
+        await this.sessionStorage.updateMessageContent(sendingSession.id, assistantMessage.id, accumulatedDisplay, assistantMessage.reasoning);
         await this.sessionStorage.updateSessionMeta(sendingSession);
         if (this.isSessionActive(sendingSession)) {
           this.onMessageUpdate?.(sendingSession.messages);
@@ -1127,7 +1154,10 @@ export class ChatManager {
       assistantMessage.content = accumulatedDisplay;
       assistantMessage.timestamp = Date.now();
       sendingSession.updatedAt = Date.now();
-      await this.sessionStorage.updateMessageContent(sendingSession.id, assistantMessage.id, accumulatedDisplay);
+      if (!assistantMessage.reasoning) {
+        delete assistantMessage.reasoning;
+      }
+      await this.sessionStorage.updateMessageContent(sendingSession.id, assistantMessage.id, accumulatedDisplay, assistantMessage.reasoning);
       await this.sessionStorage.updateSessionMeta(sendingSession);
       if (this.isSessionActive(sendingSession)) {
         this.onMessageUpdate?.(sendingSession.messages);

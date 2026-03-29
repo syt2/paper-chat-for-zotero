@@ -105,14 +105,15 @@ export class SessionStorageService {
       const nextSeq = (seqRows[0]?.max_seq ?? -1) + 1;
 
       await db.queryAsync(
-        `INSERT INTO messages (id, session_id, seq, role, content, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, is_system_notice)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO messages (id, session_id, seq, role, content, reasoning, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, is_system_notice)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           message.id,
           sessionId,
           nextSeq,
           message.role,
           message.content || "",
+          message.reasoning || null,
           message.images ? JSON.stringify(message.images) : null,
           message.files ? JSON.stringify(message.files) : null,
           message.timestamp || Date.now(),
@@ -232,15 +233,15 @@ export class SessionStorageService {
   /**
    * 更新消息内容 (streaming 完成后更新 assistant message 的最终内容)
    */
-  async updateMessageContent(sessionId: string, messageId: string, content: string): Promise<void> {
+  async updateMessageContent(sessionId: string, messageId: string, content: string, reasoning?: string): Promise<void> {
     await this.init();
 
     try {
       const db = await getStorageDatabase().ensureInit();
 
       await db.queryAsync(
-        "UPDATE messages SET content = ?, timestamp = ? WHERE id = ? AND session_id = ?",
-        [content, Date.now(), messageId, sessionId],
+        "UPDATE messages SET content = ?, reasoning = ?, timestamp = ? WHERE id = ? AND session_id = ?",
+        [content, reasoning || null, Date.now(), messageId, sessionId],
       );
 
       // Update session_meta preview with the latest content
@@ -371,14 +372,15 @@ export class SessionStorageService {
           for (let seq = 0; seq < session.messages.length; seq++) {
             const msg = session.messages[seq];
             await db.queryAsync(
-              `INSERT INTO messages (id, session_id, seq, role, content, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, is_system_notice)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              `INSERT INTO messages (id, session_id, seq, role, content, reasoning, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, is_system_notice)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               [
                 msg.id,
                 session.id,
                 seq,
                 msg.role,
                 msg.content || "",
+                msg.reasoning || null,
                 msg.images ? JSON.stringify(msg.images) : null,
                 msg.files ? JSON.stringify(msg.files) : null,
                 msg.timestamp || Date.now(),
@@ -457,6 +459,7 @@ export class SessionStorageService {
           content: m.content || "",
           timestamp: m.timestamp,
         };
+        if (m.reasoning) msg.reasoning = m.reasoning;
         if (m.images) msg.images = JSON.parse(m.images);
         if (m.files) msg.files = JSON.parse(m.files);
         if (m.pdf_context) msg.pdfContext = true;

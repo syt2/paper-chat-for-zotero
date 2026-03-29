@@ -107,7 +107,7 @@ export abstract class BaseProvider implements AIProvider {
     format: SSEFormat,
     callbacks: StreamCallbacks,
   ): Promise<void> {
-    const { onChunk, onComplete, onError } = callbacks;
+    const { onChunk, onReasoningChunk, onComplete, onError } = callbacks;
     const reader = this.getResponseReader(response);
     let fullContent = "";
 
@@ -116,6 +116,9 @@ export abstract class BaseProvider implements AIProvider {
         fullContent += text;
         onChunk(text);
       },
+      onReasoning: onReasoningChunk
+        ? (text) => onReasoningChunk(text)
+        : undefined,
       onDone: () => onComplete(fullContent),
       onError,
     });

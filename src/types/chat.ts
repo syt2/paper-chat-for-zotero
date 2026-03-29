@@ -24,6 +24,7 @@ export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "system" | "error" | "tool";
   content: string;
+  reasoning?: string; // Reasoning/thinking chain (e.g. DeepSeek-Reasoner)
   images?: ImageAttachment[];
   files?: FileAttachment[];
   timestamp: number;
@@ -115,6 +116,7 @@ export type OpenAIMessageContent =
 // 流式响应回调
 export interface StreamCallbacks {
   onChunk: (chunk: string) => void;
+  onReasoningChunk?: (chunk: string) => void;
   onComplete: (fullContent: string, toolCalls?: ToolCall[]) => void;
   onError: (error: Error) => void;
 }
@@ -130,6 +132,9 @@ export interface StreamToolCallingResult {
 export interface StreamToolCallingCallbacks {
   /** 文本片段 */
   onTextDelta: (text: string) => void;
+
+  /** Reasoning/thinking chain delta (e.g. DeepSeek-Reasoner) */
+  onReasoningDelta?: (text: string) => void;
 
   /** Tool call 开始 */
   onToolCallStart: (toolCall: {
