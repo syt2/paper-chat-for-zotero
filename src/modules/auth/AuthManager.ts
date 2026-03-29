@@ -10,7 +10,7 @@ import type { UserInfo, TokenInfo, AuthState } from "../../types/auth";
 import { getPref, setPref } from "../../utils/prefs";
 import { BUILTIN_PROVIDERS, getProviderManager } from "../providers";
 import { getString } from "../../utils/locale";
-import { AUTO_MODEL, resolveAutoModel, fetchPaperchatRatios } from "../preferences/ModelsFetcher";
+import { AUTO_MODEL, fetchPaperchatRatios } from "../preferences/ModelsFetcher";
 import { isEmbeddingModel } from "../embedding/providers/PaperChatEmbedding";
 
 // 密码加密/解密（使用简单的 XOR 加密 + Base64 编码）
@@ -793,25 +793,22 @@ export class AuthManager {
             return;
           }
 
-          // If current model is no longer available, auto-fallback
+          // If current model is no longer available, switch to auto
           if (currentModel && !chatModels.includes(currentModel)) {
-            const newModel = resolveAutoModel(chatModels) || chatModels[0];
-            setPref("model", newModel);
+            setPref("model", AUTO_MODEL);
             providerManager.updateProviderConfig("paperchat", {
-              defaultModel: newModel,
+              defaultModel: AUTO_MODEL,
               availableModels: chatModels,
             });
             ztoolkit.log(
-              `[AuthManager] Model "${currentModel}" unavailable, switched to "${newModel}"`,
+              `[AuthManager] Model "${currentModel}" unavailable, switched to auto`,
             );
-            // Notify user
-            this.showModelSwitchNotification(currentModel, newModel);
+            this.showModelSwitchNotification(currentModel, getString("chat-model-auto"));
           } else if (!currentModel) {
-            // No model selected yet — pick cheapest
-            const newModel = resolveAutoModel(chatModels) || chatModels[0];
-            setPref("model", newModel);
+            // No model selected yet — default to auto
+            setPref("model", AUTO_MODEL);
             providerManager.updateProviderConfig("paperchat", {
-              defaultModel: newModel,
+              defaultModel: AUTO_MODEL,
               availableModels: chatModels,
             });
           } else {

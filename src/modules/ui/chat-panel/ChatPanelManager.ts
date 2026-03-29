@@ -30,6 +30,7 @@ import {
   setActiveReaderItemFn,
   setTogglePanelModeFn,
   updatePanelModeButtonIcon,
+  updateModelSelectorDisplay,
 } from "./ChatPanelEvents";
 import { loadCachedRatios } from "../../preferences/ModelsFetcher";
 import { Guide } from "../Guide";
@@ -412,6 +413,7 @@ async function initializeChatContentCommon(
   const providerManager = getProviderManager();
   providerManager.setOnProviderChange(() => {
     context.updateUserBar();
+    updateModelSelectorDisplay(container);
   });
 
   // Setup event handlers

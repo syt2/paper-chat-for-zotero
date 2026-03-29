@@ -85,16 +85,18 @@ export function populatePaperchatModels(
     modelList = BUILTIN_PROVIDERS.paperchat.defaultModels;
   }
 
-  // Save to cache and provider config if requested
-  if (saveToCache && models) {
-    setPref("paperchatModelsCache", JSON.stringify(models));
-    providerManager.updateProviderConfig("paperchat", {
-      availableModels: models,
-    });
-  }
-
   // Filter out embedding models (they are used for RAG, not for chat)
   const chatModels = modelList.filter((model) => !isEmbeddingModel(model));
+
+  // Save to cache and provider config if requested
+  if (saveToCache && models) {
+    // Cache ALL models (RAG reads embedding models from cache)
+    setPref("paperchatModelsCache", JSON.stringify(models));
+    // Only set chat models as available
+    providerManager.updateProviderConfig("paperchat", {
+      availableModels: chatModels,
+    });
+  }
 
   // Add "Auto (cheapest)" option at the top
   const autoItem = doc.createXULElement("menuitem");
@@ -110,8 +112,20 @@ export function populatePaperchatModels(
   });
 
   // Use model pref as source of truth (consistent with chat dropdown)
-  const currentModel = (getPref("model") as string) || config?.defaultModel || chatModels[0] || modelList[0];
-  modelSelect.value = currentModel;
+  const currentModel = (getPref("model") as string) || config?.defaultModel || AUTO_MODEL;
+  // Check if the current model exists in the new list
+  const modelExists = currentModel === AUTO_MODEL || chatModels.includes(currentModel);
+  if (modelExists) {
+    modelSelect.value = currentModel;
+  } else {
+    // Model was removed — fall back to auto and persist the change
+    modelSelect.value = AUTO_MODEL;
+    setPref("model", AUTO_MODEL);
+    providerManager.updateProviderConfig("paperchat", {
+      defaultModel: AUTO_MODEL,
+      availableModels: chatModels,
+    });
+  }
 }
 
 /**

@@ -703,6 +703,8 @@ export class ProviderManager {
       } as ProviderConfig;
       this.saveToPrefs();
       this.initializeProviders();
+      // Notify listeners (model or config changed)
+      this.onProviderChangeCallback?.(providerId);
     }
   }
 
