@@ -5,9 +5,10 @@
 import { getPref, setPref } from "../../utils/prefs";
 import { getProviderManager, BUILTIN_PROVIDERS } from "../providers";
 import type { PaperChatProviderConfig } from "../../types/provider";
-import { formatModelLabel } from "./ModelsFetcher";
+import { formatModelLabel, AUTO_MODEL } from "./ModelsFetcher";
 import { clearElement } from "./utils";
 import { isEmbeddingModel } from "../embedding/providers/PaperChatEmbedding";
+import { getString } from "../../utils/locale";
 
 /**
  * Populate PaperChat panel with settings from provider config
@@ -95,6 +96,12 @@ export function populatePaperchatModels(
   // Filter out embedding models (they are used for RAG, not for chat)
   const chatModels = modelList.filter((model) => !isEmbeddingModel(model));
 
+  // Add "Auto (cheapest)" option at the top
+  const autoItem = doc.createXULElement("menuitem");
+  autoItem.setAttribute("label", getString("chat-model-auto"));
+  autoItem.setAttribute("value", AUTO_MODEL);
+  modelPopup.appendChild(autoItem);
+
   chatModels.forEach((model) => {
     const menuitem = doc.createXULElement("menuitem");
     menuitem.setAttribute("label", formatModelLabel(model, "paperchat"));
@@ -102,8 +109,8 @@ export function populatePaperchatModels(
     modelPopup.appendChild(menuitem);
   });
 
-  // Set current model from provider config (use first chat model as fallback)
-  const currentModel = config?.defaultModel || chatModels[0] || modelList[0];
+  // Use model pref as source of truth (consistent with chat dropdown)
+  const currentModel = (getPref("model") as string) || config?.defaultModel || chatModels[0] || modelList[0];
   modelSelect.value = currentModel;
 }
 
@@ -126,8 +133,15 @@ export function savePaperchatConfig(doc: Document): void {
     "pref-paperchat-systemprompt",
   ) as HTMLTextAreaElement;
 
+  const selectedModel = modelSelect?.value || "";
+
+  // Sync model pref (source of truth for chat dropdown)
+  if (selectedModel) {
+    setPref("model", selectedModel);
+  }
+
   const updates: Partial<PaperChatProviderConfig> = {
-    defaultModel: modelSelect?.value || "",
+    defaultModel: selectedModel,
     maxTokens: parseInt(maxTokensEl?.value) || 4096,
     temperature: parseFloat(temperatureEl?.value) || 0.7,
     systemPrompt: systemPromptEl?.value || "",
