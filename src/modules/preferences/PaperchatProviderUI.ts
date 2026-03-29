@@ -5,7 +5,7 @@
 import { getPref, setPref } from "../../utils/prefs";
 import { getProviderManager, BUILTIN_PROVIDERS } from "../providers";
 import type { PaperChatProviderConfig } from "../../types/provider";
-import { formatModelLabel, AUTO_MODEL } from "./ModelsFetcher";
+import { formatModelLabel, AUTO_MODEL, AUTO_MODEL_SMART, isAutoModel } from "./ModelsFetcher";
 import { clearElement } from "./utils";
 import { isEmbeddingModel } from "../embedding/providers/PaperChatEmbedding";
 import { getString } from "../../utils/locale";
@@ -98,11 +98,16 @@ export function populatePaperchatModels(
     });
   }
 
-  // Add "Auto (cheapest)" option at the top
-  const autoItem = doc.createXULElement("menuitem");
-  autoItem.setAttribute("label", getString("chat-model-auto"));
-  autoItem.setAttribute("value", AUTO_MODEL);
-  modelPopup.appendChild(autoItem);
+  // Add auto options at the top
+  for (const [value, labelKey] of [
+    [AUTO_MODEL, "chat-model-auto"],
+    [AUTO_MODEL_SMART, "chat-model-auto-smart"],
+  ] as const) {
+    const item = doc.createXULElement("menuitem");
+    item.setAttribute("label", getString(labelKey));
+    item.setAttribute("value", value);
+    modelPopup.appendChild(item);
+  }
 
   chatModels.forEach((model) => {
     const menuitem = doc.createXULElement("menuitem");
@@ -112,17 +117,17 @@ export function populatePaperchatModels(
   });
 
   // Use model pref as source of truth (consistent with chat dropdown)
-  const currentModel = (getPref("model") as string) || config?.defaultModel || AUTO_MODEL;
+  const currentModel = (getPref("model") as string) || config?.defaultModel || AUTO_MODEL_SMART;
   // Check if the current model exists in the new list
-  const modelExists = currentModel === AUTO_MODEL || chatModels.includes(currentModel);
+  const modelExists = isAutoModel(currentModel) || chatModels.includes(currentModel);
   if (modelExists) {
     modelSelect.value = currentModel;
   } else {
-    // Model was removed — fall back to auto and persist the change
-    modelSelect.value = AUTO_MODEL;
-    setPref("model", AUTO_MODEL);
+    // Model was removed — fall back to auto (smartest) and persist the change
+    modelSelect.value = AUTO_MODEL_SMART;
+    setPref("model", AUTO_MODEL_SMART);
     providerManager.updateProviderConfig("paperchat", {
-      defaultModel: AUTO_MODEL,
+      defaultModel: AUTO_MODEL_SMART,
       availableModels: chatModels,
     });
   }

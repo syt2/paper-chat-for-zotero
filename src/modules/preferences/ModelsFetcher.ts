@@ -11,8 +11,15 @@ import { showMessage } from "./utils";
 // Store model ratios for PaperChat
 let paperchatModelRatios: Record<string, number> = {};
 
-/** Special value stored in pref("model") to indicate auto-selection */
+/** Special value stored in pref("model") to indicate auto-selection (cheapest) */
 export const AUTO_MODEL = "auto";
+/** Special value stored in pref("model") to indicate auto-selection (smartest) */
+export const AUTO_MODEL_SMART = "auto-smart";
+
+/** Check if a model value is any auto mode */
+export function isAutoModel(model: string): boolean {
+  return model === AUTO_MODEL || model === AUTO_MODEL_SMART;
+}
 
 /**
  * Get the model ratios map
@@ -36,6 +43,25 @@ export function resolveAutoModel(availableModels: string[]): string | null {
     if (ra === undefined) return 1;
     if (rb === undefined) return -1;
     return ra - rb;
+  });
+  return sorted[0];
+}
+
+/**
+ * Resolve "auto-smart" to the most capable (most expensive) available model by ratio.
+ * If ratios are unavailable, returns the last model in the list.
+ */
+export function resolveAutoModelSmart(availableModels: string[]): string | null {
+  if (availableModels.length === 0) return null;
+
+  // Sort by ratio descending (most expensive first), models without ratio go last
+  const sorted = [...availableModels].sort((a, b) => {
+    const ra = paperchatModelRatios[a];
+    const rb = paperchatModelRatios[b];
+    if (ra === undefined && rb === undefined) return 0;
+    if (ra === undefined) return 1;
+    if (rb === undefined) return -1;
+    return rb - ra;
   });
   return sorted[0];
 }

@@ -10,7 +10,7 @@ import type { UserInfo, TokenInfo, AuthState } from "../../types/auth";
 import { getPref, setPref } from "../../utils/prefs";
 import { BUILTIN_PROVIDERS, getProviderManager } from "../providers";
 import { getString } from "../../utils/locale";
-import { AUTO_MODEL, fetchPaperchatRatios } from "../preferences/ModelsFetcher";
+import { AUTO_MODEL_SMART, isAutoModel, fetchPaperchatRatios } from "../preferences/ModelsFetcher";
 import { isEmbeddingModel } from "../embedding/providers/PaperChatEmbedding";
 
 // 密码加密/解密（使用简单的 XOR 加密 + Base64 编码）
@@ -268,8 +268,15 @@ export class AuthManager {
     });
 
     if (savedApiKey) {
-      this.state.apiKey = savedApiKey as string;
-      this.authService.setAccessToken(savedApiKey as string);
+      const key = savedApiKey as string;
+      // Reject masked keys that leaked from old versions
+      if (key.includes("*")) {
+        ztoolkit.log("[AuthManager] Discarding masked apiKey from prefs");
+        setPref("apiKey", "");
+      } else {
+        this.state.apiKey = key;
+        this.authService.setAccessToken(key);
+      }
     }
 
     // userId 可能是0，需要检查是否为有效数字
@@ -676,14 +683,21 @@ export class AuthManager {
           );
           return;
         }
-        // 如果获取 key 失败，回退到列表中的 key（掩码形式）
-        this.state.token = existingToken;
-        this.state.apiKey = `sk-${existingToken.key}`;
-        setPref("apiKey", this.state.apiKey);
-        this.authService.setAccessToken(this.state.apiKey);
+        // getTokenKey failed (e.g. 429 rate limit) — keep using cached apiKey if available
+        const cachedApiKey = getPref("apiKey") as string;
+        if (cachedApiKey && !cachedApiKey.includes("*")) {
+          this.state.token = existingToken;
+          this.state.apiKey = cachedApiKey;
+          this.authService.setAccessToken(cachedApiKey);
+          ztoolkit.log(
+            "[AuthManager] getTokenKey failed, using cached apiKey:",
+            cachedApiKey.substring(0, 10) + "...",
+          );
+          return;
+        }
+        // No cached key — cannot proceed, log warning
         ztoolkit.log(
-          "[AuthManager] Using existing plugin token (fallback):",
-          this.state.apiKey.substring(0, 10) + "...",
+          "[AuthManager] getTokenKey failed and no cached apiKey available, token will be unusable",
         );
         return;
       }
@@ -717,16 +731,22 @@ export class AuthManager {
           (t) => t.name === PLUGIN_TOKEN_NAME && t.status === 1,
         );
         if (newToken) {
-          // 通过 getTokenKey 获取真实 key
-          const keyResult = await this.withSessionRetry(
+          // 通过 getTokenKey 获取真实 key (retry once after 2s if rate limited)
+          let keyResult = await this.withSessionRetry(
             () => this.authService.getTokenKey(newToken.id),
             "getTokenKey",
           );
-          const realKey = keyResult.success && keyResult.data?.key
-            ? keyResult.data.key
-            : newToken.key;
+          if (!keyResult.success || !keyResult.data?.key) {
+            ztoolkit.log("[AuthManager] getTokenKey failed, retrying after 2s...");
+            await new Promise((r) => setTimeout(r, 2000));
+            keyResult = await this.authService.getTokenKey(newToken.id);
+          }
+          if (!keyResult.success || !keyResult.data?.key) {
+            ztoolkit.log("[AuthManager] getTokenKey failed after retry, token key unavailable");
+            return;
+          }
           this.state.token = newToken;
-          this.state.apiKey = `sk-${realKey}`;
+          this.state.apiKey = `sk-${keyResult.data.key}`;
           setPref("apiKey", this.state.apiKey);
           this.authService.setAccessToken(this.state.apiKey);
           ztoolkit.log(
@@ -785,30 +805,30 @@ export class AuthManager {
           const currentModel = getPref("model") as string;
           const providerManager = getProviderManager();
 
-          // "auto" is always valid — just update the available models list
-          if (currentModel === AUTO_MODEL) {
+          // Any auto mode is always valid — just update the available models list
+          if (isAutoModel(currentModel)) {
             providerManager.updateProviderConfig("paperchat", {
               availableModels: chatModels,
             });
             return;
           }
 
-          // If current model is no longer available, switch to auto
+          // If current model is no longer available, switch to auto (smartest)
           if (currentModel && !chatModels.includes(currentModel)) {
-            setPref("model", AUTO_MODEL);
+            setPref("model", AUTO_MODEL_SMART);
             providerManager.updateProviderConfig("paperchat", {
-              defaultModel: AUTO_MODEL,
+              defaultModel: AUTO_MODEL_SMART,
               availableModels: chatModels,
             });
             ztoolkit.log(
-              `[AuthManager] Model "${currentModel}" unavailable, switched to auto`,
+              `[AuthManager] Model "${currentModel}" unavailable, switched to auto-smart`,
             );
-            this.showModelSwitchNotification(currentModel, getString("chat-model-auto"));
+            this.showModelSwitchNotification(currentModel, getString("chat-model-auto-smart"));
           } else if (!currentModel) {
-            // No model selected yet — default to auto
-            setPref("model", AUTO_MODEL);
+            // No model selected yet — default to auto (smartest)
+            setPref("model", AUTO_MODEL_SMART);
             providerManager.updateProviderConfig("paperchat", {
-              defaultModel: AUTO_MODEL,
+              defaultModel: AUTO_MODEL_SMART,
               availableModels: chatModels,
             });
           } else {

@@ -89,6 +89,7 @@ paperchat-chat-close = 关闭
 paperchat-chat-open-settings = 打开设置
 paperchat-chat-select-model = 选择模型
 paperchat-chat-model-auto = 自动 (最低价)
+paperchat-chat-model-auto-smart = 自动 (最强)
 paperchat-chat-model-switched = 模型 "{ $old }" 已不可用，已切换为 "{ $new }"
 paperchat-chat-toggle-panel-mode = 切换侧边栏/悬浮窗模式
 paperchat-chat-switch-to-floating = 切换为悬浮窗模式

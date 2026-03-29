@@ -19,7 +19,7 @@ import { getAuthManager } from "../auth";
 import { OpenAICompatibleProvider } from "./OpenAICompatibleProvider";
 import { BUILTIN_PROVIDERS } from "./ProviderManager";
 import { getPref } from "../../utils/prefs";
-import { AUTO_MODEL, resolveAutoModel } from "../preferences/ModelsFetcher";
+import { AUTO_MODEL, AUTO_MODEL_SMART, resolveAutoModel, resolveAutoModelSmart } from "../preferences/ModelsFetcher";
 
 export class PaperChatProvider implements AIProvider {
   private _config: PaperChatProviderConfig;
@@ -37,9 +37,11 @@ export class PaperChatProvider implements AIProvider {
       BUILTIN_PROVIDERS.paperchat.defaultModels;
     const fallbackModel = BUILTIN_PROVIDERS.paperchat.defaultModels[0];
 
-    // Resolve "auto" to the cheapest available model
+    // Resolve auto modes to actual model
     let model = this._config.defaultModel;
-    if (model === AUTO_MODEL || !model) {
+    if (model === AUTO_MODEL_SMART) {
+      model = resolveAutoModelSmart(availableModels) || fallbackModel;
+    } else if (model === AUTO_MODEL || !model) {
       model = resolveAutoModel(availableModels) || fallbackModel;
     }
 

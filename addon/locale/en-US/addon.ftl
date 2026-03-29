@@ -89,6 +89,7 @@ paperchat-chat-close = Close
 paperchat-chat-open-settings = Open Settings
 paperchat-chat-select-model = Select Model
 paperchat-chat-model-auto = Auto (cheapest)
+paperchat-chat-model-auto-smart = Auto (smartest)
 paperchat-chat-model-switched = Model "{ $old }" is no longer available, switched to "{ $new }"
 paperchat-chat-toggle-panel-mode = Toggle sidebar/floating mode
 paperchat-chat-switch-to-floating = Switch to floating mode
