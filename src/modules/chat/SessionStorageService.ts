@@ -501,8 +501,8 @@ export class SessionStorageService {
         messages: filterValidMessages(messages),
         contextSummary: row.context_summary ? JSON.parse(row.context_summary) : undefined,
         contextState: row.context_state ? JSON.parse(row.context_state) : undefined,
-        memoryExtractedAt: row.memory_extracted_at || undefined,
-        memoryExtractedMsgCount: row.memory_extracted_msg_count || undefined,
+        memoryExtractedAt: row.memory_extracted_at != null ? (row.memory_extracted_at as number) : undefined,
+        memoryExtractedMsgCount: row.memory_extracted_msg_count != null ? (row.memory_extracted_msg_count as number) : undefined,
       };
 
       ztoolkit.log("[SessionStorageService] Session loaded:", sessionId);

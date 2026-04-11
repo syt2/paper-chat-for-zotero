@@ -1101,7 +1101,7 @@ async function refreshChatForCurrentItem(): Promise<void> {
 /**
  * Unregister all and clean up
  */
-export function unregisterAll(): void {
+export async function unregisterAll(): Promise<void> {
   // Close floating window
   closeFloatingWindow();
 
@@ -1140,9 +1140,9 @@ export function unregisterAll(): void {
     themeCleanup = null;
   }
 
-  // Destroy chat manager
+  // Destroy chat manager — await so DB writes complete before StorageDatabase is torn down
   if (chatManager) {
-    chatManager.destroy();
+    await chatManager.destroy();
     chatManager = null;
   }
 

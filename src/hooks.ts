@@ -19,7 +19,7 @@ import {
 } from "./modules/embedding";
 import { getStorageDatabase, destroyStorageDatabase } from "./modules/chat/db/StorageDatabase";
 import { checkAndMigrateToV3 } from "./modules/chat/migration/migrateToSQLite";
-import { destroyMemoryStores } from "./modules/chat/memory/MemoryStore";
+import { destroyMemoryStores, getMemoryStore } from "./modules/chat/memory/MemoryStore";
 
 async function onStartup() {
   await Promise.all([
@@ -44,6 +44,10 @@ async function onStartup() {
   try {
     await getStorageDatabase().init();
     await checkAndMigrateToV3();
+    // Kick off memory embedding check after DB is ready (fire-and-forget)
+    getMemoryStore().checkAndReindex().catch((err) => {
+      ztoolkit.log("[Startup] Memory reindex failed:", err);
+    });
   } catch (error) {
     ztoolkit.log("[Startup] StorageDatabase init failed (will retry on first use):", error);
   }
@@ -114,11 +118,13 @@ async function onMainWindowUnload(_win: Window): Promise<void> {
   addon.data.dialog?.window?.close();
 }
 
-function onShutdown(): void {
+async function onShutdown(): Promise<void> {
   ztoolkit.unregisterAll();
   ztoolkit.Menu.unregister("paperchat-chat-menuitem");
   getAISummaryService().unregisterMenus();
-  unregisterChatPanel();
+  // Await so ChatManager.destroy() (session meta write, extraction) finishes
+  // before StorageDatabase is torn down below.
+  await unregisterChatPanel();
   destroyProviderManager();
   destroyAuthManager();
   // Destroy AISummary

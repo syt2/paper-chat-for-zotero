@@ -109,6 +109,12 @@ export class ChatManager {
 
     this.initialized = true;
     ztoolkit.log("[ChatManager] Initialized");
+
+    // On startup, only re-extract if the session has grown since last extraction.
+    // Skip the neverExtracted path to avoid a surprise API call on every Zotero open.
+    if (this.currentSession) {
+      this.maybeExtractMemories(this.currentSession, /* requireGrowth */ true);
+    }
   }
 
   /**
@@ -875,8 +881,11 @@ export class ChatManager {
    *   - At least 8 conversational messages
    *   - Not currently in-flight for this session
    *   - Either never extracted, OR session has grown by ≥10 messages since last extraction
+   * @param requireGrowth If true, only trigger when the session has grown ≥10 messages
+   *   since last extraction (skips the neverExtracted path). Used on startup to avoid
+   *   a surprise API call the first time Zotero opens with an untouched long session.
    */
-  private maybeExtractMemories(session: ChatSession): void {
+  private maybeExtractMemories(session: ChatSession, requireGrowth = false): void {
     const conversational = session.messages.filter(
       (m) => m.role === "user" || m.role === "assistant",
     );
@@ -888,11 +897,11 @@ export class ChatManager {
     const neverExtracted = !session.memoryExtractedAt;
     const grewEnough = count >= lastCount + 10;
 
+    if (requireGrowth && !grewEnough) return;
     if (!neverExtracted && !grewEnough) return;
 
     this.extractionInFlight.add(session.id);
     this.extractMemoriesAsync(session, count).catch((err) => {
-      this.extractionInFlight.delete(session.id);
       ztoolkit.log("[ChatManager] extractMemoriesAsync failed:", getErrorMessage(err));
     });
   }
@@ -911,17 +920,23 @@ export class ChatManager {
       (m) => m.role === "user" || m.role === "assistant",
     );
 
+    // Build from newest messages backwards so the most recent context is always included
     const MAX_INPUT_CHARS = 20000;
-    let conversationText = "";
-    for (const m of turns) {
+    const lines: string[] = [];
+    let totalChars = 0;
+    for (const m of [...turns].reverse()) {
       const line = `${m.role === "user" ? "USER" : "ASSISTANT"}: ${m.content}\n\n`;
-      if (conversationText.length + line.length > MAX_INPUT_CHARS) break;
-      conversationText += line;
+      if (totalChars + line.length > MAX_INPUT_CHARS) break;
+      lines.unshift(line);
+      totalChars += line.length;
     }
+    const conversationText = lines.join("");
     if (!conversationText.trim()) return;
 
-    const systemPrompt =
-      `You are a memory extraction assistant. Review the conversation and extract 2-5 ` +
+    // Put extraction instructions in the user turn so they are not silently dropped
+    // by providers (e.g. Anthropic) that strip system-role messages from chatCompletion.
+    const extractionInstructions =
+      `You are a memory extraction assistant. Review the conversation below and extract 2-5 ` +
       `memorable facts about the USER (not the assistant). Focus on:\n` +
       `- Stated preferences (response style, language, format)\n` +
       `- Research context (field, topic, specific papers or projects)\n` +
@@ -929,11 +944,10 @@ export class ChatManager {
       `- Important entities (tools, methods, authors) they mentioned\n\n` +
       `Output ONLY a valid JSON array — no explanation, no markdown fences:\n` +
       `[{"text":"...","category":"preference|decision|entity|fact|other","importance":0.0-1.0}]\n` +
-      `Return [] if there is nothing worth remembering.`;
+      `Return [] if there is nothing worth remembering.\n\nConversation:\n\n${conversationText}`;
 
     const messages = [
-      { id: "mem-sys", role: "system" as const, content: systemPrompt, timestamp: Date.now() },
-      { id: "mem-usr", role: "user" as const, content: `Conversation:\n\n${conversationText}`, timestamp: Date.now() },
+      { id: "mem-usr", role: "user" as const, content: extractionInstructions, timestamp: Date.now() },
     ];
 
     try {
@@ -941,17 +955,28 @@ export class ChatManager {
       const response = await provider.chatCompletion(messages);
       if (!response) return;
 
-      // Parse the JSON array from the response (robust: find first [...])
-      const match = response.match(/\[[\s\S]*\]/);
-      if (!match) {
-        ztoolkit.log("[ChatManager] Memory extraction: no JSON array found in response");
-        return;
+      // Parse the JSON array from the response.
+      // Try the full response first (LLM followed instructions), then fall back
+      // to extracting the first [...] block (handles preamble/postamble text).
+      let entries: Array<{ text: string; category?: string; importance?: number }>;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(response.trim());
+      } catch {
+        const match = response.match(/\[[\s\S]*?\]/);
+        if (!match) {
+          ztoolkit.log("[ChatManager] Memory extraction: no JSON array found in response");
+          return;
+        }
+        try {
+          parsed = JSON.parse(match[0]);
+        } catch {
+          ztoolkit.log("[ChatManager] Memory extraction: failed to parse JSON from response");
+          return;
+        }
       }
-
-      const entries: Array<{ text: string; category?: string; importance?: number }> =
-        JSON.parse(match[0]);
-
-      if (!Array.isArray(entries) || entries.length === 0) return;
+      if (!Array.isArray(parsed) || parsed.length === 0) return;
+      entries = parsed as Array<{ text: string; category?: string; importance?: number }>;
 
       const store = getMemoryStore();
       let saved = 0;
@@ -1544,6 +1569,7 @@ export class ChatManager {
    */
   async destroy(): Promise<void> {
     if (this.currentSession) {
+      this.maybeExtractMemories(this.currentSession);
       await this.sessionStorage.updateSessionMeta(this.currentSession);
     }
     this.currentSession = null;

@@ -195,7 +195,9 @@ export class StorageDatabase {
         importance REAL NOT NULL DEFAULT 0.5,
         created_at INTEGER NOT NULL,
         access_count INTEGER NOT NULL DEFAULT 0,
-        last_accessed_at INTEGER NOT NULL
+        last_accessed_at INTEGER NOT NULL,
+        embedding TEXT,
+        embedding_model TEXT
       )
     `);
 
@@ -411,9 +413,21 @@ export class StorageDatabase {
           importance REAL NOT NULL DEFAULT 0.5,
           created_at INTEGER NOT NULL,
           access_count INTEGER NOT NULL DEFAULT 0,
-          last_accessed_at INTEGER NOT NULL
+          last_accessed_at INTEGER NOT NULL,
+          embedding TEXT,
+          embedding_model TEXT
         )
       `);
+
+      // Add embedding columns if memories table already existed without them
+      for (const col of ["embedding TEXT", "embedding_model TEXT"]) {
+        try {
+          await db.queryAsync(`ALTER TABLE memories ADD COLUMN ${col}`);
+        } catch (err) {
+          const msg = getErrorMessage(err);
+          if (!msg.includes("duplicate column name") && !msg.includes("already exists")) throw err;
+        }
+      }
 
       await db.queryAsync(`
         CREATE INDEX IF NOT EXISTS idx_memories_library_created

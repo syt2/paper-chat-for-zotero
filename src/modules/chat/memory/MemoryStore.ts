@@ -2,10 +2,17 @@
  * MemoryStore - Per-library persistent memory for user preferences and facts
  *
  * Stores memories in the existing paper-chat/storage SQLite database (schema v4).
- * Uses Jaccard deduplication and multi-factor relevance scoring for retrieval.
+ * Supports two retrieval modes:
+ *   - Embedding-based (cosine similarity) when an embedding provider is available
+ *   - Jaccard token-overlap fallback when no provider is configured
+ *
+ * Model change detection: when the active embedding model changes, all stored
+ * embeddings are invalidated and a background reindex job re-embeds everything.
  */
 
 import { getStorageDatabase } from "../db/StorageDatabase";
+import { getEmbeddingProviderFactory } from "../../embedding/EmbeddingProviderFactory";
+import { cosineSimilarity } from "../../embedding/utils/cosine";
 import { getErrorMessage } from "../../../utils/common";
 
 export type MemoryCategory = "preference" | "decision" | "entity" | "fact" | "other";
@@ -19,24 +26,37 @@ export interface Memory {
   createdAt: number;
   accessCount: number;
   lastAccessedAt: number;
+  embedding?: number[];
+  embeddingModel?: string;
 }
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
 
-const DEDUP_THRESHOLD = 0.9;   // Jaccard score to treat as duplicate
-const DEDUP_WINDOW = 80;        // Newest N memories checked for dedup
-const MAX_INJECT = 5;           // Max memories injected per prompt
-const MIN_SCORE = 0.25;         // Minimum relevance score to include in results
-const MIN_LEN = 10;             // Min character length for a memory
-const MAX_LEN = 500;            // Max character length for a memory
-const SEARCH_FETCH_LIMIT = 300; // Max rows loaded from DB for client-side scoring
-const MAX_MEMORIES = 500;       // Hard cap per library; oldest+least-important pruned first
+const DEDUP_THRESHOLD = 0.9;          // Jaccard score to treat as duplicate
+const EMBEDDING_DEDUP_THRESHOLD = 0.92; // Cosine similarity to treat as duplicate
+const DEDUP_WINDOW = 80;              // Newest N memories checked for Jaccard dedup
+const MAX_INJECT = 5;                 // Max memories injected per prompt
+const MIN_SCORE = 0.25;               // Minimum relevance score to include in results
+const MIN_LEN = 10;                   // Min character length for a memory
+const MAX_LEN = 500;                  // Max character length for a memory
+const SEARCH_FETCH_LIMIT = 300;       // Max rows loaded from DB for client-side scoring
+const MAX_MEMORIES = 500;             // Hard cap per library; least-important pruned first
+const REINDEX_BATCH_SIZE = 20;        // Memories embedded per batch during reindex
 
-// Scoring weights (sum > 1 is intentional: boosts can compound)
-const W_JACCARD = 0.65;
-const W_CONTAINS = 0.30;
+// Jaccard scoring weights — must sum to ≤1.0 so scores are comparable with
+// the embedding path (which also maxes at 1.0) during the mixed-mode window.
+const W_JACCARD = 0.50;
+const W_CONTAINS = 0.25;
 const W_RECENCY = 0.15;
-const W_IMPORTANCE = 0.20;
+const W_IMPORTANCE = 0.10;
+
+// Embedding scoring weights (recency+importance as secondary factors only)
+const W_COSINE = 0.70;
+const WE_RECENCY = 0.15;
+const WE_IMPORTANCE = 0.15;
+
+// Settings key prefix for tracking active embedding model (one key per library)
+const SETTING_EMBEDDING_MODEL_PREFIX = "memory_embedding_model_";
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
@@ -53,25 +73,23 @@ function jaccard(a: Set<string>, b: Set<string>): number {
   return intersection / (a.size + b.size - intersection);
 }
 
-function scoreMemory(mem: Memory, queryTokens: Set<string>, queryRaw: string, now: number): number {
+function scoreJaccard(mem: Memory, queryTokens: Set<string>, queryRaw: string, now: number): number {
   const memTokens = tokenise(mem.text);
   const jaccardScore = jaccard(queryTokens, memTokens);
-
   const containsBoost = mem.text.toLowerCase().includes(queryRaw.toLowerCase()) ? 1.0 : 0.0;
-
   const ageDays = (now - mem.createdAt) / (1000 * 86400);
   const recencyScore = Math.exp(-ageDays / 30);
+  return W_JACCARD * jaccardScore + W_CONTAINS * containsBoost + W_RECENCY * recencyScore + W_IMPORTANCE * mem.importance;
+}
 
-  return (
-    W_JACCARD * jaccardScore +
-    W_CONTAINS * containsBoost +
-    W_RECENCY * recencyScore +
-    W_IMPORTANCE * mem.importance
-  );
+function scoreEmbedding(cosine: number, mem: Memory, now: number): number {
+  const ageDays = (now - mem.createdAt) / (1000 * 86400);
+  const recencyScore = Math.exp(-ageDays / 30);
+  return W_COSINE * cosine + WE_RECENCY * recencyScore + WE_IMPORTANCE * mem.importance;
 }
 
 function rowToMemory(row: Record<string, unknown>): Memory {
-  return {
+  const mem: Memory = {
     id: row.id as string,
     libraryId: row.library_id as number,
     text: row.text as string,
@@ -81,12 +99,26 @@ function rowToMemory(row: Record<string, unknown>): Memory {
     accessCount: row.access_count as number,
     lastAccessedAt: row.last_accessed_at as number,
   };
+  if (row.embedding) {
+    try { mem.embedding = JSON.parse(row.embedding as string); } catch { /* ignore */ }
+  }
+  if (row.embedding_model) {
+    mem.embeddingModel = row.embedding_model as string;
+  }
+  return mem;
 }
 
 // ── MemoryStore ───────────────────────────────────────────────────────────────
 
 export class MemoryStore {
   private libraryId: number;
+  // Guards concurrent save() calls: prevents two in-flight saves for the same
+  // text from both passing isDuplicate() before either INSERT completes.
+  private saveLock = new Set<string>();
+
+  private get embeddingModelKey(): string {
+    return `${SETTING_EMBEDDING_MODEL_PREFIX}${this.libraryId}`;
+  }
 
   constructor(libraryId: number) {
     this.libraryId = libraryId;
@@ -96,8 +128,111 @@ export class MemoryStore {
     return getStorageDatabase().ensureInit();
   }
 
-  private async isDuplicate(text: string): Promise<boolean> {
+  // ── Embedding helpers ─────────────────────────────────────────────────────
+
+  private async getEmbeddingProvider() {
+    try {
+      return await getEmbeddingProviderFactory().getProvider();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * On startup: detect if the embedding model has changed.
+   * If so, invalidate all stored embeddings and trigger background reindex.
+   * If model unchanged, only reindex memories that are missing embeddings.
+   */
+  async checkAndReindex(): Promise<void> {
+    const provider = await this.getEmbeddingProvider();
+    if (!provider) return;
+
     const db = await this.getDb();
+    const rows = (await db.queryAsync(
+      "SELECT value FROM settings WHERE key = ?",
+      [this.embeddingModelKey],
+    )) || [];
+    const storedModel: string | null = rows.length > 0 ? (rows[0].value as string) : null;
+    const currentModel = provider.modelId;
+
+    if (storedModel !== currentModel) {
+      // Model changed — invalidate all embeddings for this library
+      ztoolkit.log(`[MemoryStore] Embedding model changed (${storedModel} → ${currentModel}), reindexing...`);
+      await db.queryAsync(
+        "UPDATE memories SET embedding = NULL, embedding_model = NULL WHERE library_id = ?",
+        [this.libraryId],
+      );
+      // Update the stored model
+      await db.queryAsync(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+        [this.embeddingModelKey, currentModel],
+      );
+    }
+
+    // Background reindex: embed all memories that still have no embedding
+    this.reindexMissingEmbeddings().catch((err) => {
+      ztoolkit.log("[MemoryStore] Background reindex failed:", getErrorMessage(err));
+    });
+  }
+
+  private async reindexMissingEmbeddings(): Promise<void> {
+    const provider = await this.getEmbeddingProvider();
+    if (!provider) return;
+
+    const db = await this.getDb();
+    const rows = (await db.queryAsync(
+      "SELECT id, text FROM memories WHERE library_id = ? AND embedding IS NULL ORDER BY created_at DESC",
+      [this.libraryId],
+    )) || [];
+
+    if (rows.length === 0) return;
+    ztoolkit.log(`[MemoryStore] Reindexing ${rows.length} memories...`);
+
+    const items = rows as Array<{ id: string; text: string }>;
+    let indexed = 0;
+
+    for (let i = 0; i < items.length; i += REINDEX_BATCH_SIZE) {
+      const batch = items.slice(i, i + REINDEX_BATCH_SIZE);
+      try {
+        const vectors = await provider.embedBatch(batch.map((r) => r.text));
+        for (let j = 0; j < batch.length; j++) {
+          if (!vectors[j]) continue;
+          await db.queryAsync(
+            "UPDATE memories SET embedding = ?, embedding_model = ? WHERE id = ?",
+            [JSON.stringify(vectors[j]), provider.modelId, batch[j].id],
+          );
+          indexed++;
+        }
+      } catch (err) {
+        ztoolkit.log("[MemoryStore] Batch embed failed:", getErrorMessage(err));
+      }
+    }
+
+    ztoolkit.log(`[MemoryStore] Reindex complete: ${indexed}/${rows.length} memories embedded`);
+  }
+
+  // ── Deduplication ─────────────────────────────────────────────────────────
+
+  private async isDuplicate(text: string, embedding?: number[]): Promise<boolean> {
+    const db = await this.getDb();
+
+    // Embedding-based dedup (preferred)
+    if (embedding) {
+      const rows = (await db.queryAsync(
+        `SELECT embedding FROM memories WHERE library_id = ? AND embedding IS NOT NULL ORDER BY created_at DESC LIMIT ?`,
+        [this.libraryId, DEDUP_WINDOW],
+      )) || [];
+
+      for (const row of rows as Array<{ embedding: string }>) {
+        try {
+          const vec = JSON.parse(row.embedding) as number[];
+          if (cosineSimilarity(embedding, vec) >= EMBEDDING_DEDUP_THRESHOLD) return true;
+        } catch { /* ignore malformed */ }
+      }
+      return false;
+    }
+
+    // Jaccard fallback
     const rows = (await db.queryAsync(
       `SELECT text FROM memories WHERE library_id = ? ORDER BY created_at DESC LIMIT ?`,
       [this.libraryId, DEDUP_WINDOW],
@@ -110,6 +245,8 @@ export class MemoryStore {
     return false;
   }
 
+  // ── Save ──────────────────────────────────────────────────────────────────
+
   /**
    * Save a memory. Returns whether it was actually saved (dedup may skip it).
    */
@@ -121,19 +258,44 @@ export class MemoryStore {
     const trimmed = text.trim();
     if (trimmed.length < MIN_LEN) return { saved: false, reason: "too short" };
     if (trimmed.length > MAX_LEN) return { saved: false, reason: "too long" };
-    if (await this.isDuplicate(trimmed)) return { saved: false, reason: "duplicate" };
+
+    // Prevent TOCTOU: two concurrent saves with the same text both passing
+    // isDuplicate() before either INSERT completes. The lock is synchronous so
+    // there is no interleaving at this check.
+    if (this.saveLock.has(trimmed)) return { saved: false, reason: "duplicate" };
+    this.saveLock.add(trimmed);
+
+    try {
+    // Try to generate embedding upfront so dedup can use it
+    const provider = await this.getEmbeddingProvider();
+    let embedding: number[] | undefined;
+    if (provider) {
+      try { embedding = await provider.embed(trimmed); } catch { /* fall back to Jaccard dedup */ }
+    }
+
+    if (await this.isDuplicate(trimmed, embedding)) return { saved: false, reason: "duplicate" };
 
     const id = `mem_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const now = Date.now();
     const db = await this.getDb();
 
     await db.queryAsync(
-      `INSERT INTO memories (id, library_id, text, category, importance, created_at, access_count, last_accessed_at)
-       VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
-      [id, this.libraryId, trimmed, category, Math.max(0, Math.min(1, importance)), now, now],
+      `INSERT INTO memories (id, library_id, text, category, importance, created_at, access_count, last_accessed_at, embedding, embedding_model)
+       VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+      [
+        id,
+        this.libraryId,
+        trimmed,
+        category,
+        Math.max(0, Math.min(1, importance)),
+        now,
+        now,
+        embedding ? JSON.stringify(embedding) : null,
+        embedding && provider ? provider.modelId : null,
+      ],
     );
 
-    ztoolkit.log(`[MemoryStore] Saved: "${trimmed.slice(0, 60)}" (${category}, importance=${importance})`);
+    ztoolkit.log(`[MemoryStore] Saved: "${trimmed.slice(0, 60)}" (${category}, importance=${importance}, embedded=${!!embedding})`);
 
     // Fire-and-forget: prune if over the cap
     this.pruneIfNeeded().catch((err) => {
@@ -141,12 +303,13 @@ export class MemoryStore {
     });
 
     return { saved: true };
+    } finally {
+      this.saveLock.delete(trimmed);
+    }
   }
 
-  /**
-   * Delete the lowest-value memories when the library exceeds MAX_MEMORIES.
-   * Prune priority: lowest importance first, then oldest last_accessed_at.
-   */
+  // ── Prune ─────────────────────────────────────────────────────────────────
+
   private async pruneIfNeeded(): Promise<void> {
     const db = await this.getDb();
     const countRows = (await db.queryAsync(
@@ -168,8 +331,11 @@ export class MemoryStore {
     ztoolkit.log(`[MemoryStore] Pruned ${excess} memories (was ${count}, cap ${MAX_MEMORIES})`);
   }
 
+  // ── Search ────────────────────────────────────────────────────────────────
+
   /**
    * Search for memories relevant to the given query.
+   * Uses embedding cosine similarity when available, Jaccard fallback otherwise.
    * Returns up to MAX_INJECT results sorted by relevance score.
    */
   async search(query: string): Promise<Memory[]> {
@@ -177,19 +343,39 @@ export class MemoryStore {
 
     const db = await this.getDb();
     const rows = (await db.queryAsync(
-      `SELECT id, library_id, text, category, importance, created_at, access_count, last_accessed_at
+      `SELECT id, library_id, text, category, importance, created_at, access_count, last_accessed_at, embedding, embedding_model
        FROM memories WHERE library_id = ? ORDER BY created_at DESC LIMIT ?`,
       [this.libraryId, SEARCH_FETCH_LIMIT],
     )) || [];
 
     if (rows.length === 0) return [];
 
-    const queryTokens = tokenise(query);
+    // Try embedding-based search
+    const provider = await this.getEmbeddingProvider();
+    let queryEmbedding: number[] | undefined;
+    if (provider) {
+      try { queryEmbedding = await provider.embed(query); } catch { /* fall back */ }
+    }
+
     const now = Date.now();
+    const queryTokens = tokenise(query);
 
     const scored = (rows as Array<Record<string, unknown>>).map((row) => {
       const mem = rowToMemory(row);
-      return { mem, score: scoreMemory(mem, queryTokens, query, now) };
+
+      let score: number;
+      if (queryEmbedding && mem.embedding && mem.embedding.length === queryEmbedding.length) {
+        try {
+          const cosine = cosineSimilarity(queryEmbedding, mem.embedding);
+          score = scoreEmbedding(cosine, mem, now);
+        } catch {
+          score = scoreJaccard(mem, queryTokens, query, now);
+        }
+      } else {
+        score = scoreJaccard(mem, queryTokens, query, now);
+      }
+
+      return { mem, score };
     });
 
     const top = scored
@@ -217,6 +403,8 @@ export class MemoryStore {
     );
   }
 
+  // ── CRUD ──────────────────────────────────────────────────────────────────
+
   /** Delete a memory by ID */
   async delete(id: string): Promise<void> {
     const db = await this.getDb();
@@ -230,7 +418,7 @@ export class MemoryStore {
   async listAll(): Promise<Memory[]> {
     const db = await this.getDb();
     const rows = (await db.queryAsync(
-      `SELECT id, library_id, text, category, importance, created_at, access_count, last_accessed_at
+      `SELECT id, library_id, text, category, importance, created_at, access_count, last_accessed_at, embedding, embedding_model
        FROM memories WHERE library_id = ? ORDER BY created_at DESC`,
       [this.libraryId],
     )) || [];
