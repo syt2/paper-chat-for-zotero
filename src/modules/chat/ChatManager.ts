@@ -1107,6 +1107,15 @@ export class ChatManager {
             }
           }
 
+          // Show a "thinking" state while the model processes the tool results.
+          // We update assistantMessage.content but NOT accumulatedDisplay, so the
+          // dots are cleanly replaced the moment the next onTextDelta or tool card fires.
+          const thinkingDisplay = accumulatedDisplay + "\n\n···";
+          assistantMessage.content = thinkingDisplay;
+          if (this.isSessionActive(sendingSession)) {
+            this.onStreamingUpdate?.(thinkingDisplay);
+          }
+
           // 继续下一轮
           continue;
         }
@@ -1281,6 +1290,15 @@ export class ChatManager {
             if (this.isSessionActive(sendingSession)) {
               this.onStreamingUpdate?.(accumulatedDisplay);
             }
+          }
+
+          // Show "thinking" state while the model processes tool results.
+          // accumulatedDisplay is NOT changed, so the dots disappear the moment
+          // the next update (tool card or final text) fires.
+          const thinkingDisplay = accumulatedDisplay + "\n\n···";
+          assistantMessage.content = thinkingDisplay;
+          if (this.isSessionActive(sendingSession)) {
+            this.onStreamingUpdate?.(thinkingDisplay);
           }
 
           continue;
