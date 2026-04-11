@@ -27,6 +27,7 @@ export function generatePaperContextPrompt(
   currentTitle?: string,
   hasCurrentItem: boolean = true,
   multiPaperContext?: MultiPaperContext,
+  memoryContext?: string,
 ): string {
   let prompt = `You are a helpful research assistant analyzing academic papers.\n\n`;
 
@@ -46,6 +47,9 @@ You can help the user by listing available papers with list_all_items or answeri
 Users may reference Zotero items using @[title](key:XXX) format in their messages.
 The "key" is the Zotero item key - use it directly with tools (e.g., itemKey, noteKey).
 \n`;
+    if (memoryContext) {
+      prompt += memoryContext;
+    }
     return prompt;
   }
 
@@ -97,6 +101,11 @@ When comparing papers, always specify which paper(s) you're referring to using t
       prompt += `\nAvailable sections: ${sectionList}\n`;
     }
     prompt += `\n`;
+  }
+
+  // Inject relevant user memories
+  if (memoryContext) {
+    prompt += memoryContext;
   }
 
   // 工具使用说明

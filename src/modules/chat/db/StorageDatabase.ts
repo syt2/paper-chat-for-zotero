@@ -11,7 +11,7 @@ import { getErrorMessage } from "../../../utils/common";
 
 const DB_DIR = "paper-chat";
 const DB_FILE = "storage";
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 /** Build absolute DB path so Zotero.DBConnection doesn't parse subdirectory names */
 function getDBPath(): string {
@@ -110,7 +110,9 @@ export class StorageDatabase {
         last_active_item_key TEXT,
         last_active_item_keys TEXT,
         context_summary TEXT,
-        context_state TEXT
+        context_state TEXT,
+        memory_extracted_at INTEGER,
+        memory_extracted_msg_count INTEGER
       )
     `);
 
@@ -182,6 +184,25 @@ export class StorageDatabase {
         updated_at INTEGER NOT NULL
       )
     `);
+
+    // User memories (per Zotero library)
+    await db.queryAsync(`
+      CREATE TABLE IF NOT EXISTS memories (
+        id TEXT PRIMARY KEY,
+        library_id INTEGER NOT NULL,
+        text TEXT NOT NULL,
+        category TEXT NOT NULL DEFAULT 'other',
+        importance REAL NOT NULL DEFAULT 0.5,
+        created_at INTEGER NOT NULL,
+        access_count INTEGER NOT NULL DEFAULT 0,
+        last_accessed_at INTEGER NOT NULL
+      )
+    `);
+
+    await db.queryAsync(`
+      CREATE INDEX IF NOT EXISTS idx_memories_library_created
+      ON memories (library_id, created_at DESC)
+    `);
   }
 
   private async initSchemaVersion(db: ZoteroDBConnection): Promise<void> {
@@ -202,6 +223,9 @@ export class StorageDatabase {
       }
       if (currentVersion < 3) {
         await this.upgradeToV3(db);
+      }
+      if (currentVersion < 4) {
+        await this.upgradeToV4(db);
       }
     }
   }
@@ -367,6 +391,56 @@ export class StorageDatabase {
         ztoolkit.log("[StorageDatabase] Schema upgrade v2 → v3 failed:", msg);
         throw error;
       }
+    }
+  }
+
+  /**
+   * Upgrade schema v3 → v4: add memories table for user preference/fact storage
+   */
+  private async upgradeToV4(db: ZoteroDBConnection): Promise<void> {
+    ztoolkit.log("[StorageDatabase] Upgrading schema v3 → v4...");
+
+    await db.queryAsync("BEGIN TRANSACTION");
+    try {
+      await db.queryAsync(`
+        CREATE TABLE IF NOT EXISTS memories (
+          id TEXT PRIMARY KEY,
+          library_id INTEGER NOT NULL,
+          text TEXT NOT NULL,
+          category TEXT NOT NULL DEFAULT 'other',
+          importance REAL NOT NULL DEFAULT 0.5,
+          created_at INTEGER NOT NULL,
+          access_count INTEGER NOT NULL DEFAULT 0,
+          last_accessed_at INTEGER NOT NULL
+        )
+      `);
+
+      await db.queryAsync(`
+        CREATE INDEX IF NOT EXISTS idx_memories_library_created
+        ON memories (library_id, created_at DESC)
+      `);
+
+      // Add memory extraction tracking columns to sessions
+      for (const col of ["memory_extracted_at INTEGER", "memory_extracted_msg_count INTEGER"]) {
+        try {
+          await db.queryAsync(`ALTER TABLE sessions ADD COLUMN ${col}`);
+        } catch (err) {
+          const msg = getErrorMessage(err);
+          if (!msg.includes("duplicate column name") && !msg.includes("already exists")) throw err;
+        }
+      }
+
+      await db.queryAsync(
+        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
+        [4, Date.now()],
+      );
+
+      await db.queryAsync("COMMIT");
+      ztoolkit.log("[StorageDatabase] Schema upgrade v3 → v4 completed");
+    } catch (error) {
+      try { await db.queryAsync("ROLLBACK"); } catch { /* ignore */ }
+      ztoolkit.log("[StorageDatabase] Schema upgrade v3 → v4 failed:", getErrorMessage(error));
+      throw error;
     }
   }
 

@@ -301,6 +301,28 @@ export class SessionStorageService {
     }
   }
 
+  /**
+   * Persist memory extraction state for a session (called after successful extraction).
+   */
+  async updateMemoryExtractionState(
+    sessionId: string,
+    extractedAt: number,
+    extractedMsgCount: number,
+  ): Promise<void> {
+    await this.init();
+
+    try {
+      const db = await getStorageDatabase().ensureInit();
+      await db.queryAsync(
+        "UPDATE sessions SET memory_extracted_at = ?, memory_extracted_msg_count = ? WHERE id = ?",
+        [extractedAt, extractedMsgCount, sessionId],
+      );
+    } catch (error) {
+      ztoolkit.log("[SessionStorageService] updateMemoryExtractionState error:", error);
+      throw error;
+    }
+  }
+
   // ============================================
   // Session-level CRUD
   // ============================================
@@ -436,7 +458,7 @@ export class SessionStorageService {
 
       // 1. Load session row (without messages)
       const sessionRows = (await db.queryAsync(
-        "SELECT id, created_at, updated_at, last_active_item_key, last_active_item_keys, context_summary, context_state FROM sessions WHERE id = ?",
+        "SELECT id, created_at, updated_at, last_active_item_key, last_active_item_keys, context_summary, context_state, memory_extracted_at, memory_extracted_msg_count FROM sessions WHERE id = ?",
         [sessionId],
       )) || [];
 
@@ -479,6 +501,8 @@ export class SessionStorageService {
         messages: filterValidMessages(messages),
         contextSummary: row.context_summary ? JSON.parse(row.context_summary) : undefined,
         contextState: row.context_state ? JSON.parse(row.context_state) : undefined,
+        memoryExtractedAt: row.memory_extracted_at || undefined,
+        memoryExtractedMsgCount: row.memory_extracted_msg_count || undefined,
       };
 
       ztoolkit.log("[SessionStorageService] Session loaded:", sessionId);

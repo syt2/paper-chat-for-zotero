@@ -19,6 +19,7 @@ import {
 } from "./modules/embedding";
 import { getStorageDatabase, destroyStorageDatabase } from "./modules/chat/db/StorageDatabase";
 import { checkAndMigrateToV3 } from "./modules/chat/migration/migrateToSQLite";
+import { destroyMemoryStores } from "./modules/chat/memory/MemoryStore";
 
 async function onStartup() {
   await Promise.all([
@@ -127,6 +128,8 @@ function onShutdown(): void {
   destroyRAGService();
   destroyEmbeddingProviderFactory();
   destroyVectorStore();
+  // Destroy Memory stores
+  destroyMemoryStores();
   // Destroy StorageDatabase
   destroyStorageDatabase();
   addon.data.dialog?.window?.close();

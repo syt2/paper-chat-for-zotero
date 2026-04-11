@@ -49,7 +49,10 @@ import type {
   // 多文档比较工具类型
   ComparePapersArgs,
   SearchAcrossPapersArgs,
+  // 记忆工具类型
+  SaveMemoryArgs,
 } from "../../../types/tool";
+import { getMemoryStore } from "../memory/MemoryStore";
 import { parsePaperStructure, parsePages } from "./paperParser";
 import { generatePaperContextPrompt as generatePaperContextPromptFn } from "./promptGenerator";
 import {
@@ -950,8 +953,42 @@ export class PdfToolManager {
       );
     }
 
-    // 返回 PDF 工具 + Library 工具 + 比较工具
-    return [...pdfTools, ...libraryTools, ...comparisonTools];
+    // Memory tool (always available)
+    const memoryTools: ToolDefinition[] = [
+      {
+        type: "function",
+        function: {
+          name: "save_memory",
+          description:
+            "Save a user preference, decision, or important fact to long-term memory. Use this when the user states a preference (e.g. 'I prefer concise answers'), makes a decision, or asks you to remember something. Memories are recalled automatically in future conversations.",
+          parameters: {
+            type: "object",
+            properties: {
+              text: {
+                type: "string",
+                description:
+                  "The fact, preference, or decision to remember. Be concise (max 500 characters).",
+              },
+              category: {
+                type: "string",
+                description:
+                  "Category: preference (user likes/dislikes), decision (choice made), entity (person/paper/tool), fact (general fact to remember), other. Default: other",
+                enum: ["preference", "decision", "entity", "fact", "other"],
+              },
+              importance: {
+                type: "number",
+                description:
+                  "How important this memory is, from 0.0 (low) to 1.0 (critical). Default: 0.7",
+              },
+            },
+            required: ["text"],
+          },
+        },
+      },
+    ];
+
+    // 返回 PDF 工具 + Library 工具 + 比较工具 + 记忆工具
+    return [...pdfTools, ...libraryTools, ...comparisonTools, ...memoryTools];
   }
 
   // === 类型守卫函数 ===
@@ -1121,6 +1158,27 @@ export class PdfToolManager {
     );
   }
 
+  private isSaveMemoryArgs(args: unknown): args is SaveMemoryArgs {
+    return (
+      typeof args === "object" &&
+      args !== null &&
+      typeof (args as SaveMemoryArgs).text === "string"
+    );
+  }
+
+  private async executeSaveMemory(args: SaveMemoryArgs): Promise<string> {
+    const store = getMemoryStore();
+    const result = await store.save(
+      args.text,
+      args.category ?? "other",
+      args.importance ?? 0.7,
+    );
+    if (result.saved) {
+      return `Memory saved: "${args.text.slice(0, 80)}"`;
+    }
+    return `Memory not saved (${result.reason ?? "unknown reason"}).`;
+  }
+
   /**
    * 执行工具调用（异步，按需提取 PDF）
    * @param toolCall AI 请求的工具调用
@@ -1263,6 +1321,13 @@ export class PdfToolManager {
         }
         return this.executeSearchAcrossPapers(args);
       }
+
+      case "save_memory": {
+        if (!this.isSaveMemoryArgs(args)) {
+          return "Error: Invalid arguments for save_memory. Required: text (string)";
+        }
+        return this.executeSaveMemory(args);
+      }
     }
 
     // === PDF 内容工具（需要 PDF）===
@@ -1360,12 +1425,15 @@ export class PdfToolManager {
     currentItemKey?: string,
     currentTitle?: string,
     hasCurrentItem: boolean = true,
+    memoryContext?: string,
   ): string {
     return generatePaperContextPromptFn(
       currentPaperStructure,
       currentItemKey,
       currentTitle,
       hasCurrentItem,
+      undefined,
+      memoryContext,
     );
   }
 

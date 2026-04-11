@@ -93,7 +93,9 @@ export type PaperToolName =
   | "add_item"
   // 多文档比较工具
   | "compare_papers"
-  | "search_across_papers";
+  | "search_across_papers"
+  // Memory tool
+  | "save_memory";
 
 // 基础工具参数（所有工具都可以指定 itemKey）
 export interface BaseToolArgs {
@@ -258,4 +260,11 @@ export interface SearchAcrossPapersArgs {
   query: string; // 搜索查询
   itemKeys?: string[]; // 指定论文 keys，不传则搜索所有当前选中的论文
   max_results_per_paper?: number; // 每篇论文最多返回结果数
+}
+
+// 保存用户记忆的参数
+export interface SaveMemoryArgs {
+  text: string; // The fact, preference, or decision to remember
+  category?: "preference" | "decision" | "entity" | "fact" | "other";
+  importance?: number; // 0.0 – 1.0, defaults to 0.7
 }

@@ -79,6 +79,9 @@ export interface ChatSession {
   // 上下文管理相关
   contextSummary?: ContextSummary;
   contextState?: ContextState;
+  // Memory extraction tracking (persisted to DB)
+  memoryExtractedAt?: number;       // timestamp of last extraction
+  memoryExtractedMsgCount?: number; // conversational msg count at last extraction
 }
 
 // API配置
