@@ -1,7 +1,7 @@
 // API Configuration
 pref("apiKey", "");
 pref("baseUrl", "https://paperchat.zotero.store/v1");
-pref("model", "claude-haiku-4-5-20251001");
+pref("model", "auto-smart");
 pref("maxTokens", 0);
 pref("temperature", "0.7");
 pref(
