@@ -120,6 +120,8 @@ export type FluentMessageId =
   | 'paperchat-untitled'
   | 'paperchat-untitled-attachment'
   | 'paperchat-untitled-note'
+  | 'paperchat-user-checked-in'
+  | 'paperchat-user-checkin-btn'
   | 'paperchat-user-panel-balance'
   | 'paperchat-user-panel-logged-in'
   | 'paperchat-user-panel-login-btn'

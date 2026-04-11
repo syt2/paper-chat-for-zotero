@@ -31,6 +31,7 @@ import {
   setTogglePanelModeFn,
   updatePanelModeButtonIcon,
   updateModelSelectorDisplay,
+  refreshCheckinDisplay,
 } from "./ChatPanelEvents";
 import { loadCachedRatios } from "../../preferences/ModelsFetcher";
 import { Guide } from "../Guide";
@@ -406,7 +407,13 @@ async function initializeChatContentCommon(
   // Set auth callbacks
   authManager.addListener({
     onBalanceUpdate: () => context.updateUserBar(),
-    onLoginStatusChange: () => context.updateUserBar(),
+    onLoginStatusChange: () => {
+      context.updateUserBar();
+      // Re-fetch check-in status on login status change (e.g. auto-relogin after session expiry)
+      if (authManager.isLoggedIn()) {
+        refreshCheckinDisplay(container, authManager);
+      }
+    },
   });
 
   // Set provider change callback

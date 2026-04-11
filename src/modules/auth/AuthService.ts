@@ -459,6 +459,50 @@ export class AuthService {
     return result.data;
   }
 
+  async getCheckinStatus(month: string): Promise<{
+    success: boolean;
+    enabled: boolean;
+    checkedInToday: boolean;
+    checkinCount: number;
+  }> {
+    const url = `${this.baseUrl}/api/user/checkin?month=${encodeURIComponent(month)}`;
+    const result = await this.request<{
+      success: boolean;
+      data: {
+        enabled: boolean;
+        stats: { checked_in_today: boolean; total_checkins: number };
+      };
+    }>("GET", url, { skipAccessToken: true });
+
+    if (result.error || !result.data?.success) {
+      return { success: false, enabled: false, checkedInToday: false, checkinCount: 0 };
+    }
+    return {
+      success: true,
+      enabled: result.data.data.enabled,
+      checkedInToday: result.data.data.stats.checked_in_today,
+      checkinCount: result.data.data.stats.total_checkins,
+    };
+  }
+
+  async doCheckin(): Promise<{ success: boolean; message?: string; quotaAwarded?: number }> {
+    const url = `${this.baseUrl}/api/user/checkin`;
+    const result = await this.request<{
+      success: boolean;
+      message: string;
+      data: { checkin_date: string; quota_awarded: number };
+    }>("POST", url, { skipAccessToken: true });
+
+    if (result.error) {
+      return { success: false, message: result.error };
+    }
+    return {
+      success: result.data?.success ?? false,
+      message: result.data?.message,
+      quotaAwarded: result.data?.data?.quota_awarded,
+    };
+  }
+
   async getTokenKey(id: number): Promise<ApiResponse<{ key: string }>> {
     const url = `${this.baseUrl}/api/token/${id}/key`;
     const result = await this.request<ApiResponse<{ key: string }>>("POST", url);

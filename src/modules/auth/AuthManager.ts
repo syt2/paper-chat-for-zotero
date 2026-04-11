@@ -609,6 +609,27 @@ export class AuthManager {
   }
 
   /**
+   * 获取签到状态（当月）
+   */
+  async fetchCheckinStatus(): Promise<{
+    success: boolean;
+    enabled: boolean;
+    checkedInToday: boolean;
+    checkinCount: number;
+  }> {
+    const now = new Date();
+    const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    return this.authService.getCheckinStatus(month);
+  }
+
+  /**
+   * 执行签到
+   */
+  async doCheckin(): Promise<{ success: boolean; message?: string; quotaAwarded?: number }> {
+    return this.authService.doCheckin();
+  }
+
+  /**
    * 刷新用户信息
    */
   async refreshUserInfo(): Promise<void> {

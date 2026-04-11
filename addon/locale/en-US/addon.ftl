@@ -64,6 +64,8 @@ paperchat-user-panel-redeem-placeholder = Enter redemption code
 paperchat-user-panel-redeem-btn = Redeem
 paperchat-user-panel-redeem-success = Redeemed successfully
 paperchat-user-panel-redeem-error = Redemption failed
+paperchat-user-checkin-btn = Check In
+paperchat-user-checked-in = ✓ Checked In
 
 # Balance display in sidebar
 paperchat-sidebar-balance = Token Balance: { $balance }

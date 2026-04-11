@@ -200,6 +200,24 @@ export function createChatContainer(
     { id: "chat-user-action-btn" },
   );
 
+  // Check-in button (visible when logged in)
+  const checkinBtn = createElement(
+    doc,
+    "button",
+    {
+      background: "rgba(0, 0, 0, 0.06)",
+      border: "1px solid rgba(0, 0, 0, 0.1)",
+      borderRadius: "4px",
+      padding: "5px 10px",
+      color: "inherit",
+      fontSize: "11px",
+      cursor: "pointer",
+      display: "none",
+      whiteSpace: "nowrap",
+    },
+    { id: "chat-checkin-btn" },
+  );
+
   // Right side container for settings button + action button
   const userBarRight = createElement(doc, "div", {
     display: "flex",
@@ -207,6 +225,7 @@ export function createChatContainer(
     gap: "8px",
   });
 
+  userBarRight.appendChild(checkinBtn);
   userBarRight.appendChild(userActionBtn);
   userBarRight.appendChild(userBarSettingsBtn);
 

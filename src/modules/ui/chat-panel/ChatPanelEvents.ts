@@ -31,6 +31,9 @@ let togglePanelModeFn: (() => void) | null = null;
 // 发送锁（按 session 分配，防止同一 session 内重复发送，同时允许切换 session 后正常发送）
 const sessionSendLocks = new Set<string>();
 
+// Duration (ms) to show the "+quota" flash on the check-in button after a successful check-in
+const CHECKIN_FLASH_DURATION_MS = 5000;
+
 /**
  * Set the getActiveReaderItem function reference
  * Called by ChatPanelManager to avoid circular imports
@@ -85,6 +88,40 @@ function getActiveReaderItem(): Zotero.Item | null {
 }
 
 /**
+ * Fetch check-in status and update the check-in button in the user bar.
+ * Call this once on init (if logged in) and after a successful login.
+ */
+export async function refreshCheckinDisplay(
+  container: HTMLElement,
+  authManager: { fetchCheckinStatus(): Promise<{ success: boolean; enabled: boolean; checkedInToday: boolean; checkinCount: number }> },
+): Promise<void> {
+  const checkinBtn = container.querySelector(
+    "#chat-checkin-btn",
+  ) as HTMLButtonElement | null;
+  if (!checkinBtn) return;
+
+  const result = await authManager.fetchCheckinStatus();
+  if (!result.success || !result.enabled) {
+    checkinBtn.style.display = "none";
+    return;
+  }
+
+  checkinBtn.style.display = "inline-flex";
+
+  if (result.checkedInToday) {
+    checkinBtn.textContent = getString("user-checked-in");
+    checkinBtn.disabled = true;
+    checkinBtn.style.opacity = "0.65";
+    checkinBtn.style.cursor = "default";
+  } else {
+    checkinBtn.textContent = getString("user-checkin-btn");
+    checkinBtn.disabled = false;
+    checkinBtn.style.opacity = "1";
+    checkinBtn.style.cursor = "pointer";
+  }
+}
+
+/**
  * Setup all event handlers for the chat panel
  */
 export function setupEventHandlers(context: ChatPanelContext): void {
@@ -113,6 +150,9 @@ export function setupEventHandlers(context: ChatPanelContext): void {
   const userActionBtn = container.querySelector(
     "#chat-user-action-btn",
   ) as HTMLButtonElement;
+  const checkinBtn = container.querySelector(
+    "#chat-checkin-btn",
+  ) as HTMLButtonElement;
   const chatHistory = container.querySelector("#chat-history") as HTMLElement;
   const emptyState = container.querySelector(
     "#chat-empty-state",
@@ -120,6 +160,34 @@ export function setupEventHandlers(context: ChatPanelContext): void {
 
   // History dropdown state
   const historyState = createHistoryDropdownState();
+
+  // Check-in button
+  checkinBtn?.addEventListener("click", async () => {
+    if (checkinBtn.disabled) return;
+    checkinBtn.disabled = true;
+    checkinBtn.textContent = "...";
+    const result = await authManager.doCheckin();
+    if (result.success) {
+      // Flash "+quota" for 5 s, then settle into the checked-in state
+      if (result.quotaAwarded) {
+        checkinBtn.textContent = `+${result.quotaAwarded}`;
+        setTimeout(() => {
+          refreshCheckinDisplay(container, authManager);
+        }, CHECKIN_FLASH_DURATION_MS);
+      } else {
+        await refreshCheckinDisplay(container, authManager);
+      }
+    } else {
+      // Restore clickable state on failure
+      checkinBtn.textContent = getString("user-checkin-btn");
+      checkinBtn.disabled = false;
+    }
+  });
+
+  // Fetch check-in status on init if already logged in
+  if (authManager.isLoggedIn()) {
+    refreshCheckinDisplay(container, authManager);
+  }
 
   // User action button - login/logout
   userActionBtn?.addEventListener("click", async () => {
@@ -129,7 +197,10 @@ export function setupEventHandlers(context: ChatPanelContext): void {
       context.updateUserBar();
     } else {
       const success = await showAuthDialog("login");
-      if (success) context.updateUserBar();
+      if (success) {
+        context.updateUserBar();
+        refreshCheckinDisplay(container, authManager);
+      }
     }
   });
 
@@ -727,6 +798,9 @@ export function updateUserBarDisplay(
   const userBarSettingsBtn = container.querySelector(
     "#chat-user-bar-settings-btn",
   ) as HTMLButtonElement;
+  const checkinBtn = container.querySelector(
+    "#chat-checkin-btn",
+  ) as HTMLButtonElement;
 
   if (!userBar || !userNameEl || !userBalanceEl || !userActionBtn) return;
 
@@ -750,6 +824,8 @@ export function updateUserBarDisplay(
     if (userBarSettingsBtn) {
       userBarSettingsBtn.style.display = "none";
     }
+    // Check-in button visibility is owned by refreshCheckinDisplay (respects enabled flag).
+    // Do NOT force-show it here — that would override the server's enabled:false response.
   } else {
     userNameEl.textContent = getString("user-panel-not-logged-in");
     userBalanceEl.textContent = "";
@@ -757,6 +833,10 @@ export function updateUserBarDisplay(
     // Show settings button when not logged in
     if (userBarSettingsBtn) {
       userBarSettingsBtn.style.display = "flex";
+    }
+    // Hide check-in button when not logged in
+    if (checkinBtn) {
+      checkinBtn.style.display = "none";
     }
   }
 }

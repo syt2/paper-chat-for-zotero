@@ -64,6 +64,8 @@ paperchat-user-panel-redeem-placeholder = 请输入兑换码
 paperchat-user-panel-redeem-btn = 兑换
 paperchat-user-panel-redeem-success = 兑换成功
 paperchat-user-panel-redeem-error = 兑换失败
+paperchat-user-checkin-btn = 签到
+paperchat-user-checked-in = ✓ 已签到
 
 # Balance display in sidebar
 paperchat-sidebar-balance = Token余额: { $balance }
