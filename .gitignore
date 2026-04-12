@@ -1,5 +1,7 @@
 # dot files
 .DS_Store
+.claude
+CLAUDE.md
 
 # Node.js
 node_modules
