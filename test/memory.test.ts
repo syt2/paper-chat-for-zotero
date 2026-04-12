@@ -10,7 +10,9 @@ import {
 import { MemoryService } from "../src/modules/chat/memory/MemoryService";
 import { MemorySearchService } from "../src/modules/chat/memory/MemorySearchService";
 import { MemoryStore } from "../src/modules/chat/memory/MemoryStore";
-import type { ChatMessage } from "../src/types/chat";
+import { MemoryOrchestrator } from "../src/modules/chat/memory/MemoryOrchestrator";
+import { MemoryManager } from "../src/modules/chat/memory/MemoryManager";
+import type { ChatMessage, ChatSession } from "../src/types/chat";
 import type { Memory } from "../src/modules/chat/memory/MemoryTypes";
 
 describe("memory module", function () {
@@ -417,5 +419,171 @@ describe("memory module", function () {
       reason: "duplicate",
     });
     assert.lengthOf(inserted, 1);
+  });
+
+  it("does not re-run extraction for unchanged sessions after a successful pass", async function () {
+    let updateCalls = 0;
+    const session: ChatSession = {
+      id: "session-1",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      messages: [
+        { id: "u1", role: "user", content: "1", timestamp: 1 },
+        { id: "a1", role: "assistant", content: "2", timestamp: 2 },
+        { id: "u2", role: "user", content: "3", timestamp: 3 },
+        { id: "a2", role: "assistant", content: "4", timestamp: 4 },
+        { id: "u3", role: "user", content: "5", timestamp: 5 },
+        { id: "a3", role: "assistant", content: "6", timestamp: 6 },
+        { id: "u4", role: "user", content: "7", timestamp: 7 },
+        { id: "a4", role: "assistant", content: "8", timestamp: 8 },
+      ],
+    };
+
+    const orchestrator = new MemoryOrchestrator(
+      {
+        updateMemoryExtractionState: async () => {
+          updateCalls++;
+        },
+      } as any,
+      () => ({
+        save: async () => ({ saved: true }),
+      }) as any,
+      () => ({
+        extract: async () => ({
+          ok: true,
+          entries: [
+            {
+              text: "The user prefers concise answers.",
+              category: "preference",
+              importance: 0.9,
+            },
+          ],
+        }),
+      }) as any,
+    );
+
+    const firstRun = orchestrator.scheduleExtraction(session);
+    assert.isNotNull(firstRun);
+    await firstRun;
+    assert.equal(updateCalls, 1);
+    assert.equal(session.memoryExtractedMsgCount, 8);
+
+    const secondRun = orchestrator.scheduleExtraction(session);
+    assert.isNull(secondRun);
+    assert.equal(updateCalls, 1);
+  });
+
+  it("waits for pending extraction work during memory-manager destroy", async function () {
+    let releaseSave!: () => void;
+    const saveGate = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    let saveCalls = 0;
+    let updateCalls = 0;
+
+    const manager = new MemoryManager(
+      {
+        updateMemoryExtractionState: async () => {
+          updateCalls++;
+        },
+      } as any,
+      () => ({
+        save: async () => {
+          saveCalls++;
+          await saveGate;
+          return { saved: true };
+        },
+        buildPromptContext: async () => undefined,
+      }) as any,
+      () => ({
+        extract: async () => ({
+          ok: true,
+          entries: [
+            {
+              text: "The user works on a Zotero plugin.",
+              category: "fact",
+              importance: 0.8,
+            },
+          ],
+        }),
+      }) as any,
+    );
+
+    const session: ChatSession = {
+      id: "session-2",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      messages: [
+        { id: "u1", role: "user", content: "1", timestamp: 1 },
+        { id: "a1", role: "assistant", content: "2", timestamp: 2 },
+        { id: "u2", role: "user", content: "3", timestamp: 3 },
+        { id: "a2", role: "assistant", content: "4", timestamp: 4 },
+        { id: "u3", role: "user", content: "5", timestamp: 5 },
+        { id: "a3", role: "assistant", content: "6", timestamp: 6 },
+        { id: "u4", role: "user", content: "7", timestamp: 7 },
+        { id: "a4", role: "assistant", content: "8", timestamp: 8 },
+      ],
+    };
+
+    const destroyPromise = manager.flushOnDestroy(session);
+    await Promise.resolve();
+    assert.equal(saveCalls, 1);
+    assert.equal(updateCalls, 0);
+
+    releaseSave();
+    await destroyPromise;
+    assert.equal(updateCalls, 1);
+  });
+
+  it("passes requireGrowth when startup triggers extraction checks", function () {
+    const manager = new MemoryManager(
+      {} as any,
+      () => ({}) as any,
+      () => ({}) as any,
+    );
+    const scheduleCalls: Array<{
+      sessionId: string;
+      requireGrowth?: boolean;
+    }> = [];
+
+    (manager as any).orchestrator = {
+      scheduleExtraction: (session: ChatSession, options?: { requireGrowth?: boolean }) => {
+        scheduleCalls.push({
+          sessionId: session.id,
+          requireGrowth: options?.requireGrowth,
+        });
+        return null;
+      },
+      awaitPendingTasks: async () => undefined,
+      clear: () => undefined,
+    };
+
+    manager.onSessionReady({
+      id: "session-3",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      memoryExtractedAt: 100,
+      memoryExtractedMsgCount: 8,
+      messages: [
+        { id: "u1", role: "user", content: "1", timestamp: 1 },
+        { id: "a1", role: "assistant", content: "2", timestamp: 2 },
+        { id: "u2", role: "user", content: "3", timestamp: 3 },
+        { id: "a2", role: "assistant", content: "4", timestamp: 4 },
+        { id: "u3", role: "user", content: "5", timestamp: 5 },
+        { id: "a3", role: "assistant", content: "6", timestamp: 6 },
+        { id: "u4", role: "user", content: "7", timestamp: 7 },
+        { id: "a4", role: "assistant", content: "8", timestamp: 8 },
+      ],
+    });
+
+    assert.deepEqual(scheduleCalls, [
+      {
+        sessionId: "session-3",
+        requireGrowth: true,
+      },
+    ]);
   });
 });
