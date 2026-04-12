@@ -29,6 +29,7 @@ import { getPref } from "../../utils/prefs";
 import { getErrorMessage, getItemTitleSmart, generateTimestampId } from "../../utils/common";
 import { getMemoryStore } from "./memory/MemoryStore";
 import { formatMemoriesForPrompt } from "./memory/MemoryPrompt";
+import { MemoryOrchestrator } from "./memory/MemoryOrchestrator";
 // V1 migration now handled by migrateToSQLite.ts at startup
 
 /**
@@ -76,9 +77,7 @@ export class ChatManager {
   // when the user switches back to a session that is still streaming.
   private streamingSessions = new Map<string, ChatSession>();
 
-  // In-flight memory extraction tasks keyed by session ID.
-  // Reused by destroy() so shutdown can await any outstanding persistence work.
-  private extractionTasks = new Map<string, Promise<void>>();
+  private memoryOrchestrator: MemoryOrchestrator;
 
   // UI回调
   private onMessageUpdate?: (messages: ChatMessage[]) => void;
@@ -93,6 +92,7 @@ export class ChatManager {
   constructor() {
     this.sessionStorage = new SessionStorageService();
     this.pdfExtractor = new PdfExtractor();
+    this.memoryOrchestrator = new MemoryOrchestrator(this.sessionStorage);
   }
 
   /**
@@ -113,7 +113,9 @@ export class ChatManager {
     // On startup, only re-extract if the session has grown since last extraction.
     // Skip the neverExtracted path to avoid a surprise API call on every Zotero open.
     if (this.currentSession) {
-      this.maybeExtractMemories(this.currentSession, /* requireGrowth */ true);
+      this.memoryOrchestrator.scheduleExtraction(this.currentSession, {
+        requireGrowth: true,
+      });
     }
   }
 
@@ -289,7 +291,7 @@ export class ChatManager {
     // Trigger memory extraction for the session we're leaving
     const leavingSession = this.currentSession;
     if (leavingSession && leavingSession.id !== sessionId) {
-      this.maybeExtractMemories(leavingSession);
+      this.memoryOrchestrator.scheduleExtraction(leavingSession);
     }
 
     // If the target session is currently streaming, reuse its in-memory
@@ -876,148 +878,6 @@ export class ChatManager {
   }
 
   /**
-   * Decide whether to trigger memory extraction for the given session.
-   * Conditions:
-   *   - At least 8 conversational messages
-   *   - Not currently in-flight for this session
-   *   - Either never extracted, OR session has grown by ≥10 messages since last extraction
-   * @param requireGrowth If true, only trigger when the session has grown ≥10 messages
-   *   since last extraction (skips the neverExtracted path). Used on startup to avoid
-   *   a surprise API call the first time Zotero opens with an untouched long session.
-   */
-  private maybeExtractMemories(
-    session: ChatSession,
-    requireGrowth = false,
-  ): Promise<void> | null {
-    const conversational = session.messages.filter(
-      (m) => m.role === "user" || m.role === "assistant",
-    );
-    const count = conversational.length;
-    if (count < 8) return null;
-
-    const existingTask = this.extractionTasks.get(session.id);
-    if (existingTask) {
-      return existingTask;
-    }
-
-    const lastCount = session.memoryExtractedMsgCount ?? 0;
-    const hasPreviousExtraction = session.memoryExtractedAt != null;
-    const grewEnough = hasPreviousExtraction && count >= lastCount + 10;
-
-    if (requireGrowth && !grewEnough) return null;
-    if (hasPreviousExtraction && !grewEnough) return null;
-
-    const task = this.extractMemoriesAsync(session, count)
-      .catch((err) => {
-        ztoolkit.log("[ChatManager] extractMemoriesAsync failed:", getErrorMessage(err));
-      })
-      .finally(() => {
-        this.extractionTasks.delete(session.id);
-      });
-
-    this.extractionTasks.set(session.id, task);
-    return task;
-  }
-
-  /**
-   * Post-session memory extraction — runs after the user leaves a session.
-   * Calls the AI to extract memorable facts/preferences from the conversation,
-   * then saves them to the MemoryStore. Fire-and-forget.
-   */
-  private async extractMemoriesAsync(session: ChatSession, conversationalCount: number): Promise<void> {
-    try {
-      const provider = this.getActiveProvider();
-      if (!provider || !provider.isReady()) return;
-
-      // Only include user/assistant turns (skip tool, system, error messages)
-      const turns = session.messages.filter(
-        (m) => m.role === "user" || m.role === "assistant",
-      );
-
-      // Build from newest messages backwards so the most recent context is always included
-      const MAX_INPUT_CHARS = 20000;
-      const lines: string[] = [];
-      let totalChars = 0;
-      for (const m of [...turns].reverse()) {
-        const line = `${m.role === "user" ? "USER" : "ASSISTANT"}: ${m.content}\n\n`;
-        if (totalChars + line.length > MAX_INPUT_CHARS) break;
-        lines.unshift(line);
-        totalChars += line.length;
-      }
-      const conversationText = lines.join("");
-      if (!conversationText.trim()) return;
-
-      // Put extraction instructions in the user turn so they are not silently dropped
-      // by providers (e.g. Anthropic) that strip system-role messages from chatCompletion.
-      const extractionInstructions =
-        `You are a memory extraction assistant. Review the conversation below and extract 2-5 ` +
-        `memorable facts about the USER (not the assistant). Focus on:\n` +
-        `- Stated preferences (response style, language, format)\n` +
-        `- Research context (field, topic, specific papers or projects)\n` +
-        `- Decisions made during the conversation\n` +
-        `- Important entities (tools, methods, authors) they mentioned\n\n` +
-        `Output ONLY a valid JSON array — no explanation, no markdown fences:\n` +
-        `[{"text":"...","category":"preference|decision|entity|fact|other","importance":0.0-1.0}]\n` +
-        `Return [] if there is nothing worth remembering.\n\nConversation:\n\n${conversationText}`;
-
-      const messages = [
-        { id: "mem-usr", role: "user" as const, content: extractionInstructions, timestamp: Date.now() },
-      ];
-
-      ztoolkit.log(`[ChatManager] Extracting memories from session ${session.id}...`);
-      const response = await provider.chatCompletion(messages);
-      if (!response) return;
-
-      // Parse the JSON array from the response.
-      // Try the full response first (LLM followed instructions), then fall back
-      // to extracting the first [...] block (handles preamble/postamble text).
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(response.trim());
-      } catch {
-        const match = response.match(/\[[\s\S]*?\]/);
-        if (!match) {
-          ztoolkit.log("[ChatManager] Memory extraction: no JSON array found in response");
-          return;
-        }
-        try {
-          parsed = JSON.parse(match[0]);
-        } catch {
-          ztoolkit.log("[ChatManager] Memory extraction: failed to parse JSON from response");
-          return;
-        }
-      }
-      if (!Array.isArray(parsed)) return;
-      const entries: Array<{ text: string; category?: string; importance?: number }> =
-        parsed as Array<{ text: string; category?: string; importance?: number }>;
-
-      const store = getMemoryStore();
-      let saved = 0;
-      for (const entry of entries) {
-        if (typeof entry.text !== "string" || !entry.text.trim()) continue;
-        const validCategories = ["preference", "decision", "entity", "fact", "other"];
-        const category = validCategories.includes(entry.category ?? "")
-          ? (entry.category as import("./memory/MemoryStore").MemoryCategory)
-          : "other";
-        const importance = typeof entry.importance === "number"
-          ? Math.max(0, Math.min(1, entry.importance))
-          : 0.6;
-        const result = await store.save(entry.text, category, importance);
-        if (result.saved) saved++;
-      }
-      ztoolkit.log(`[ChatManager] Memory extraction done: ${saved}/${entries.length} saved`);
-
-      // Persist extraction state to DB so cross-restart dedup works
-      const now = Date.now();
-      session.memoryExtractedAt = now;
-      session.memoryExtractedMsgCount = conversationalCount;
-      await this.sessionStorage.updateMemoryExtractionState(session.id, now, conversationalCount);
-    } catch (err) {
-      ztoolkit.log("[ChatManager] Memory extraction failed:", getErrorMessage(err));
-    }
-  }
-
-  /**
    * 转义 XML 特殊字符，防止 XSS/XML 注入
    */
   private escapeXml(str: string): string {
@@ -1579,16 +1439,13 @@ export class ChatManager {
    * 销毁
    */
   async destroy(): Promise<void> {
-    const pendingTasks = new Set<Promise<void>>(this.extractionTasks.values());
+    let currentTask: Promise<void> | null = null;
     if (this.currentSession) {
-      const currentTask = this.maybeExtractMemories(this.currentSession);
-      if (currentTask) {
-        pendingTasks.add(currentTask);
-      }
+      currentTask = this.memoryOrchestrator.scheduleExtraction(
+        this.currentSession,
+      );
     }
-    if (pendingTasks.size > 0) {
-      await Promise.allSettled([...pendingTasks]);
-    }
+    await this.memoryOrchestrator.awaitPendingTasks(currentTask);
     if (this.currentSession) {
       await this.sessionStorage.updateSessionMeta(this.currentSession);
     }
@@ -1596,7 +1453,7 @@ export class ChatManager {
     this.currentItemKey = null;
     this.currentItemKeys = [];
     this.streamingSessions.clear();
-    this.extractionTasks.clear();
+    this.memoryOrchestrator.clear();
     this.initialized = false;
   }
 }
