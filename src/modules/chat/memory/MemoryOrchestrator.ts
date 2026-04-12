@@ -1,7 +1,11 @@
 import type { ChatSession } from "../../../types/chat";
 import { getProviderManager } from "../../providers";
 import { getErrorMessage } from "../../../utils/common";
-import { getMemoryStore } from "./MemoryStore";
+import {
+  getMemoryService,
+  type MemoryService,
+  type MemoryServiceFactory,
+} from "./MemoryService";
 import type { MemoryCategory } from "./MemoryTypes";
 import { SessionStorageService } from "../SessionStorageService";
 
@@ -11,8 +15,19 @@ interface ExtractionOptions {
 
 export class MemoryOrchestrator {
   private extractionTasks = new Map<string, Promise<void>>();
+  private memoryService: MemoryService | null = null;
 
-  constructor(private sessionStorage: SessionStorageService) {}
+  constructor(
+    private sessionStorage: SessionStorageService,
+    private createMemoryService: MemoryServiceFactory = getMemoryService,
+  ) {}
+
+  private getMemoryService(): MemoryService {
+    if (!this.memoryService) {
+      this.memoryService = this.createMemoryService();
+    }
+    return this.memoryService;
+  }
 
   scheduleExtraction(
     session: ChatSession,
@@ -143,7 +158,6 @@ export class MemoryOrchestrator {
         importance?: number;
       }>;
 
-      const store = getMemoryStore();
       let saved = 0;
       for (const entry of entries) {
         if (typeof entry.text !== "string" || !entry.text.trim()) continue;
@@ -163,7 +177,11 @@ export class MemoryOrchestrator {
           typeof entry.importance === "number"
             ? Math.max(0, Math.min(1, entry.importance))
             : 0.6;
-        const result = await store.save(entry.text, category, importance);
+        const result = await this.getMemoryService().save(
+          entry.text,
+          category,
+          importance,
+        );
         if (result.saved) saved++;
       }
       ztoolkit.log(

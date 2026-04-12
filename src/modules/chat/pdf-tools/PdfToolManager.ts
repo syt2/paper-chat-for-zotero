@@ -52,7 +52,7 @@ import type {
   // 记忆工具类型
   SaveMemoryArgs,
 } from "../../../types/tool";
-import { getMemoryStore } from "../memory/MemoryStore";
+import { getMemoryService } from "../memory/MemoryService";
 import { parsePaperStructure, parsePages } from "./paperParser";
 import { generatePaperContextPrompt as generatePaperContextPromptFn } from "./promptGenerator";
 import {
@@ -1167,8 +1167,7 @@ export class PdfToolManager {
   }
 
   private async executeSaveMemory(args: SaveMemoryArgs): Promise<string> {
-    const store = getMemoryStore();
-    const result = await store.save(
+    const result = await getMemoryService().save(
       args.text,
       args.category ?? "other",
       args.importance ?? 0.7,

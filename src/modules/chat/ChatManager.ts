@@ -27,9 +27,7 @@ import { getAuthManager } from "../auth";
 import { getString } from "../../utils/locale";
 import { getPref } from "../../utils/prefs";
 import { getErrorMessage, getItemTitleSmart, generateTimestampId } from "../../utils/common";
-import { getMemoryStore } from "./memory/MemoryStore";
-import { formatMemoriesForPrompt } from "./memory/MemoryPrompt";
-import { MemoryOrchestrator } from "./memory/MemoryOrchestrator";
+import { MemoryManager } from "./memory/MemoryManager";
 // V1 migration now handled by migrateToSQLite.ts at startup
 
 /**
@@ -77,7 +75,7 @@ export class ChatManager {
   // when the user switches back to a session that is still streaming.
   private streamingSessions = new Map<string, ChatSession>();
 
-  private memoryOrchestrator: MemoryOrchestrator;
+  private memoryManager: MemoryManager;
 
   // UI回调
   private onMessageUpdate?: (messages: ChatMessage[]) => void;
@@ -92,7 +90,7 @@ export class ChatManager {
   constructor() {
     this.sessionStorage = new SessionStorageService();
     this.pdfExtractor = new PdfExtractor();
-    this.memoryOrchestrator = new MemoryOrchestrator(this.sessionStorage);
+    this.memoryManager = new MemoryManager(this.sessionStorage);
   }
 
   /**
@@ -112,11 +110,7 @@ export class ChatManager {
 
     // On startup, only re-extract if the session has grown since last extraction.
     // Skip the neverExtracted path to avoid a surprise API call on every Zotero open.
-    if (this.currentSession) {
-      this.memoryOrchestrator.scheduleExtraction(this.currentSession, {
-        requireGrowth: true,
-      });
-    }
+    this.memoryManager.onSessionReady(this.currentSession);
   }
 
   /**
@@ -289,10 +283,7 @@ export class ChatManager {
     await this.init();
 
     // Trigger memory extraction for the session we're leaving
-    const leavingSession = this.currentSession;
-    if (leavingSession && leavingSession.id !== sessionId) {
-      this.memoryOrchestrator.scheduleExtraction(leavingSession);
-    }
+    this.memoryManager.onBeforeSessionSwitch(this.currentSession, sessionId);
 
     // If the target session is currently streaming, reuse its in-memory
     // object so that isSessionActive(sendingSession) returns true and
@@ -775,15 +766,9 @@ export class ChatManager {
 
     // Search for relevant memories using the last user message as query
     const lastUserMessage = messagesForApi.filter((m) => m.role === "user").at(-1);
-    let memoryContext: string | undefined;
-    if (lastUserMessage?.content) {
-      try {
-        const memories = await getMemoryStore().search(lastUserMessage.content);
-        memoryContext = formatMemoriesForPrompt(memories) || undefined;
-      } catch (err) {
-        ztoolkit.log("[ChatManager] Memory search failed:", getErrorMessage(err));
-      }
-    }
+    const memoryContext = await this.memoryManager.buildPromptContext(
+      lastUserMessage?.content,
+    );
 
     // 添加论文上下文系统提示
     const paperContextPrompt = pdfToolManager.generatePaperContextPrompt(
@@ -1439,13 +1424,7 @@ export class ChatManager {
    * 销毁
    */
   async destroy(): Promise<void> {
-    let currentTask: Promise<void> | null = null;
-    if (this.currentSession) {
-      currentTask = this.memoryOrchestrator.scheduleExtraction(
-        this.currentSession,
-      );
-    }
-    await this.memoryOrchestrator.awaitPendingTasks(currentTask);
+    await this.memoryManager.flushOnDestroy(this.currentSession);
     if (this.currentSession) {
       await this.sessionStorage.updateSessionMeta(this.currentSession);
     }
@@ -1453,7 +1432,7 @@ export class ChatManager {
     this.currentItemKey = null;
     this.currentItemKeys = [];
     this.streamingSessions.clear();
-    this.memoryOrchestrator.clear();
+    this.memoryManager.clear();
     this.initialized = false;
   }
 }

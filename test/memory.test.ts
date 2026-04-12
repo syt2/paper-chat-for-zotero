@@ -1,4 +1,5 @@
 import { assert } from "chai";
+import { MemoryService } from "../src/modules/chat/memory/MemoryService";
 import { MemorySearchService } from "../src/modules/chat/memory/MemorySearchService";
 import { MemoryStore } from "../src/modules/chat/memory/MemoryStore";
 import type { Memory } from "../src/modules/chat/memory/MemoryTypes";
@@ -98,6 +99,36 @@ describe("memory module", function () {
     assert.isAtLeast(results.length, 1);
     assert.equal(results[0].id, "m1");
     assert.deepEqual(touchedIds, results.map((memory) => memory.id));
+  });
+
+  it("builds prompt context from searched memories", async function () {
+    const memoryService = new MemoryService({
+      save: async () => ({ saved: true }),
+      search: async () => [
+        {
+          id: "m1",
+          libraryId: 1,
+          text: "The user prefers concise answers with bullet points.",
+          category: "preference",
+          importance: 0.8,
+          createdAt: Date.now(),
+          accessCount: 0,
+          lastAccessedAt: Date.now(),
+        },
+      ],
+      delete: async () => undefined,
+      listAll: async () => [],
+    } as any);
+
+    const promptContext = await memoryService.buildPromptContext(
+      "concise answers",
+    );
+
+    assert.include(promptContext ?? "", "[preference]");
+    assert.include(
+      promptContext ?? "",
+      "The user prefers concise answers with bullet points.",
+    );
   });
 
   it("prunes excess memories after a successful save", async function () {
