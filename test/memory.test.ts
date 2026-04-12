@@ -1,7 +1,15 @@
 import { assert } from "chai";
+import {
+  parseMemoryExtractionResponse,
+} from "../src/modules/chat/memory/MemoryExtractionParser";
+import {
+  buildMemoryExtractionConversationText,
+  buildMemoryExtractionPrompt,
+} from "../src/modules/chat/memory/MemoryExtractionPrompt";
 import { MemoryService } from "../src/modules/chat/memory/MemoryService";
 import { MemorySearchService } from "../src/modules/chat/memory/MemorySearchService";
 import { MemoryStore } from "../src/modules/chat/memory/MemoryStore";
+import type { ChatMessage } from "../src/types/chat";
 import type { Memory } from "../src/modules/chat/memory/MemoryTypes";
 
 describe("memory module", function () {
@@ -129,6 +137,77 @@ describe("memory module", function () {
       promptContext ?? "",
       "The user prefers concise answers with bullet points.",
     );
+  });
+
+  it("builds extraction conversation text from the latest conversational turns", function () {
+    const messages: ChatMessage[] = [
+      {
+        id: "sys",
+        role: "system",
+        content: "ignore this",
+        timestamp: 1,
+      },
+      {
+        id: "u1",
+        role: "user",
+        content: "first question",
+        timestamp: 2,
+      },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "first answer",
+        timestamp: 3,
+      },
+      {
+        id: "u2",
+        role: "user",
+        content: "second question",
+        timestamp: 4,
+      },
+    ];
+
+    const conversationText = buildMemoryExtractionConversationText(messages, 64);
+    const prompt = buildMemoryExtractionPrompt(conversationText);
+
+    assert.notInclude(conversationText, "ignore this");
+    assert.include(conversationText, "USER: second question");
+    assert.include(prompt, "Conversation:");
+    assert.include(prompt, conversationText);
+  });
+
+  it("parses and normalizes extracted memory entries", function () {
+    const result = parseMemoryExtractionResponse(
+      'prefix [{"text":"  concise answers  ","category":"invalid","importance":9},{"text":"project uses Zotero","category":"fact","importance":0.3},{"text":"   "}] suffix',
+    );
+
+    assert.isTrue(result.ok);
+    if (!result.ok) {
+      throw new Error("expected parse to succeed");
+    }
+
+    assert.deepEqual(result.entries, [
+      {
+        text: "concise answers",
+        category: "other",
+        importance: 1,
+      },
+      {
+        text: "project uses Zotero",
+        category: "fact",
+        importance: 0.3,
+      },
+    ]);
+  });
+
+  it("reports when no json array is present in extraction output", function () {
+    const result = parseMemoryExtractionResponse("nothing structured here");
+
+    assert.isFalse(result.ok);
+    if (result.ok) {
+      throw new Error("expected parse to fail");
+    }
+    assert.equal(result.reason, "no_json_array");
   });
 
   it("prunes excess memories after a successful save", async function () {

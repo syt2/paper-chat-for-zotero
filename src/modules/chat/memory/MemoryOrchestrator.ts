@@ -6,8 +6,12 @@ import {
   type MemoryService,
   type MemoryServiceFactory,
 } from "./MemoryService";
-import type { MemoryCategory } from "./MemoryTypes";
 import { SessionStorageService } from "../SessionStorageService";
+import {
+  buildMemoryExtractionConversationText,
+  buildMemoryExtractionPrompt,
+} from "./MemoryExtractionPrompt";
+import { parseMemoryExtractionResponse } from "./MemoryExtractionParser";
 
 interface ExtractionOptions {
   requireGrowth?: boolean;
@@ -88,38 +92,16 @@ export class MemoryOrchestrator {
       const provider = getProviderManager().getActiveProvider();
       if (!provider || !provider.isReady()) return;
 
-      const turns = session.messages.filter(
-        (message) => message.role === "user" || message.role === "assistant",
+      const conversationText = buildMemoryExtractionConversationText(
+        session.messages,
       );
-
-      const MAX_INPUT_CHARS = 20000;
-      const lines: string[] = [];
-      let totalChars = 0;
-      for (const message of [...turns].reverse()) {
-        const line = `${message.role === "user" ? "USER" : "ASSISTANT"}: ${message.content}\n\n`;
-        if (totalChars + line.length > MAX_INPUT_CHARS) break;
-        lines.unshift(line);
-        totalChars += line.length;
-      }
-      const conversationText = lines.join("");
       if (!conversationText.trim()) return;
-
-      const extractionInstructions =
-        `You are a memory extraction assistant. Review the conversation below and extract 2-5 ` +
-        `memorable facts about the USER (not the assistant). Focus on:\n` +
-        `- Stated preferences (response style, language, format)\n` +
-        `- Research context (field, topic, specific papers or projects)\n` +
-        `- Decisions made during the conversation\n` +
-        `- Important entities (tools, methods, authors) they mentioned\n\n` +
-        `Output ONLY a valid JSON array — no explanation, no markdown fences:\n` +
-        `[{"text":"...","category":"preference|decision|entity|fact|other","importance":0.0-1.0}]\n` +
-        `Return [] if there is nothing worth remembering.\n\nConversation:\n\n${conversationText}`;
 
       const messages = [
         {
           id: "mem-usr",
           role: "user" as const,
-          content: extractionInstructions,
+          content: buildMemoryExtractionPrompt(conversationText),
           timestamp: Date.now(),
         },
       ];
@@ -130,62 +112,31 @@ export class MemoryOrchestrator {
       const response = await provider.chatCompletion(messages);
       if (!response) return;
 
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(response.trim());
-      } catch {
-        const match = response.match(/\[[\s\S]*?\]/);
-        if (!match) {
+      const parsed = parseMemoryExtractionResponse(response);
+      if (!parsed.ok) {
+        if (parsed.reason === "no_json_array") {
           ztoolkit.log(
             "[MemoryOrchestrator] Memory extraction: no JSON array found in response",
           );
-          return;
-        }
-        try {
-          parsed = JSON.parse(match[0]);
-        } catch {
+        } else if (parsed.reason === "invalid_json_array") {
           ztoolkit.log(
             "[MemoryOrchestrator] Memory extraction: failed to parse JSON from response",
           );
-          return;
         }
+        return;
       }
-      if (!Array.isArray(parsed)) return;
-
-      const entries = parsed as Array<{
-        text: string;
-        category?: string;
-        importance?: number;
-      }>;
 
       let saved = 0;
-      for (const entry of entries) {
-        if (typeof entry.text !== "string" || !entry.text.trim()) continue;
-        const validCategories: MemoryCategory[] = [
-          "preference",
-          "decision",
-          "entity",
-          "fact",
-          "other",
-        ];
-        const category = validCategories.includes(
-          (entry.category ?? "other") as MemoryCategory,
-        )
-          ? ((entry.category ?? "other") as MemoryCategory)
-          : "other";
-        const importance =
-          typeof entry.importance === "number"
-            ? Math.max(0, Math.min(1, entry.importance))
-            : 0.6;
+      for (const entry of parsed.entries) {
         const result = await this.getMemoryService().save(
           entry.text,
-          category,
-          importance,
+          entry.category,
+          entry.importance,
         );
         if (result.saved) saved++;
       }
       ztoolkit.log(
-        `[MemoryOrchestrator] Memory extraction done: ${saved}/${entries.length} saved`,
+        `[MemoryOrchestrator] Memory extraction done: ${saved}/${parsed.entries.length} saved`,
       );
 
       const now = Date.now();
