@@ -1,5 +1,5 @@
 import { cosineSimilarity } from "../../embedding/utils/cosine";
-import type { Memory } from "./MemoryStore";
+import type { Memory } from "./MemoryTypes";
 
 const W_JACCARD = 0.5;
 const W_CONTAINS = 0.25;

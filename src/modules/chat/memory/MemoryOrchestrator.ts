@@ -1,7 +1,8 @@
 import type { ChatSession } from "../../../types/chat";
 import { getProviderManager } from "../../providers";
 import { getErrorMessage } from "../../../utils/common";
-import { getMemoryStore, type MemoryCategory } from "./MemoryStore";
+import { getMemoryStore } from "./MemoryStore";
+import type { MemoryCategory } from "./MemoryTypes";
 import { SessionStorageService } from "../SessionStorageService";
 
 interface ExtractionOptions {

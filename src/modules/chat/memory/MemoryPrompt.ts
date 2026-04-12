@@ -1,4 +1,4 @@
-import type { Memory } from "./MemoryStore";
+import type { Memory } from "./MemoryTypes";
 
 export function formatMemoriesForPrompt(memories: Memory[]): string {
   if (memories.length === 0) return "";
