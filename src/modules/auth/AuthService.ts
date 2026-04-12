@@ -464,6 +464,7 @@ export class AuthService {
     enabled: boolean;
     checkedInToday: boolean;
     checkinCount: number;
+    message?: string;
   }> {
     const url = `${this.baseUrl}/api/user/checkin?month=${encodeURIComponent(month)}`;
     const result = await this.request<{
@@ -474,8 +475,28 @@ export class AuthService {
       };
     }>("GET", url, { skipAccessToken: true });
 
-    if (result.error || !result.data?.success) {
-      return { success: false, enabled: false, checkedInToday: false, checkinCount: 0 };
+    if (result.error) {
+      return {
+        success: false,
+        enabled: false,
+        checkedInToday: false,
+        checkinCount: 0,
+        message: result.error,
+      };
+    }
+    if (result.status >= 400 || !result.data?.success) {
+      return {
+        success: false,
+        enabled: false,
+        checkedInToday: false,
+        checkinCount: 0,
+        message: this.parseErrorMessage(
+          result.data,
+          getString("api-error-get-user-failed", {
+            args: { status: result.status },
+          }),
+        ),
+      };
     }
     return {
       success: true,

@@ -687,9 +687,43 @@ export class PdfToolManager {
       );
     }
 
-    // 如果没有当前 item，只返回 library 工具
+    // Memory tool (always available)
+    const memoryTools: ToolDefinition[] = [
+      {
+        type: "function",
+        function: {
+          name: "save_memory",
+          description:
+            "Save a user preference, decision, or important fact to long-term memory. Use this when the user states a preference (e.g. 'I prefer concise answers'), makes a decision, or asks you to remember something. Memories are recalled automatically in future conversations.",
+          parameters: {
+            type: "object",
+            properties: {
+              text: {
+                type: "string",
+                description:
+                  "The fact, preference, or decision to remember. Be concise (max 500 characters).",
+              },
+              category: {
+                type: "string",
+                description:
+                  "Category: preference (user likes/dislikes), decision (choice made), entity (person/paper/tool), fact (general fact to remember), other. Default: other",
+                enum: ["preference", "decision", "entity", "fact", "other"],
+              },
+              importance: {
+                type: "number",
+                description:
+                  "How important this memory is, from 0.0 (low) to 1.0 (critical). Default: 0.7",
+              },
+            },
+            required: ["text"],
+          },
+        },
+      },
+    ];
+
+    // 如果没有当前 item，只返回 library 工具 + memory 工具
     if (!hasCurrentItem) {
-      return libraryTools;
+      return [...libraryTools, ...memoryTools];
     }
 
     // PDF 内容工具 (需要有当前 item)
@@ -952,40 +986,6 @@ export class PdfToolManager {
         },
       );
     }
-
-    // Memory tool (always available)
-    const memoryTools: ToolDefinition[] = [
-      {
-        type: "function",
-        function: {
-          name: "save_memory",
-          description:
-            "Save a user preference, decision, or important fact to long-term memory. Use this when the user states a preference (e.g. 'I prefer concise answers'), makes a decision, or asks you to remember something. Memories are recalled automatically in future conversations.",
-          parameters: {
-            type: "object",
-            properties: {
-              text: {
-                type: "string",
-                description:
-                  "The fact, preference, or decision to remember. Be concise (max 500 characters).",
-              },
-              category: {
-                type: "string",
-                description:
-                  "Category: preference (user likes/dislikes), decision (choice made), entity (person/paper/tool), fact (general fact to remember), other. Default: other",
-                enum: ["preference", "decision", "entity", "fact", "other"],
-              },
-              importance: {
-                type: "number",
-                description:
-                  "How important this memory is, from 0.0 (low) to 1.0 (critical). Default: 0.7",
-              },
-            },
-            required: ["text"],
-          },
-        },
-      },
-    ];
 
     // 返回 PDF 工具 + Library 工具 + 比较工具 + 记忆工具
     return [...pdfTools, ...libraryTools, ...comparisonTools, ...memoryTools];

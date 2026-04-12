@@ -371,8 +371,8 @@ export class SessionStorageService {
         // Upsert session (no messages column)
         await db.queryAsync(
           `INSERT OR REPLACE INTO sessions
-           (id, created_at, updated_at, last_active_item_key, last_active_item_keys, context_summary, context_state)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+           (id, created_at, updated_at, last_active_item_key, last_active_item_keys, context_summary, context_state, memory_extracted_at, memory_extracted_msg_count)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             session.id,
             session.createdAt,
@@ -381,6 +381,8 @@ export class SessionStorageService {
             session.lastActiveItemKeys ? JSON.stringify(session.lastActiveItemKeys) : null,
             session.contextSummary ? JSON.stringify(session.contextSummary) : null,
             session.contextState ? JSON.stringify(session.contextState) : null,
+            session.memoryExtractedAt ?? null,
+            session.memoryExtractedMsgCount ?? null,
           ],
         );
 

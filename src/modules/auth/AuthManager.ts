@@ -616,17 +616,24 @@ export class AuthManager {
     enabled: boolean;
     checkedInToday: boolean;
     checkinCount: number;
+    message?: string;
   }> {
     const now = new Date();
     const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-    return this.authService.getCheckinStatus(month);
+    return this.withSessionRetry(
+      () => this.authService.getCheckinStatus(month),
+      "getCheckinStatus",
+    );
   }
 
   /**
    * 执行签到
    */
   async doCheckin(): Promise<{ success: boolean; message?: string; quotaAwarded?: number }> {
-    return this.authService.doCheckin();
+    return this.withSessionRetry(
+      () => this.authService.doCheckin(),
+      "doCheckin",
+    );
   }
 
   /**
