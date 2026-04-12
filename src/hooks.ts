@@ -19,7 +19,8 @@ import {
 } from "./modules/embedding";
 import { getStorageDatabase, destroyStorageDatabase } from "./modules/chat/db/StorageDatabase";
 import { checkAndMigrateToV3 } from "./modules/chat/migration/migrateToSQLite";
-import { destroyMemoryStores, getMemoryStore } from "./modules/chat/memory/MemoryStore";
+import { destroyMemoryStores } from "./modules/chat/memory/MemoryStore";
+import { destroyMemoryIndexers, getMemoryIndexer } from "./modules/chat/memory/MemoryIndexer";
 
 async function onStartup() {
   await Promise.all([
@@ -45,7 +46,7 @@ async function onStartup() {
     await getStorageDatabase().init();
     await checkAndMigrateToV3();
     // Kick off memory embedding check after DB is ready (fire-and-forget)
-    getMemoryStore().checkAndReindex().catch((err) => {
+    getMemoryIndexer().checkAndReindex().catch((err) => {
       ztoolkit.log("[Startup] Memory reindex failed:", err);
     });
   } catch (error) {
@@ -136,6 +137,7 @@ async function onShutdown(): Promise<void> {
   destroyVectorStore();
   // Destroy Memory stores
   destroyMemoryStores();
+  destroyMemoryIndexers();
   // Destroy StorageDatabase
   destroyStorageDatabase();
   addon.data.dialog?.window?.close();

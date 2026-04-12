@@ -27,7 +27,8 @@ import { getAuthManager } from "../auth";
 import { getString } from "../../utils/locale";
 import { getPref } from "../../utils/prefs";
 import { getErrorMessage, getItemTitleSmart, generateTimestampId } from "../../utils/common";
-import { getMemoryStore, formatMemoriesForPrompt } from "./memory/MemoryStore";
+import { getMemoryStore } from "./memory/MemoryStore";
+import { formatMemoriesForPrompt } from "./memory/MemoryPrompt";
 // V1 migration now handled by migrateToSQLite.ts at startup
 
 /**
