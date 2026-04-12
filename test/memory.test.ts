@@ -1,4 +1,5 @@
 import { assert } from "chai";
+import { ProviderMemoryExtractor } from "../src/modules/chat/memory/MemoryExtractor";
 import {
   parseMemoryExtractionResponse,
 } from "../src/modules/chat/memory/MemoryExtractionParser";
@@ -208,6 +209,41 @@ describe("memory module", function () {
       throw new Error("expected parse to fail");
     }
     assert.equal(result.reason, "no_json_array");
+  });
+
+  it("extracts normalized memory entries through the provider-backed extractor", async function () {
+    const extractor = new ProviderMemoryExtractor(async () => ({
+      isReady: () => true,
+      chatCompletion: async () =>
+        '[{"text":"  concise answers  ","category":"preference","importance":0.9}]',
+    }));
+
+    const result = await extractor.extract([
+      {
+        id: "u1",
+        role: "user",
+        content: "Please answer concisely.",
+        timestamp: 1,
+      },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "Sure.",
+        timestamp: 2,
+      },
+    ]);
+
+    assert.isTrue(result.ok);
+    if (!result.ok) {
+      throw new Error("expected extraction to succeed");
+    }
+    assert.deepEqual(result.entries, [
+      {
+        text: "concise answers",
+        category: "preference",
+        importance: 0.9,
+      },
+    ]);
   });
 
   it("prunes excess memories after a successful save", async function () {

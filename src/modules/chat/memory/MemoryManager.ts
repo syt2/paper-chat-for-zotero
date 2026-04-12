@@ -7,17 +7,26 @@ import {
   type MemoryServiceFactory,
 } from "./MemoryService";
 import { MemoryOrchestrator } from "./MemoryOrchestrator";
+import {
+  getMemoryExtractor,
+  type MemoryExtractor,
+  type MemoryExtractorFactory,
+} from "./MemoryExtractor";
 
 export class MemoryManager {
   private orchestrator: MemoryOrchestrator;
   private memoryService: MemoryService | null = null;
+  private memoryExtractor: MemoryExtractor | null = null;
 
   constructor(
     sessionStorage: SessionStorageService,
     private createMemoryService: MemoryServiceFactory = getMemoryService,
+    private createMemoryExtractor: MemoryExtractorFactory = getMemoryExtractor,
   ) {
-    this.orchestrator = new MemoryOrchestrator(sessionStorage, () =>
-      this.getMemoryService(),
+    this.orchestrator = new MemoryOrchestrator(
+      sessionStorage,
+      () => this.getMemoryService(),
+      () => this.getMemoryExtractor(),
     );
   }
 
@@ -26,6 +35,13 @@ export class MemoryManager {
       this.memoryService = this.createMemoryService();
     }
     return this.memoryService;
+  }
+
+  private getMemoryExtractor(): MemoryExtractor {
+    if (!this.memoryExtractor) {
+      this.memoryExtractor = this.createMemoryExtractor();
+    }
+    return this.memoryExtractor;
   }
 
   onSessionReady(session: ChatSession | null): void {

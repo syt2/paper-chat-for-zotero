@@ -1,5 +1,4 @@
 import type { ChatSession } from "../../../types/chat";
-import { getProviderManager } from "../../providers";
 import { getErrorMessage } from "../../../utils/common";
 import {
   getMemoryService,
@@ -8,10 +7,10 @@ import {
 } from "./MemoryService";
 import { SessionStorageService } from "../SessionStorageService";
 import {
-  buildMemoryExtractionConversationText,
-  buildMemoryExtractionPrompt,
-} from "./MemoryExtractionPrompt";
-import { parseMemoryExtractionResponse } from "./MemoryExtractionParser";
+  getMemoryExtractor,
+  type MemoryExtractor,
+  type MemoryExtractorFactory,
+} from "./MemoryExtractor";
 
 interface ExtractionOptions {
   requireGrowth?: boolean;
@@ -20,10 +19,12 @@ interface ExtractionOptions {
 export class MemoryOrchestrator {
   private extractionTasks = new Map<string, Promise<void>>();
   private memoryService: MemoryService | null = null;
+  private memoryExtractor: MemoryExtractor | null = null;
 
   constructor(
     private sessionStorage: SessionStorageService,
     private createMemoryService: MemoryServiceFactory = getMemoryService,
+    private createMemoryExtractor: MemoryExtractorFactory = getMemoryExtractor,
   ) {}
 
   private getMemoryService(): MemoryService {
@@ -31,6 +32,13 @@ export class MemoryOrchestrator {
       this.memoryService = this.createMemoryService();
     }
     return this.memoryService;
+  }
+
+  private getMemoryExtractor(): MemoryExtractor {
+    if (!this.memoryExtractor) {
+      this.memoryExtractor = this.createMemoryExtractor();
+    }
+    return this.memoryExtractor;
   }
 
   scheduleExtraction(
@@ -89,36 +97,13 @@ export class MemoryOrchestrator {
     conversationalCount: number,
   ): Promise<void> {
     try {
-      const provider = getProviderManager().getActiveProvider();
-      if (!provider || !provider.isReady()) return;
-
-      const conversationText = buildMemoryExtractionConversationText(
-        session.messages,
-      );
-      if (!conversationText.trim()) return;
-
-      const messages = [
-        {
-          id: "mem-usr",
-          role: "user" as const,
-          content: buildMemoryExtractionPrompt(conversationText),
-          timestamp: Date.now(),
-        },
-      ];
-
-      ztoolkit.log(
-        `[MemoryOrchestrator] Extracting memories from session ${session.id}...`,
-      );
-      const response = await provider.chatCompletion(messages);
-      if (!response) return;
-
-      const parsed = parseMemoryExtractionResponse(response);
-      if (!parsed.ok) {
-        if (parsed.reason === "no_json_array") {
+      const extracted = await this.getMemoryExtractor().extract(session.messages);
+      if (!extracted.ok) {
+        if (extracted.reason === "no_json_array") {
           ztoolkit.log(
             "[MemoryOrchestrator] Memory extraction: no JSON array found in response",
           );
-        } else if (parsed.reason === "invalid_json_array") {
+        } else if (extracted.reason === "invalid_json_array") {
           ztoolkit.log(
             "[MemoryOrchestrator] Memory extraction: failed to parse JSON from response",
           );
@@ -127,7 +112,7 @@ export class MemoryOrchestrator {
       }
 
       let saved = 0;
-      for (const entry of parsed.entries) {
+      for (const entry of extracted.entries) {
         const result = await this.getMemoryService().save(
           entry.text,
           entry.category,
@@ -136,7 +121,7 @@ export class MemoryOrchestrator {
         if (result.saved) saved++;
       }
       ztoolkit.log(
-        `[MemoryOrchestrator] Memory extraction done: ${saved}/${parsed.entries.length} saved`,
+        `[MemoryOrchestrator] Memory extraction done: ${saved}/${extracted.entries.length} saved`,
       );
 
       const now = Date.now();
