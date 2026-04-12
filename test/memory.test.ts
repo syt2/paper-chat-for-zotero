@@ -246,6 +246,97 @@ describe("memory module", function () {
     ]);
   });
 
+  it("reports missing provider during extraction", async function () {
+    const extractor = new ProviderMemoryExtractor(async () => null);
+
+    const result = await extractor.extract([
+      {
+        id: "u1",
+        role: "user",
+        content: "Please answer concisely.",
+        timestamp: 1,
+      },
+    ]);
+
+    assert.isFalse(result.ok);
+    if (result.ok) {
+      throw new Error("expected extraction to fail");
+    }
+    assert.equal(result.reason, "no_provider");
+  });
+
+  it("reports provider not ready during extraction", async function () {
+    const extractor = new ProviderMemoryExtractor(async () => ({
+      isReady: () => false,
+      chatCompletion: async () => "[]",
+    }));
+
+    const result = await extractor.extract([
+      {
+        id: "u1",
+        role: "user",
+        content: "Please answer concisely.",
+        timestamp: 1,
+      },
+    ]);
+
+    assert.isFalse(result.ok);
+    if (result.ok) {
+      throw new Error("expected extraction to fail");
+    }
+    assert.equal(result.reason, "provider_not_ready");
+  });
+
+  it("reports empty provider response during extraction", async function () {
+    const extractor = new ProviderMemoryExtractor(async () => ({
+      isReady: () => true,
+      chatCompletion: async () => "",
+    }));
+
+    const result = await extractor.extract([
+      {
+        id: "u1",
+        role: "user",
+        content: "Please answer concisely.",
+        timestamp: 1,
+      },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "Sure.",
+        timestamp: 2,
+      },
+    ]);
+
+    assert.isFalse(result.ok);
+    if (result.ok) {
+      throw new Error("expected extraction to fail");
+    }
+    assert.equal(result.reason, "empty_response");
+  });
+
+  it("reports empty conversation during extraction", async function () {
+    const extractor = new ProviderMemoryExtractor(async () => ({
+      isReady: () => true,
+      chatCompletion: async () => "[]",
+    }));
+
+    const result = await extractor.extract([
+      {
+        id: "sys",
+        role: "system",
+        content: "ignore this",
+        timestamp: 1,
+      },
+    ]);
+
+    assert.isFalse(result.ok);
+    if (result.ok) {
+      throw new Error("expected extraction to fail");
+    }
+    assert.equal(result.reason, "empty_conversation");
+  });
+
   it("prunes excess memories after a successful save", async function () {
     const inserted: any[] = [];
     let pruneExcess = 0;
