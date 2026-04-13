@@ -52,6 +52,40 @@ export interface ContextState {
   lastSummaryMessageCount: number;
 }
 
+export type ExecutionPlanStatus =
+  | "pending"
+  | "in_progress"
+  | "completed"
+  | "failed";
+
+export type ExecutionPlanStepStatus =
+  | "pending"
+  | "in_progress"
+  | "completed"
+  | "failed";
+
+export interface ExecutionPlanStep {
+  id: string;
+  title: string;
+  status: ExecutionPlanStepStatus;
+  toolName?: string;
+  detail?: string;
+  startedAt?: number;
+  completedAt?: number;
+  error?: string;
+}
+
+export interface ExecutionPlan {
+  id: string;
+  sourceMessageId?: string;
+  summary: string;
+  status: ExecutionPlanStatus;
+  steps: ExecutionPlanStep[];
+  activeStepId?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 // Session 索引 (用于快速加载 session 列表)
 export interface SessionIndex {
   sessions: SessionMeta[];
@@ -79,6 +113,7 @@ export interface ChatSession {
   // 上下文管理相关
   contextSummary?: ContextSummary;
   contextState?: ContextState;
+  executionPlan?: ExecutionPlan;
   // Memory extraction tracking (persisted to DB)
   memoryExtractedAt?: number;       // timestamp of last extraction
   memoryExtractedMsgCount?: number; // conversational msg count at last extraction
@@ -204,5 +239,6 @@ export interface LegacyChatSession {
   updatedAt: number;
   contextSummary?: ContextSummary;
   contextState?: ContextState;
+  executionPlan?: ExecutionPlan;
   paperStructure?: unknown;
 }

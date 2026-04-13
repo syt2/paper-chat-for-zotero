@@ -111,6 +111,7 @@ export class StorageDatabase {
         last_active_item_keys TEXT,
         context_summary TEXT,
         context_state TEXT,
+        execution_plan TEXT,
         memory_extracted_at INTEGER,
         memory_extracted_msg_count INTEGER,
         selected_tier TEXT,
@@ -474,6 +475,38 @@ export class StorageDatabase {
     } catch (error) {
       try { await db.queryAsync("ROLLBACK"); } catch { /* ignore */ }
       ztoolkit.log("[StorageDatabase] Schema upgrade v3 → v4 failed:", getErrorMessage(error));
+      throw error;
+    }
+  }
+
+  private async upgradeToV5(db: ZoteroDBConnection): Promise<void> {
+    ztoolkit.log("[StorageDatabase] Upgrading schema v4 → v5...");
+
+    await db.queryAsync("BEGIN TRANSACTION");
+    try {
+      const cols = (await db.queryAsync("PRAGMA table_info(sessions)")) || [];
+      const colNames = new Set(cols.map((c: any) => String(c.name)));
+
+      if (!colNames.has("execution_plan")) {
+        await db.queryAsync(
+          "ALTER TABLE sessions ADD COLUMN execution_plan TEXT",
+        );
+      }
+
+      await db.queryAsync(
+        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
+        [5, Date.now()],
+      );
+
+      await db.queryAsync("COMMIT");
+      ztoolkit.log("[StorageDatabase] Schema upgraded to v5");
+    } catch (error) {
+      try {
+        await db.queryAsync("ROLLBACK");
+      } catch {
+        // ignore rollback error
+      }
+      ztoolkit.log("[StorageDatabase] Failed to upgrade to v5:", error);
       throw error;
     }
   }

@@ -26,6 +26,7 @@ type SessionRow = {
   last_active_item_keys: string | null;
   context_summary: string | null;
   context_state: string | null;
+  execution_plan?: string | null;
   memory_extracted_at: number | null;
   memory_extracted_msg_count: number | null;
   selected_tier: string | null;
@@ -80,6 +81,7 @@ export function mapSessionRowToChatSession(
       ? JSON.parse(row.context_summary)
       : undefined,
     contextState: row.context_state ? JSON.parse(row.context_state) : undefined,
+    executionPlan: row.execution_plan ? JSON.parse(row.execution_plan) : undefined,
     memoryExtractedAt:
       row.memory_extracted_at != null
         ? (row.memory_extracted_at as number)
@@ -360,7 +362,8 @@ export class SessionStorageService {
             last_active_item_key = ?,
             last_active_item_keys = ?,
             context_summary = ?,
-            context_state = ?
+            context_state = ?,
+            execution_plan = ?
           WHERE id = ?`,
           [
             session.updatedAt,
@@ -368,9 +371,10 @@ export class SessionStorageService {
             session.lastActiveItemKeys ? JSON.stringify(session.lastActiveItemKeys) : null,
             session.contextSummary ? JSON.stringify(session.contextSummary) : null,
             session.contextState ? JSON.stringify(session.contextState) : null,
-            session.id,
-          ],
-        );
+            session.executionPlan ? JSON.stringify(session.executionPlan) : null,
+          session.id,
+        ],
+      );
 
         await db.queryAsync(
           `INSERT INTO paperchat_session_state
@@ -479,8 +483,8 @@ export class SessionStorageService {
         // Upsert session (no messages column)
         await db.queryAsync(
           `INSERT INTO sessions
-           (id, created_at, updated_at, last_active_item_key, last_active_item_keys, context_summary, context_state, memory_extracted_at, memory_extracted_msg_count)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           (id, created_at, updated_at, last_active_item_key, last_active_item_keys, context_summary, context_state, execution_plan, memory_extracted_at, memory_extracted_msg_count)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              created_at = excluded.created_at,
              updated_at = excluded.updated_at,
@@ -488,6 +492,7 @@ export class SessionStorageService {
              last_active_item_keys = excluded.last_active_item_keys,
              context_summary = excluded.context_summary,
              context_state = excluded.context_state,
+             execution_plan = excluded.execution_plan,
              memory_extracted_at = excluded.memory_extracted_at,
              memory_extracted_msg_count = excluded.memory_extracted_msg_count`,
           [
@@ -498,6 +503,7 @@ export class SessionStorageService {
             session.lastActiveItemKeys ? JSON.stringify(session.lastActiveItemKeys) : null,
             session.contextSummary ? JSON.stringify(session.contextSummary) : null,
             session.contextState ? JSON.stringify(session.contextState) : null,
+            session.executionPlan ? JSON.stringify(session.executionPlan) : null,
             session.memoryExtractedAt ?? null,
             session.memoryExtractedMsgCount ?? null,
           ],
@@ -625,6 +631,10 @@ export class SessionStorageService {
         context_state:
           typeof baseRowRaw.context_state === "string"
             ? baseRowRaw.context_state
+            : null,
+        execution_plan:
+          typeof baseRowRaw.execution_plan === "string"
+            ? baseRowRaw.execution_plan
             : null,
         memory_extracted_at:
           typeof baseRowRaw.memory_extracted_at === "number"

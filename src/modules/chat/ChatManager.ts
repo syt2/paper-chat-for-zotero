@@ -13,10 +13,9 @@ import type {
   ChatSession,
   SendMessageOptions,
   StreamCallbacks,
-  StreamToolCallingCallbacks,
   SessionMeta,
 } from "../../types/chat";
-import type { ToolDefinition, ToolCall } from "../../types/tool";
+import type { ToolDefinition } from "../../types/tool";
 import type {
   ToolCallingProvider,
   AIProvider,
@@ -55,6 +54,7 @@ import {
   rerollPaperChatFailureAndReplay,
 } from "./paperchat-retry-orchestration";
 import { MemoryManager } from "./memory/MemoryManager";
+import { AgentRuntime } from "./agent-runtime/AgentRuntime";
 // V1 migration now handled by migrateToSQLite.ts at startup
 
 /**
@@ -125,6 +125,7 @@ export class ChatManager {
   private streamingSessions = new Map<string, ChatSession>();
 
   private memoryManager: MemoryManager;
+  private agentRuntime: AgentRuntime;
 
   // UI回调
   private onMessageUpdate?: (messages: ChatMessage[]) => void;
@@ -140,6 +141,17 @@ export class ChatManager {
     this.sessionStorage = new SessionStorageService();
     this.pdfExtractor = new PdfExtractor();
     this.memoryManager = new MemoryManager(this.sessionStorage);
+    this.agentRuntime = new AgentRuntime(this.sessionStorage, {
+      isSessionActive: (session) => this.isSessionActive(session),
+      onStreamingUpdate: (content) => this.onStreamingUpdate?.(content),
+      onReasoningUpdate: (reasoning) => this.onReasoningUpdate?.(reasoning),
+      onMessageUpdate: (messages) => this.onMessageUpdate?.(messages),
+      onPdfAttached: () => this.onPdfAttached?.(),
+      onMessageComplete: () => this.onMessageComplete?.(),
+      formatToolCallCard: (toolName, args, status, resultPreview) =>
+        this.formatToolCallCard(toolName, args, status, resultPreview),
+      generateId: () => this.generateId(),
+    });
   }
 
   /**
@@ -1084,6 +1096,8 @@ export class ChatManager {
 
     sendingSession.messages.push(assistantMessage);
     await this.sessionStorage.insertMessage(sendingSession.id, assistantMessage);
+    sendingSession.executionPlan = undefined;
+    await this.sessionStorage.updateSessionMeta(sendingSession);
     if (this.isSessionActive(sendingSession)) {
       this.onMessageUpdate?.(sendingSession.messages);
     }
@@ -1095,7 +1109,7 @@ export class ChatManager {
 
     // 从过滤后的消息中排除最后一条 (assistant 占位)
     const messagesForApi = filteredMessages.filter(
-      (m) => m.id !== assistantMessage.id,
+      (m: ChatMessage) => m.id !== assistantMessage.id,
     );
 
     ztoolkit.log(
@@ -1223,7 +1237,7 @@ export class ChatManager {
                     .generateSummaryAsync(sendingSession, async () => {
                       await this.sessionStorage.updateSessionMeta(sendingSession);
                     })
-                    .catch((err) => {
+                    .catch((err: unknown) => {
                       ztoolkit.log("[ChatManager] Summary generation failed:", err);
                     });
                 }
@@ -1650,251 +1664,18 @@ export class ChatManager {
     >,
     sendingSession: ChatSession,
   ): Promise<void> {
-    const pdfToolManager = getPdfToolManager();
-    const contextManager = getContextManager();
-    const maxIterations = 10;
-    let iteration = 0;
-
-    // 累积的显示内容（跨多轮保持）
-    let accumulatedDisplay = "";
-
-    try {
-      while (iteration < maxIterations) {
-        iteration++;
-        ztoolkit.log(
-          `[Streaming Tool Calling] Iteration ${iteration}, messages: ${currentMessages.length}`,
-        );
-
-        // 本轮的工具调用信息
-        const pendingToolCalls = new Map<
-          number,
-          { id: string; name: string; arguments: string }
-        >();
-
-        // 本轮开始前的显示内容长度
-        const displayBeforeThisRound = accumulatedDisplay;
-
-        const result = await new Promise<{
-          content: string;
-          toolCalls?: ToolCall[];
-          stopReason: string;
-        }>((resolve, reject) => {
-          let roundContent = "";
-          let stopReason = "end_turn";
-
-          const callbacks: StreamToolCallingCallbacks = {
-            onTextDelta: (text) => {
-              roundContent += text;
-              // 实时更新：显示累积内容 + 本轮文本
-              assistantMessage.content = displayBeforeThisRound + roundContent;
-              if (this.isSessionActive(sendingSession)) {
-                this.onStreamingUpdate?.(assistantMessage.content);
-              }
-            },
-            onReasoningDelta: (text) => {
-              assistantMessage.reasoning = (assistantMessage.reasoning || "") + text;
-              if (this.isSessionActive(sendingSession)) {
-                this.onReasoningUpdate?.(assistantMessage.reasoning);
-              }
-            },
-            onToolCallStart: ({ index, id, name }) => {
-              pendingToolCalls.set(index, { id, name, arguments: "" });
-              ztoolkit.log(
-                `[Streaming Tool Calling] Tool call started: ${name} (${id})`,
-              );
-              // 注意：这里不显示卡片，因为参数还在流式接收中
-              // 等到工具实际执行时再显示完整的 "calling" 卡片，避免 UI 闪烁
-            },
-            onToolCallDelta: (index, argumentsDelta) => {
-              const tc = pendingToolCalls.get(index);
-              if (tc) {
-                tc.arguments += argumentsDelta;
-              }
-            },
-            onComplete: (result) => {
-              stopReason = result.stopReason;
-              // Build tool calls from accumulated data
-              const toolCalls: ToolCall[] = [];
-              for (const [, tc] of pendingToolCalls) {
-                toolCalls.push({
-                  id: tc.id,
-                  type: "function",
-                  function: {
-                    name: tc.name,
-                    arguments: tc.arguments,
-                  },
-                });
-              }
-              resolve({
-                content: roundContent,
-                toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-                stopReason,
-              });
-            },
-            onError: (error) => {
-              reject(error);
-            },
-          };
-
-          // 调用流式方法，捕获可能的同步异常
-          provider
-            .streamChatCompletionWithTools(currentMessages, tools, callbacks)
-            .catch(reject);
-        });
-
-        ztoolkit.log(
-          "[Streaming Tool Calling] Response:",
-          result.content ? result.content.substring(0, 100) : "(no content)",
-          "toolCalls:",
-          result.toolCalls?.length || 0,
-          "stopReason:",
-          result.stopReason,
-        );
-
-        // 如果有工具调用，执行并继续
-        if (result.toolCalls && result.toolCalls.length > 0) {
-          // 添加带 tool_calls 的 assistant 消息到上下文
-          const assistantToolMessage: ChatMessage = {
-            id: this.generateId(),
-            role: "assistant",
-            content: result.content || "",
-            tool_calls: result.toolCalls,
-            timestamp: Date.now(),
-          };
-          currentMessages.push(assistantToolMessage);
-
-          // 累积本轮的文本内容
-          if (result.content) {
-            accumulatedDisplay += result.content;
-          }
-
-          // 执行所有工具，并实时更新显示
-          for (const toolCall of result.toolCalls) {
-            const toolName = toolCall.function.name;
-            const toolArgs = toolCall.function.arguments;
-
-            ztoolkit.log(`[Streaming Tool Calling] Executing: ${toolName}`);
-
-            // 显示"正在调用"状态
-            const callingDisplay =
-              accumulatedDisplay +
-              this.formatToolCallCard(toolName, toolArgs, "calling");
-            assistantMessage.content = callingDisplay;
-            if (this.isSessionActive(sendingSession)) {
-              this.onStreamingUpdate?.(callingDisplay);
-            }
-
-            // 执行工具（包装 try-catch 防止意外异常中断聊天）
-            let toolResult: string;
-            try {
-              toolResult = await pdfToolManager.executeToolCall(
-                toolCall,
-                paperStructure || undefined,
-              );
-            } catch (error) {
-              toolResult = `Error: Tool execution failed: ${getErrorMessage(error)}`;
-              ztoolkit.log(`[Streaming Tool Calling] Tool ${toolName} threw error:`, error);
-            }
-
-            ztoolkit.log(
-              `[Streaming Tool Calling] Result (truncated): ${toolResult.substring(0, 200)}...`,
-            );
-
-            // 添加工具结果到上下文
-            const toolResultMessage: ChatMessage = {
-              id: this.generateId(),
-              role: "tool",
-              content: toolResult,
-              tool_call_id: toolCall.id,
-              timestamp: Date.now(),
-            };
-            currentMessages.push(toolResultMessage);
-
-            // 更新显示：工具执行完成
-            accumulatedDisplay += this.formatToolCallCard(
-              toolName,
-              toolArgs,
-              "completed",
-              toolResult,
-            );
-            assistantMessage.content = accumulatedDisplay;
-            if (this.isSessionActive(sendingSession)) {
-              this.onStreamingUpdate?.(accumulatedDisplay);
-            }
-          }
-
-          // Show a "thinking" state while the model processes the tool results.
-          // We update assistantMessage.content but NOT accumulatedDisplay, so the
-          // dots are cleanly replaced the moment the next onTextDelta or tool card fires.
-          const thinkingDisplay = accumulatedDisplay + "\n\n···";
-          assistantMessage.content = thinkingDisplay;
-          if (this.isSessionActive(sendingSession)) {
-            this.onStreamingUpdate?.(thinkingDisplay);
-          }
-
-          // 继续下一轮
-          continue;
-        }
-
-        // 没有 tool calls，最终回答
-        // 累积本轮内容作为最终显示
-        accumulatedDisplay += result.content || "";
-        assistantMessage.content = accumulatedDisplay;
-        assistantMessage.timestamp = Date.now();
-        sendingSession.updatedAt = Date.now();
-        clearPaperChatRetryableState(sendingSession);
-
-        // Clean up empty reasoning
-        if (!assistantMessage.reasoning) {
-          delete assistantMessage.reasoning;
-        }
-
-        await this.sessionStorage.updateMessageContent(sendingSession.id, assistantMessage.id, accumulatedDisplay, assistantMessage.reasoning);
-        await this.sessionStorage.updateSessionMeta(sendingSession);
-        if (this.isSessionActive(sendingSession)) {
-          this.onMessageUpdate?.(sendingSession.messages);
-
-          if (pdfWasAttached) {
-            this.onPdfAttached?.();
-          }
-          this.onMessageComplete?.();
-        }
-
-        if (summaryTriggered) {
-          contextManager
-            .generateSummaryAsync(sendingSession, async () => {
-              await this.sessionStorage.updateSessionMeta(sendingSession);
-            })
-            .catch((err) => {
-              ztoolkit.log("[ChatManager] Summary generation failed:", err);
-            });
-        }
-
-        return;
-      }
-
-      // 达到最大迭代次数
-      ztoolkit.log("[Streaming Tool Calling] Max iterations reached");
-      accumulatedDisplay +=
-        "\n\nI apologize, but I was unable to complete the request within the allowed number of iterations.";
-      assistantMessage.content = accumulatedDisplay;
-      assistantMessage.timestamp = Date.now();
-      sendingSession.updatedAt = Date.now();
-      clearPaperChatRetryableState(sendingSession);
-      if (!assistantMessage.reasoning) {
-        delete assistantMessage.reasoning;
-      }
-      await this.sessionStorage.updateMessageContent(sendingSession.id, assistantMessage.id, accumulatedDisplay, assistantMessage.reasoning);
-      await this.sessionStorage.updateSessionMeta(sendingSession);
-      if (this.isSessionActive(sendingSession)) {
-        this.onMessageUpdate?.(sendingSession.messages);
-        this.onMessageComplete?.();
-      }
-    } catch (error) {
-      ztoolkit.log("[Streaming Tool Calling] Error:", error);
-      // 重新抛出错误，让外层的 executeWithFallback 处理降级
-      throw error;
-    }
+    await this.agentRuntime.executeStreamingToolLoop({
+      provider,
+      currentMessages,
+      assistantMessage,
+      pdfWasAttached,
+      summaryTriggered,
+      tools,
+      paperStructure,
+      sendingSession,
+    });
+    clearPaperChatRetryableState(sendingSession);
+    await this.sessionStorage.updateSessionMeta(sendingSession);
   }
 
   /**
@@ -1913,165 +1694,18 @@ export class ChatManager {
     >,
     sendingSession: ChatSession,
   ): Promise<void> {
-    const pdfToolManager = getPdfToolManager();
-    const contextManager = getContextManager();
-    const maxIterations = 10;
-    let iteration = 0;
-
-    // 累积的显示内容（跨多轮保持）
-    let accumulatedDisplay = "";
-
-    try {
-      while (iteration < maxIterations) {
-        iteration++;
-        ztoolkit.log(
-          `[Tool Calling] Iteration ${iteration}, messages: ${currentMessages.length}`,
-        );
-
-        const result = await provider.chatCompletionWithTools(
-          currentMessages,
-          tools,
-        );
-
-        ztoolkit.log(
-          "[Tool Calling] Response:",
-          result.content ? result.content.substring(0, 100) : "(no content)",
-          "toolCalls:",
-          result.toolCalls?.length || 0,
-        );
-
-        if (result.toolCalls && result.toolCalls.length > 0) {
-          const assistantToolMessage: ChatMessage = {
-            id: this.generateId(),
-            role: "assistant",
-            content: result.content || "",
-            tool_calls: result.toolCalls,
-            timestamp: Date.now(),
-          };
-          currentMessages.push(assistantToolMessage);
-
-          // 累积本轮的文本内容
-          if (result.content) {
-            accumulatedDisplay += result.content;
-          }
-
-          // 执行所有工具，并实时更新显示
-          for (const toolCall of result.toolCalls) {
-            const toolName = toolCall.function.name;
-            const toolArgs = toolCall.function.arguments;
-
-            ztoolkit.log(`[Tool Calling] Executing tool: ${toolName}`, toolArgs);
-
-            // 显示"正在调用"状态
-            const callingDisplay =
-              accumulatedDisplay +
-              this.formatToolCallCard(toolName, toolArgs, "calling");
-            assistantMessage.content = callingDisplay;
-            if (this.isSessionActive(sendingSession)) {
-              this.onStreamingUpdate?.(callingDisplay);
-            }
-
-            // 执行工具（包装 try-catch 防止意外异常中断聊天）
-            let toolResult: string;
-            try {
-              toolResult = await pdfToolManager.executeToolCall(
-                toolCall,
-                paperStructure || undefined,
-              );
-            } catch (error) {
-              toolResult = `Error: Tool execution failed: ${getErrorMessage(error)}`;
-              ztoolkit.log(`[Tool Calling] Tool ${toolName} threw error:`, error);
-            }
-
-            ztoolkit.log(
-              `[Tool Calling] Tool result (truncated): ${toolResult.substring(0, 200)}...`,
-            );
-
-            // 添加工具结果到上下文
-            const toolResultMessage: ChatMessage = {
-              id: this.generateId(),
-              role: "tool",
-              content: toolResult,
-              tool_call_id: toolCall.id,
-              timestamp: Date.now(),
-            };
-            currentMessages.push(toolResultMessage);
-
-            // 更新显示：工具执行完成
-            accumulatedDisplay += this.formatToolCallCard(
-              toolName,
-              toolArgs,
-              "completed",
-              toolResult,
-            );
-            assistantMessage.content = accumulatedDisplay;
-            if (this.isSessionActive(sendingSession)) {
-              this.onStreamingUpdate?.(accumulatedDisplay);
-            }
-          }
-
-          // Show "thinking" state while the model processes tool results.
-          // accumulatedDisplay is NOT changed, so the dots disappear the moment
-          // the next update (tool card or final text) fires.
-          const thinkingDisplay = accumulatedDisplay + "\n\n···";
-          assistantMessage.content = thinkingDisplay;
-          if (this.isSessionActive(sendingSession)) {
-            this.onStreamingUpdate?.(thinkingDisplay);
-          }
-
-          continue;
-        }
-
-        // 没有 tool calls，最终回答
-        accumulatedDisplay += result.content || "";
-        assistantMessage.content = accumulatedDisplay;
-        assistantMessage.timestamp = Date.now();
-        sendingSession.updatedAt = Date.now();
-        clearPaperChatRetryableState(sendingSession);
-
-        await this.sessionStorage.updateMessageContent(sendingSession.id, assistantMessage.id, accumulatedDisplay);
-        await this.sessionStorage.updateSessionMeta(sendingSession);
-        if (this.isSessionActive(sendingSession)) {
-          this.onMessageUpdate?.(sendingSession.messages);
-
-          if (pdfWasAttached) {
-            this.onPdfAttached?.();
-          }
-          this.onMessageComplete?.();
-        }
-
-        if (summaryTriggered) {
-          contextManager
-            .generateSummaryAsync(sendingSession, async () => {
-              await this.sessionStorage.updateSessionMeta(sendingSession);
-            })
-            .catch((err) => {
-              ztoolkit.log("[ChatManager] Summary generation failed:", err);
-            });
-        }
-
-        return;
-      }
-
-      // 达到最大迭代次数
-      ztoolkit.log("[Tool Calling] Max iterations reached");
-      accumulatedDisplay +=
-        "\n\nI apologize, but I was unable to complete the request within the allowed number of iterations.";
-      assistantMessage.content = accumulatedDisplay;
-      assistantMessage.timestamp = Date.now();
-      sendingSession.updatedAt = Date.now();
-      clearPaperChatRetryableState(sendingSession);
-      await this.sessionStorage.updateMessageContent(sendingSession.id, assistantMessage.id, accumulatedDisplay);
-      await this.sessionStorage.updateSessionMeta(sendingSession);
-      if (this.isSessionActive(sendingSession)) {
-        this.onMessageUpdate?.(sendingSession.messages);
-        this.onMessageComplete?.();
-      }
-    } catch (error) {
-      ztoolkit.log("[Tool Calling] Error:", error);
-      // 重新抛出错误，让外层的 executeWithFallback 处理降级
-      throw error;
-    }
+    await this.agentRuntime.executeNonStreamingToolLoop({
+      provider,
+      currentMessages,
+      assistantMessage,
+      pdfWasAttached,
+      summaryTriggered,
+      tools,
+      paperStructure,
+      sendingSession,
+    });
+    clearPaperChatRetryableState(sendingSession);
+    await this.sessionStorage.updateSessionMeta(sendingSession);
   }
 
   /**
@@ -2083,6 +1717,7 @@ export class ChatManager {
     this.currentSession.messages = [];
     this.currentSession.contextSummary = undefined;
     this.currentSession.contextState = undefined;
+    this.currentSession.executionPlan = undefined;
     this.currentSession.lastActiveItemKey = null;
     this.currentSession.lastActiveItemKeys = [];
     this.currentSession.updatedAt = Date.now();

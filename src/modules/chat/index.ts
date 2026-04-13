@@ -14,6 +14,7 @@ export {
 } from "./pdf-tools";
 export { checkAndMigrate } from "./migration/migrateV1Sessions";
 export { checkAndMigrateToV3 } from "./migration/migrateToSQLite";
+export { getToolPermissionManager, ToolPermissionManager } from "./tool-permissions";
 export {
   getStorageDatabase,
   destroyStorageDatabase,
@@ -28,6 +29,10 @@ export type {
   FileAttachment,
   SendMessageOptions,
   StreamCallbacks,
+  ExecutionPlan,
+  ExecutionPlanStep,
+  ExecutionPlanStatus,
+  ExecutionPlanStepStatus,
   ContextSummary,
   ContextState,
   SessionIndex,
@@ -39,6 +44,12 @@ export type { FilteredMessagesResult } from "./ContextManager";
 export type {
   ToolDefinition,
   ToolCall,
+  ToolPermissionDecision,
+  ToolPermissionDescriptor,
+  ToolPermissionMode,
+  ToolPermissionRequest,
+  ToolPermissionRiskLevel,
+  ToolPermissionScope,
   PaperStructure,
   PaperSection,
   PaperMetadata,
