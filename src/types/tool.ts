@@ -65,6 +65,7 @@ export interface PaperSection {
 
 // 工具名称枚举
 export type PaperToolName =
+  | "web_search"
   | "get_paper_section"
   | "search_paper_content"
   | "get_paper_metadata"
@@ -189,6 +190,14 @@ export interface SearchItemsArgs {
   field?: "title" | "creator" | "tag" | "everywhere"; // 搜索范围
   itemType?: string; // 条目类型筛选
   limit?: number;
+}
+
+// Web 搜索参数
+export interface WebSearchArgs {
+  query: string;
+  max_results?: number;
+  domain_filter?: string[];
+  include_content?: boolean;
 }
 
 // 获取分类列表的参数

@@ -37,6 +37,7 @@ import type {
   // 新增类型
   GetAnnotationsArgs,
   SearchItemsArgs,
+  WebSearchArgs,
   GetCollectionsArgs,
   GetCollectionItemsArgs,
   GetTagsArgs,
@@ -53,6 +54,7 @@ import type {
   SaveMemoryArgs,
 } from "../../../types/tool";
 import { getMemoryService } from "../memory/MemoryService";
+import { executeWebSearch, isValidWebSearchArgs } from "../web-search";
 import { parsePaperStructure, parsePages } from "./paperParser";
 import { generatePaperContextPrompt as generatePaperContextPromptFn } from "./promptGenerator";
 import {
@@ -302,6 +304,45 @@ export class PdfToolManager {
 
     // Library 工具 (始终可用，不需要 PDF)
     const libraryTools: ToolDefinition[] = [
+      ...(getPref("enableWebSearch") as boolean
+        ? [
+            {
+              type: "function" as const,
+              function: {
+                name: "web_search",
+                description:
+                  "Search the public web for current information beyond the local Zotero library. Use this when the user asks about recent developments, external websites, or information not contained in the selected papers.",
+                parameters: {
+                  type: "object" as const,
+                  properties: {
+                    query: {
+                      type: "string" as const,
+                      description:
+                        "The web search query. Be specific and include key entities or phrases.",
+                    },
+                    max_results: {
+                      type: "number" as const,
+                      description:
+                        "Maximum number of results to return (default: 5, max: 8).",
+                    },
+                    domain_filter: {
+                      type: "array" as const,
+                      items: { type: "string" },
+                      description:
+                        "Optional list of domains to keep results from, for example ['arxiv.org', 'nature.com'].",
+                    },
+                    include_content: {
+                      type: "boolean" as const,
+                      description:
+                        "Whether to fetch untrusted page content excerpts for top results. Default: false.",
+                    },
+                  },
+                  required: ["query"],
+                },
+              },
+            },
+          ]
+        : []),
       {
         type: "function",
         function: {
@@ -1080,6 +1121,10 @@ export class PdfToolManager {
     );
   }
 
+  private isWebSearchArgs(args: unknown): args is WebSearchArgs {
+    return isValidWebSearchArgs(args);
+  }
+
   private isGetCollectionsArgs(args: unknown): args is GetCollectionsArgs {
     return typeof args === "object" && args !== null;
   }
@@ -1198,6 +1243,14 @@ export class PdfToolManager {
 
     // === Zotero Library 工具（不需要 PDF）===
     switch (name) {
+      case "web_search":
+        if (!(getPref("enableWebSearch") as boolean)) {
+          return "Error: Web search is disabled in settings.";
+        }
+        if (!this.isWebSearchArgs(args)) {
+          return "Error: Invalid arguments for web_search. Required: query (string)";
+        }
+        return executeWebSearch(args);
       case "list_all_items":
         if (!this.isListAllItemsArgs(args)) {
           return "Error: Invalid arguments for list_all_items";

@@ -75,6 +75,11 @@ pref-upload-raw-pdf-desc = When enabled, uploads original PDF to AI if text extr
 pref-ai-tools-settings = AI Tools Settings
 pref-enable-ai-write = Allow AI to create notes and modify tags
 pref-enable-ai-write-desc = When enabled, AI can create notes and batch update tags in your library. Use with caution.
+pref-enable-web-search = Allow AI to search the web
+pref-enable-web-search-desc = When enabled, AI can query external websites and retrieve page excerpts for current information beyond your Zotero library.
+pref-web-search-provider = Search Provider
+pref-web-search-provider-desc = The search backend used by the local web_search tool.
+pref-web-search-provider-duckduckgo = DuckDuckGo (HTML scraping)
 
 # AISummary Settings
 pref-aisummary-settings = AI Summary

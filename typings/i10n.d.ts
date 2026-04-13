@@ -161,6 +161,8 @@ export type FluentMessageId =
   | 'pref-enable-ai-write'
   | 'pref-enable-ai-write-desc'
   | 'pref-enable-semantic-search'
+  | 'pref-enable-web-search'
+  | 'pref-enable-web-search-desc'
   | 'pref-enter-model-id'
   | 'pref-enter-provider-name'
   | 'pref-fetch-models-failed'
@@ -202,4 +204,7 @@ export type FluentMessageId =
   | 'pref-testing'
   | 'pref-title'
   | 'pref-upload-raw-pdf'
-  | 'pref-upload-raw-pdf-desc';
+  | 'pref-upload-raw-pdf-desc'
+  | 'pref-web-search-provider'
+  | 'pref-web-search-provider-desc'
+  | 'pref-web-search-provider-duckduckgo';

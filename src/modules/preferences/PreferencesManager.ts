@@ -23,6 +23,11 @@ import { getString } from "../../utils/locale";
 import { getAISummaryManager } from "../ai-summary";
 import { getAllTemplates } from "../ai-summary/defaultTemplates";
 import { getEmbeddingProviderFactory } from "../embedding";
+import {
+  DEFAULT_WEB_SEARCH_PROVIDER_ID,
+  listWebSearchProviders,
+  normalizeWebSearchProviderId,
+} from "../chat/web-search/WebSearchRegistry";
 import { getErrorMessage } from "../../utils/common";
 
 // Current selected provider ID
@@ -111,6 +116,16 @@ function initAIToolsSettingsCheckbox(doc: Document): void {
       "enableAIWriteOperations",
     ) as boolean;
   }
+
+  const enableWebSearchCheckbox = doc.getElementById(
+    "pref-enable-web-search-checkbox",
+  ) as XUL.Checkbox | null;
+  if (enableWebSearchCheckbox) {
+    enableWebSearchCheckbox.checked = getPref("enableWebSearch") as boolean;
+  }
+
+  populateWebSearchProviderOptions(doc);
+  updateWebSearchControls(doc);
 }
 
 /**
@@ -189,6 +204,72 @@ function bindAIToolsSettingsEvent(doc: Document): void {
       setPref("enableAIWriteOperations", enableAIWriteCheckbox.checked);
     });
   }
+
+  const enableWebSearchCheckbox = doc.getElementById(
+    "pref-enable-web-search-checkbox",
+  ) as XUL.Checkbox | null;
+  if (enableWebSearchCheckbox) {
+    enableWebSearchCheckbox.addEventListener("command", () => {
+      setPref("enableWebSearch", enableWebSearchCheckbox.checked);
+      updateWebSearchControls(doc);
+    });
+  }
+
+  const webSearchProviderSelect = doc.getElementById(
+    "pref-web-search-provider",
+  ) as unknown as XULMenuListElement | null;
+  if (webSearchProviderSelect) {
+    webSearchProviderSelect.addEventListener("command", () => {
+      setPref("webSearchProvider", webSearchProviderSelect.value || "duckduckgo");
+    });
+  }
+}
+
+function populateWebSearchProviderOptions(doc: Document): void {
+  const providerSelect = doc.getElementById(
+    "pref-web-search-provider",
+  ) as unknown as XULMenuListElement | null;
+  const providerPopup = doc.getElementById(
+    "pref-web-search-provider-popup",
+  ) as XUL.MenuPopup | null;
+
+  if (!providerSelect || !providerPopup) {
+    return;
+  }
+
+  while (providerPopup.firstChild) {
+    providerPopup.removeChild(providerPopup.firstChild);
+  }
+
+  for (const provider of listWebSearchProviders()) {
+    const providerItem = doc.createXULElement("menuitem");
+    providerItem.setAttribute("label", getString(provider.labelL10nId));
+    providerItem.setAttribute("value", provider.id);
+    providerPopup.appendChild(providerItem);
+  }
+
+  const selectedProvider =
+    (getPref("webSearchProvider") as string) || DEFAULT_WEB_SEARCH_PROVIDER_ID;
+  const normalizedProvider = normalizeWebSearchProviderId(selectedProvider);
+  if (normalizedProvider !== selectedProvider) {
+    setPref("webSearchProvider", normalizedProvider);
+  }
+  providerSelect.value = normalizedProvider;
+}
+
+function updateWebSearchControls(doc: Document): void {
+  const enableWebSearchCheckbox = doc.getElementById(
+    "pref-enable-web-search-checkbox",
+  ) as XUL.Checkbox | null;
+  const webSearchProviderSelect = doc.getElementById(
+    "pref-web-search-provider",
+  ) as unknown as XULMenuListElement | null;
+
+  if (!enableWebSearchCheckbox || !webSearchProviderSelect) {
+    return;
+  }
+
+  webSearchProviderSelect.disabled = !enableWebSearchCheckbox.checked;
 }
 
 /**

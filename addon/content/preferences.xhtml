@@ -390,6 +390,37 @@
       data-l10n-id="pref-enable-ai-write-desc"
       style="font-size: 11px; color: #666; margin-top: 4px; margin-left: 2px"
     ></label>
+
+    <separator class="thin" style="margin: 10px 0 8px 0" />
+
+    <hbox align="center">
+      <label
+        data-l10n-id="pref-enable-web-search"
+        style="margin-right: 8px"
+      ></label>
+      <checkbox id="pref-enable-web-search-checkbox" />
+    </hbox>
+    <label
+      data-l10n-id="pref-enable-web-search-desc"
+      style="font-size: 11px; color: #666; margin-top: 4px; margin-left: 2px"
+    ></label>
+
+    <hbox align="center" style="margin-top: 10px">
+      <label
+        for="pref-web-search-provider"
+        data-l10n-id="pref-web-search-provider"
+        style="margin-right: 8px"
+      ></label>
+      <menulist id="pref-web-search-provider" style="width: 220px">
+        <menupopup id="pref-web-search-provider-popup">
+          <!-- Populated by JS -->
+        </menupopup>
+      </menulist>
+    </hbox>
+    <label
+      data-l10n-id="pref-web-search-provider-desc"
+      style="font-size: 11px; color: #666; margin-top: 4px; margin-left: 2px"
+    ></label>
   </groupbox>
 
   <!-- Semantic Search Settings -->
