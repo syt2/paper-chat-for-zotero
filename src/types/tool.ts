@@ -33,6 +33,38 @@ export interface ToolCall {
   };
 }
 
+export type ToolPermissionMode = "auto_allow" | "ask" | "deny";
+
+export type ToolPermissionScope = "once" | "session" | "always";
+
+export type ToolPermissionRiskLevel =
+  | "read"
+  | "network"
+  | "write"
+  | "memory"
+  | "high_cost";
+
+export interface ToolPermissionDescriptor {
+  name: string;
+  riskLevel: ToolPermissionRiskLevel;
+  mode: ToolPermissionMode;
+  description: string;
+}
+
+export interface ToolPermissionRequest {
+  toolCall: ToolCall;
+  args: Record<string, unknown>;
+  sessionId?: string;
+}
+
+export interface ToolPermissionDecision {
+  verdict: "allow" | "deny";
+  mode: ToolPermissionMode;
+  scope: ToolPermissionScope;
+  descriptor: ToolPermissionDescriptor;
+  reason?: string;
+}
+
 // 工具调用结果
 export interface ToolResult {
   tool_call_id: string;

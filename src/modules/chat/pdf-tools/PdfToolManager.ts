@@ -90,6 +90,7 @@ import {
 } from "./libraryExecutors";
 import { getPref } from "../../../utils/prefs";
 import { getErrorMessage } from "../../../utils/common";
+import { getToolPermissionManager } from "../tool-permissions";
 
 // 缓存条目类型
 interface CacheEntry {
@@ -1239,6 +1240,18 @@ export class PdfToolManager {
       args = JSON.parse(argsString);
     } catch {
       return `Error: Invalid arguments JSON: ${argsString}`;
+    }
+
+    const permissionDecision = await getToolPermissionManager().decide({
+      toolCall,
+      args,
+    });
+    if (permissionDecision.verdict !== "allow") {
+      ztoolkit.log(
+        `[PdfToolManager] Tool permission denied: ${name}`,
+        permissionDecision.reason,
+      );
+      return getToolPermissionManager().formatDeniedResult(permissionDecision);
     }
 
     // === Zotero Library 工具（不需要 PDF）===

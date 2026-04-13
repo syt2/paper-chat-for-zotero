@@ -278,7 +278,8 @@ export class SessionStorageService {
           last_active_item_key = ?,
           last_active_item_keys = ?,
           context_summary = ?,
-          context_state = ?
+          context_state = ?,
+          execution_plan = ?
         WHERE id = ?`,
         [
           session.updatedAt,
@@ -286,6 +287,7 @@ export class SessionStorageService {
           session.lastActiveItemKeys ? JSON.stringify(session.lastActiveItemKeys) : null,
           session.contextSummary ? JSON.stringify(session.contextSummary) : null,
           session.contextState ? JSON.stringify(session.contextState) : null,
+          session.executionPlan ? JSON.stringify(session.executionPlan) : null,
           session.id,
         ],
       );
@@ -371,8 +373,8 @@ export class SessionStorageService {
         // Upsert session (no messages column)
         await db.queryAsync(
           `INSERT OR REPLACE INTO sessions
-           (id, created_at, updated_at, last_active_item_key, last_active_item_keys, context_summary, context_state, memory_extracted_at, memory_extracted_msg_count)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, created_at, updated_at, last_active_item_key, last_active_item_keys, context_summary, context_state, execution_plan, memory_extracted_at, memory_extracted_msg_count)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             session.id,
             session.createdAt,
@@ -381,6 +383,7 @@ export class SessionStorageService {
             session.lastActiveItemKeys ? JSON.stringify(session.lastActiveItemKeys) : null,
             session.contextSummary ? JSON.stringify(session.contextSummary) : null,
             session.contextState ? JSON.stringify(session.contextState) : null,
+            session.executionPlan ? JSON.stringify(session.executionPlan) : null,
             session.memoryExtractedAt ?? null,
             session.memoryExtractedMsgCount ?? null,
           ],
@@ -460,7 +463,7 @@ export class SessionStorageService {
 
       // 1. Load session row (without messages)
       const sessionRows = (await db.queryAsync(
-        "SELECT id, created_at, updated_at, last_active_item_key, last_active_item_keys, context_summary, context_state, memory_extracted_at, memory_extracted_msg_count FROM sessions WHERE id = ?",
+        "SELECT id, created_at, updated_at, last_active_item_key, last_active_item_keys, context_summary, context_state, execution_plan, memory_extracted_at, memory_extracted_msg_count FROM sessions WHERE id = ?",
         [sessionId],
       )) || [];
 
@@ -503,6 +506,7 @@ export class SessionStorageService {
         messages: filterValidMessages(messages),
         contextSummary: row.context_summary ? JSON.parse(row.context_summary) : undefined,
         contextState: row.context_state ? JSON.parse(row.context_state) : undefined,
+        executionPlan: row.execution_plan ? JSON.parse(row.execution_plan) : undefined,
         memoryExtractedAt: row.memory_extracted_at != null ? (row.memory_extracted_at as number) : undefined,
         memoryExtractedMsgCount: row.memory_extracted_msg_count != null ? (row.memory_extracted_msg_count as number) : undefined,
       };
