@@ -1,6 +1,10 @@
 import type {
+  AgentRuntimeEvent,
+  AgentRuntimeEventType,
   ChatMessage,
+  ChatMessageStreamingState,
   ChatSession,
+  ExecutionPlan,
   StreamToolCallingCallbacks,
 } from "../../../types/chat";
 import type {
@@ -8,21 +12,25 @@ import type {
   PaperStructureExtended,
   ToolCall,
   ToolDefinition,
+  ToolExecutionResult,
 } from "../../../types/tool";
 import type { ToolCallingProvider } from "../../../types/provider";
 import { getErrorMessage } from "../../../utils/common";
 import { getContextManager } from "../ContextManager";
-import { getPdfToolManager } from "../pdf-tools";
 import type { SessionStorageService } from "../SessionStorageService";
+import { getToolScheduler } from "../tool-scheduler";
 import { ExecutionPlanManager } from "./ExecutionPlanManager";
 
 interface AgentRuntimeCallbacks {
   isSessionActive: (session: ChatSession) => boolean;
+  isSessionTracked: (session: ChatSession) => boolean;
+  onRuntimeEvent?: (event: AgentRuntimeEvent) => void;
   onStreamingUpdate?: (content: string) => void;
   onReasoningUpdate?: (reasoning: string) => void;
   onMessageUpdate?: (messages: ChatMessage[]) => void;
   onPdfAttached?: () => void;
   onMessageComplete?: () => void;
+  onExecutionPlanUpdate?: (plan?: ExecutionPlan) => void;
   formatToolCallCard: (
     toolName: string,
     args: string,
@@ -41,6 +49,10 @@ interface RuntimeExecutionOptions {
   tools: ToolDefinition[];
   paperStructure?: PaperStructure | PaperStructureExtended | null;
   sendingSession: ChatSession;
+  refreshSystemPrompt?: (
+    currentMessages: ChatMessage[],
+    session: ChatSession,
+  ) => string;
 }
 
 interface StreamingRuntimeExecutionOptions extends RuntimeExecutionOptions {
@@ -51,8 +63,22 @@ interface StreamingRuntimeExecutionOptions extends RuntimeExecutionOptions {
   };
 }
 
+type RuntimeEventPayload<T extends AgentRuntimeEventType> = Omit<
+  Extract<AgentRuntimeEvent, { type: T }>,
+  "sessionId" | "assistantMessageId" | "timestamp" | "planId"
+>;
+
+class SessionRunInvalidatedError extends Error {
+  constructor() {
+    super("Session run invalidated");
+  }
+}
+
 export class AgentRuntime {
   private executionPlanManager = new ExecutionPlanManager();
+  private toolScheduler = getToolScheduler();
+  private messageCheckpointTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private messageCheckpointQueues = new Map<string, Promise<void>>();
 
   constructor(
     private sessionStorage: SessionStorageService,
@@ -71,18 +97,26 @@ export class AgentRuntime {
       tools,
       paperStructure,
       sendingSession,
+      refreshSystemPrompt,
     } = options;
-    const pdfToolManager = getPdfToolManager();
     const contextManager = getContextManager();
     const maxIterations = 10;
     let iteration = 0;
     let accumulatedDisplay = "";
-    this.executionPlanManager.startPlan(sendingSession, currentMessages);
+    const plan = this.executionPlanManager.startPlan(sendingSession, currentMessages);
+    this.initializeToolExecutionState(sendingSession);
     await this.sessionStorage.updateSessionMeta(sendingSession);
+    this.emitPlanUpdate(sendingSession);
+    this.emitRuntimeEvent<"turn_started">(sendingSession, assistantMessage, {
+      type: "turn_started",
+      summary: plan.summary,
+      streaming: true,
+    });
 
     try {
       while (iteration < maxIterations) {
         iteration++;
+        this.refreshSystemPrompt(currentMessages, sendingSession, refreshSystemPrompt);
         ztoolkit.log(
           `[Streaming Tool Calling] Iteration ${iteration}, messages: ${currentMessages.length}`,
         );
@@ -103,15 +137,37 @@ export class AgentRuntime {
 
           const callbacks: StreamToolCallingCallbacks = {
             onTextDelta: (text) => {
+              if (!this.callbacks.isSessionTracked(sendingSession)) {
+                return;
+              }
               roundContent += text;
               assistantMessage.content = displayBeforeThisRound + roundContent;
+              assistantMessage.streamingState = "in_progress";
+              this.scheduleAssistantMessageCheckpoint(sendingSession, assistantMessage);
+              this.emitRuntimeEvent<"text_delta">(sendingSession, assistantMessage, {
+                type: "text_delta",
+                delta: text,
+                content: assistantMessage.content,
+                iteration,
+              });
               if (this.callbacks.isSessionActive(sendingSession)) {
                 this.callbacks.onStreamingUpdate?.(assistantMessage.content);
               }
             },
             onReasoningDelta: (text) => {
+              if (!this.callbacks.isSessionTracked(sendingSession)) {
+                return;
+              }
               assistantMessage.reasoning =
                 (assistantMessage.reasoning || "") + text;
+              assistantMessage.streamingState = "in_progress";
+              this.scheduleAssistantMessageCheckpoint(sendingSession, assistantMessage);
+              this.emitRuntimeEvent<"reasoning_delta">(sendingSession, assistantMessage, {
+                type: "reasoning_delta",
+                delta: text,
+                reasoning: assistantMessage.reasoning,
+                iteration,
+              });
               if (this.callbacks.isSessionActive(sendingSession)) {
                 this.callbacks.onReasoningUpdate?.(assistantMessage.reasoning);
               }
@@ -157,6 +213,8 @@ export class AgentRuntime {
             .catch(reject);
         });
 
+        this.ensureSessionTracked(sendingSession);
+
         ztoolkit.log(
           "[Streaming Tool Calling] Response:",
           result.content ? result.content.substring(0, 100) : "(no content)",
@@ -180,83 +238,134 @@ export class AgentRuntime {
             accumulatedDisplay += result.content;
           }
 
-          for (const toolCall of result.toolCalls) {
-            const toolName = toolCall.function.name;
-            const toolArgs = toolCall.function.arguments;
+          const executionBatches = this.toolScheduler.createExecutionBatches(
+            result.toolCalls.map((toolCall) => ({
+              toolCall,
+              sessionId: sendingSession.id,
+              fallbackStructure: paperStructure || undefined,
+            })),
+          );
 
-            ztoolkit.log(`[Streaming Tool Calling] Executing: ${toolName}`);
+          for (const batch of executionBatches) {
+            let callingDisplay = accumulatedDisplay;
 
-            const callingDisplay =
-              accumulatedDisplay +
-              this.callbacks.formatToolCallCard(toolName, toolArgs, "calling");
+            for (const request of batch) {
+              const toolCall = request.toolCall;
+              const toolName = toolCall.function.name;
+              const toolArgs = toolCall.function.arguments;
+              ztoolkit.log(`[Streaming Tool Calling] Executing: ${toolName}`);
+
+              callingDisplay += this.callbacks.formatToolCallCard(
+                toolName,
+                toolArgs,
+                "calling",
+              );
+              this.executionPlanManager.addOrUpdateToolStep(
+                sendingSession,
+                currentMessages,
+                toolCall.id,
+                toolName,
+                "in_progress",
+                truncateToolDetail(toolArgs),
+              );
+              this.emitRuntimeEvent<"tool_started">(sendingSession, assistantMessage, {
+                type: "tool_started",
+                toolCallId: toolCall.id,
+                toolName,
+                args: toolArgs,
+                iteration,
+              });
+            }
+
             assistantMessage.content = callingDisplay;
-            this.executionPlanManager.addOrUpdateToolStep(
+            assistantMessage.streamingState = "in_progress";
+            await this.flushAssistantMessageCheckpoint(
               sendingSession,
-              currentMessages,
-              toolCall.id,
-              toolName,
+              assistantMessage,
               "in_progress",
-              truncateToolDetail(toolArgs),
             );
             await this.sessionStorage.updateSessionMeta(sendingSession);
+            this.emitPlanUpdate(sendingSession);
             if (this.callbacks.isSessionActive(sendingSession)) {
               this.callbacks.onStreamingUpdate?.(callingDisplay);
             }
 
-            let toolResult: string;
-            try {
-              toolResult = await pdfToolManager.executeToolCall(
-                toolCall,
-                paperStructure || undefined,
-              );
-            } catch (error) {
-              toolResult = `Error: Tool execution failed: ${getErrorMessage(error)}`;
-              ztoolkit.log(
-                `[Streaming Tool Calling] Tool ${toolName} threw error:`,
-                error,
-              );
-            }
-
-            ztoolkit.log(
-              `[Streaming Tool Calling] Result (truncated): ${toolResult.substring(0, 200)}...`,
-            );
-
-            const toolResultMessage: ChatMessage = {
-              id: this.callbacks.generateId(),
-              role: "tool",
-              content: toolResult,
-              tool_call_id: toolCall.id,
-              timestamp: Date.now(),
-            };
-            currentMessages.push(toolResultMessage);
-
-            const toolFailed = isToolResultError(toolResult);
-            const toolDisplayStatus = toolFailed ? "error" : "completed";
-            const planStepStatus = toolFailed ? "failed" : "completed";
-
-            accumulatedDisplay += this.callbacks.formatToolCallCard(
-              toolName,
-              toolArgs,
-              toolDisplayStatus,
-              toolResult,
-            );
-            assistantMessage.content = accumulatedDisplay;
-            this.executionPlanManager.addOrUpdateToolStep(
-              sendingSession,
-              currentMessages,
-              toolCall.id,
-              toolName,
-              planStepStatus,
-              truncateToolDetail(toolResult),
-            );
+            const batchResults = await this.toolScheduler.executeBatch(batch);
+            this.appendToolExecutionResults(sendingSession, batchResults);
             await this.sessionStorage.updateSessionMeta(sendingSession);
-            if (this.callbacks.isSessionActive(sendingSession)) {
-              this.callbacks.onStreamingUpdate?.(accumulatedDisplay);
+            this.emitPlanUpdate(sendingSession);
+
+            for (const executionResult of batchResults) {
+              const toolCall = executionResult.toolCall;
+              const toolName = toolCall.function.name;
+              const toolArgs = toolCall.function.arguments;
+              const toolResult = executionResult.content;
+
+              ztoolkit.log(
+                `[Streaming Tool Calling] Result (truncated): ${toolResult.substring(0, 200)}...`,
+              );
+
+              const toolResultMessage: ChatMessage = {
+                id: this.callbacks.generateId(),
+                role: "tool",
+                content: toolResult,
+                tool_call_id: toolCall.id,
+                timestamp: Date.now(),
+              };
+              currentMessages.push(toolResultMessage);
+
+              const toolSucceeded = executionResult.status === "completed";
+              const toolDisplayStatus = toolSucceeded ? "completed" : "error";
+              const planStepStatus = toPlanStepStatus(executionResult.status);
+
+              accumulatedDisplay += this.callbacks.formatToolCallCard(
+                toolName,
+                toolArgs,
+                toolDisplayStatus,
+                toolResult,
+              );
+              assistantMessage.content = accumulatedDisplay;
+              assistantMessage.streamingState = "in_progress";
+              await this.flushAssistantMessageCheckpoint(
+                sendingSession,
+                assistantMessage,
+                "in_progress",
+              );
+              this.executionPlanManager.addOrUpdateToolStep(
+                sendingSession,
+                currentMessages,
+                toolCall.id,
+                toolName,
+                planStepStatus,
+                truncateToolDetail(toolResult),
+              );
+              await this.sessionStorage.updateSessionMeta(sendingSession);
+              this.emitPlanUpdate(sendingSession);
+              this.emitRuntimeEvent<"tool_completed">(sendingSession, assistantMessage, {
+                type: "tool_completed",
+                toolCallId: toolCall.id,
+                toolName,
+                args: toolArgs,
+                resultPreview: truncateToolDetail(toolResult),
+                status: executionResult.status,
+                iteration,
+              });
+              if (this.callbacks.isSessionActive(sendingSession)) {
+                this.callbacks.onStreamingUpdate?.(accumulatedDisplay);
+              }
             }
+
+            this.appendDenialRecoveryMessage(currentMessages, batchResults);
           }
 
           const thinkingDisplay = accumulatedDisplay + "\n\n···";
           assistantMessage.content = thinkingDisplay;
+          assistantMessage.streamingState = "in_progress";
+          await this.flushAssistantMessageCheckpoint(
+            sendingSession,
+            assistantMessage,
+            "in_progress",
+          );
           if (this.callbacks.isSessionActive(sendingSession)) {
             this.callbacks.onStreamingUpdate?.(thinkingDisplay);
           }
@@ -272,6 +381,7 @@ export class AgentRuntime {
         if (!assistantMessage.reasoning) {
           delete assistantMessage.reasoning;
         }
+        assistantMessage.streamingState = undefined;
 
         this.executionPlanManager.completeRespondStep(
           sendingSession,
@@ -279,13 +389,19 @@ export class AgentRuntime {
           truncateToolDetail(accumulatedDisplay),
         );
 
-        await this.sessionStorage.updateMessageContent(
-          sendingSession.id,
-          assistantMessage.id,
-          accumulatedDisplay,
-          assistantMessage.reasoning,
+        await this.flushAssistantMessageCheckpoint(
+          sendingSession,
+          assistantMessage,
+          null,
         );
+        this.touchToolExecutionState(sendingSession);
         await this.sessionStorage.updateSessionMeta(sendingSession);
+        this.emitPlanUpdate(sendingSession);
+        this.emitRuntimeEvent<"turn_completed">(sendingSession, assistantMessage, {
+          type: "turn_completed",
+          content: accumulatedDisplay,
+          iteration,
+        });
         if (this.callbacks.isSessionActive(sendingSession)) {
           this.callbacks.onMessageUpdate?.(sendingSession.messages);
 
@@ -322,24 +438,46 @@ export class AgentRuntime {
       if (!assistantMessage.reasoning) {
         delete assistantMessage.reasoning;
       }
-      await this.sessionStorage.updateMessageContent(
-        sendingSession.id,
-        assistantMessage.id,
-        accumulatedDisplay,
-        assistantMessage.reasoning,
+      assistantMessage.streamingState = undefined;
+      await this.flushAssistantMessageCheckpoint(
+        sendingSession,
+        assistantMessage,
+        null,
       );
+      this.touchToolExecutionState(sendingSession);
       await this.sessionStorage.updateSessionMeta(sendingSession);
+      this.emitPlanUpdate(sendingSession);
+      this.emitRuntimeEvent<"turn_failed">(sendingSession, assistantMessage, {
+        type: "turn_failed",
+        error: "Maximum tool-calling iterations reached.",
+        iteration,
+      });
       if (this.callbacks.isSessionActive(sendingSession)) {
         this.callbacks.onMessageUpdate?.(sendingSession.messages);
         this.callbacks.onMessageComplete?.();
       }
     } catch (error) {
+      if (error instanceof SessionRunInvalidatedError) {
+        return;
+      }
       this.executionPlanManager.failPlan(
         sendingSession,
         currentMessages,
         getErrorMessage(error),
       );
+      await this.flushAssistantMessageCheckpoint(
+        sendingSession,
+        assistantMessage,
+        "in_progress",
+      );
+      this.touchToolExecutionState(sendingSession);
       await this.sessionStorage.updateSessionMeta(sendingSession);
+      this.emitPlanUpdate(sendingSession);
+      this.emitRuntimeEvent<"turn_failed">(sendingSession, assistantMessage, {
+        type: "turn_failed",
+        error: getErrorMessage(error),
+        iteration,
+      });
       ztoolkit.log("[Streaming Tool Calling] Error:", error);
       throw error;
     }
@@ -357,18 +495,26 @@ export class AgentRuntime {
       tools,
       paperStructure,
       sendingSession,
+      refreshSystemPrompt,
     } = options;
-    const pdfToolManager = getPdfToolManager();
     const contextManager = getContextManager();
     const maxIterations = 10;
     let iteration = 0;
     let accumulatedDisplay = "";
-    this.executionPlanManager.startPlan(sendingSession, currentMessages);
+    const plan = this.executionPlanManager.startPlan(sendingSession, currentMessages);
+    this.initializeToolExecutionState(sendingSession);
     await this.sessionStorage.updateSessionMeta(sendingSession);
+    this.emitPlanUpdate(sendingSession);
+    this.emitRuntimeEvent<"turn_started">(sendingSession, assistantMessage, {
+      type: "turn_started",
+      summary: plan.summary,
+      streaming: false,
+    });
 
     try {
       while (iteration < maxIterations) {
         iteration++;
+        this.refreshSystemPrompt(currentMessages, sendingSession, refreshSystemPrompt);
         ztoolkit.log(
           `[Tool Calling] Iteration ${iteration}, messages: ${currentMessages.length}`,
         );
@@ -377,6 +523,8 @@ export class AgentRuntime {
           currentMessages,
           tools,
         );
+
+        this.ensureSessionTracked(sendingSession);
 
         ztoolkit.log(
           "[Tool Calling] Response:",
@@ -399,83 +547,135 @@ export class AgentRuntime {
             accumulatedDisplay += result.content;
           }
 
-          for (const toolCall of result.toolCalls) {
-            const toolName = toolCall.function.name;
-            const toolArgs = toolCall.function.arguments;
+          const executionBatches = this.toolScheduler.createExecutionBatches(
+            result.toolCalls.map((toolCall) => ({
+              toolCall,
+              sessionId: sendingSession.id,
+              fallbackStructure: paperStructure || undefined,
+            })),
+          );
 
-            ztoolkit.log(`[Tool Calling] Executing tool: ${toolName}`, toolArgs);
+          for (const batch of executionBatches) {
+            let callingDisplay = accumulatedDisplay;
 
-            const callingDisplay =
-              accumulatedDisplay +
-              this.callbacks.formatToolCallCard(toolName, toolArgs, "calling");
+            for (const request of batch) {
+              const toolCall = request.toolCall;
+              const toolName = toolCall.function.name;
+              const toolArgs = toolCall.function.arguments;
+
+              ztoolkit.log(`[Tool Calling] Executing tool: ${toolName}`, toolArgs);
+
+              callingDisplay += this.callbacks.formatToolCallCard(
+                toolName,
+                toolArgs,
+                "calling",
+              );
+              this.executionPlanManager.addOrUpdateToolStep(
+                sendingSession,
+                currentMessages,
+                toolCall.id,
+                toolName,
+                "in_progress",
+                truncateToolDetail(toolArgs),
+              );
+              this.emitRuntimeEvent<"tool_started">(sendingSession, assistantMessage, {
+                type: "tool_started",
+                toolCallId: toolCall.id,
+                toolName,
+                args: toolArgs,
+                iteration,
+              });
+            }
+
             assistantMessage.content = callingDisplay;
-            this.executionPlanManager.addOrUpdateToolStep(
+            assistantMessage.streamingState = "in_progress";
+            await this.flushAssistantMessageCheckpoint(
               sendingSession,
-              currentMessages,
-              toolCall.id,
-              toolName,
+              assistantMessage,
               "in_progress",
-              truncateToolDetail(toolArgs),
             );
             await this.sessionStorage.updateSessionMeta(sendingSession);
+            this.emitPlanUpdate(sendingSession);
             if (this.callbacks.isSessionActive(sendingSession)) {
               this.callbacks.onStreamingUpdate?.(callingDisplay);
             }
 
-            let toolResult: string;
-            try {
-              toolResult = await pdfToolManager.executeToolCall(
-                toolCall,
-                paperStructure || undefined,
-              );
-            } catch (error) {
-              toolResult = `Error: Tool execution failed: ${getErrorMessage(error)}`;
-              ztoolkit.log(
-                `[Tool Calling] Tool ${toolName} threw error:`,
-                error,
-              );
-            }
-
-            ztoolkit.log(
-              `[Tool Calling] Tool result (truncated): ${toolResult.substring(0, 200)}...`,
-            );
-
-            const toolResultMessage: ChatMessage = {
-              id: this.callbacks.generateId(),
-              role: "tool",
-              content: toolResult,
-              tool_call_id: toolCall.id,
-              timestamp: Date.now(),
-            };
-            currentMessages.push(toolResultMessage);
-
-            const toolFailed = isToolResultError(toolResult);
-            const toolDisplayStatus = toolFailed ? "error" : "completed";
-            const planStepStatus = toolFailed ? "failed" : "completed";
-
-            accumulatedDisplay += this.callbacks.formatToolCallCard(
-              toolName,
-              toolArgs,
-              toolDisplayStatus,
-              toolResult,
-            );
-            assistantMessage.content = accumulatedDisplay;
-            this.executionPlanManager.addOrUpdateToolStep(
-              sendingSession,
-              currentMessages,
-              toolCall.id,
-              toolName,
-              planStepStatus,
-              truncateToolDetail(toolResult),
-            );
+            const batchResults = await this.toolScheduler.executeBatch(batch);
+            this.appendToolExecutionResults(sendingSession, batchResults);
             await this.sessionStorage.updateSessionMeta(sendingSession);
-            if (this.callbacks.isSessionActive(sendingSession)) {
-              this.callbacks.onStreamingUpdate?.(accumulatedDisplay);
+            this.emitPlanUpdate(sendingSession);
+
+            for (const executionResult of batchResults) {
+              const toolCall = executionResult.toolCall;
+              const toolName = toolCall.function.name;
+              const toolArgs = toolCall.function.arguments;
+              const toolResult = executionResult.content;
+
+              ztoolkit.log(
+                `[Tool Calling] Tool result (truncated): ${toolResult.substring(0, 200)}...`,
+              );
+
+              const toolResultMessage: ChatMessage = {
+                id: this.callbacks.generateId(),
+                role: "tool",
+                content: toolResult,
+                tool_call_id: toolCall.id,
+                timestamp: Date.now(),
+              };
+              currentMessages.push(toolResultMessage);
+
+              const toolSucceeded = executionResult.status === "completed";
+              const toolDisplayStatus = toolSucceeded ? "completed" : "error";
+              const planStepStatus = toPlanStepStatus(executionResult.status);
+
+              accumulatedDisplay += this.callbacks.formatToolCallCard(
+                toolName,
+                toolArgs,
+                toolDisplayStatus,
+                toolResult,
+              );
+              assistantMessage.content = accumulatedDisplay;
+              assistantMessage.streamingState = "in_progress";
+              await this.flushAssistantMessageCheckpoint(
+                sendingSession,
+                assistantMessage,
+                "in_progress",
+              );
+              this.executionPlanManager.addOrUpdateToolStep(
+                sendingSession,
+                currentMessages,
+                toolCall.id,
+                toolName,
+                planStepStatus,
+                truncateToolDetail(toolResult),
+              );
+              await this.sessionStorage.updateSessionMeta(sendingSession);
+              this.emitPlanUpdate(sendingSession);
+              this.emitRuntimeEvent<"tool_completed">(sendingSession, assistantMessage, {
+                type: "tool_completed",
+                toolCallId: toolCall.id,
+                toolName,
+                args: toolArgs,
+                resultPreview: truncateToolDetail(toolResult),
+                status: executionResult.status,
+                iteration,
+              });
+              if (this.callbacks.isSessionActive(sendingSession)) {
+                this.callbacks.onStreamingUpdate?.(accumulatedDisplay);
+              }
             }
+
+            this.appendDenialRecoveryMessage(currentMessages, batchResults);
           }
 
           const thinkingDisplay = accumulatedDisplay + "\n\n···";
           assistantMessage.content = thinkingDisplay;
+          assistantMessage.streamingState = "in_progress";
+          await this.flushAssistantMessageCheckpoint(
+            sendingSession,
+            assistantMessage,
+            "in_progress",
+          );
           if (this.callbacks.isSessionActive(sendingSession)) {
             this.callbacks.onStreamingUpdate?.(thinkingDisplay);
           }
@@ -485,6 +685,7 @@ export class AgentRuntime {
 
         accumulatedDisplay += result.content || "";
         assistantMessage.content = accumulatedDisplay;
+        assistantMessage.streamingState = undefined;
         assistantMessage.timestamp = Date.now();
         sendingSession.updatedAt = Date.now();
         this.executionPlanManager.completeRespondStep(
@@ -493,12 +694,19 @@ export class AgentRuntime {
           truncateToolDetail(accumulatedDisplay),
         );
 
-        await this.sessionStorage.updateMessageContent(
-          sendingSession.id,
-          assistantMessage.id,
-          accumulatedDisplay,
+        await this.flushAssistantMessageCheckpoint(
+          sendingSession,
+          assistantMessage,
+          null,
         );
+        this.touchToolExecutionState(sendingSession);
         await this.sessionStorage.updateSessionMeta(sendingSession);
+        this.emitPlanUpdate(sendingSession);
+        this.emitRuntimeEvent<"turn_completed">(sendingSession, assistantMessage, {
+          type: "turn_completed",
+          content: accumulatedDisplay,
+          iteration,
+        });
         if (this.callbacks.isSessionActive(sendingSession)) {
           this.callbacks.onMessageUpdate?.(sendingSession.messages);
 
@@ -525,6 +733,7 @@ export class AgentRuntime {
       accumulatedDisplay +=
         "\n\nI apologize, but I was unable to complete the request within the allowed number of iterations.";
       assistantMessage.content = accumulatedDisplay;
+      assistantMessage.streamingState = undefined;
       assistantMessage.timestamp = Date.now();
       sendingSession.updatedAt = Date.now();
       this.executionPlanManager.failPlan(
@@ -532,25 +741,240 @@ export class AgentRuntime {
         currentMessages,
         "Maximum tool-calling iterations reached.",
       );
-      await this.sessionStorage.updateMessageContent(
-        sendingSession.id,
-        assistantMessage.id,
-        accumulatedDisplay,
+      await this.flushAssistantMessageCheckpoint(
+        sendingSession,
+        assistantMessage,
+        null,
       );
+      this.touchToolExecutionState(sendingSession);
       await this.sessionStorage.updateSessionMeta(sendingSession);
+      this.emitPlanUpdate(sendingSession);
+      this.emitRuntimeEvent<"turn_failed">(sendingSession, assistantMessage, {
+        type: "turn_failed",
+        error: "Maximum tool-calling iterations reached.",
+        iteration,
+      });
       if (this.callbacks.isSessionActive(sendingSession)) {
         this.callbacks.onMessageUpdate?.(sendingSession.messages);
         this.callbacks.onMessageComplete?.();
       }
     } catch (error) {
+      if (error instanceof SessionRunInvalidatedError) {
+        return;
+      }
       this.executionPlanManager.failPlan(
         sendingSession,
         currentMessages,
         getErrorMessage(error),
       );
+      await this.flushAssistantMessageCheckpoint(
+        sendingSession,
+        assistantMessage,
+        "in_progress",
+      );
+      this.touchToolExecutionState(sendingSession);
       await this.sessionStorage.updateSessionMeta(sendingSession);
+      this.emitPlanUpdate(sendingSession);
+      this.emitRuntimeEvent<"turn_failed">(sendingSession, assistantMessage, {
+        type: "turn_failed",
+        error: getErrorMessage(error),
+        iteration,
+      });
       ztoolkit.log("[Tool Calling] Error:", error);
       throw error;
+    }
+  }
+
+  private emitPlanUpdate(session: ChatSession): void {
+    if (this.callbacks.isSessionActive(session)) {
+      this.callbacks.onExecutionPlanUpdate?.(session.executionPlan);
+    }
+  }
+
+  private initializeToolExecutionState(session: ChatSession): void {
+    const now = Date.now();
+    session.toolExecutionState = {
+      planId: session.executionPlan?.id,
+      turnStartedAt: now,
+      updatedAt: now,
+      results: [],
+    };
+  }
+
+  private appendToolExecutionResults(
+    session: ChatSession,
+    results: ToolExecutionResult[],
+  ): void {
+    if (!session.toolExecutionState) {
+      this.initializeToolExecutionState(session);
+    }
+
+    session.toolExecutionState!.planId = session.executionPlan?.id;
+    session.toolExecutionState!.results.push(...results);
+    session.toolExecutionState!.updatedAt = Date.now();
+  }
+
+  private touchToolExecutionState(session: ChatSession): void {
+    if (!session.toolExecutionState) {
+      this.initializeToolExecutionState(session);
+    }
+    session.toolExecutionState!.planId = session.executionPlan?.id;
+    session.toolExecutionState!.updatedAt = Date.now();
+  }
+
+  private scheduleAssistantMessageCheckpoint(
+    session: ChatSession,
+    message: ChatMessage,
+  ): void {
+    if (!this.callbacks.isSessionTracked(session)) {
+      return;
+    }
+    if (this.messageCheckpointTimers.has(message.id)) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      this.messageCheckpointTimers.delete(message.id);
+      if (!this.callbacks.isSessionTracked(session)) {
+        return;
+      }
+      void this.enqueueAssistantMessageCheckpoint(
+        session,
+        message,
+        "in_progress",
+      );
+    }, 1000);
+    this.messageCheckpointTimers.set(message.id, timer);
+  }
+
+  private async flushAssistantMessageCheckpoint(
+    session: ChatSession,
+    message: ChatMessage,
+    streamingState: ChatMessageStreamingState | null,
+  ): Promise<void> {
+    if (!this.callbacks.isSessionTracked(session)) {
+      return;
+    }
+    const timer = this.messageCheckpointTimers.get(message.id);
+    if (timer) {
+      clearTimeout(timer);
+      this.messageCheckpointTimers.delete(message.id);
+    }
+
+    await this.enqueueAssistantMessageCheckpoint(
+      session,
+      message,
+      streamingState,
+    );
+  }
+
+  private async enqueueAssistantMessageCheckpoint(
+    session: ChatSession,
+    message: ChatMessage,
+    streamingState: ChatMessageStreamingState | null,
+  ): Promise<void> {
+    if (!this.callbacks.isSessionTracked(session)) {
+      return;
+    }
+    const previous = this.messageCheckpointQueues.get(message.id) || Promise.resolve();
+    const next = previous
+      .catch(() => undefined)
+      .then(async () => {
+        await this.sessionStorage.updateMessageContent(
+          session.id,
+          message.id,
+          message.content,
+          message.reasoning,
+          { streamingState },
+        );
+      });
+    this.messageCheckpointQueues.set(message.id, next);
+
+    try {
+      await next;
+    } finally {
+      if (this.messageCheckpointQueues.get(message.id) === next) {
+        this.messageCheckpointQueues.delete(message.id);
+      }
+    }
+  }
+
+  private appendDenialRecoveryMessage(
+    currentMessages: ChatMessage[],
+    results: ToolExecutionResult[],
+  ): void {
+    const deniedResults = results.filter((result) => result.status === "denied");
+    if (deniedResults.length === 0) {
+      return;
+    }
+
+    const lines = deniedResults.map((result) => {
+      const descriptor = result.permissionDecision?.descriptor;
+      const toolName = result.toolCall.function.name;
+      const riskLevel = descriptor?.riskLevel || "unknown";
+      const reason =
+        result.permissionDecision?.reason ||
+        result.error ||
+        "No explicit denial reason was returned.";
+      return `- ${toolName} (risk: ${riskLevel}): ${reason}`;
+    });
+
+    currentMessages.push({
+      id: this.callbacks.generateId(),
+      role: "system",
+      content: [
+        "Tool denial notice:",
+        "The following tool calls were denied by the permission policy in this turn.",
+        ...lines,
+        "Do not repeat denied tool calls in this turn unless the user changes approval.",
+        "Revise the plan, choose safer alternatives, or ask the user for permission if the denied action is necessary.",
+      ].join("\n"),
+      timestamp: Date.now(),
+    });
+  }
+
+  private refreshSystemPrompt(
+    currentMessages: ChatMessage[],
+    session: ChatSession,
+    promptBuilder?: (currentMessages: ChatMessage[], session: ChatSession) => string,
+  ): void {
+    if (!promptBuilder) return;
+
+    const content = promptBuilder(currentMessages, session);
+    const existing = currentMessages.find((message) => message.id === "paper-context");
+    if (existing) {
+      existing.content = content;
+      existing.timestamp = Date.now();
+      return;
+    }
+
+    currentMessages.unshift({
+      id: "paper-context",
+      role: "system",
+      content,
+      timestamp: Date.now(),
+    });
+  }
+
+  private emitRuntimeEvent<T extends AgentRuntimeEventType>(
+    session: ChatSession,
+    assistantMessage: ChatMessage,
+    event: RuntimeEventPayload<T>,
+  ): void {
+    const fullEvent = {
+      ...event,
+      sessionId: session.id,
+      assistantMessageId: assistantMessage.id,
+      timestamp: Date.now(),
+      planId: session.executionPlan?.id,
+    } as Extract<AgentRuntimeEvent, { type: T }>;
+
+    this.callbacks.onRuntimeEvent?.(fullEvent);
+  }
+
+  private ensureSessionTracked(session: ChatSession): void {
+    if (!this.callbacks.isSessionTracked(session)) {
+      throw new SessionRunInvalidatedError();
     }
   }
 }
@@ -562,6 +986,15 @@ function truncateToolDetail(text: string): string {
   return text.slice(0, 157) + "...";
 }
 
-function isToolResultError(toolResult: string): boolean {
-  return toolResult.trimStart().startsWith("Error:");
+function toPlanStepStatus(
+  status: ToolExecutionResult["status"],
+): "completed" | "failed" | "denied" {
+  switch (status) {
+    case "completed":
+      return "completed";
+    case "denied":
+      return "denied";
+    default:
+      return "failed";
+  }
 }

@@ -65,7 +65,7 @@ export class ExecutionPlanManager {
       if (status === "in_progress" && !existingStep.startedAt) {
         existingStep.startedAt = now;
       }
-      if (status === "completed" || status === "failed") {
+      if (status === "completed" || status === "failed" || status === "denied") {
         existingStep.completedAt = now;
       }
     } else {
@@ -77,7 +77,7 @@ export class ExecutionPlanManager {
         detail,
         startedAt: now,
       };
-      if (status === "completed" || status === "failed") {
+      if (status === "completed" || status === "failed" || status === "denied") {
         newStep.completedAt = now;
       }
       plan.steps.push(newStep);

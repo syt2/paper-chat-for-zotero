@@ -56,6 +56,7 @@ import type {
 import { getMemoryService } from "../memory/MemoryService";
 import { executeWebSearch, isValidWebSearchArgs } from "../web-search";
 import { parsePaperStructure, parsePages } from "./paperParser";
+import type { AgentPromptContext } from "./promptGenerator";
 import { generatePaperContextPrompt as generatePaperContextPromptFn } from "./promptGenerator";
 import {
   executeGetPaperSection,
@@ -142,13 +143,17 @@ export class PdfToolManager {
    */
   async extractAndParsePapers(
     itemKeys: string[],
+    options?: {
+      onProgress?: (completed: number, total: number, itemKey: string) => Promise<void> | void;
+    },
   ): Promise<Map<string, PaperStructureExtended>> {
     const results = new Map<string, PaperStructureExtended>();
-    for (const key of itemKeys) {
+    for (const [index, key] of itemKeys.entries()) {
       const structure = await this.extractAndParsePaper(key);
       if (structure) {
         results.set(key, structure);
       }
+      await options?.onProgress?.(index + 1, itemKeys.length, key);
     }
     return results;
   }
@@ -1254,6 +1259,29 @@ export class PdfToolManager {
       return getToolPermissionManager().formatDeniedResult(permissionDecision);
     }
 
+    return this.executeToolCallUnchecked(toolCall, fallbackStructure, args);
+  }
+
+  async executeToolCallUnchecked(
+    toolCall: ToolCall,
+    fallbackStructure?: PaperStructure | PaperStructureExtended,
+    parsedArgs?: Record<string, unknown>,
+  ): Promise<string> {
+    const { name, arguments: argsString } = toolCall.function;
+
+    let args = parsedArgs;
+    if (!args) {
+      try {
+        const parsed = JSON.parse(argsString);
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          return `Error: Invalid arguments JSON: ${argsString}`;
+        }
+        args = parsed as Record<string, unknown>;
+      } catch {
+        return `Error: Invalid arguments JSON: ${argsString}`;
+      }
+    }
+
     // === Zotero Library 工具（不需要 PDF）===
     switch (name) {
       case "web_search":
@@ -1491,6 +1519,7 @@ export class PdfToolManager {
     currentTitle?: string,
     hasCurrentItem: boolean = true,
     memoryContext?: string,
+    agentContext?: AgentPromptContext,
   ): string {
     return generatePaperContextPromptFn(
       currentPaperStructure,
@@ -1499,6 +1528,7 @@ export class PdfToolManager {
       hasCurrentItem,
       undefined,
       memoryContext,
+      agentContext,
     );
   }
 
@@ -1516,77 +1546,82 @@ export class PdfToolManager {
       return "Error: compare_papers requires at least 2 papers. Please select multiple papers or provide itemKeys array.";
     }
 
-    // 提取所有论文的结构
-    const papersMap = await this.extractAndParsePapers(itemKeys);
+    try {
+      // 提取所有论文的结构
+      const papersMap = await this.extractAndParsePapers(itemKeys);
 
-    if (papersMap.size < 2) {
-      return `Error: Could only extract ${papersMap.size} paper(s). Need at least 2 for comparison.`;
-    }
+      if (papersMap.size < 2) {
+        return `Error: Could only extract ${papersMap.size} paper(s). Need at least 2 for comparison.`;
+      }
 
-    const aspect = args.aspect || "all";
-    const results: string[] = [];
+      const aspect = args.aspect || "all";
+      const results: string[] = [];
 
-    results.push(`=== Comparing ${papersMap.size} Papers ===\n`);
+      results.push(`=== Comparing ${papersMap.size} Papers ===\n`);
 
-    // 获取每篇论文的标题
-    for (const [key, structure] of papersMap) {
-      const title = structure.metadata.title || key;
-      results.push(`- [${key}] "${title}"`);
-    }
-    results.push("");
+      // 获取每篇论文的标题
+      for (const [key, structure] of papersMap) {
+        const title = structure.metadata.title || key;
+        results.push(`- [${key}] "${title}"`);
+      }
+      results.push("");
 
-    // 根据 aspect 提取对应内容
-    const sectionsToCompare: string[] = [];
-    if (aspect === "methodology" || aspect === "all") {
-      sectionsToCompare.push("methodology", "methods", "approach");
-    }
-    if (aspect === "results" || aspect === "all") {
-      sectionsToCompare.push("results", "experiments", "evaluation");
-    }
-    if (aspect === "conclusions" || aspect === "all") {
-      sectionsToCompare.push("conclusion", "conclusions", "discussion");
-    }
-    if (args.section) {
-      sectionsToCompare.push(args.section.toLowerCase());
-    }
+      // 根据 aspect 提取对应内容
+      const sectionsToCompare: string[] = [];
+      if (aspect === "methodology" || aspect === "all") {
+        sectionsToCompare.push("methodology", "methods", "approach");
+      }
+      if (aspect === "results" || aspect === "all") {
+        sectionsToCompare.push("results", "experiments", "evaluation");
+      }
+      if (aspect === "conclusions" || aspect === "all") {
+        sectionsToCompare.push("conclusion", "conclusions", "discussion");
+      }
+      if (args.section) {
+        sectionsToCompare.push(args.section.toLowerCase());
+      }
 
-    // 对每篇论文提取相关章节
-    for (const [key, structure] of papersMap) {
-      const title = structure.metadata.title || key;
-      results.push(`\n--- Paper [${key}]: ${title} ---\n`);
+      // 对每篇论文提取相关章节
+      for (const [key, structure] of papersMap) {
+        const title = structure.metadata.title || key;
+        results.push(`\n--- Paper [${key}]: ${title} ---\n`);
 
-      let foundContent = false;
-      for (const sectionName of sectionsToCompare) {
-        const section = structure.sections.find(
-          (s) =>
-            s.normalizedName === sectionName ||
-            s.name.toLowerCase().includes(sectionName),
-        );
-        if (section) {
-          foundContent = true;
-          results.push(`**${section.name}:**`);
-          // 截断到合理长度
-          const content =
-            section.content.length > 2000
-              ? section.content.substring(0, 2000) + "... [truncated]"
-              : section.content;
-          results.push(content);
-          results.push("");
+        let foundContent = false;
+        for (const sectionName of sectionsToCompare) {
+          const section = structure.sections.find(
+            (s) =>
+              s.normalizedName === sectionName ||
+              s.name.toLowerCase().includes(sectionName),
+          );
+          if (section) {
+            foundContent = true;
+            results.push(`**${section.name}:**`);
+            // 截断到合理长度
+            const content =
+              section.content.length > 2000
+                ? section.content.substring(0, 2000) + "... [truncated]"
+                : section.content;
+            results.push(content);
+            results.push("");
+          }
+        }
+
+        if (!foundContent) {
+          // 如果没有找到具体章节，返回摘要
+          if (structure.metadata.abstract) {
+            results.push("**Abstract:**");
+            results.push(structure.metadata.abstract);
+          } else {
+            results.push("(No matching sections found for this paper)");
+          }
         }
       }
 
-      if (!foundContent) {
-        // 如果没有找到具体章节，返回摘要
-        if (structure.metadata.abstract) {
-          results.push("**Abstract:**");
-          results.push(structure.metadata.abstract);
-        } else {
-          results.push("(No matching sections found for this paper)");
-        }
-      }
+      return results.join("\n");
+    } catch (error) {
+      const message = getErrorMessage(error);
+      return `Error: compare_papers failed: ${message}`;
     }
-
-    return results.join("\n");
   }
 
   /**
