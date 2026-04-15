@@ -581,6 +581,16 @@ export class ToolPermissionManager {
     request: ToolPermissionRequest,
     descriptor: ToolPermissionDescriptor,
   ): Promise<ToolPermissionDecision> {
+    if (!this.approvalHandler && this.approvalObservers.size === 0) {
+      return {
+        verdict: "deny",
+        mode: "ask",
+        scope: "once",
+        descriptor,
+        reason: `Tool ${descriptor.name} requires approval, but no approval channel is available.`,
+      };
+    }
+
     const approvalRequest = this.createApprovalRequest(request, descriptor);
     const decisionPromise = new Promise<ToolPermissionDecision>((resolve) => {
       this.pendingApprovals.set(approvalRequest.id, {

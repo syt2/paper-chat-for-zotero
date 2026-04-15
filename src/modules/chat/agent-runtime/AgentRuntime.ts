@@ -287,11 +287,13 @@ export class AgentRuntime {
             }
 
             const batchResults = await this.toolScheduler.executeBatch(batch);
+            this.ensureSessionTracked(sendingSession);
             this.appendToolExecutionResults(sendingSession, batchResults);
             await this.sessionStorage.updateSessionMeta(sendingSession);
             this.emitPlanUpdate(sendingSession);
 
             for (const executionResult of batchResults) {
+              this.ensureSessionTracked(sendingSession);
               const toolCall = executionResult.toolCall;
               const toolName = toolCall.function.name;
               const toolArgs = toolCall.function.arguments;
@@ -327,6 +329,7 @@ export class AgentRuntime {
                 assistantMessage,
                 "in_progress",
               );
+              this.ensureSessionTracked(sendingSession);
               this.executionPlanManager.addOrUpdateToolStep(
                 sendingSession,
                 currentMessages,
@@ -354,6 +357,7 @@ export class AgentRuntime {
             this.appendDenialRecoveryMessage(currentMessages, batchResults);
           }
 
+          this.ensureSessionTracked(sendingSession);
           const thinkingDisplay = accumulatedDisplay + "\n\n···";
           assistantMessage.content = thinkingDisplay;
           assistantMessage.streamingState = "in_progress";
@@ -362,6 +366,7 @@ export class AgentRuntime {
             assistantMessage,
             "in_progress",
           );
+          this.ensureSessionTracked(sendingSession);
           if (this.callbacks.isSessionActive(sendingSession)) {
             this.callbacks.onStreamingUpdate?.(thinkingDisplay);
           }
@@ -390,6 +395,7 @@ export class AgentRuntime {
           assistantMessage,
           null,
         );
+        this.ensureSessionTracked(sendingSession);
         this.touchToolExecutionState(sendingSession);
         await this.sessionStorage.updateSessionMeta(sendingSession);
         this.emitPlanUpdate(sendingSession);
@@ -410,6 +416,7 @@ export class AgentRuntime {
         if (summaryTriggered) {
           contextManager
             .generateSummaryAsync(sendingSession, async () => {
+              this.ensureSessionTracked(sendingSession);
               await this.sessionStorage.updateSessionMeta(sendingSession);
             })
             .catch((err) => {
@@ -440,6 +447,7 @@ export class AgentRuntime {
         assistantMessage,
         null,
       );
+      this.ensureSessionTracked(sendingSession);
       this.touchToolExecutionState(sendingSession);
       await this.sessionStorage.updateSessionMeta(sendingSession);
       this.emitPlanUpdate(sendingSession);
@@ -466,6 +474,7 @@ export class AgentRuntime {
         assistantMessage,
         "in_progress",
       );
+      this.ensureSessionTracked(sendingSession);
       this.touchToolExecutionState(sendingSession);
       await this.sessionStorage.updateSessionMeta(sendingSession);
       this.emitPlanUpdate(sendingSession);
@@ -598,11 +607,13 @@ export class AgentRuntime {
             }
 
             const batchResults = await this.toolScheduler.executeBatch(batch);
+            this.ensureSessionTracked(sendingSession);
             this.appendToolExecutionResults(sendingSession, batchResults);
             await this.sessionStorage.updateSessionMeta(sendingSession);
             this.emitPlanUpdate(sendingSession);
 
             for (const executionResult of batchResults) {
+              this.ensureSessionTracked(sendingSession);
               const toolCall = executionResult.toolCall;
               const toolName = toolCall.function.name;
               const toolArgs = toolCall.function.arguments;
@@ -638,6 +649,7 @@ export class AgentRuntime {
                 assistantMessage,
                 "in_progress",
               );
+              this.ensureSessionTracked(sendingSession);
               this.executionPlanManager.addOrUpdateToolStep(
                 sendingSession,
                 currentMessages,
@@ -665,6 +677,7 @@ export class AgentRuntime {
             this.appendDenialRecoveryMessage(currentMessages, batchResults);
           }
 
+          this.ensureSessionTracked(sendingSession);
           const thinkingDisplay = accumulatedDisplay + "\n\n···";
           assistantMessage.content = thinkingDisplay;
           assistantMessage.streamingState = "in_progress";
@@ -673,6 +686,7 @@ export class AgentRuntime {
             assistantMessage,
             "in_progress",
           );
+          this.ensureSessionTracked(sendingSession);
           if (this.callbacks.isSessionActive(sendingSession)) {
             this.callbacks.onStreamingUpdate?.(thinkingDisplay);
           }
@@ -696,6 +710,7 @@ export class AgentRuntime {
           assistantMessage,
           null,
         );
+        this.ensureSessionTracked(sendingSession);
         this.touchToolExecutionState(sendingSession);
         await this.sessionStorage.updateSessionMeta(sendingSession);
         this.emitPlanUpdate(sendingSession);
@@ -716,6 +731,7 @@ export class AgentRuntime {
         if (summaryTriggered) {
           contextManager
             .generateSummaryAsync(sendingSession, async () => {
+              this.ensureSessionTracked(sendingSession);
               await this.sessionStorage.updateSessionMeta(sendingSession);
             })
             .catch((err) => {
@@ -743,6 +759,7 @@ export class AgentRuntime {
         assistantMessage,
         null,
       );
+      this.ensureSessionTracked(sendingSession);
       this.touchToolExecutionState(sendingSession);
       await this.sessionStorage.updateSessionMeta(sendingSession);
       this.emitPlanUpdate(sendingSession);
@@ -769,6 +786,7 @@ export class AgentRuntime {
         assistantMessage,
         "in_progress",
       );
+      this.ensureSessionTracked(sendingSession);
       this.touchToolExecutionState(sendingSession);
       await this.sessionStorage.updateSessionMeta(sendingSession);
       this.emitPlanUpdate(sendingSession);
