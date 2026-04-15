@@ -11,7 +11,7 @@ import { getErrorMessage } from "../../../utils/common";
 
 const DB_DIR = "paper-chat";
 const DB_FILE = "storage";
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 9;
 
 /** Build absolute DB path so Zotero.DBConnection doesn't parse subdirectory names */
 function getDBPath(): string {
@@ -112,6 +112,8 @@ export class StorageDatabase {
         context_summary TEXT,
         context_state TEXT,
         execution_plan TEXT,
+        tool_execution_state TEXT,
+        tool_approval_state TEXT,
         memory_extracted_at INTEGER,
         memory_extracted_msg_count INTEGER
       )
@@ -156,6 +158,7 @@ export class StorageDatabase {
         selected_text TEXT,
         tool_calls TEXT,
         tool_call_id TEXT,
+        streaming_state TEXT,
         is_system_notice INTEGER,
         FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
       )
@@ -164,6 +167,56 @@ export class StorageDatabase {
     await db.queryAsync(`
       CREATE INDEX IF NOT EXISTS idx_messages_session_seq
       ON messages (session_id, seq ASC)
+    `);
+
+    await db.queryAsync(`
+      CREATE TABLE IF NOT EXISTS tasks (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        title TEXT NOT NULL,
+        session_id TEXT,
+        source_message_id TEXT,
+        execution_plan_id TEXT,
+        parent_task_id TEXT,
+        progress TEXT,
+        input TEXT,
+        output TEXT,
+        error TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        started_at INTEGER,
+        completed_at INTEGER,
+        cancelled_at INTEGER,
+        FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE SET NULL,
+        FOREIGN KEY (parent_task_id) REFERENCES tasks(id) ON DELETE SET NULL
+      )
+    `);
+
+    await db.queryAsync(`
+      CREATE INDEX IF NOT EXISTS idx_tasks_updated_at
+      ON tasks (updated_at DESC)
+    `);
+
+    await db.queryAsync(`
+      CREATE INDEX IF NOT EXISTS idx_tasks_session_updated
+      ON tasks (session_id, updated_at DESC)
+    `);
+
+    await db.queryAsync(`
+      CREATE TABLE IF NOT EXISTS task_events (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        payload TEXT,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+      )
+    `);
+
+    await db.queryAsync(`
+      CREATE INDEX IF NOT EXISTS idx_task_events_task_created
+      ON task_events (task_id, created_at ASC)
     `);
 
     // Key-value settings (active_session_id, migration markers, etc.)
@@ -232,6 +285,18 @@ export class StorageDatabase {
       }
       if (currentVersion < 5) {
         await this.upgradeToV5(db);
+      }
+      if (currentVersion < 6) {
+        await this.upgradeToV6(db);
+      }
+      if (currentVersion < 7) {
+        await this.upgradeToV7(db);
+      }
+      if (currentVersion < 8) {
+        await this.upgradeToV8(db);
+      }
+      if (currentVersion < 9) {
+        await this.upgradeToV9(db);
       }
     }
   }
@@ -490,6 +555,175 @@ export class StorageDatabase {
         // ignore rollback error
       }
       ztoolkit.log("[StorageDatabase] Failed to upgrade to v5:", error);
+      throw error;
+    }
+  }
+
+  private async upgradeToV6(db: ZoteroDBConnection): Promise<void> {
+    ztoolkit.log("[StorageDatabase] Upgrading schema v5 → v6...");
+
+    await db.queryAsync("BEGIN TRANSACTION");
+    try {
+      const cols = (await db.queryAsync("PRAGMA table_info(sessions)")) || [];
+      const colNames = new Set(cols.map((c: any) => String(c.name)));
+
+      if (!colNames.has("tool_execution_state")) {
+        await db.queryAsync(
+          "ALTER TABLE sessions ADD COLUMN tool_execution_state TEXT",
+        );
+      }
+
+      await db.queryAsync(
+        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
+        [6, Date.now()],
+      );
+
+      await db.queryAsync("COMMIT");
+      ztoolkit.log("[StorageDatabase] Schema upgraded to v6");
+    } catch (error) {
+      try {
+        await db.queryAsync("ROLLBACK");
+      } catch {
+        // ignore rollback error
+      }
+      ztoolkit.log("[StorageDatabase] Failed to upgrade to v6:", error);
+      throw error;
+    }
+  }
+
+  private async upgradeToV7(db: ZoteroDBConnection): Promise<void> {
+    ztoolkit.log("[StorageDatabase] Upgrading schema v6 → v7...");
+
+    await db.queryAsync("BEGIN TRANSACTION");
+    try {
+      const cols = (await db.queryAsync("PRAGMA table_info(sessions)")) || [];
+      const colNames = new Set(cols.map((c: any) => String(c.name)));
+
+      if (!colNames.has("tool_approval_state")) {
+        await db.queryAsync(
+          "ALTER TABLE sessions ADD COLUMN tool_approval_state TEXT",
+        );
+      }
+
+      await db.queryAsync(
+        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
+        [7, Date.now()],
+      );
+
+      await db.queryAsync("COMMIT");
+      ztoolkit.log("[StorageDatabase] Schema upgraded to v7");
+    } catch (error) {
+      try {
+        await db.queryAsync("ROLLBACK");
+      } catch {
+        // ignore rollback error
+      }
+      ztoolkit.log("[StorageDatabase] Failed to upgrade to v7:", error);
+      throw error;
+    }
+  }
+
+  private async upgradeToV8(db: ZoteroDBConnection): Promise<void> {
+    ztoolkit.log("[StorageDatabase] Upgrading schema v7 → v8...");
+
+    await db.queryAsync("BEGIN TRANSACTION");
+    try {
+      const cols = (await db.queryAsync("PRAGMA table_info(messages)")) || [];
+      const colNames = new Set(cols.map((c: any) => String(c.name)));
+
+      if (!colNames.has("streaming_state")) {
+        await db.queryAsync(
+          "ALTER TABLE messages ADD COLUMN streaming_state TEXT",
+        );
+      }
+
+      await db.queryAsync(
+        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
+        [8, Date.now()],
+      );
+
+      await db.queryAsync("COMMIT");
+      ztoolkit.log("[StorageDatabase] Schema upgraded to v8");
+    } catch (error) {
+      try {
+        await db.queryAsync("ROLLBACK");
+      } catch {
+        // ignore rollback error
+      }
+      ztoolkit.log("[StorageDatabase] Failed to upgrade to v8:", error);
+      throw error;
+    }
+  }
+
+  private async upgradeToV9(db: ZoteroDBConnection): Promise<void> {
+    ztoolkit.log("[StorageDatabase] Upgrading schema v8 → v9...");
+
+    await db.queryAsync("BEGIN TRANSACTION");
+    try {
+      await db.queryAsync(`
+        CREATE TABLE IF NOT EXISTS tasks (
+          id TEXT PRIMARY KEY,
+          type TEXT NOT NULL,
+          status TEXT NOT NULL,
+          title TEXT NOT NULL,
+          session_id TEXT,
+          source_message_id TEXT,
+          execution_plan_id TEXT,
+          parent_task_id TEXT,
+          progress TEXT,
+          input TEXT,
+          output TEXT,
+          error TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          started_at INTEGER,
+          completed_at INTEGER,
+          cancelled_at INTEGER,
+          FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE SET NULL,
+          FOREIGN KEY (parent_task_id) REFERENCES tasks(id) ON DELETE SET NULL
+        )
+      `);
+
+      await db.queryAsync(`
+        CREATE INDEX IF NOT EXISTS idx_tasks_updated_at
+        ON tasks (updated_at DESC)
+      `);
+
+      await db.queryAsync(`
+        CREATE INDEX IF NOT EXISTS idx_tasks_session_updated
+        ON tasks (session_id, updated_at DESC)
+      `);
+
+      await db.queryAsync(`
+        CREATE TABLE IF NOT EXISTS task_events (
+          id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL,
+          type TEXT NOT NULL,
+          payload TEXT,
+          created_at INTEGER NOT NULL,
+          FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+        )
+      `);
+
+      await db.queryAsync(`
+        CREATE INDEX IF NOT EXISTS idx_task_events_task_created
+        ON task_events (task_id, created_at ASC)
+      `);
+
+      await db.queryAsync(
+        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
+        [9, Date.now()],
+      );
+
+      await db.queryAsync("COMMIT");
+      ztoolkit.log("[StorageDatabase] Schema upgraded to v9");
+    } catch (error) {
+      try {
+        await db.queryAsync("ROLLBACK");
+      } catch {
+        // ignore rollback error
+      }
+      ztoolkit.log("[StorageDatabase] Failed to upgrade to v9:", error);
       throw error;
     }
   }

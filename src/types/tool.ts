@@ -65,6 +65,72 @@ export interface ToolPermissionDecision {
   reason?: string;
 }
 
+export interface ToolApprovalRequest {
+  id: string;
+  toolName: PaperToolName;
+  descriptor: ToolPermissionDescriptor;
+  request: ToolPermissionRequest;
+  createdAt: number;
+}
+
+export interface ToolApprovalResolution {
+  verdict: "allow" | "deny";
+  scope: ToolPermissionScope;
+  reason?: string;
+}
+
+export interface ToolPermissionPolicyEntry {
+  toolName: PaperToolName;
+  verdict: "allow" | "deny";
+  scope: ToolPermissionScope;
+  sessionId?: string;
+  updatedAt: number;
+  reason?: string;
+}
+
+export type ToolExecutionStatus = "completed" | "failed" | "denied";
+
+export type ToolExecutionClass =
+  | "read"
+  | "network"
+  | "write"
+  | "memory"
+  | "high_cost";
+
+export type ToolConcurrencyMode = "parallel_safe" | "serial";
+
+export type ToolTargetScope =
+  | "paper"
+  | "library"
+  | "multi_paper"
+  | "memory"
+  | "external";
+
+export interface ToolRuntimeMetadata {
+  name: PaperToolName;
+  executionClass: ToolExecutionClass;
+  concurrency: ToolConcurrencyMode;
+  targetScope: ToolTargetScope;
+  mutatesState: boolean;
+  requiresActivePaper?: boolean;
+}
+
+export interface ToolExecutionRequest {
+  toolCall: ToolCall;
+  args: Record<string, unknown>;
+  sessionId?: string;
+}
+
+export interface ToolExecutionResult {
+  toolCall: ToolCall;
+  args?: Record<string, unknown>;
+  metadata?: ToolRuntimeMetadata;
+  permissionDecision?: ToolPermissionDecision;
+  status: ToolExecutionStatus;
+  content: string;
+  error?: string;
+}
+
 // 工具调用结果
 export interface ToolResult {
   tool_call_id: string;
