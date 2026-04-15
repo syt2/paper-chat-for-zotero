@@ -1,0 +1,349 @@
+import type {
+  PaperStructure,
+  PaperStructureExtended,
+  ToolCall,
+  ToolExecutionRequest,
+  ToolExecutionResult,
+  ToolPermissionDecision,
+  ToolRuntimeMetadata,
+} from "../../../types/tool";
+import { config } from "../../../../package.json";
+import { getErrorMessage } from "../../../utils/common";
+import { getPdfToolManager } from "../pdf-tools";
+import { getToolPermissionManager } from "../tool-permissions";
+import { getToolRuntimeMetadata } from "./ToolMetadataRegistry";
+
+export interface ToolSchedulerRequest {
+  toolCall: ToolCall;
+  sessionId?: string;
+  fallbackStructure?: PaperStructure | PaperStructureExtended;
+}
+
+interface PreparedToolExecution {
+  request: ToolSchedulerRequest;
+  metadata?: ToolRuntimeMetadata;
+  args: Record<string, unknown>;
+  permissionDecision: ToolPermissionDecision;
+}
+
+type ParsedArgsResult =
+  | { ok: true; args: Record<string, unknown> }
+  | { ok: false; result: ToolExecutionResult };
+
+interface ToolFaultInjectionConfig {
+  enabled?: boolean;
+  failNextToolCall?: boolean;
+  failToolNames?: string[];
+  mode?: "failed" | "denied";
+  message?: string;
+}
+
+const FAULT_INJECTION_PREF =
+  `${config.prefsPrefix}.devToolFaultInjection`;
+
+export class ToolScheduler {
+  createExecutionBatches(
+    requests: ToolSchedulerRequest[],
+  ): ToolSchedulerRequest[][] {
+    const batches: ToolSchedulerRequest[][] = [];
+    let currentParallelBatch: ToolSchedulerRequest[] = [];
+
+    for (const request of requests) {
+      const metadata = getToolRuntimeMetadata(request.toolCall.function.name);
+      if (this.isParallelSafeRead(metadata)) {
+        currentParallelBatch.push(request);
+        continue;
+      }
+
+      if (currentParallelBatch.length > 0) {
+        batches.push(currentParallelBatch);
+        currentParallelBatch = [];
+      }
+      batches.push([request]);
+    }
+
+    if (currentParallelBatch.length > 0) {
+      batches.push(currentParallelBatch);
+    }
+
+    return batches;
+  }
+
+  async execute(request: ToolSchedulerRequest): Promise<ToolExecutionResult> {
+    const prepared = await this.prepareExecution(request);
+    if ("status" in prepared) {
+      return prepared;
+    }
+    return this.executePrepared(prepared);
+  }
+
+  async executeBatch(
+    requests: ToolSchedulerRequest[],
+  ): Promise<ToolExecutionResult[]> {
+    const prepared: Array<{
+      index: number;
+      prepared: PreparedToolExecution | ToolExecutionResult;
+    }> = [];
+    for (const [index, request] of requests.entries()) {
+      prepared.push({
+        index,
+        prepared: await this.prepareExecution(request),
+      });
+    }
+
+    const results: ToolExecutionResult[] = new Array(requests.length);
+    const runnable: Array<{ index: number; prepared: PreparedToolExecution }> = [];
+
+    for (const item of prepared) {
+      if ("status" in item.prepared) {
+        results[item.index] = item.prepared;
+      } else {
+        runnable.push({
+          index: item.index,
+          prepared: item.prepared,
+        });
+      }
+    }
+
+    const runInParallel =
+      runnable.length > 1 &&
+      runnable.every((item) => this.isParallelSafeRead(item.prepared.metadata));
+
+    if (runInParallel) {
+      const executed = await Promise.all(
+        runnable.map(async (item) => ({
+          index: item.index,
+          result: await this.executePrepared(item.prepared),
+        })),
+      );
+      for (const item of executed) {
+        results[item.index] = item.result;
+      }
+    } else {
+      for (const item of runnable) {
+        results[item.index] = await this.executePrepared(item.prepared);
+      }
+    }
+
+    return results;
+  }
+
+  private parseArguments(
+    toolCall: ToolCall,
+  ): ParsedArgsResult {
+    try {
+      const parsed = JSON.parse(toolCall.function.arguments);
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        return {
+          ok: false,
+          result: {
+            toolCall,
+            status: "failed",
+            content: `Error: Invalid arguments JSON: ${toolCall.function.arguments}`,
+            error: "Tool arguments must decode to an object.",
+          },
+        };
+      }
+      return { ok: true, args: parsed as Record<string, unknown> };
+    } catch {
+      return {
+        ok: false,
+        result: {
+          toolCall,
+          status: "failed",
+          content: `Error: Invalid arguments JSON: ${toolCall.function.arguments}`,
+          error: "Tool arguments are not valid JSON.",
+        },
+      };
+    }
+  }
+
+  private maybeInjectFailure(
+    toolCall: ToolCall,
+    args: Record<string, unknown>,
+    metadata: ToolExecutionResult["metadata"],
+    permissionDecision: ToolPermissionDecision,
+    permissionManager: ReturnType<typeof getToolPermissionManager>,
+  ): ToolExecutionResult | null {
+    const state = this.readFaultInjectionConfig();
+    const cfg = state.config;
+    if (!cfg?.enabled) {
+      return null;
+    }
+
+    const toolName = toolCall.function.name;
+    const shouldFailNext = cfg.failNextToolCall === true;
+    const shouldFailNamed =
+      cfg.failToolNames?.includes(toolName) === true;
+
+    if (!shouldFailNext && !shouldFailNamed) {
+      return null;
+    }
+
+    if (shouldFailNext) {
+      cfg.failNextToolCall = false;
+      this.writeFaultInjectionConfig(cfg);
+    }
+
+    if (cfg.mode === "denied") {
+      const deniedDecision: ToolPermissionDecision = {
+        ...permissionDecision,
+        verdict: "deny",
+        reason:
+          cfg.message ||
+          "Injected permission denial for development testing.",
+      };
+      return {
+        toolCall,
+        args,
+        metadata,
+        permissionDecision: deniedDecision,
+        status: "denied",
+        content: permissionManager.formatDeniedResult(deniedDecision),
+        error: deniedDecision.reason,
+      };
+    }
+
+    const message =
+      cfg.message ||
+      `Injected tool failure for development testing (${toolName}).`;
+    return {
+      toolCall,
+      args,
+      metadata,
+      permissionDecision,
+      status: "failed",
+      content: `Error: ${message}`,
+      error: message,
+    };
+  }
+
+  private readFaultInjectionConfig(): {
+    config: ToolFaultInjectionConfig | null;
+    raw: string;
+  } {
+    const raw = (Zotero.Prefs.get(FAULT_INJECTION_PREF, true) as string) || "";
+    if (!raw) {
+      return { config: null, raw: "" };
+    }
+
+    try {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        return { config: null, raw };
+      }
+      return { config: parsed as ToolFaultInjectionConfig, raw };
+    } catch {
+      return { config: null, raw };
+    }
+  }
+
+  private writeFaultInjectionConfig(configValue: ToolFaultInjectionConfig): void {
+    Zotero.Prefs.set(
+      FAULT_INJECTION_PREF,
+      JSON.stringify(configValue),
+      true,
+    );
+  }
+
+  private async prepareExecution(
+    request: ToolSchedulerRequest,
+  ): Promise<PreparedToolExecution | ToolExecutionResult> {
+    const metadata = getToolRuntimeMetadata(request.toolCall.function.name);
+    const argsResult = this.parseArguments(request.toolCall);
+    if (!argsResult.ok) {
+      return {
+        ...argsResult.result,
+        metadata: metadata || undefined,
+      };
+    }
+
+    const executionRequest: ToolExecutionRequest = {
+      toolCall: request.toolCall,
+      args: argsResult.args,
+      sessionId: request.sessionId,
+    };
+
+    const permissionManager = getToolPermissionManager();
+    const permissionDecision = await permissionManager.decide(executionRequest);
+    if (permissionDecision.verdict !== "allow") {
+      return {
+        toolCall: request.toolCall,
+        args: argsResult.args,
+        metadata: metadata || undefined,
+        permissionDecision,
+        status: "denied",
+        content: permissionManager.formatDeniedResult(permissionDecision),
+        error: permissionDecision.reason,
+      };
+    }
+
+    const injectedResult = this.maybeInjectFailure(
+      request.toolCall,
+      argsResult.args,
+      metadata || undefined,
+      permissionDecision,
+      permissionManager,
+    );
+    if (injectedResult) {
+      return injectedResult;
+    }
+
+    return {
+      request,
+      metadata: metadata || undefined,
+      args: argsResult.args,
+      permissionDecision,
+    };
+  }
+
+  private async executePrepared(
+    prepared: PreparedToolExecution,
+  ): Promise<ToolExecutionResult> {
+    try {
+      const content = await getPdfToolManager().executeToolCallUnchecked(
+        prepared.request.toolCall,
+        prepared.request.fallbackStructure,
+        prepared.args,
+      );
+
+      return {
+        toolCall: prepared.request.toolCall,
+        args: prepared.args,
+        metadata: prepared.metadata,
+        permissionDecision: prepared.permissionDecision,
+        status: content.trimStart().startsWith("Error:") ? "failed" : "completed",
+        content,
+        error: content.trimStart().startsWith("Error:") ? content : undefined,
+      };
+    } catch (error) {
+      const message = getErrorMessage(error);
+      return {
+        toolCall: prepared.request.toolCall,
+        args: prepared.args,
+        metadata: prepared.metadata,
+        permissionDecision: prepared.permissionDecision,
+        status: "failed",
+        content: `Error: Tool execution failed: ${message}`,
+        error: message,
+      };
+    }
+  }
+
+  private isParallelSafeRead(metadata?: ToolRuntimeMetadata | null): boolean {
+    return (
+      metadata?.concurrency === "parallel_safe" &&
+      metadata.executionClass === "read" &&
+      metadata.mutatesState === false
+    );
+  }
+}
+
+let toolScheduler: ToolScheduler | null = null;
+
+export function getToolScheduler(): ToolScheduler {
+  if (!toolScheduler) {
+    toolScheduler = new ToolScheduler();
+  }
+  return toolScheduler;
+}
