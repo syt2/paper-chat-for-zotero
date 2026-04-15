@@ -63,7 +63,7 @@ The main limitation is that execution still lives inside `ChatManager` as a sing
 
 ## Phase 0: Stabilize Interfaces
 
-Status: in progress
+Status: completed
 
 Goals:
 
@@ -79,7 +79,7 @@ Delivered / planned work:
 
 ## Phase 1: Extract `AgentRuntime`
 
-Status: next active phase
+Status: completed
 
 Goals:
 
@@ -106,7 +106,22 @@ Exit criteria:
 - `ChatManager` no longer directly owns the tool execution loop
 - behavior remains equivalent for existing tool-calling chat
 
+Delivered:
+
+- streaming and non-streaming tool loops moved into `AgentRuntime`
+- `ChatManager` now coordinates session setup, provider selection, and UI callbacks
+- runtime lifecycle events exposed for:
+  - turn started
+  - text delta
+  - reasoning delta
+  - tool started
+  - tool completed
+  - turn completed
+  - turn failed
+
 ## Phase 2: Introduce Structured Plans
+
+Status: in progress
 
 Goals:
 
@@ -145,6 +160,8 @@ Exit criteria:
 
 ## Phase 3: Add `ToolScheduler`
 
+Status: in progress
+
 Goals:
 
 - decouple “tool requested” from “tool executed”
@@ -171,7 +188,20 @@ Exit criteria:
 - tools run through one scheduler
 - scheduler emits progress and result objects
 
+Delivered so far:
+
+- introduced a minimal serial `ToolScheduler`
+- moved permission decision and tool execution result shaping into scheduler
+- preserved current behavior by keeping all tools `auto_allow`
+- kept `ExecutionPlan` updates in `AgentRuntime` while switching execution to structured scheduler results
+- refreshed the tool-calling system prompt on each runtime iteration with current execution plan state and recent tool results
+- added a dedicated tool runtime metadata registry for execution class, target scope, mutation behavior, and future concurrency decisions
+- scheduler now batches `parallel_safe` read-only tool calls and executes those batches concurrently while keeping serial tools ordered
+- scheduler results now persist into session-level runtime state instead of existing only as rendered tool message text
+
 ## Phase 4: Upgrade Permissions
+
+Status: in progress
 
 Goals:
 
@@ -196,7 +226,20 @@ Exit criteria:
 
 - at least write, memory, network, and high-cost tools can be configured independently
 
+Delivered so far:
+
+- `ToolPermissionManager` now supports internal `once`, `session`, and `always` policy state
+- persistent policy entries are stored separately from the default descriptor table
+- runtime still defaults to `auto_allow` unless explicit policy state is set
+- added a pending approval interface so `ask` mode can pause tool execution and later be resumed by an external approval decision
+- kept all current tool descriptors on `auto_allow`, so no new user-facing approval UI is required yet
+- chat runtime now mirrors pending approval state onto the active session and emits approval lifecycle events for UI updates
+- the top execution bar now switches to a compact permission approval strip with `once / session / always / deny` actions when a tool enters `ask`
+- pending approval state is now persisted with the session and reconciled against live in-memory requests on load, so stale approval UI does not survive a runtime restart
+
 ## Phase 5: Add `TaskManager`
+
+Status: in progress
 
 Goals:
 
@@ -217,6 +260,12 @@ Concrete tasks:
 2. Add task state machine.
 3. Expose task progress in UI.
 4. Support cancellation and recovery after restart.
+
+Delivered so far:
+
+- added dedicated `tasks` and `task_events` persistence tables
+- introduced `TaskManager` with create/list/get/progress/complete/fail/cancel APIs
+- added startup recovery that marks leftover `running` tasks as `failed` and leftover `cancel_requested` tasks as `cancelled`
 
 Exit criteria:
 
@@ -279,7 +328,7 @@ Later:
 
 ## Immediate Next Steps
 
-1. Complete `AgentRuntime` extraction.
-2. Define `ExecutionPlan` types.
-3. Decide whether plan persistence should start in session metadata or a dedicated table.
-4. Add a minimal internal plan object even before UI display.
+1. Keep permission decisions as `auto_allow`, but start routing denial outcomes back into replanning paths.
+2. Decide whether `ExecutionPlan` and scheduler results should graduate from session metadata into dedicated storage tables.
+3. Evaluate whether mixed read/network batches need additional throttling or ordering rules.
+4. Decide whether runtime state needs dedicated UI beyond the current compact execution plan bar.
