@@ -4,11 +4,139 @@
 
 import { getPref, setPref } from "../../utils/prefs";
 import { getProviderManager, BUILTIN_PROVIDERS } from "../providers";
+import {
+  PAPERCHAT_TIERS,
+  parseTierState,
+  resolveSelectedTierModel,
+  type PaperChatTier,
+  type PaperChatTierState,
+} from "../providers/paperchat-tier-routing";
 import type { PaperChatProviderConfig } from "../../types/provider";
-import { formatModelLabel, AUTO_MODEL, AUTO_MODEL_SMART, isAutoModel } from "./ModelsFetcher";
+import { formatModelLabel, getModelRatios } from "./ModelsFetcher";
 import { clearElement } from "./utils";
 import { isEmbeddingModel } from "../embedding/providers/PaperChatEmbedding";
 import { getString } from "../../utils/locale";
+
+const TIER_MODEL_SELECTORS: Record<PaperChatTier, string> = {
+  "paperchat-lite": "pref-paperchat-lite-model",
+  "paperchat-standard": "pref-paperchat-standard-model",
+  "paperchat-pro": "pref-paperchat-pro-model",
+};
+
+const TIER_MODEL_POPUPS: Record<PaperChatTier, string> = {
+  "paperchat-lite": "pref-paperchat-lite-model-popup",
+  "paperchat-standard": "pref-paperchat-standard-model-popup",
+  "paperchat-pro": "pref-paperchat-pro-model-popup",
+};
+
+const TIER_SELECTOR_IDS = [
+  "pref-paperchat-tier",
+  ...Object.values(TIER_MODEL_SELECTORS),
+] as const;
+
+const PAPERCHAT_CONFIG_INPUT_IDS = [
+  "pref-paperchat-maxtokens",
+  "pref-paperchat-temperature",
+  "pref-paperchat-systemprompt",
+] as const;
+
+const TIER_LABEL_KEYS: Record<PaperChatTier, string> = {
+  "paperchat-lite": "pref-paperchat-tier-lite",
+  "paperchat-standard": "pref-paperchat-tier-standard",
+  "paperchat-pro": "pref-paperchat-tier-pro",
+};
+
+function syncTierSelectorLabels(doc: Document): void {
+  const tierSelect = doc.getElementById(
+    "pref-paperchat-tier",
+  ) as unknown as XULMenuListElement | null;
+  const popup = doc.getElementById("pref-paperchat-tier-popup");
+  if (!tierSelect || !popup) {
+    return;
+  }
+
+  for (const tier of PAPERCHAT_TIERS) {
+    const item = popup.querySelector(`menuitem[value="${tier}"]`) as Element | null;
+    if (!item) {
+      continue;
+    }
+    item.setAttribute("label", getString(TIER_LABEL_KEYS[tier]));
+  }
+
+  const selectedItem = tierSelect.selectedItem as XUL.MenuItem | null;
+  if (selectedItem) {
+    tierSelect.setAttribute("label", selectedItem.getAttribute("label") || "");
+  }
+}
+
+function loadTierState(): PaperChatTierState {
+  return parseTierState(getPref("paperchatTierState") as string | undefined);
+}
+
+function saveTierState(state: PaperChatTierState): void {
+  setPref("paperchatTierState", JSON.stringify(state));
+}
+
+function getAvailableChatModels(
+  config?: PaperChatProviderConfig,
+  models?: string[],
+): string[] {
+  let modelList = models;
+  if (!modelList && config?.availableModels && config.availableModels.length > 0) {
+    modelList = config.availableModels;
+  }
+  if (!modelList) {
+    const cachedModels = getPref("paperchatModelsCache") as string;
+    if (cachedModels) {
+      try {
+        modelList = JSON.parse(cachedModels) as string[];
+      } catch (error) {
+        ztoolkit.log(
+          "[Preferences] Invalid paperchatModelsCache, falling back to defaults:",
+          error,
+        );
+        modelList = undefined;
+      }
+    }
+  }
+  if (!modelList || modelList.length === 0) {
+    modelList = BUILTIN_PROVIDERS.paperchat.defaultModels;
+  }
+
+  return modelList.filter((model) => !isEmbeddingModel(model));
+}
+
+function populateTierOverridePopup(
+  doc: Document,
+  tier: PaperChatTier,
+  models: string[],
+  state: PaperChatTierState,
+): void {
+  const popup = doc.getElementById(TIER_MODEL_POPUPS[tier]);
+  const select = doc.getElementById(
+    TIER_MODEL_SELECTORS[tier],
+  ) as unknown as XULMenuListElement | null;
+  if (!popup || !select) {
+    return;
+  }
+
+  clearElement(popup);
+
+  const autoItem = doc.createXULElement("menuitem");
+  autoItem.setAttribute("label", getString("pref-paperchat-model-auto"));
+  autoItem.setAttribute("value", "auto");
+  popup.appendChild(autoItem);
+
+  for (const model of models) {
+    const item = doc.createXULElement("menuitem");
+    item.setAttribute("label", formatModelLabel(model, "paperchat"));
+    item.setAttribute("value", model);
+    popup.appendChild(item);
+  }
+
+  const entry = state.tiers[tier];
+  select.value = entry.mode === "manual" && entry.modelId ? entry.modelId : "auto";
+}
 
 /**
  * Populate PaperChat panel with settings from provider config
@@ -21,7 +149,7 @@ export function populatePaperchatPanel(doc: Document): void {
 
   if (!config) return;
 
-  // Populate model dropdown
+  // Populate tier selector and per-tier override dropdowns
   populatePaperchatModels(doc);
 
   // Populate other settings
@@ -41,7 +169,7 @@ export function populatePaperchatPanel(doc: Document): void {
 }
 
 /**
- * Populate PaperChat model dropdown from cache, defaults, or API response
+ * Populate PaperChat tier and override dropdowns from cache, defaults, or API response
  */
 export function populatePaperchatModels(
   doc: Document,
@@ -52,84 +180,29 @@ export function populatePaperchatModels(
   const config = providerManager.getProviderConfig(
     "paperchat",
   ) as PaperChatProviderConfig;
-  const modelSelect = doc.getElementById(
-    "pref-paperchat-model",
-  ) as unknown as XULMenuListElement;
-  const modelPopup = doc.getElementById("pref-paperchat-model-popup");
+  const tierSelect = doc.getElementById(
+    "pref-paperchat-tier",
+  ) as unknown as XULMenuListElement | null;
 
-  if (!modelSelect || !modelPopup) return;
-
-  // Clear existing items
-  clearElement(modelPopup);
-
-  // Get models: from parameter > from provider config > from cache > from defaults
-  let modelList = models;
-  if (!modelList) {
-    // Try from provider config
-    if (config?.availableModels && config.availableModels.length > 0) {
-      modelList = config.availableModels;
-    }
-  }
-  if (!modelList) {
-    // Try to load from cache
-    const cachedModels = getPref("paperchatModelsCache") as string;
-    if (cachedModels) {
-      try {
-        modelList = JSON.parse(cachedModels);
-      } catch {
-        // ignore parse error
-      }
-    }
-  }
-  if (!modelList || modelList.length === 0) {
-    modelList = BUILTIN_PROVIDERS.paperchat.defaultModels;
+  if (!tierSelect) {
+    return;
   }
 
-  // Filter out embedding models (they are used for RAG, not for chat)
-  const chatModels = modelList.filter((model) => !isEmbeddingModel(model));
+  const chatModels = getAvailableChatModels(config, models);
 
-  // Save to cache and provider config if requested
   if (saveToCache && models) {
-    // Cache ALL models (RAG reads embedding models from cache)
     setPref("paperchatModelsCache", JSON.stringify(models));
-    // Only set chat models as available
     providerManager.updateProviderConfig("paperchat", {
       availableModels: chatModels,
     });
   }
 
-  // Add auto options at the top
-  for (const [value, labelKey] of [
-    [AUTO_MODEL, "chat-model-auto"],
-    [AUTO_MODEL_SMART, "chat-model-auto-smart"],
-  ] as const) {
-    const item = doc.createXULElement("menuitem");
-    item.setAttribute("label", getString(labelKey));
-    item.setAttribute("value", value);
-    modelPopup.appendChild(item);
-  }
+  const state = loadTierState();
+  tierSelect.value = state.selectedTier;
+  syncTierSelectorLabels(doc);
 
-  chatModels.forEach((model) => {
-    const menuitem = doc.createXULElement("menuitem");
-    menuitem.setAttribute("label", formatModelLabel(model, "paperchat"));
-    menuitem.setAttribute("value", model);
-    modelPopup.appendChild(menuitem);
-  });
-
-  // Use model pref as source of truth (consistent with chat dropdown)
-  const currentModel = (getPref("model") as string) || config?.defaultModel || AUTO_MODEL_SMART;
-  // Check if the current model exists in the new list
-  const modelExists = isAutoModel(currentModel) || chatModels.includes(currentModel);
-  if (modelExists) {
-    modelSelect.value = currentModel;
-  } else {
-    // Model was removed — fall back to auto (smartest) and persist the change
-    modelSelect.value = AUTO_MODEL_SMART;
-    setPref("model", AUTO_MODEL_SMART);
-    providerManager.updateProviderConfig("paperchat", {
-      defaultModel: AUTO_MODEL_SMART,
-      availableModels: chatModels,
-    });
+  for (const tier of PAPERCHAT_TIERS) {
+    populateTierOverridePopup(doc, tier, chatModels, state);
   }
 }
 
@@ -139,9 +212,9 @@ export function populatePaperchatModels(
 export function savePaperchatConfig(doc: Document): void {
   const providerManager = getProviderManager();
 
-  const modelSelect = doc.getElementById(
-    "pref-paperchat-model",
-  ) as unknown as XULMenuListElement;
+  const tierSelect = doc.getElementById(
+    "pref-paperchat-tier",
+  ) as unknown as XULMenuListElement | null;
   const maxTokensEl = doc.getElementById(
     "pref-paperchat-maxtokens",
   ) as HTMLInputElement;
@@ -152,21 +225,35 @@ export function savePaperchatConfig(doc: Document): void {
     "pref-paperchat-systemprompt",
   ) as HTMLTextAreaElement;
 
-  const selectedModel = modelSelect?.value || "";
+  const state = loadTierState();
+  state.selectedTier =
+    (tierSelect?.value as PaperChatTier | "") || "paperchat-standard";
 
-  // Sync model pref (source of truth for chat dropdown)
-  if (selectedModel) {
-    setPref("model", selectedModel);
+  for (const tier of PAPERCHAT_TIERS) {
+    const select = doc.getElementById(
+      TIER_MODEL_SELECTORS[tier],
+    ) as unknown as XULMenuListElement | null;
+    const value = select?.value || "auto";
+    state.tiers[tier] =
+      value === "auto"
+        ? { mode: "auto", modelId: null }
+        : { mode: "manual", modelId: value };
   }
 
-  const updates: Partial<PaperChatProviderConfig> = {
-    defaultModel: selectedModel,
+  saveTierState(state);
+  const resolvedDefaultModel = resolveSelectedTierModel(
+    state,
+    getAvailableChatModels(
+      providerManager.getProviderConfig("paperchat") as PaperChatProviderConfig,
+    ),
+    getModelRatios(),
+  ).modelId;
+  providerManager.updateProviderConfig("paperchat", {
+    defaultModel: resolvedDefaultModel || undefined,
     maxTokens: parseInt(maxTokensEl?.value) || 4096,
     temperature: parseFloat(temperatureEl?.value) || 0.7,
     systemPrompt: systemPromptEl?.value || "",
-  };
-
-  providerManager.updateProviderConfig("paperchat", updates);
+  });
 }
 
 /**
@@ -176,37 +263,19 @@ export function bindPaperchatEvents(
   doc: Document,
   onRefreshModels: () => Promise<void>,
 ): void {
-  // PaperChat model selection - save to provider config
-  const paperchatModelSelect = doc.getElementById(
-    "pref-paperchat-model",
-  ) as unknown as XULMenuListElement;
-  paperchatModelSelect?.addEventListener("command", () => {
-    savePaperchatConfig(doc);
-  });
+  for (const id of TIER_SELECTOR_IDS) {
+    const select = doc.getElementById(id) as unknown as XULMenuListElement | null;
+    select?.addEventListener("command", function () {
+      savePaperchatConfig(doc);
+    });
+  }
 
-  // PaperChat max tokens
-  const paperchatMaxTokensInput = doc.getElementById(
-    "pref-paperchat-maxtokens",
-  ) as HTMLInputElement;
-  paperchatMaxTokensInput?.addEventListener("blur", () =>
-    savePaperchatConfig(doc),
-  );
-
-  // PaperChat temperature
-  const paperchatTemperatureInput = doc.getElementById(
-    "pref-paperchat-temperature",
-  ) as HTMLInputElement;
-  paperchatTemperatureInput?.addEventListener("blur", () =>
-    savePaperchatConfig(doc),
-  );
-
-  // PaperChat system prompt
-  const paperchatSystemPromptInput = doc.getElementById(
-    "pref-paperchat-systemprompt",
-  ) as HTMLTextAreaElement;
-  paperchatSystemPromptInput?.addEventListener("blur", () =>
-    savePaperchatConfig(doc),
-  );
+  for (const id of PAPERCHAT_CONFIG_INPUT_IDS) {
+    const input = doc.getElementById(id) as HTMLElement | null;
+    input?.addEventListener("blur", function () {
+      savePaperchatConfig(doc);
+    });
+  }
 
   // PaperChat refresh models button
   const paperchatRefreshBtn = doc.getElementById(

@@ -423,6 +423,7 @@ export function createChatContainer(
     alignItems: "center",
     justifyContent: "space-between",
     marginTop: "10px",
+    gap: "8px",
   });
 
   // Left side container (model selector + settings button)
@@ -430,11 +431,15 @@ export function createChatContainer(
     display: "flex",
     alignItems: "center",
     gap: "8px",
+    flex: "1",
+    minWidth: "0",
   });
 
   // Model selector container
   const modelSelectorContainer = createElement(doc, "div", {
     position: "relative",
+    flex: "1",
+    minWidth: "0",
   });
 
   // Model selector button
@@ -452,7 +457,10 @@ export function createChatContainer(
       cursor: "pointer",
       fontSize: "12px",
       color: theme.textSecondary,
+      width: "100%",
       maxWidth: "200px",
+      minWidth: "0",
+      overflow: "hidden",
     },
     { id: "chat-model-selector-btn" },
   );
@@ -461,6 +469,9 @@ export function createChatContainer(
     doc,
     "span",
     {
+      display: "block",
+      flex: "1",
+      minWidth: "0",
       overflow: "hidden",
       textOverflow: "ellipsis",
       whiteSpace: "nowrap",

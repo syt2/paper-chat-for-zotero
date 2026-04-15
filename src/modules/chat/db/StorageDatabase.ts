@@ -11,7 +11,7 @@ import { getErrorMessage } from "../../../utils/common";
 
 const DB_DIR = "paper-chat";
 const DB_FILE = "storage";
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 /** Build absolute DB path so Zotero.DBConnection doesn't parse subdirectory names */
 function getDBPath(): string {
@@ -112,13 +112,30 @@ export class StorageDatabase {
         context_summary TEXT,
         context_state TEXT,
         memory_extracted_at INTEGER,
-        memory_extracted_msg_count INTEGER
+        memory_extracted_msg_count INTEGER,
+        selected_tier TEXT,
+        resolved_model_id TEXT,
+        last_retryable_user_message_id TEXT,
+        last_retryable_error_message_id TEXT,
+        last_retryable_failed_model_id TEXT
       )
     `);
 
     await db.queryAsync(`
       CREATE INDEX IF NOT EXISTS idx_sessions_updated_at
       ON sessions (updated_at DESC)
+    `);
+
+    await db.queryAsync(`
+      CREATE TABLE IF NOT EXISTS paperchat_session_state (
+        session_id TEXT PRIMARY KEY,
+        selected_tier TEXT,
+        resolved_model_id TEXT,
+        last_retryable_user_message_id TEXT,
+        last_retryable_error_message_id TEXT,
+        last_retryable_failed_model_id TEXT,
+        FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+      )
     `);
 
     // Session metadata (lightweight queries, replaces session-index.json)
@@ -228,6 +245,9 @@ export class StorageDatabase {
       }
       if (currentVersion < 4) {
         await this.upgradeToV4(db);
+      }
+      if (currentVersion < 5) {
+        await this.upgradeToV5(db);
       }
     }
   }
@@ -454,6 +474,88 @@ export class StorageDatabase {
     } catch (error) {
       try { await db.queryAsync("ROLLBACK"); } catch { /* ignore */ }
       ztoolkit.log("[StorageDatabase] Schema upgrade v3 → v4 failed:", getErrorMessage(error));
+      throw error;
+    }
+  }
+
+  /**
+   * Upgrade schema v4 → v5: add PaperChat session state columns and companion table.
+   */
+  private async upgradeToV5(db: ZoteroDBConnection): Promise<void> {
+    ztoolkit.log("[StorageDatabase] Upgrading schema v4 → v5...");
+
+    await db.queryAsync("BEGIN TRANSACTION");
+    try {
+      for (const col of [
+        "selected_tier TEXT",
+        "resolved_model_id TEXT",
+        "last_retryable_user_message_id TEXT",
+        "last_retryable_error_message_id TEXT",
+        "last_retryable_failed_model_id TEXT",
+      ]) {
+        try {
+          await db.queryAsync(`ALTER TABLE sessions ADD COLUMN ${col}`);
+        } catch (err) {
+          const msg = getErrorMessage(err);
+          if (!msg.includes("duplicate column name") && !msg.includes("already exists")) throw err;
+        }
+      }
+
+      await db.queryAsync(`
+        CREATE TABLE IF NOT EXISTS paperchat_session_state (
+          session_id TEXT PRIMARY KEY,
+          selected_tier TEXT,
+          resolved_model_id TEXT,
+          last_retryable_user_message_id TEXT,
+          last_retryable_error_message_id TEXT,
+          last_retryable_failed_model_id TEXT,
+          FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+        )
+      `);
+
+      const sessionRows = (await db.queryAsync(
+        `SELECT
+           id,
+           selected_tier,
+           resolved_model_id,
+           last_retryable_user_message_id,
+           last_retryable_error_message_id,
+           last_retryable_failed_model_id
+         FROM sessions`,
+      )) || [];
+
+      for (const row of sessionRows) {
+        await db.queryAsync(
+          `INSERT INTO paperchat_session_state
+           (session_id, selected_tier, resolved_model_id, last_retryable_user_message_id, last_retryable_error_message_id, last_retryable_failed_model_id)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(session_id) DO UPDATE SET
+             selected_tier = excluded.selected_tier,
+             resolved_model_id = excluded.resolved_model_id,
+             last_retryable_user_message_id = excluded.last_retryable_user_message_id,
+             last_retryable_error_message_id = excluded.last_retryable_error_message_id,
+             last_retryable_failed_model_id = excluded.last_retryable_failed_model_id`,
+          [
+            row.id,
+            row.selected_tier ?? null,
+            row.resolved_model_id ?? null,
+            row.last_retryable_user_message_id ?? null,
+            row.last_retryable_error_message_id ?? null,
+            row.last_retryable_failed_model_id ?? null,
+          ],
+        );
+      }
+
+      await db.queryAsync(
+        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
+        [5, Date.now()],
+      );
+
+      await db.queryAsync("COMMIT");
+      ztoolkit.log("[StorageDatabase] Schema upgrade v4 → v5 completed");
+    } catch (error) {
+      try { await db.queryAsync("ROLLBACK"); } catch { /* ignore */ }
+      ztoolkit.log("[StorageDatabase] Schema upgrade v4 → v5 failed:", getErrorMessage(error));
       throw error;
     }
   }

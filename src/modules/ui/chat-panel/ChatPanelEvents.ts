@@ -17,8 +17,13 @@ import { showAuthDialog } from "../AuthDialog";
 import { getString } from "../../../utils/locale";
 import { getProviderManager } from "../../providers";
 import { getPref, setPref } from "../../../utils/prefs";
-import { formatModelLabel, AUTO_MODEL, AUTO_MODEL_SMART, isAutoModel } from "../../preferences/ModelsFetcher";
-import type { PanelMode } from "./ChatPanelManager";
+import { formatModelLabel } from "../../preferences/ModelsFetcher";
+import {
+  PAPERCHAT_TIERS,
+  parseTierState,
+  type PaperChatTier,
+} from "../../providers/paperchat-tier-routing";
+import { getChatManager, type PanelMode } from "./ChatPanelManager";
 import { MentionSelector, type MentionResource, findMentionAtCursor } from "./MentionSelector";
 
 // Import getActiveReaderItem from the manager module to avoid circular dependency
@@ -33,6 +38,18 @@ const sessionSendLocks = new Set<string>();
 
 // Duration (ms) to show the "+quota" flash on the check-in button after a successful check-in
 const CHECKIN_FLASH_DURATION_MS = 5000;
+
+function getPaperChatTierLabel(tier: PaperChatTier): string {
+  if (tier === "paperchat-lite") {
+    return getString("chat-tier-lite");
+  }
+
+  if (tier === "paperchat-pro") {
+    return getString("chat-tier-pro");
+  }
+
+  return getString("chat-tier-standard");
+}
 
 /**
  * Set the getActiveReaderItem function reference
@@ -307,6 +324,7 @@ export function setupEventHandlers(context: ChatPanelContext): void {
       chatHistory.appendChild(emptyState);
       emptyState.style.display = "flex";
     }
+    updateModelSelectorDisplay(container);
 
     ztoolkit.log("New session created:", newSession.id);
   });
@@ -427,13 +445,51 @@ export function setupEventHandlers(context: ChatPanelContext): void {
             context.setCurrentItem(null);
           }
 
-          context.renderMessages(loadedSession.messages);
+          const activeSession = chatManager.getActiveSession() || loadedSession;
+          context.renderMessages(activeSession.messages);
+          updateModelSelectorDisplay(container);
+          container.ownerDocument?.defaultView?.requestAnimationFrame(() => {
+            const latestSession = chatManager.getActiveSession();
+            if (!latestSession || latestSession.id !== session.id) {
+              return;
+            }
+            context.renderMessages(latestSession.messages);
+            updateModelSelectorDisplay(container);
+          });
         }
       },
       // onDelete callback
       async (session: SessionInfo) => {
         ztoolkit.log("Deleting session:", session.id);
         await chatManager.deleteSession(session.id);
+
+        const activeSession = chatManager.getActiveSession();
+        const itemKey = activeSession?.lastActiveItemKey;
+        if (itemKey) {
+          const libraryID = Zotero.Libraries.userLibraryID;
+          const item = Zotero.Items.getByLibraryAndKey(libraryID, itemKey);
+          if (item) {
+            context.setCurrentItem(item as Zotero.Item);
+            await context.updatePdfCheckboxVisibility(item as Zotero.Item);
+          } else {
+            context.setCurrentItem(null);
+            await context.updatePdfCheckboxVisibility(null);
+          }
+        } else {
+          context.setCurrentItem(null);
+          await context.updatePdfCheckboxVisibility(null);
+        }
+
+        if (activeSession) {
+          context.renderMessages(activeSession.messages);
+        } else if (chatHistory && emptyState) {
+          chatHistory.textContent = "";
+          chatHistory.appendChild(emptyState);
+          emptyState.style.display = "flex";
+        }
+        updateModelSelectorDisplay(container);
+        syncSendButtonState(sendButton, chatManager);
+
         // Refresh the dropdown to reflect the deletion
         await refreshHistoryDropdown();
       },
@@ -652,6 +708,8 @@ async function sendMessage(
     return;
   }
 
+  let draftState: { content: string; attachmentState: AttachmentState } | null = null;
+
   // acquire 后立即进 try/finally，确保所有路径都能释放锁并同步按钮状态
   try {
     const content = messageInput?.value?.trim();
@@ -697,7 +755,13 @@ async function sendMessage(
           await authManager.logout();
           context.updateUserBar();
           // Show error in chat
-          chatManager.showErrorMessage(getString("chat-error-session-expired"));
+          try {
+            await chatManager.showErrorMessage(getString("chat-error-session-expired"));
+          } catch (error) {
+            context.appendError(
+              error instanceof Error ? error.message : String(error),
+            );
+          }
           // Prompt login again
           const success = await showAuthDialog("login");
           if (!success) {
@@ -706,25 +770,40 @@ async function sendMessage(
           context.updateUserBar();
           // Check again after re-login
           if (!activeProvider?.isReady()) {
-            chatManager.showErrorMessage(getString("chat-error-no-provider"));
+            try {
+              await chatManager.showErrorMessage(getString("chat-error-no-provider"));
+            } catch (error) {
+              context.appendError(
+                error instanceof Error ? error.message : String(error),
+              );
+            }
             return;
           }
         }
       }
     } else if (!activeProvider?.isReady()) {
       ztoolkit.log("Provider not ready:", activeProviderId);
-      return;
+      throw new Error(getString("chat-error-no-provider"));
     }
 
     // Disable send button (reflect current session's lock state)
     syncSendButtonState(sendButton, chatManager);
 
-    // Get attachment state before clearing
+    // Capture draft state so failures can restore it instead of silently dropping it
     const attachmentState = context.getAttachmentState();
+    draftState = {
+      content,
+      attachmentState: {
+        pendingImages: [...attachmentState.pendingImages],
+        pendingFiles: [...attachmentState.pendingFiles],
+        pendingSelectedText: attachmentState.pendingSelectedText,
+      },
+    };
     // Auto-detect PDF: attach if we have an active reader item with PDF
     const shouldAttachPdf = activeReaderItem !== null;
 
-    // Clear input immediately after getting the content
+    // Clear the composer immediately once the draft is captured so the UI
+    // reflects "message sent" while the async request is still streaming.
     if (messageInput) {
       messageInput.value = "";
       messageInput.style.height = "auto";
@@ -760,13 +839,40 @@ async function sendMessage(
     }
 
     // Send message (unified API handles both global and item-bound chat)
-    await chatManager.sendMessage(content, {
+    const didAcceptMessage = await chatManager.sendMessage(content, {
       item: targetItem,
       attachPdf: shouldAttachPdf,
       ...attachmentOptions,
     });
+
+    if (!didAcceptMessage) {
+      if (draftState) {
+        if (messageInput) {
+          messageInput.value = draftState.content;
+          messageInput.style.height = "auto";
+          messageInput.style.height = Math.min(messageInput.scrollHeight, 140) + "px";
+        }
+        context.setAttachmentState(draftState.attachmentState);
+        context.updateAttachmentsPreview();
+      }
+      return;
+    }
+
+    // Composer was already cleared before the async send began.
   } catch (error) {
     ztoolkit.log("Error in sendMessage:", error);
+    if (draftState) {
+      if (messageInput) {
+        messageInput.value = draftState.content;
+        messageInput.style.height = "auto";
+        messageInput.style.height = Math.min(messageInput.scrollHeight, 140) + "px";
+      }
+      context.setAttachmentState(draftState.attachmentState);
+      context.updateAttachmentsPreview();
+    }
+    context.appendError(
+      error instanceof Error ? error.message : String(error),
+    );
   } finally {
     releaseSendLock(sessionId);
     // 根据当前活跃 session 的锁状态同步按钮（而非无条件恢复，避免覆盖其他 session 的 disabled 状态）
@@ -871,31 +977,39 @@ export function focusInput(container: HTMLElement): void {
 export function updateModelSelectorDisplay(container: HTMLElement): void {
   const modelSelectorText = container.querySelector(
     "#chat-model-selector-text",
-  ) as HTMLElement;
-  if (!modelSelectorText) return;
+  ) as HTMLElement | null;
+  if (!modelSelectorText) {
+    return;
+  }
 
   const providerManager = getProviderManager();
   const activeProvider = providerManager.getActiveProvider();
-  const currentModel = getPref("model") as string;
-
-  if (activeProvider && currentModel) {
-    const providerName = activeProvider.getName();
-    if (currentModel === AUTO_MODEL) {
-      modelSelectorText.textContent = `${providerName}: ${getString("chat-model-auto")}`;
-    } else if (currentModel === AUTO_MODEL_SMART) {
-      modelSelectorText.textContent = `${providerName}: ${getString("chat-model-auto-smart")}`;
-    } else {
-      const modelShort =
-        currentModel.length > 20
-          ? currentModel.substring(0, 18) + "..."
-          : currentModel;
-      modelSelectorText.textContent = `${providerName}: ${modelShort}`;
-    }
-  } else if (activeProvider) {
-    modelSelectorText.textContent = activeProvider.getName();
-  } else {
+  if (!activeProvider) {
     modelSelectorText.textContent = getString("chat-select-model");
+    return;
   }
+
+  if (providerManager.getActiveProviderId() !== "paperchat") {
+    const currentModel = getPref("model") as string;
+    if (currentModel) {
+      const modelShort =
+        formatModelLabel(currentModel, providerManager.getActiveProviderId() || undefined);
+      modelSelectorText.textContent = `${activeProvider.getName()}: ${modelShort}`;
+    } else {
+      modelSelectorText.textContent = activeProvider.getName();
+    }
+    return;
+  }
+
+  const tierState = parseTierState(getPref("paperchatTierState") as string | undefined);
+  const session = getChatManager().getActiveSession();
+  const tier = session?.selectedTier || tierState.selectedTier;
+  const resolved = session?.resolvedModelId;
+  const tierLabel = getPaperChatTierLabel(tier);
+
+  modelSelectorText.textContent = resolved
+    ? `PaperChat: ${tierLabel} · ${resolved}`
+    : `PaperChat: ${tierLabel}`;
 }
 
 /**
@@ -913,7 +1027,6 @@ function populateModelDropdown(
   const providerManager = getProviderManager();
   const providers = providerManager.getConfiguredProviders();
   const activeProviderId = providerManager.getActiveProviderId();
-  const currentModel = getPref("model") as string;
 
   for (const provider of providers) {
     // Provider section header
@@ -935,15 +1048,21 @@ function populateModelDropdown(
     const models = config.availableModels || [];
     const isActiveProvider = config.id === activeProviderId;
 
-    // Add "Auto" options for paperchat provider
     if (config.id === "paperchat") {
-      const autoOptions = [
-        { value: AUTO_MODEL, label: getString("chat-model-auto") },
-        { value: AUTO_MODEL_SMART, label: getString("chat-model-auto-smart") },
-      ];
-      for (const opt of autoOptions) {
-        const isSelected = isActiveProvider && currentModel === opt.value;
-        const item = createElement(doc, "div", {
+      const tierState = parseTierState(
+        getPref("paperchatTierState") as string | undefined,
+      );
+      const session = context.chatManager.getActiveSession();
+      const selectedTier = session?.selectedTier || tierState.selectedTier;
+      const tierOptions: Array<{ value: PaperChatTier; label: string }> =
+        PAPERCHAT_TIERS.map((tier) => ({
+          value: tier,
+          label: getPaperChatTierLabel(tier),
+        }));
+
+      for (const opt of tierOptions) {
+        const isSelected = isActiveProvider && selectedTier === opt.value;
+        const item = createElement(doc, "button", {
           padding: "8px 12px",
           fontSize: "12px",
           color: isSelected ? theme.inputFocusBorderColor : theme.textPrimary,
@@ -952,7 +1071,11 @@ function populateModelDropdown(
           display: "flex",
           alignItems: "center",
           gap: "8px",
+          width: "100%",
+          border: "none",
+          textAlign: "left",
         });
+        item.setAttribute("type", "button");
         if (isSelected) {
           const check = createElement(doc, "span", {
             color: theme.inputFocusBorderColor,
@@ -961,7 +1084,7 @@ function populateModelDropdown(
           check.textContent = "✓";
           item.appendChild(check);
         }
-        const label = createElement(doc, "span", { fontStyle: "italic" });
+        const label = createElement(doc, "span", {});
         label.textContent = opt.label;
         item.appendChild(label);
         item.addEventListener("mouseenter", () => {
@@ -970,17 +1093,64 @@ function populateModelDropdown(
         item.addEventListener("mouseleave", () => {
           if (!isSelected) item.style.background = "transparent";
         });
-        item.addEventListener("click", () => {
-          if (!isActiveProvider) providerManager.setActiveProvider(config.id);
-          setPref("model", opt.value);
-          providerManager.updateProviderConfig(config.id, { defaultModel: opt.value });
-          updateModelSelectorDisplay(container);
-          dropdown.style.display = "none";
-          context.updateUserBar();
-          ztoolkit.log(`Model switched to: ${opt.value}`);
+        item.addEventListener("focus", () => {
+          item.style.background = theme.dropdownItemHoverBg;
+          item.style.outline = `2px solid ${theme.inputFocusBorderColor}`;
+          item.style.outlineOffset = "-2px";
+        });
+        item.addEventListener("blur", () => {
+          item.style.outline = "none";
+          item.style.outlineOffset = "0";
+          if (!isSelected) {
+            item.style.background = "transparent";
+          }
+        });
+        item.addEventListener("click", async () => {
+          if (isSelected) {
+            dropdown.style.display = "none";
+            return;
+          }
+
+          const previousTierState = parseTierState(
+            getPref("paperchatTierState") as string | undefined,
+          );
+          const previousActiveProviderId = providerManager.getActiveProviderId();
+
+          try {
+            if (!isActiveProvider) {
+              await context.chatManager.clearCurrentSessionPaperChatRetryableState();
+              providerManager.setActiveProvider(config.id);
+            }
+            const nextTierState = {
+              ...previousTierState,
+              selectedTier: opt.value,
+            };
+            setPref("paperchatTierState", JSON.stringify(nextTierState));
+
+            await context.chatManager.switchCurrentSessionPaperChatTier(opt.value);
+            const activeSession = context.chatManager.getActiveSession();
+            if (activeSession) {
+              context.renderMessages(activeSession.messages);
+            }
+
+            updateModelSelectorDisplay(container);
+            dropdown.style.display = "none";
+            context.updateUserBar();
+          } catch (error) {
+            setPref("paperchatTierState", JSON.stringify(previousTierState));
+            if (previousActiveProviderId && previousActiveProviderId !== config.id) {
+              providerManager.setActiveProvider(previousActiveProviderId);
+            }
+            updateModelSelectorDisplay(container);
+            context.updateUserBar();
+            context.appendError(
+              error instanceof Error ? error.message : String(error),
+            );
+          }
         });
         dropdown.appendChild(item);
       }
+      continue;
     }
 
     if (models.length === 0) {
@@ -996,6 +1166,7 @@ function populateModelDropdown(
     } else {
       // List models
       for (const model of models) {
+        const currentModel = getPref("model") as string;
         const isCurrentModel = isActiveProvider && model === currentModel;
 
         const modelItem = createElement(doc, "div", {
@@ -1042,28 +1213,45 @@ function populateModelDropdown(
         });
 
         // Click to select model
-        modelItem.addEventListener("click", () => {
-          // Switch provider if needed
-          if (!isActiveProvider) {
-            providerManager.setActiveProvider(config.id);
+        modelItem.addEventListener("click", async () => {
+          const leavingPaperChat = providerManager.getActiveProviderId() === "paperchat"
+            && config.id !== "paperchat";
+
+          try {
+            if (leavingPaperChat) {
+              await context.chatManager.clearCurrentSessionPaperChatRetryableState();
+              const paperchatProvider = providerManager.getProvider("paperchat");
+              paperchatProvider?.updateConfig({
+                resolvedModelOverride: undefined,
+              });
+            }
+
+            // Switch provider if needed
+            if (!isActiveProvider) {
+              providerManager.setActiveProvider(config.id);
+            }
+
+            // Set model
+            setPref("model", model);
+
+            // Update provider config
+            providerManager.updateProviderConfig(config.id, {
+              defaultModel: model,
+            });
+
+            // Update display and close dropdown
+            updateModelSelectorDisplay(container);
+            dropdown.style.display = "none";
+
+            // Update user bar (provider might have changed)
+            context.updateUserBar();
+
+            ztoolkit.log(`Model switched to: ${config.id}/${model}`);
+          } catch (error) {
+            context.appendError(
+              error instanceof Error ? error.message : String(error),
+            );
           }
-
-          // Set model
-          setPref("model", model);
-
-          // Update provider config
-          providerManager.updateProviderConfig(config.id, {
-            defaultModel: model,
-          });
-
-          // Update display and close dropdown
-          updateModelSelectorDisplay(container);
-          dropdown.style.display = "none";
-
-          // Update user bar (provider might have changed)
-          context.updateUserBar();
-
-          ztoolkit.log(`Model switched to: ${config.id}/${model}`);
         });
 
         dropdown.appendChild(modelItem);

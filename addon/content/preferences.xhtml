@@ -84,19 +84,30 @@
           style="margin-left: 78px; font-size: 12px"
         ></label>
 
-        <!-- PaperChat Model Selection -->
+        <!-- PaperChat Tier Selection -->
         <hbox align="center" style="margin-top: 16px; margin-bottom: 8px">
           <label
-            for="pref-paperchat-model"
-            data-l10n-id="pref-model"
+            for="pref-paperchat-tier"
+            data-l10n-id="pref-paperchat-tier"
             style="width: 70px; text-align: right"
           ></label>
           <menulist
-            id="pref-paperchat-model"
+            id="pref-paperchat-tier"
             style="flex: 1; margin-left: 8px; min-width: 150px"
           >
-            <menupopup id="pref-paperchat-model-popup">
-              <!-- Models populated by JS -->
+            <menupopup id="pref-paperchat-tier-popup">
+              <menuitem
+                value="paperchat-lite"
+                data-l10n-id="pref-paperchat-tier-lite"
+              ></menuitem>
+              <menuitem
+                value="paperchat-standard"
+                data-l10n-id="pref-paperchat-tier-standard"
+              ></menuitem>
+              <menuitem
+                value="paperchat-pro"
+                data-l10n-id="pref-paperchat-tier-pro"
+              ></menuitem>
             </menupopup>
           </menulist>
           <button
@@ -112,6 +123,48 @@
             data-l10n-id="pref-advanced-options"
             style="cursor: pointer; font-weight: bold; margin-bottom: 8px"
           ></html:summary>
+
+          <hbox align="center" style="margin-bottom: 8px; margin-left: 12px">
+            <label
+              for="pref-paperchat-lite-model"
+              data-l10n-id="pref-paperchat-lite-model"
+              style="width: 70px; text-align: right"
+            ></label>
+            <menulist
+              id="pref-paperchat-lite-model"
+              style="flex: 1; margin-left: 8px; min-width: 180px"
+            >
+              <menupopup id="pref-paperchat-lite-model-popup"></menupopup>
+            </menulist>
+          </hbox>
+
+          <hbox align="center" style="margin-bottom: 8px; margin-left: 12px">
+            <label
+              for="pref-paperchat-standard-model"
+              data-l10n-id="pref-paperchat-standard-model"
+              style="width: 70px; text-align: right"
+            ></label>
+            <menulist
+              id="pref-paperchat-standard-model"
+              style="flex: 1; margin-left: 8px; min-width: 180px"
+            >
+              <menupopup id="pref-paperchat-standard-model-popup"></menupopup>
+            </menulist>
+          </hbox>
+
+          <hbox align="center" style="margin-bottom: 8px; margin-left: 12px">
+            <label
+              for="pref-paperchat-pro-model"
+              data-l10n-id="pref-paperchat-pro-model"
+              style="width: 70px; text-align: right"
+            ></label>
+            <menulist
+              id="pref-paperchat-pro-model"
+              style="flex: 1; margin-left: 8px; min-width: 180px"
+            >
+              <menupopup id="pref-paperchat-pro-model-popup"></menupopup>
+            </menulist>
+          </hbox>
 
           <!-- PaperChat Max Tokens -->
           <hbox align="center" style="margin-bottom: 8px; margin-left: 12px">

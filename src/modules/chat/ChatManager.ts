@@ -17,16 +17,43 @@ import type {
   SessionMeta,
 } from "../../types/chat";
 import type { ToolDefinition, ToolCall } from "../../types/tool";
-import type { ToolCallingProvider, AIProvider } from "../../types/provider";
-import { SessionStorageService } from "./SessionStorageService";
+import type {
+  ToolCallingProvider,
+  AIProvider,
+  PaperChatProviderConfig,
+} from "../../types/provider";
+import {
+  MissingActiveSessionError,
+  SessionLoadError,
+  SessionStorageService,
+} from "./SessionStorageService";
 import { PdfExtractor } from "./PdfExtractor";
 import { getContextManager } from "./ContextManager";
 import { getPdfToolManager } from "./pdf-tools";
 import { getProviderManager } from "../providers";
 import { getAuthManager } from "../auth";
 import { getString } from "../../utils/locale";
-import { getPref } from "../../utils/prefs";
+import { getPref, setPref } from "../../utils/prefs";
 import { getErrorMessage, getItemTitleSmart, generateTimestampId } from "../../utils/common";
+import { getModelRatios } from "../preferences/ModelsFetcher";
+import { isEmbeddingModel } from "../embedding/providers/PaperChatEmbedding";
+import {
+    rerollTierModel,
+    deriveTierPools,
+    isPaperChatModelHardFailure,
+    parseTierState,
+    type PaperChatTier,
+  } from "../providers/paperchat-tier-routing";
+import {
+  applyPaperChatSessionBinding,
+  clearPaperChatRetryableState,
+  repairPaperChatSessionBindingAfterHardFailure,
+  resolvePaperChatSessionBinding,
+} from "./paperchat-session-state";
+import {
+  repairPaperChatSessionAfterHardFailureWithRollback,
+  rerollPaperChatFailureAndReplay,
+} from "./paperchat-retry-orchestration";
 import { MemoryManager } from "./memory/MemoryManager";
 // V1 migration now handled by migrateToSQLite.ts at startup
 
@@ -59,6 +86,28 @@ function providerSupportsStreamingToolCalling(
     typeof provider.streamChatCompletionWithTools === "function"
   );
 }
+
+function pickRandomCandidate(candidates: string[]): string | null {
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  const index = Math.floor(Math.random() * candidates.length);
+  return candidates[index] ?? null;
+}
+
+function getPaperChatChatModels(): string[] {
+  const providerConfig = getProviderManager().getProviderConfig("paperchat") as
+    | PaperChatProviderConfig
+    | null;
+  const configuredModels = providerConfig?.availableModels;
+  if (Array.isArray(configuredModels) && configuredModels.length > 0) {
+    return configuredModels.filter((model) => !isEmbeddingModel(model));
+  }
+
+  return [];
+}
+
 // 使用 common.ts 中的 getItemTitleSmart 获取 item 标题
 
 export class ChatManager {
@@ -103,7 +152,24 @@ export class ChatManager {
     await this.sessionStorage.init();
 
     // 加载活动 session
-    this.currentSession = await this.sessionStorage.getOrCreateActiveSession();
+    try {
+      this.currentSession = await this.sessionStorage.getOrCreateActiveSession();
+    } catch (error) {
+      if (error instanceof MissingActiveSessionError) {
+        ztoolkit.log("[ChatManager] Active session is missing, creating a fresh session:", error.message);
+        await this.sessionStorage.setActiveSession(null);
+        this.currentSession = await this.sessionStorage.createSession();
+      } else if (error instanceof SessionLoadError) {
+        ztoolkit.log("[ChatManager] Active session failed to load, resetting active session:", error.message);
+        this.onError?.(
+          new Error(`Failed to load the active chat session: ${error.message}`),
+        );
+        await this.sessionStorage.setActiveSession(null);
+        this.currentSession = await this.sessionStorage.createSession();
+      } else {
+        throw error;
+      }
+    }
 
     this.initialized = true;
     ztoolkit.log("[ChatManager] Initialized");
@@ -148,6 +214,165 @@ export class ChatManager {
     return provider?.getName() === "PaperChat";
   }
 
+  private syncSessionItemState(session: ChatSession | null): void {
+    this.currentItemKey = session?.lastActiveItemKey ?? null;
+    this.currentItemKeys = session?.lastActiveItemKeys
+      || (this.currentItemKey ? [this.currentItemKey] : []);
+    getPdfToolManager().setCurrentItemKey(this.currentItemKey);
+    getPdfToolManager().setCurrentItemKeys(this.currentItemKeys);
+  }
+
+  private async ensurePaperChatModelResolved(
+    session: ChatSession,
+    persist: boolean = true,
+  ): Promise<string> {
+    const providerManager = getProviderManager();
+    const paperchatProvider = providerManager.getProvider("paperchat");
+    const paperchatConfig = providerManager.getProviderConfig(
+      "paperchat",
+    ) as PaperChatProviderConfig | null;
+
+    if (!paperchatProvider || !paperchatConfig) {
+      throw new Error("PaperChat provider is not configured");
+    }
+
+    const binding = resolvePaperChatSessionBinding(
+      session,
+      getPref("paperchatTierState") as string | undefined,
+      paperchatConfig.availableModels || [],
+      getModelRatios(),
+    );
+
+    const didChange = persist
+      ? applyPaperChatSessionBinding(session, binding)
+      : false;
+
+    if (persist && didChange) {
+      await this.sessionStorage.updateSessionMeta(session);
+    }
+
+    paperchatProvider.updateConfig({
+      resolvedModelOverride: binding.modelId,
+    });
+
+    return binding.modelId;
+  }
+
+  private buildPaperChatReroutedNotice(
+    tier: PaperChatTier,
+    previousModel: string,
+    nextModel: string,
+  ): string {
+    const tierLabel =
+      tier === "paperchat-lite"
+        ? getString("chat-tier-lite")
+        : tier === "paperchat-pro"
+          ? getString("chat-tier-pro")
+          : getString("chat-tier-standard");
+
+    return getString("chat-model-rerouted", {
+      args: {
+        tier: tierLabel,
+        old: previousModel,
+        new: nextModel,
+      },
+    });
+  }
+
+  private async repairPaperChatSessionAfterHardFailure(
+    session: ChatSession,
+    failedModelId: string | null,
+    persist: boolean = true,
+  ): Promise<{
+    previousModel: string;
+    nextModel: string;
+    tier: PaperChatTier;
+  } | null> {
+    const previousTierStateRaw = (getPref("paperchatTierState") as string | undefined) || "";
+    const updateProviderOverride = (modelId: string | undefined) => {
+      getProviderManager().getProvider("paperchat")?.updateConfig({
+        resolvedModelOverride: modelId,
+      });
+    };
+
+    if (!persist) {
+      const repair = repairPaperChatSessionBindingAfterHardFailure(
+        session,
+        previousTierStateRaw,
+        getPaperChatChatModels(),
+        getModelRatios(),
+        failedModelId,
+        pickRandomCandidate,
+      );
+
+      if (!repair || !repair.previousModelId) {
+        return null;
+      }
+
+      setPref("paperchatTierState", JSON.stringify(repair.state));
+      applyPaperChatSessionBinding(session, repair);
+      updateProviderOverride(repair.modelId);
+
+      return {
+        previousModel: repair.previousModelId,
+        nextModel: repair.modelId,
+        tier: repair.selectedTier,
+      };
+    }
+
+    const reroute = await repairPaperChatSessionAfterHardFailureWithRollback({
+      session,
+      failedModelId,
+      previousTierStateRaw,
+      availableModels: getPaperChatChatModels(),
+      ratios: getModelRatios(),
+      persistSessionMeta: (updatedSession) => this.sessionStorage.updateSessionMeta(updatedSession),
+      setTierStateRaw: (raw) => {
+        setPref("paperchatTierState", raw);
+      },
+      updateProviderOverride,
+      pickRandom: pickRandomCandidate,
+    });
+
+    if (!reroute) {
+      return null;
+    }
+
+    return reroute;
+  }
+
+  private async insertSystemNotice(
+    session: ChatSession,
+    content: string,
+  ): Promise<void> {
+    const notice: ChatMessage = {
+      id: this.generateId(),
+      role: "system",
+      content,
+      timestamp: Date.now(),
+      isSystemNotice: true,
+    };
+
+    session.messages.push(notice);
+    await this.sessionStorage.insertMessage(session.id, notice);
+    if (this.isSessionActive(session)) {
+      this.onMessageUpdate?.(session.messages);
+    }
+  }
+
+  private getSessionItem(session: ChatSession): Zotero.Item | null {
+    const itemKey = session.lastActiveItemKey;
+    if (!itemKey) {
+      return null;
+    }
+
+    const libraryID = Zotero.Libraries.userLibraryID;
+    return (
+      (Zotero.Items.getByLibraryAndKey(libraryID, itemKey) as Zotero.Item | false)
+      || null
+    );
+  }
+
   /**
    * Check if the given session is still the active/displayed session.
    * Used to guard UI callbacks so we don't update the UI for a session
@@ -183,10 +408,6 @@ export class ChatManager {
     const providerManager = getProviderManager();
     providerManager.setOnFallback((from, to, error) => {
       ztoolkit.log(`[ChatManager] Provider fallback: ${from} -> ${to}, error: ${error.message}`);
-      // 在聊天消息中插入降级通知 (fire-and-forget)
-      this.insertFallbackNotice(from, to).catch((err) => {
-        ztoolkit.log("[ChatManager] Failed to persist fallback notice:", err);
-      });
       // 通知 UI 层（如果需要额外处理）
       this.onFallbackNotice?.(from, to);
     });
@@ -273,6 +494,7 @@ export class ChatManager {
   async createNewSession(): Promise<ChatSession> {
     await this.init();
     this.currentSession = await this.sessionStorage.createSession();
+    this.syncSessionItemState(this.currentSession);
     return this.currentSession;
   }
 
@@ -285,22 +507,27 @@ export class ChatManager {
     // Trigger memory extraction for the session we're leaving
     this.memoryManager.onBeforeSessionSwitch(this.currentSession, sessionId);
 
-    // If the target session is currently streaming, reuse its in-memory
-    // object so that isSessionActive(sendingSession) returns true and
-    // live streaming updates resume on the UI.
-    const session = this.streamingSessions.get(sessionId)
-      ?? await this.sessionStorage.loadSession(sessionId);
+    try {
+      // If the target session is currently streaming, reuse its in-memory
+      // object so that isSessionActive(sendingSession) returns true and
+      // live streaming updates resume on the UI.
+      const session = this.streamingSessions.get(sessionId)
+        ?? await this.sessionStorage.loadSession(sessionId);
 
-    if (session) {
-      this.currentSession = session;
-      await this.sessionStorage.setActiveSession(sessionId);
-      // 恢复 lastActiveItemKey 和 lastActiveItemKeys
-      this.currentItemKey = session.lastActiveItemKey;
-      this.currentItemKeys = session.lastActiveItemKeys || (this.currentItemKey ? [this.currentItemKey] : []);
-      getPdfToolManager().setCurrentItemKey(this.currentItemKey);
-      getPdfToolManager().setCurrentItemKeys(this.currentItemKeys);
+      if (session) {
+        this.currentSession = session;
+        await this.sessionStorage.setActiveSession(sessionId);
+        this.syncSessionItemState(session);
+      }
+      return session;
+    } catch (error) {
+      if (error instanceof SessionLoadError) {
+        ztoolkit.log("[ChatManager] switchSession failed:", error.message);
+        this.onError?.(error);
+        return null;
+      }
+      throw error;
     }
-    return session;
   }
 
   /**
@@ -316,9 +543,27 @@ export class ChatManager {
 
     // 如果删除的是当前 session，切换到最近的或创建新的
     if (this.currentSession?.id === sessionId) {
-      this.currentSession =
-        await this.sessionStorage.getOrCreateActiveSession();
+      try {
+        this.currentSession = await this.sessionStorage.getOrCreateActiveSession();
+      } catch (error) {
+        if (error instanceof MissingActiveSessionError) {
+          ztoolkit.log("[ChatManager] Replacement active session is missing after delete, creating a fresh session:", error.message);
+          await this.sessionStorage.setActiveSession(null);
+          this.currentSession = await this.sessionStorage.createSession();
+        } else if (error instanceof SessionLoadError) {
+          ztoolkit.log("[ChatManager] Replacement active session failed to load after delete, creating a fresh session:", error.message);
+          this.onError?.(
+            new Error(`Failed to load the replacement chat session: ${error.message}`),
+          );
+          await this.sessionStorage.setActiveSession(null);
+          this.currentSession = await this.sessionStorage.createSession();
+        } else {
+          throw error;
+        }
+      }
     }
+
+    this.syncSessionItemState(this.currentSession);
   }
 
   /**
@@ -339,7 +584,7 @@ export class ChatManager {
 
     const errorMessage: ChatMessage = {
       id: this.generateId(),
-      role: "assistant",
+      role: "error",
       content,
       timestamp: Date.now(),
     };
@@ -348,12 +593,245 @@ export class ChatManager {
     this.onMessageUpdate?.(this.currentSession!.messages);
   }
 
+  async rerollCurrentPaperChatTier(): Promise<{
+    previousModel: string;
+    nextModel: string;
+    tier: PaperChatTier;
+  } | null> {
+    await this.init();
+
+    const session = this.currentSession;
+    if (!session || !session.selectedTier || !session.resolvedModelId) {
+      return null;
+    }
+
+    const providerManager = getProviderManager();
+    const provider = this.getActiveProvider();
+    if (!provider || providerManager.getActiveProviderId() !== "paperchat") {
+      return null;
+    }
+
+    const availableModels = getPaperChatChatModels();
+    const pools = deriveTierPools(availableModels, getModelRatios());
+    const nextModel = rerollTierModel(
+      pools[session.selectedTier],
+      session.resolvedModelId,
+      pickRandomCandidate,
+    );
+
+    if (!nextModel) {
+      return null;
+    }
+
+    const previousModel = session.resolvedModelId;
+    const previousRetryableState = {
+      lastRetryableUserMessageId: session.lastRetryableUserMessageId,
+      lastRetryableErrorMessageId: session.lastRetryableErrorMessageId,
+      lastRetryableFailedModelId: session.lastRetryableFailedModelId,
+    };
+    const previousUpdatedAt = session.updatedAt;
+
+    session.resolvedModelId = nextModel;
+    clearPaperChatRetryableState(session);
+
+    try {
+      await this.sessionStorage.updateSessionMeta(session);
+    } catch (error) {
+      session.resolvedModelId = previousModel;
+      session.lastRetryableUserMessageId = previousRetryableState.lastRetryableUserMessageId;
+      session.lastRetryableErrorMessageId = previousRetryableState.lastRetryableErrorMessageId;
+      session.lastRetryableFailedModelId = previousRetryableState.lastRetryableFailedModelId;
+      session.updatedAt = previousUpdatedAt;
+      throw error;
+    }
+
+    const paperchatProvider = providerManager.getProvider("paperchat");
+    paperchatProvider?.updateConfig({
+      resolvedModelOverride: nextModel,
+    });
+
+    return {
+      previousModel,
+      nextModel,
+      tier: session.selectedTier,
+    };
+  }
+
+  async switchCurrentSessionPaperChatTier(tier: PaperChatTier): Promise<void> {
+    await this.init();
+
+    const session = this.currentSession;
+    if (!session) {
+      return;
+    }
+
+    const effectiveSelectedTier = session.selectedTier
+      || parseTierState(
+        getPref("paperchatTierState") as string | undefined,
+      ).selectedTier;
+    if (effectiveSelectedTier === tier) {
+      return;
+    }
+
+    const previousSessionState = {
+      selectedTier: session.selectedTier,
+      resolvedModelId: session.resolvedModelId,
+      lastRetryableUserMessageId: session.lastRetryableUserMessageId,
+      lastRetryableErrorMessageId: session.lastRetryableErrorMessageId,
+      lastRetryableFailedModelId: session.lastRetryableFailedModelId,
+      updatedAt: session.updatedAt,
+    };
+
+    session.selectedTier = tier;
+    session.resolvedModelId = undefined;
+    clearPaperChatRetryableState(session);
+
+    try {
+      await this.sessionStorage.updateSessionMeta(session);
+    } catch (error) {
+      session.selectedTier = previousSessionState.selectedTier;
+      session.resolvedModelId = previousSessionState.resolvedModelId;
+      session.lastRetryableUserMessageId = previousSessionState.lastRetryableUserMessageId;
+      session.lastRetryableErrorMessageId = previousSessionState.lastRetryableErrorMessageId;
+      session.lastRetryableFailedModelId = previousSessionState.lastRetryableFailedModelId;
+      session.updatedAt = previousSessionState.updatedAt;
+      throw error;
+    }
+
+    const providerManager = getProviderManager();
+    const paperchatProvider = providerManager.getProvider("paperchat");
+    paperchatProvider?.updateConfig({
+      resolvedModelOverride: undefined,
+    });
+  }
+
+  async clearCurrentSessionPaperChatRetryableState(): Promise<void> {
+    await this.init();
+
+    const session = this.currentSession;
+    if (!session) {
+      return;
+    }
+
+    const hadRetryableState =
+      !!session.lastRetryableUserMessageId
+      || !!session.lastRetryableErrorMessageId
+      || !!session.lastRetryableFailedModelId;
+
+    if (!hadRetryableState) {
+      return;
+    }
+
+    const previousState = {
+      lastRetryableUserMessageId: session.lastRetryableUserMessageId,
+      lastRetryableErrorMessageId: session.lastRetryableErrorMessageId,
+      lastRetryableFailedModelId: session.lastRetryableFailedModelId,
+      updatedAt: session.updatedAt,
+    };
+
+    clearPaperChatRetryableState(session);
+
+    try {
+      await this.sessionStorage.updateSessionMeta(session);
+    } catch (error) {
+      session.lastRetryableUserMessageId = previousState.lastRetryableUserMessageId;
+      session.lastRetryableErrorMessageId = previousState.lastRetryableErrorMessageId;
+      session.lastRetryableFailedModelId = previousState.lastRetryableFailedModelId;
+      session.updatedAt = previousState.updatedAt;
+      throw error;
+    }
+  }
+
+  async rerollCurrentPaperChatFailureAndRetry(): Promise<{
+    previousModel: string;
+    nextModel: string;
+    tier: PaperChatTier;
+  } | null> {
+    await this.init();
+
+    const session = this.currentSession;
+    if (!session) {
+      return null;
+    }
+
+    return rerollPaperChatFailureAndReplay<Zotero.Item | null>({
+      session,
+      rerollTier: () => this.rerollCurrentPaperChatTier(),
+      deleteMessage: (sessionId, messageId) =>
+        this.sessionStorage.deleteMessage(sessionId, messageId),
+      buildSystemNotice: (reroute) =>
+        this.buildPaperChatReroutedNotice(
+          reroute.tier,
+          reroute.previousModel,
+          reroute.nextModel,
+        ),
+      insertSystemNotice: (targetSession, content) =>
+        this.insertSystemNotice(targetSession, content),
+      resend: async ({ content, images, item }) => {
+        await this.sendMessage(content, {
+          item,
+          images,
+        });
+      },
+      getItem: (targetSession) => this.getSessionItem(targetSession),
+    });
+  }
+
+  async insertCurrentSessionSystemNotice(content: string): Promise<void> {
+    await this.init();
+
+    if (!this.currentSession) {
+      return;
+    }
+
+    await this.insertSystemNotice(this.currentSession, content);
+  }
+
+
+  private async applyPaperChatFailureState(
+    session: ChatSession,
+    userMessageId: string,
+    errorMessage: ChatMessage,
+    error: unknown,
+    failedProviderId: string,
+    failedModelId: string | null,
+  ): Promise<void> {
+    const isPaperChatFailure = failedProviderId === "paperchat";
+    const isHardFailure =
+      isPaperChatFailure &&
+      error instanceof Error &&
+      isPaperChatModelHardFailure(error);
+
+    if (isHardFailure) {
+      try {
+        await this.repairPaperChatSessionAfterHardFailure(
+          session,
+          failedModelId,
+          false,
+        );
+      } catch (repairError) {
+        ztoolkit.log(
+          "[ChatManager] Failed to repair PaperChat tier state after hard failure:",
+          getErrorMessage(repairError),
+        );
+      }
+    }
+
+    session.lastRetryableUserMessageId = isPaperChatFailure ? userMessageId : undefined;
+    session.lastRetryableErrorMessageId = isPaperChatFailure ? errorMessage.id : undefined;
+    session.lastRetryableFailedModelId = isPaperChatFailure
+      ? (failedModelId ?? undefined)
+      : undefined;
+  }
+
   /**
    * 插入降级通知消息到聊天界面
    */
-  private async insertFallbackNotice(fromProvider: string, toProvider: string): Promise<void> {
-    if (!this.currentSession) return;
-
+  private async insertFallbackNotice(
+    session: ChatSession,
+    fromProvider: string,
+    toProvider: string,
+  ): Promise<void> {
     const notice: ChatMessage = {
       id: this.generateId(),
       role: "system",
@@ -362,9 +840,11 @@ export class ChatManager {
       isSystemNotice: true,
     };
 
-    this.currentSession.messages.push(notice);
-    await this.sessionStorage.insertMessage(this.currentSession.id, notice);
-    this.onMessageUpdate?.(this.currentSession.messages);
+    session.messages.push(notice);
+    await this.sessionStorage.insertMessage(session.id, notice);
+    if (this.isSessionActive(session)) {
+      this.onMessageUpdate?.(session.messages);
+    }
   }
 
   /**
@@ -399,7 +879,7 @@ export class ChatManager {
   async sendMessage(
     content: string,
     options: SendMessageOptions & { item?: Zotero.Item | null } = {},
-  ): Promise<void> {
+  ): Promise<boolean> {
     await this.init();
 
     const item = options.item;
@@ -416,8 +896,24 @@ export class ChatManager {
 
     // 确保有 session
     if (!this.currentSession) {
-      this.currentSession =
-        await this.sessionStorage.getOrCreateActiveSession();
+      try {
+        this.currentSession = await this.sessionStorage.getOrCreateActiveSession();
+      } catch (error) {
+        if (error instanceof MissingActiveSessionError) {
+          ztoolkit.log("[ChatManager] Active session is missing during send, creating a fresh session:", error.message);
+          await this.sessionStorage.setActiveSession(null);
+          this.currentSession = await this.sessionStorage.createSession();
+        } else if (error instanceof SessionLoadError) {
+          ztoolkit.log("[ChatManager] Active session failed to load during send, creating a fresh session:", error.message);
+          this.onError?.(
+            new Error(`Failed to load the active chat session: ${error.message}`),
+          );
+          await this.sessionStorage.setActiveSession(null);
+          this.currentSession = await this.sessionStorage.createSession();
+        } else {
+          throw error;
+        }
+      }
     }
 
     // Capture a stable reference to the session we're sending in.
@@ -449,6 +945,7 @@ export class ChatManager {
     }
 
     // 获取活动的 AI 提供商
+    const providerManager = getProviderManager();
     const provider = this.getActiveProvider();
     ztoolkit.log(
       "[ChatManager] provider:",
@@ -456,6 +953,10 @@ export class ChatManager {
       "isReady:",
       provider?.isReady(),
     );
+
+    if (providerManager.getActiveProviderId() === "paperchat") {
+      await this.ensurePaperChatModelResolved(sendingSession);
+    }
 
     if (!provider || !provider.isReady()) {
       ztoolkit.log("[ChatManager] Provider not ready, showing error in chat");
@@ -472,7 +973,7 @@ export class ChatManager {
       if (this.isSessionActive(sendingSession)) {
         this.onMessageUpdate?.(sendingSession.messages);
       }
-      return;
+      return false;
     }
 
     // 构建最终消息内容
@@ -624,19 +1125,63 @@ export class ChatManager {
           item!,
           sendingSession,
         );
-        return;
+        return true;
       }
 
-      // 传统模式：流式调用（带自动降级）
-      const providerManager = getProviderManager();
+      let failedProviderId = provider.config.id;
+      let failedProvider: AIProvider = provider;
+      let failedPaperChatModelId: string | null = null;
+      let fallbackFromProviderName: string | null = null;
+      let fallbackToProviderName: string | null = null;
 
+      const handleFallbackNotice = async () => {
+        if (!fallbackFromProviderName || !fallbackToProviderName) {
+          return;
+        }
+        try {
+          await this.insertFallbackNotice(
+            sendingSession,
+            fallbackFromProviderName,
+            fallbackToProviderName,
+          );
+        } catch (noticeError) {
+          ztoolkit.log("[ChatManager] Failed to persist fallback notice:", noticeError);
+          this.onError?.(
+            new Error(
+              `Switched from ${fallbackFromProviderName} to ${fallbackToProviderName}, but failed to show the fallback notice: ${getErrorMessage(noticeError)}`,
+            ),
+          );
+        } finally {
+          fallbackFromProviderName = null;
+          fallbackToProviderName = null;
+        }
+      };
+
+      // 传统模式：流式调用（带自动降级）
       try {
         await providerManager.executeWithFallback(async (currentProvider) => {
+          if (currentProvider.config.id !== failedProviderId) {
+            fallbackFromProviderName = failedProvider.getName();
+            fallbackToProviderName = currentProvider.getName();
+          }
+          failedProviderId = currentProvider.config.id;
+          failedProvider = currentProvider;
+          await handleFallbackNotice();
+
+          if (currentProvider.config.id === "paperchat") {
+            failedPaperChatModelId = await this.ensurePaperChatModelResolved(
+              sendingSession,
+              false,
+            );
+          } else {
+            failedPaperChatModelId = null;
+          }
+
           // 重置 assistant 消息内容（降级时需要清空之前的部分内容）
           assistantMessage.content = "";
           assistantMessage.reasoning = "";
 
-          return new Promise<void>((resolve, reject) => {
+          const streamCurrentProvider = () => new Promise<void>((resolve, reject) => {
             const callbacks: StreamCallbacks = {
               onChunk: (chunk: string) => {
                 assistantMessage.content += chunk;
@@ -654,6 +1199,7 @@ export class ChatManager {
                 assistantMessage.content = fullContent;
                 assistantMessage.timestamp = Date.now();
                 sendingSession.updatedAt = Date.now();
+                clearPaperChatRetryableState(sendingSession);
 
                 // Clean up empty reasoning
                 if (!assistantMessage.reasoning) {
@@ -705,7 +1251,43 @@ export class ChatManager {
 
             currentProvider.streamChatCompletion(messagesForApi, callbacks, pdfAttachment);
           });
+
+          try {
+            return await streamCurrentProvider();
+          } catch (error) {
+            if (
+              currentProvider.config.id !== "paperchat"
+              || !(error instanceof Error)
+              || !isPaperChatModelHardFailure(error)
+            ) {
+              throw error;
+            }
+
+            const reroute = await this.repairPaperChatSessionAfterHardFailure(
+              sendingSession,
+              failedPaperChatModelId,
+            );
+            if (!reroute) {
+              throw error;
+            }
+
+            failedPaperChatModelId = reroute.nextModel;
+            assistantMessage.content = "";
+            assistantMessage.reasoning = "";
+            await this.insertSystemNotice(
+              sendingSession,
+              this.buildPaperChatReroutedNotice(
+                reroute.tier,
+                reroute.previousModel,
+                reroute.nextModel,
+              ),
+            );
+
+            return await streamCurrentProvider();
+          }
         });
+
+        return true;
       } catch (error) {
         // 所有 provider 都失败了
         ztoolkit.log("[ChatManager] All providers failed:", error);
@@ -725,13 +1307,31 @@ export class ChatManager {
           content: getErrorMessage(error),
           timestamp: Date.now(),
         };
+
+        await this.applyPaperChatFailureState(
+          sendingSession,
+          userMessage.id,
+          errorMessage,
+          error,
+          failedProviderId,
+          failedProviderId === "paperchat"
+            ? (failedPaperChatModelId || sendingSession.resolvedModelId || null)
+            : null,
+        );
+
         sendingSession.messages.push(errorMessage);
         await this.sessionStorage.insertMessage(sendingSession.id, errorMessage);
+        await this.sessionStorage.updateSessionMeta(sendingSession);
 
         if (this.isSessionActive(sendingSession)) {
           this.onError?.(error instanceof Error ? error : new Error(String(error)));
           this.onMessageUpdate?.(sendingSession.messages);
         }
+
+        // The user message has already been persisted into the session.
+        // Return success here so the UI clears the input instead of restoring
+        // a draft that now duplicates the visible chat history.
+        return true;
       }
     } finally {
       this.streamingSessions.delete(sendingSession.id);
@@ -752,7 +1352,7 @@ export class ChatManager {
     hasCurrentItem: boolean,
     item: Zotero.Item,
     sendingSession: ChatSession,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const pdfToolManager = getPdfToolManager();
     const providerManager = getProviderManager();
 
@@ -791,8 +1391,55 @@ export class ChatManager {
 
     // 使用 executeWithFallback 找到第一个可用的支持 tool calling 的 provider
     // 注意：一旦开始 tool calling 循环，就不再降级（状态难以恢复）
+    let failedProviderId = _provider.config.id;
+    let failedProvider: AIProvider = _provider;
+    let failedPaperChatModelId: string | null = null;
+
+    let fallbackFromProviderName: string | null = null;
+    let fallbackToProviderName: string | null = null;
+
+    const handleFallbackNotice = async () => {
+      if (!fallbackFromProviderName || !fallbackToProviderName) {
+        return;
+      }
+      try {
+        await this.insertFallbackNotice(
+          sendingSession,
+          fallbackFromProviderName,
+          fallbackToProviderName,
+        );
+      } catch (noticeError) {
+        ztoolkit.log("[ChatManager] Failed to persist fallback notice:", noticeError);
+        this.onError?.(
+          new Error(
+            `Switched from ${fallbackFromProviderName} to ${fallbackToProviderName}, but failed to show the fallback notice: ${getErrorMessage(noticeError)}`,
+          ),
+        );
+      } finally {
+        fallbackFromProviderName = null;
+        fallbackToProviderName = null;
+      }
+    };
+
     try {
       await providerManager.executeWithFallback(async (currentProvider) => {
+        if (currentProvider.config.id !== failedProviderId) {
+          fallbackFromProviderName = failedProvider.getName();
+          fallbackToProviderName = currentProvider.getName();
+        }
+        failedProviderId = currentProvider.config.id;
+        failedProvider = currentProvider;
+        await handleFallbackNotice();
+
+        if (currentProvider.config.id === "paperchat") {
+          failedPaperChatModelId = await this.ensurePaperChatModelResolved(
+            sendingSession,
+            false,
+          );
+        } else {
+          failedPaperChatModelId = null;
+        }
+
         // 检查 provider 是否支持 tool calling
         if (!providerSupportsToolCalling(currentProvider)) {
           throw new Error(`Provider ${currentProvider.getName()} does not support tool calling`);
@@ -804,22 +1451,24 @@ export class ChatManager {
         assistantMessage.content = "";
         assistantMessage.reasoning = "";
 
-        // 检查是否支持流式 tool calling
-        if (providerSupportsStreamingToolCalling(currentProvider)) {
-          ztoolkit.log(`[Tool Calling] Using streaming mode with ${currentProvider.getName()}`);
-          await this.sendMessageWithStreamingToolCalling(
-            currentProvider as AIProvider & ToolCallingProvider & {
-              streamChatCompletionWithTools: NonNullable<ToolCallingProvider["streamChatCompletionWithTools"]>;
-            },
-            messagesWithContext,
-            assistantMessage,
-            pdfWasAttached,
-            summaryTriggered,
-            tools,
-            paperStructure,
-            sendingSession,
-          );
-        } else {
+        const executeToolCallingAttempt = async () => {
+          if (providerSupportsStreamingToolCalling(currentProvider)) {
+            ztoolkit.log(`[Tool Calling] Using streaming mode with ${currentProvider.getName()}`);
+            await this.sendMessageWithStreamingToolCalling(
+              currentProvider as AIProvider & ToolCallingProvider & {
+                streamChatCompletionWithTools: NonNullable<ToolCallingProvider["streamChatCompletionWithTools"]>;
+              },
+              messagesWithContext,
+              assistantMessage,
+              pdfWasAttached,
+              summaryTriggered,
+              tools,
+              paperStructure,
+              sendingSession,
+            );
+            return;
+          }
+
           ztoolkit.log(`[Tool Calling] Using non-streaming mode with ${currentProvider.getName()}`);
           await this.sendMessageWithNonStreamingToolCalling(
             toolProvider,
@@ -831,8 +1480,44 @@ export class ChatManager {
             paperStructure,
             sendingSession,
           );
+        };
+
+        try {
+          await executeToolCallingAttempt();
+        } catch (error) {
+          if (
+            currentProvider.config.id !== "paperchat"
+            || !(error instanceof Error)
+            || !isPaperChatModelHardFailure(error)
+          ) {
+            throw error;
+          }
+
+          const reroute = await this.repairPaperChatSessionAfterHardFailure(
+            sendingSession,
+            failedPaperChatModelId,
+          );
+          if (!reroute) {
+            throw error;
+          }
+
+          failedPaperChatModelId = reroute.nextModel;
+          assistantMessage.content = "";
+          assistantMessage.reasoning = "";
+          await this.insertSystemNotice(
+            sendingSession,
+            this.buildPaperChatReroutedNotice(
+              reroute.tier,
+              reroute.previousModel,
+              reroute.nextModel,
+            ),
+          );
+
+          await executeToolCallingAttempt();
         }
       });
+
+      return true;
     } catch (error) {
       // 所有 provider 都失败了
       ztoolkit.log("[Tool Calling] All providers failed:", error);
@@ -852,13 +1537,26 @@ export class ChatManager {
         content: getErrorMessage(error),
         timestamp: Date.now(),
       };
+      await this.applyPaperChatFailureState(
+        sendingSession,
+        messagesForApi.filter((m) => m.role === "user").at(-1)?.id || "",
+        errorMessage,
+        error,
+        failedProviderId,
+        failedProviderId === "paperchat"
+          ? (failedPaperChatModelId || sendingSession.resolvedModelId || null)
+          : null,
+      );
       sendingSession.messages.push(errorMessage);
       await this.sessionStorage.insertMessage(sendingSession.id, errorMessage);
+      await this.sessionStorage.updateSessionMeta(sendingSession);
 
       if (this.isSessionActive(sendingSession)) {
         this.onError?.(error instanceof Error ? error : new Error(String(error)));
         this.onMessageUpdate?.(sendingSession.messages);
       }
+
+      return false;
     }
   }
 
@@ -1144,6 +1842,7 @@ export class ChatManager {
         assistantMessage.content = accumulatedDisplay;
         assistantMessage.timestamp = Date.now();
         sendingSession.updatedAt = Date.now();
+        clearPaperChatRetryableState(sendingSession);
 
         // Clean up empty reasoning
         if (!assistantMessage.reasoning) {
@@ -1181,6 +1880,7 @@ export class ChatManager {
       assistantMessage.content = accumulatedDisplay;
       assistantMessage.timestamp = Date.now();
       sendingSession.updatedAt = Date.now();
+      clearPaperChatRetryableState(sendingSession);
       if (!assistantMessage.reasoning) {
         delete assistantMessage.reasoning;
       }
@@ -1327,6 +2027,7 @@ export class ChatManager {
         assistantMessage.content = accumulatedDisplay;
         assistantMessage.timestamp = Date.now();
         sendingSession.updatedAt = Date.now();
+        clearPaperChatRetryableState(sendingSession);
 
         await this.sessionStorage.updateMessageContent(sendingSession.id, assistantMessage.id, accumulatedDisplay);
         await this.sessionStorage.updateSessionMeta(sendingSession);
@@ -1359,6 +2060,7 @@ export class ChatManager {
       assistantMessage.content = accumulatedDisplay;
       assistantMessage.timestamp = Date.now();
       sendingSession.updatedAt = Date.now();
+      clearPaperChatRetryableState(sendingSession);
       await this.sessionStorage.updateMessageContent(sendingSession.id, assistantMessage.id, accumulatedDisplay);
       await this.sessionStorage.updateSessionMeta(sendingSession);
       if (this.isSessionActive(sendingSession)) {

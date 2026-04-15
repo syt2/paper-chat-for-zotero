@@ -18,6 +18,87 @@ import { getStorageDatabase } from "./db/StorageDatabase";
 // 最大 session 数量限制
 const MAX_SESSIONS = 1000;
 
+type SessionRow = {
+  id: string;
+  created_at: number;
+  updated_at: number;
+  last_active_item_key: string | null;
+  last_active_item_keys: string | null;
+  context_summary: string | null;
+  context_state: string | null;
+  memory_extracted_at: number | null;
+  memory_extracted_msg_count: number | null;
+  selected_tier: string | null;
+  resolved_model_id: string | null;
+  last_retryable_user_message_id: string | null;
+  last_retryable_error_message_id: string | null;
+  last_retryable_failed_model_id: string | null;
+};
+
+export class SessionLoadError extends Error {
+  constructor(message: string, cause?: unknown) {
+    super(message);
+    this.name = "SessionLoadError";
+    if (cause !== undefined) {
+      (this as Error & { cause?: unknown }).cause = cause;
+    }
+  }
+}
+
+export class MissingActiveSessionError extends SessionLoadError {
+  constructor(message: string) {
+    super(message);
+    this.name = "MissingActiveSessionError";
+  }
+}
+
+function toValidSelectedTier(value: string | null): ChatSession["selectedTier"] {
+  if (
+    value === "paperchat-lite" ||
+    value === "paperchat-standard" ||
+    value === "paperchat-pro"
+  ) {
+    return value;
+  }
+  return undefined;
+}
+
+export function mapSessionRowToChatSession(
+  row: SessionRow,
+  messages: ChatMessage[],
+): ChatSession {
+  return {
+    id: row.id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    lastActiveItemKey: row.last_active_item_key || null,
+    lastActiveItemKeys: row.last_active_item_keys
+      ? JSON.parse(row.last_active_item_keys)
+      : undefined,
+    messages: filterValidMessages(messages),
+    contextSummary: row.context_summary
+      ? JSON.parse(row.context_summary)
+      : undefined,
+    contextState: row.context_state ? JSON.parse(row.context_state) : undefined,
+    memoryExtractedAt:
+      row.memory_extracted_at != null
+        ? (row.memory_extracted_at as number)
+        : undefined,
+    memoryExtractedMsgCount:
+      row.memory_extracted_msg_count != null
+        ? (row.memory_extracted_msg_count as number)
+        : undefined,
+    selectedTier: toValidSelectedTier(row.selected_tier),
+    resolvedModelId: row.resolved_model_id || undefined,
+    lastRetryableUserMessageId:
+      row.last_retryable_user_message_id || undefined,
+    lastRetryableErrorMessageId:
+      row.last_retryable_error_message_id || undefined,
+    lastRetryableFailedModelId:
+      row.last_retryable_failed_model_id || undefined,
+  };
+}
+
 export class SessionStorageService {
   private initialized: boolean = false;
   private activeSessionIdCache: string | null = null;
@@ -271,30 +352,57 @@ export class SessionStorageService {
     try {
       const db = await getStorageDatabase().ensureInit();
       session.updatedAt = Date.now();
+      await db.queryAsync("BEGIN TRANSACTION");
+      try {
+        await db.queryAsync(
+          `UPDATE sessions SET
+            updated_at = ?,
+            last_active_item_key = ?,
+            last_active_item_keys = ?,
+            context_summary = ?,
+            context_state = ?
+          WHERE id = ?`,
+          [
+            session.updatedAt,
+            session.lastActiveItemKey || null,
+            session.lastActiveItemKeys ? JSON.stringify(session.lastActiveItemKeys) : null,
+            session.contextSummary ? JSON.stringify(session.contextSummary) : null,
+            session.contextState ? JSON.stringify(session.contextState) : null,
+            session.id,
+          ],
+        );
 
-      await db.queryAsync(
-        `UPDATE sessions SET
-          updated_at = ?,
-          last_active_item_key = ?,
-          last_active_item_keys = ?,
-          context_summary = ?,
-          context_state = ?
-        WHERE id = ?`,
-        [
-          session.updatedAt,
-          session.lastActiveItemKey || null,
-          session.lastActiveItemKeys ? JSON.stringify(session.lastActiveItemKeys) : null,
-          session.contextSummary ? JSON.stringify(session.contextSummary) : null,
-          session.contextState ? JSON.stringify(session.contextState) : null,
-          session.id,
-        ],
-      );
+        await db.queryAsync(
+          `INSERT INTO paperchat_session_state
+           (session_id, selected_tier, resolved_model_id, last_retryable_user_message_id, last_retryable_error_message_id, last_retryable_failed_model_id)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(session_id) DO UPDATE SET
+             selected_tier = excluded.selected_tier,
+             resolved_model_id = excluded.resolved_model_id,
+             last_retryable_user_message_id = excluded.last_retryable_user_message_id,
+             last_retryable_error_message_id = excluded.last_retryable_error_message_id,
+             last_retryable_failed_model_id = excluded.last_retryable_failed_model_id`,
+          [
+            session.id,
+            session.selectedTier || null,
+            session.resolvedModelId || null,
+            session.lastRetryableUserMessageId || null,
+            session.lastRetryableErrorMessageId || null,
+            session.lastRetryableFailedModelId || null,
+          ],
+        );
 
-      // Also keep session_meta.updated_at in sync
-      await db.queryAsync(
-        "UPDATE session_meta SET updated_at = ? WHERE id = ?",
-        [session.updatedAt, session.id],
-      );
+        // Also keep session_meta.updated_at in sync
+        await db.queryAsync(
+          "UPDATE session_meta SET updated_at = ? WHERE id = ?",
+          [session.updatedAt, session.id],
+        );
+
+        await db.queryAsync("COMMIT");
+      } catch (error) {
+        try { await db.queryAsync("ROLLBACK"); } catch { /* ignore */ }
+        throw error;
+      }
     } catch (error) {
       ztoolkit.log("[SessionStorageService] Update session meta error:", error);
       throw error;
@@ -370,9 +478,18 @@ export class SessionStorageService {
       try {
         // Upsert session (no messages column)
         await db.queryAsync(
-          `INSERT OR REPLACE INTO sessions
+          `INSERT INTO sessions
            (id, created_at, updated_at, last_active_item_key, last_active_item_keys, context_summary, context_state, memory_extracted_at, memory_extracted_msg_count)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             created_at = excluded.created_at,
+             updated_at = excluded.updated_at,
+             last_active_item_key = excluded.last_active_item_key,
+             last_active_item_keys = excluded.last_active_item_keys,
+             context_summary = excluded.context_summary,
+             context_state = excluded.context_state,
+             memory_extracted_at = excluded.memory_extracted_at,
+             memory_extracted_msg_count = excluded.memory_extracted_msg_count`,
           [
             session.id,
             session.createdAt,
@@ -383,6 +500,26 @@ export class SessionStorageService {
             session.contextState ? JSON.stringify(session.contextState) : null,
             session.memoryExtractedAt ?? null,
             session.memoryExtractedMsgCount ?? null,
+          ],
+        );
+
+        await db.queryAsync(
+          `INSERT INTO paperchat_session_state
+           (session_id, selected_tier, resolved_model_id, last_retryable_user_message_id, last_retryable_error_message_id, last_retryable_failed_model_id)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(session_id) DO UPDATE SET
+             selected_tier = excluded.selected_tier,
+             resolved_model_id = excluded.resolved_model_id,
+             last_retryable_user_message_id = excluded.last_retryable_user_message_id,
+             last_retryable_error_message_id = excluded.last_retryable_error_message_id,
+             last_retryable_failed_model_id = excluded.last_retryable_failed_model_id`,
+          [
+            session.id,
+            session.selectedTier || null,
+            session.resolvedModelId || null,
+            session.lastRetryableUserMessageId || null,
+            session.lastRetryableErrorMessageId || null,
+            session.lastRetryableFailedModelId || null,
           ],
         );
 
@@ -460,7 +597,7 @@ export class SessionStorageService {
 
       // 1. Load session row (without messages)
       const sessionRows = (await db.queryAsync(
-        "SELECT id, created_at, updated_at, last_active_item_key, last_active_item_keys, context_summary, context_state, memory_extracted_at, memory_extracted_msg_count FROM sessions WHERE id = ?",
+        "SELECT * FROM sessions WHERE id = ?",
         [sessionId],
       )) || [];
 
@@ -468,7 +605,76 @@ export class SessionStorageService {
         return null;
       }
 
-      const row = sessionRows[0];
+      const baseRowRaw = sessionRows[0] as Partial<SessionRow> & Record<string, unknown>;
+      const baseRow: SessionRow = {
+        id: String(baseRowRaw.id || ""),
+        created_at: Number(baseRowRaw.created_at || 0),
+        updated_at: Number(baseRowRaw.updated_at || 0),
+        last_active_item_key:
+          typeof baseRowRaw.last_active_item_key === "string"
+            ? baseRowRaw.last_active_item_key
+            : null,
+        last_active_item_keys:
+          typeof baseRowRaw.last_active_item_keys === "string"
+            ? baseRowRaw.last_active_item_keys
+            : null,
+        context_summary:
+          typeof baseRowRaw.context_summary === "string"
+            ? baseRowRaw.context_summary
+            : null,
+        context_state:
+          typeof baseRowRaw.context_state === "string"
+            ? baseRowRaw.context_state
+            : null,
+        memory_extracted_at:
+          typeof baseRowRaw.memory_extracted_at === "number"
+            ? baseRowRaw.memory_extracted_at
+            : null,
+        memory_extracted_msg_count:
+          typeof baseRowRaw.memory_extracted_msg_count === "number"
+            ? baseRowRaw.memory_extracted_msg_count
+            : null,
+        selected_tier:
+          typeof baseRowRaw.selected_tier === "string"
+            ? baseRowRaw.selected_tier
+            : null,
+        resolved_model_id:
+          typeof baseRowRaw.resolved_model_id === "string"
+            ? baseRowRaw.resolved_model_id
+            : null,
+        last_retryable_user_message_id:
+          typeof baseRowRaw.last_retryable_user_message_id === "string"
+            ? baseRowRaw.last_retryable_user_message_id
+            : null,
+        last_retryable_error_message_id:
+          typeof baseRowRaw.last_retryable_error_message_id === "string"
+            ? baseRowRaw.last_retryable_error_message_id
+            : null,
+        last_retryable_failed_model_id:
+          typeof baseRowRaw.last_retryable_failed_model_id === "string"
+            ? baseRowRaw.last_retryable_failed_model_id
+            : null,
+      };
+      const paperchatStateRows = (await db.queryAsync(
+        "SELECT * FROM paperchat_session_state WHERE session_id = ?",
+        [sessionId],
+      )) || [];
+      const paperchatState = paperchatStateRows[0] as Partial<SessionRow> | undefined;
+      const row: SessionRow = {
+        ...baseRow,
+        selected_tier: paperchatState?.selected_tier ?? baseRow.selected_tier,
+        resolved_model_id:
+          paperchatState?.resolved_model_id ?? baseRow.resolved_model_id,
+        last_retryable_user_message_id:
+          paperchatState?.last_retryable_user_message_id
+          ?? baseRow.last_retryable_user_message_id,
+        last_retryable_error_message_id:
+          paperchatState?.last_retryable_error_message_id
+          ?? baseRow.last_retryable_error_message_id,
+        last_retryable_failed_model_id:
+          paperchatState?.last_retryable_failed_model_id
+          ?? baseRow.last_retryable_failed_model_id,
+      };
 
       // 2. Load messages from messages table
       const messageRows = (await db.queryAsync(
@@ -494,24 +700,11 @@ export class SessionStorageService {
         return msg;
       });
 
-      const session: ChatSession = {
-        id: row.id,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-        lastActiveItemKey: row.last_active_item_key || null,
-        lastActiveItemKeys: row.last_active_item_keys ? JSON.parse(row.last_active_item_keys) : undefined,
-        messages: filterValidMessages(messages),
-        contextSummary: row.context_summary ? JSON.parse(row.context_summary) : undefined,
-        contextState: row.context_state ? JSON.parse(row.context_state) : undefined,
-        memoryExtractedAt: row.memory_extracted_at != null ? (row.memory_extracted_at as number) : undefined,
-        memoryExtractedMsgCount: row.memory_extracted_msg_count != null ? (row.memory_extracted_msg_count as number) : undefined,
-      };
-
-      ztoolkit.log("[SessionStorageService] Session loaded:", sessionId);
+      const session = mapSessionRowToChatSession(row, messages);
       return session;
     } catch (error) {
       ztoolkit.log("[SessionStorageService] Load session error:", error);
-      return null;
+      throw new SessionLoadError(`Failed to load session ${sessionId}`, error);
     }
   }
 
@@ -526,6 +719,10 @@ export class SessionStorageService {
 
       // Explicitly delete from all tables (don't rely on CASCADE alone,
       // since PRAGMA foreign_keys may not persist across reconnections)
+      await db.queryAsync(
+        "DELETE FROM paperchat_session_state WHERE session_id = ?",
+        [sessionId],
+      );
       await db.queryAsync("DELETE FROM messages WHERE session_id = ?", [sessionId]);
       await db.queryAsync("DELETE FROM session_meta WHERE id = ?", [sessionId]);
       await db.queryAsync("DELETE FROM sessions WHERE id = ?", [sessionId]);
@@ -618,6 +815,7 @@ export class SessionStorageService {
       this.activeSessionIdCache = sessionId;
     } catch (error) {
       ztoolkit.log("[SessionStorageService] Set active session error:", error);
+      throw error;
     }
   }
 
@@ -643,6 +841,10 @@ export class SessionStorageService {
       const rows = (await db.queryAsync(query, params)) || [];
 
       for (const row of rows) {
+        await db.queryAsync(
+          "DELETE FROM paperchat_session_state WHERE session_id = ?",
+          [row.id],
+        );
         await db.queryAsync("DELETE FROM messages WHERE session_id = ?", [row.id]);
         await db.queryAsync("DELETE FROM session_meta WHERE id = ?", [row.id]);
         await db.queryAsync("DELETE FROM sessions WHERE id = ?", [row.id]);
@@ -681,6 +883,10 @@ export class SessionStorageService {
       )) || [];
 
       for (const row of toDeleteRows) {
+        await db.queryAsync(
+          "DELETE FROM paperchat_session_state WHERE session_id = ?",
+          [row.id],
+        );
         await db.queryAsync("DELETE FROM messages WHERE session_id = ?", [row.id]);
         await db.queryAsync("DELETE FROM session_meta WHERE id = ?", [row.id]);
         await db.queryAsync("DELETE FROM sessions WHERE id = ?", [row.id]);
@@ -703,11 +909,16 @@ export class SessionStorageService {
   async getOrCreateActiveSession(): Promise<ChatSession> {
     await this.init();
 
-    let session = await this.getActiveSession();
-    if (!session) {
-      session = await this.createSession();
+    const activeId = this.activeSessionIdCache;
+    if (activeId) {
+      const session = await this.loadSession(activeId);
+      if (session) {
+        return session;
+      }
+      throw new MissingActiveSessionError(`Active session ${activeId} is missing`);
     }
-    return session;
+
+    return this.createSession();
   }
 
   /**

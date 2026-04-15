@@ -17,6 +17,7 @@ pref("userQuotaJson", "");
 // Cache
 pref("paperchatModelsCache", "");
 pref("paperchatRatiosCache", "");
+pref("paperchatTierState", "");
 
 // PDF Settings
 pref("uploadRawPdfOnFailure", false);

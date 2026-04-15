@@ -82,6 +82,9 @@ export function createMessageElement(
   msg: ChatMessage,
   theme: ThemeColors,
   isLastAssistant: boolean = false,
+  showReroll: boolean = false,
+  onReroll?: () => void | Promise<void>,
+  onRerollError?: (error: Error) => void,
 ): HTMLElement {
   // Handle system notices specially
   if (msg.isSystemNotice) {
@@ -244,6 +247,12 @@ export function createMessageElement(
   setupCopyButtonHover(bubble, copyBtn);
 
   bubble.appendChild(copyBtn);
+
+  if (showReroll && onReroll) {
+    const rerollBtn = createRerollButton(doc, theme, onReroll, onRerollError);
+    bubble.appendChild(rerollBtn);
+  }
+
   wrapper.appendChild(bubble);
   return wrapper;
 }
@@ -327,8 +336,63 @@ function createReasoningContainer(
 }
 
 /**
- * Create a copy button for message bubbles
+ * Create a reroll button for retryable error messages
  */
+function createRerollButton(
+  doc: Document,
+  theme: ThemeColors,
+  onClick: () => void | Promise<void>,
+  onError?: (error: Error) => void,
+): HTMLElement {
+  const btn = createElement(
+    doc,
+    "button",
+    {
+      position: "absolute",
+      bottom: "4px",
+      right: "36px",
+      background: theme.copyBtnBg,
+      border: "none",
+      borderRadius: "4px",
+      padding: "4px 8px",
+      fontSize: "12px",
+      cursor: "pointer",
+      opacity: "1",
+      transition: "background 0.2s, box-shadow 0.2s",
+    },
+    { class: "reroll-btn", title: getString("chat-reroll-model") },
+  );
+  btn.setAttribute("type", "button");
+  btn.textContent = "🎲";
+  btn.addEventListener("focus", () => {
+    btn.style.boxShadow = `0 0 0 2px ${theme.borderColor}`;
+  });
+  btn.addEventListener("blur", () => {
+    btn.style.boxShadow = "none";
+  });
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (btn.getAttribute("data-busy") === "true") {
+      return;
+    }
+    btn.setAttribute("data-busy", "true");
+    btn.style.opacity = "1";
+    btn.style.cursor = "wait";
+    Promise.resolve(onClick())
+      .catch((error: unknown) => {
+        const rerollError = error instanceof Error ? error : new Error(String(error));
+        ztoolkit.log("[MessageRenderer] Reroll failed:", rerollError);
+        onError?.(rerollError);
+      })
+      .finally(() => {
+        btn.removeAttribute("data-busy");
+        btn.style.cursor = "pointer";
+      });
+  });
+  return btn;
+}
+
 export function createCopyButton(
   doc: Document,
   theme: ThemeColors,
@@ -390,11 +454,13 @@ export function renderMessages(
   emptyState: HTMLElement | null,
   messages: ChatMessage[],
   theme: ThemeColors,
+  retryableErrorMessageId?: string,
+  onReroll?: () => void | Promise<void>,
+  onRerollError?: (error: Error) => void,
 ): void {
   const doc = chatHistory.ownerDocument;
   if (!doc) return;
 
-  ztoolkit.log("renderMessages called, count:", messages.length);
   chatHistory.textContent = "";
 
   if (messages.length === 0) {
@@ -421,7 +487,15 @@ export function renderMessages(
     const msg = messages[i];
     const isLastAssistant = i === lastAssistantIndex;
     chatHistory.appendChild(
-      createMessageElement(doc, msg, theme, isLastAssistant),
+      createMessageElement(
+        doc,
+        msg,
+        theme,
+        isLastAssistant,
+        msg.role === "error" && retryableErrorMessageId === msg.id,
+        onReroll,
+        onRerollError,
+      ),
     );
   }
 

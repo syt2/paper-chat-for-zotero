@@ -10,7 +10,7 @@ import { getAuthManager } from "../../auth";
 import { getProviderManager } from "../../providers";
 import { getPref, setPref } from "../../../utils/prefs";
 
-import type { ChatPanelContext } from "./types";
+import type { AttachmentState, ChatPanelContext } from "./types";
 import { chatColors } from "../../../utils/colors";
 import {
   getCurrentTheme,
@@ -421,6 +421,10 @@ async function initializeChatContentCommon(
   providerManager.setOnProviderChange(() => {
     context.updateUserBar();
     updateModelSelectorDisplay(container);
+    const activeSession = manager.getActiveSession();
+    if (activeSession) {
+      context.renderMessages(activeSession.messages);
+    }
   });
 
   // Setup event handlers
@@ -451,6 +455,7 @@ async function initializeChatContentCommon(
   if (session) {
     context.renderMessages(session.messages);
   }
+  updateModelSelectorDisplay(container);
 
   focusInput(container);
 }
@@ -697,6 +702,7 @@ function setupChatManagerCallbacks(
         messages.length,
       );
       context.renderMessages(messages);
+      updateModelSelectorDisplay(container);
     },
     onStreamingUpdate: (content) => {
       if (container) {
@@ -969,11 +975,21 @@ export function unregisterToolbarButton(): void {
 /**
  * Create context for event handlers
  */
+function cloneAttachmentState(state: AttachmentState): AttachmentState {
+  return {
+    pendingImages: [...state.pendingImages],
+    pendingFiles: [...state.pendingFiles],
+    pendingSelectedText: state.pendingSelectedText,
+  };
+}
+
 function createContext(container: HTMLElement): ChatPanelContext {
   const manager = getChatManager();
   const authManager = getAuthManager();
 
-  return {
+  let context!: ChatPanelContext;
+
+  context = {
     container: container,
     chatManager: manager,
     authManager,
@@ -994,11 +1010,17 @@ function createContext(container: HTMLElement): ChatPanelContext {
       moduleCurrentItem = item;
     },
     getTheme: getCurrentTheme,
-    getAttachmentState: () => ({
+    getAttachmentState: () => cloneAttachmentState({
       pendingImages,
       pendingFiles,
       pendingSelectedText,
     }),
+    setAttachmentState: (state) => {
+      const nextState = cloneAttachmentState(state);
+      pendingImages = nextState.pendingImages;
+      pendingFiles = nextState.pendingFiles;
+      pendingSelectedText = nextState.pendingSelectedText;
+    },
     clearAttachments: () => {
       pendingImages = [];
       pendingFiles = [];
@@ -1031,12 +1053,24 @@ function createContext(container: HTMLElement): ChatPanelContext {
         const emptyState = container.querySelector(
           "#chat-empty-state",
         ) as HTMLElement;
+        const session = manager.getActiveSession();
+        const retryableErrorMessageId =
+          getProviderManager().getActiveProviderId() === "paperchat"
+            ? session?.lastRetryableErrorMessageId
+            : undefined;
         if (chatHistory) {
           renderMessageElements(
             chatHistory,
             emptyState,
             messages,
             getCurrentTheme(),
+            retryableErrorMessageId,
+            async () => {
+              await context.rerollPaperChatTierForCurrentSession();
+            },
+            (error) => {
+              context.appendError(error.message);
+            },
           );
         }
       }
@@ -1079,7 +1113,17 @@ function createContext(container: HTMLElement): ChatPanelContext {
         }
       }
     },
+    rerollPaperChatTierForCurrentSession: async () => {
+      const reroute = await manager.rerollCurrentPaperChatFailureAndRetry();
+      if (!reroute) {
+        throw new Error("No alternate PaperChat model is available for this tier.");
+      }
+      updateModelSelectorDisplay(container);
+      return reroute;
+    },
   };
+
+  return context;
 }
 
 /**

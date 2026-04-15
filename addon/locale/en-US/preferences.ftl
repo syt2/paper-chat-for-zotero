@@ -29,7 +29,16 @@ pref-system-prompt-placeholder =
 pref-providers = Providers
 pref-add-provider = + Add Custom
 pref-paperchat-title = PaperChat Service
-pref-paperchat-description = Login-based AI service with multi-model support. No API key required.
+pref-paperchat-description = Built-in AI service with login-based access. Compared with managing your own API key, it is usually more convenient, stable, fast, and worry-free.
+pref-paperchat-tier = Tier
+pref-paperchat-tier-lite = Lite
+pref-paperchat-tier-standard = Standard
+pref-paperchat-tier-pro = Pro
+pref-paperchat-lite-model = Lite Model
+pref-paperchat-standard-model = Standard Model
+pref-paperchat-pro-model = Pro Model
+pref-paperchat-model-auto = Auto
+pref-paperchat-model-auto-desc = Follow automatic tier routing
 pref-official-website = Visit Official Website
 
 # Provider Configuration

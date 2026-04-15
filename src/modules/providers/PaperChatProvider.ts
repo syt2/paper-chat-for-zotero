@@ -19,7 +19,14 @@ import { getAuthManager } from "../auth";
 import { OpenAICompatibleProvider } from "./OpenAICompatibleProvider";
 import { BUILTIN_PROVIDERS } from "./ProviderManager";
 import { getPref } from "../../utils/prefs";
-import { AUTO_MODEL, AUTO_MODEL_SMART, resolveAutoModel, resolveAutoModelSmart } from "../preferences/ModelsFetcher";
+import {
+  AUTO_MODEL,
+  AUTO_MODEL_SMART,
+  getModelRatios,
+  resolveAutoModel,
+  resolveAutoModelSmart,
+} from "../preferences/ModelsFetcher";
+import { resolveSelectedTierModel } from "./paperchat-tier-routing";
 
 export class PaperChatProvider implements AIProvider {
   private _config: PaperChatProviderConfig;
@@ -37,8 +44,17 @@ export class PaperChatProvider implements AIProvider {
       BUILTIN_PROVIDERS.paperchat.defaultModels;
     const fallbackModel = BUILTIN_PROVIDERS.paperchat.defaultModels[0];
 
-    // Resolve auto modes to actual model
-    let model = this._config.defaultModel;
+    let model = this._config.resolvedModelOverride;
+
+    if (!model) {
+      const resolvedDefault = resolveSelectedTierModel(
+        getPref("paperchatTierState") as string | undefined,
+        availableModels,
+        getModelRatios(),
+      ).modelId;
+      model = resolvedDefault || this._config.defaultModel;
+    }
+
     if (model === AUTO_MODEL_SMART) {
       model = resolveAutoModelSmart(availableModels) || fallbackModel;
     } else if (model === AUTO_MODEL || !model) {
@@ -116,8 +132,11 @@ export class PaperChatProvider implements AIProvider {
         if (Array.isArray(models) && models.length > 0) {
           return models;
         }
-      } catch {
-        // ignore parse error
+      } catch (error) {
+        ztoolkit.log(
+          "[PaperChatProvider] Invalid paperchatModelsCache, falling back to defaults:",
+          error,
+        );
       }
     }
     return BUILTIN_PROVIDERS.paperchat.defaultModels;

@@ -8,9 +8,14 @@
 import { AuthService } from "./AuthService";
 import type { UserInfo, TokenInfo, AuthState } from "../../types/auth";
 import { getPref, setPref } from "../../utils/prefs";
-import { BUILTIN_PROVIDERS, getProviderManager } from "../providers";
 import { getString } from "../../utils/locale";
-import { AUTO_MODEL_SMART, isAutoModel, fetchPaperchatRatios } from "../preferences/ModelsFetcher";
+import { BUILTIN_PROVIDERS, getProviderManager } from "../providers";
+import { getModelRatios, fetchPaperchatRatios } from "../preferences/ModelsFetcher";
+import {
+  parseTierState,
+  resolveSelectedTierModel,
+  validateTierState,
+} from "../providers/paperchat-tier-routing";
 import { isEmbeddingModel } from "../embedding/providers/PaperChatEmbedding";
 
 // 密码加密/解密（使用简单的 XOR 加密 + Base64 编码）
@@ -829,62 +834,37 @@ export class AuthManager {
         ztoolkit.log("[AuthManager] Chat models:", chatModels.length, "/ total:", allModels.length);
 
         if (chatModels.length > 0) {
-
-          const currentModel = getPref("model") as string;
           const providerManager = getProviderManager();
+          const tierState = parseTierState(
+            getPref("paperchatTierState") as string | undefined,
+          );
+          const repaired = validateTierState(
+            tierState,
+            chatModels,
+            getModelRatios(),
+            (candidates) => {
+              if (candidates.length === 0) {
+                return null;
+              }
+              const index = Math.floor(Math.random() * candidates.length);
+              return candidates[index] ?? null;
+            },
+          );
 
-          // Any auto mode is always valid — just update the available models list
-          if (isAutoModel(currentModel)) {
-            providerManager.updateProviderConfig("paperchat", {
-              availableModels: chatModels,
-            });
-            return;
-          }
-
-          // If current model is no longer available, switch to auto (smartest)
-          if (currentModel && !chatModels.includes(currentModel)) {
-            setPref("model", AUTO_MODEL_SMART);
-            providerManager.updateProviderConfig("paperchat", {
-              defaultModel: AUTO_MODEL_SMART,
-              availableModels: chatModels,
-            });
-            ztoolkit.log(
-              `[AuthManager] Model "${currentModel}" unavailable, switched to auto-smart`,
-            );
-            this.showModelSwitchNotification(currentModel, getString("chat-model-auto-smart"));
-          } else if (!currentModel) {
-            // No model selected yet — default to auto (smartest)
-            setPref("model", AUTO_MODEL_SMART);
-            providerManager.updateProviderConfig("paperchat", {
-              defaultModel: AUTO_MODEL_SMART,
-              availableModels: chatModels,
-            });
-          } else {
-            // Current model is still valid — just update available models
-            providerManager.updateProviderConfig("paperchat", {
-              availableModels: chatModels,
-            });
-          }
+          setPref("paperchatTierState", JSON.stringify(repaired));
+          const resolvedDefaultModel = resolveSelectedTierModel(
+            repaired,
+            chatModels,
+            getModelRatios(),
+          ).modelId;
+          providerManager.updateProviderConfig("paperchat", {
+            defaultModel: resolvedDefaultModel || undefined,
+            availableModels: chatModels,
+          });
         }
       }
     } catch (e) {
       ztoolkit.log("[AuthManager] Failed to fetch models:", e);
-    }
-  }
-
-  /**
-   * Show a ProgressWindow notification when model is auto-switched
-   */
-  private showModelSwitchNotification(oldModel: string, newModel: string): void {
-    try {
-      const msg = getString("chat-model-switched", {
-        args: { old: oldModel, new: newModel },
-      });
-      new ztoolkit.ProgressWindow("Paper Chat")
-        .createLine({ text: msg, type: "default" })
-        .show();
-    } catch (e) {
-      ztoolkit.log("[AuthManager] Failed to show notification:", e);
     }
   }
 

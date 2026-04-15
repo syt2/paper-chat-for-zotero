@@ -29,7 +29,16 @@ pref-system-prompt-placeholder =
 pref-providers = 服务提供商
 pref-add-provider = + 添加自定义
 pref-paperchat-title = PaperChat 服务
-pref-paperchat-description = 基于登录的 AI 服务，支持多种模型。无需 API 密钥。
+pref-paperchat-description = 内置 AI 服务，登录即可使用；相比自备 API Key，通常更方便、稳定、高速、省心。
+pref-paperchat-tier = 档位
+pref-paperchat-tier-lite = Lite
+pref-paperchat-tier-standard = Standard
+pref-paperchat-tier-pro = Pro
+pref-paperchat-lite-model = Lite 模型
+pref-paperchat-standard-model = Standard 模型
+pref-paperchat-pro-model = Pro 模型
+pref-paperchat-model-auto = 自动
+pref-paperchat-model-auto-desc = 跟随自动档位路由
 pref-official-website = 访问官网
 
 # Provider Configuration

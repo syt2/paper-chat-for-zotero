@@ -4,6 +4,7 @@
 
 import type { ChatManager, ChatMessage } from "../../chat";
 import type { AuthManager } from "../../auth";
+import type { PaperChatTier } from "../../providers/paperchat-tier-routing";
 
 // Theme colors interface
 export interface ThemeColors {
@@ -68,12 +69,18 @@ export interface ChatPanelContext {
   setCurrentItem: (item: Zotero.Item | null) => void;
   getTheme: () => ThemeColors;
   getAttachmentState: () => AttachmentState;
+  setAttachmentState: (state: AttachmentState) => void;
   clearAttachments: () => void;
   updateAttachmentsPreview: () => void;
   updateUserBar: () => void;
   updatePdfCheckboxVisibility: (item: Zotero.Item | null) => Promise<void>;
   renderMessages: (messages: ChatMessage[]) => void;
   appendError: (errorMessage: string) => void;
+  rerollPaperChatTierForCurrentSession: () => Promise<{
+    previousModel: string;
+    nextModel: string;
+    tier: PaperChatTier;
+  } | null>;
   // Callbacks reference for multi-doc selector
   callbacks?: {
     onMessageUpdate?: (messages: ChatMessage[]) => void;

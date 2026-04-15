@@ -72,6 +72,7 @@ export interface BaseProviderConfig {
 export interface PaperChatProviderConfig extends BaseProviderConfig {
   type: "paperchat";
   defaultModel?: string;
+  resolvedModelOverride?: string;
   availableModels?: string[];
   maxTokens?: number;
   temperature?: number;
