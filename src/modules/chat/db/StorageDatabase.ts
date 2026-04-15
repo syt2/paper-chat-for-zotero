@@ -11,7 +11,7 @@ import { getErrorMessage } from "../../../utils/common";
 
 const DB_DIR = "paper-chat";
 const DB_FILE = "storage";
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 5;
 
 /** Build absolute DB path so Zotero.DBConnection doesn't parse subdirectory names */
 function getDBPath(): string {
@@ -307,22 +307,6 @@ export class StorageDatabase {
         await this.upgradeToV5(db);
         currentVersion = 5;
       }
-      if (currentVersion < 6) {
-        await this.upgradeToV6(db);
-        currentVersion = 6;
-      }
-      if (currentVersion < 7) {
-        await this.upgradeToV7(db);
-        currentVersion = 7;
-      }
-      if (currentVersion < 8) {
-        await this.upgradeToV8(db);
-        currentVersion = 8;
-      }
-      if (currentVersion < 9) {
-        await this.upgradeToV9(db);
-        currentVersion = 9;
-      }
     }
   }
 
@@ -552,139 +536,40 @@ export class StorageDatabase {
     }
   }
 
+  /**
+   * Upgrade schema v4 → v5: add agent runtime columns and task tables.
+   *
+   * Consolidates what were previously separate dev migrations (v5-v9).
+   * v1.4.0 shipped at v4; all users upgrading from ≤v4 run this once.
+   */
   private async upgradeToV5(db: ZoteroDBConnection): Promise<void> {
     ztoolkit.log("[StorageDatabase] Upgrading schema v4 → v5...");
 
     await db.queryAsync("BEGIN TRANSACTION");
     try {
-      const cols = (await db.queryAsync("PRAGMA table_info(sessions)")) || [];
-      const colNames = new Set(cols.map((c: any) => String(c.name)));
-
-      if (!colNames.has("execution_plan")) {
-        await db.queryAsync(
-          "ALTER TABLE sessions ADD COLUMN execution_plan TEXT",
-        );
-      }
-
-      await db.queryAsync(
-        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
-        [5, Date.now()],
+      // Add new columns to sessions (guard against partial prior installs)
+      const sessionCols = new Set(
+        ((await db.queryAsync("PRAGMA table_info(sessions)")) || []).map((c: any) => String(c.name)),
       );
-
-      await db.queryAsync("COMMIT");
-      ztoolkit.log("[StorageDatabase] Schema upgraded to v5");
-    } catch (error) {
-      try {
-        await db.queryAsync("ROLLBACK");
-      } catch {
-        // ignore rollback error
-      }
-      ztoolkit.log("[StorageDatabase] Failed to upgrade to v5:", error);
-      throw error;
-    }
-  }
-
-  private async upgradeToV6(db: ZoteroDBConnection): Promise<void> {
-    ztoolkit.log("[StorageDatabase] Upgrading schema v5 → v6...");
-
-    await db.queryAsync("BEGIN TRANSACTION");
-    try {
-      const cols = (await db.queryAsync("PRAGMA table_info(sessions)")) || [];
-      const colNames = new Set(cols.map((c: any) => String(c.name)));
-
-      if (!colNames.has("tool_execution_state")) {
-        await db.queryAsync(
-          "ALTER TABLE sessions ADD COLUMN tool_execution_state TEXT",
-        );
+      for (const col of [
+        "execution_plan TEXT",
+        "tool_execution_state TEXT",
+        "tool_approval_state TEXT",
+      ]) {
+        if (!sessionCols.has(col.split(" ")[0])) {
+          await db.queryAsync(`ALTER TABLE sessions ADD COLUMN ${col}`);
+        }
       }
 
-      await db.queryAsync(
-        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
-        [6, Date.now()],
+      // Add streaming_state to messages
+      const msgCols = new Set(
+        ((await db.queryAsync("PRAGMA table_info(messages)")) || []).map((c: any) => String(c.name)),
       );
-
-      await db.queryAsync("COMMIT");
-      ztoolkit.log("[StorageDatabase] Schema upgraded to v6");
-    } catch (error) {
-      try {
-        await db.queryAsync("ROLLBACK");
-      } catch {
-        // ignore rollback error
-      }
-      ztoolkit.log("[StorageDatabase] Failed to upgrade to v6:", error);
-      throw error;
-    }
-  }
-
-  private async upgradeToV7(db: ZoteroDBConnection): Promise<void> {
-    ztoolkit.log("[StorageDatabase] Upgrading schema v6 → v7...");
-
-    await db.queryAsync("BEGIN TRANSACTION");
-    try {
-      const cols = (await db.queryAsync("PRAGMA table_info(sessions)")) || [];
-      const colNames = new Set(cols.map((c: any) => String(c.name)));
-
-      if (!colNames.has("tool_approval_state")) {
-        await db.queryAsync(
-          "ALTER TABLE sessions ADD COLUMN tool_approval_state TEXT",
-        );
+      if (!msgCols.has("streaming_state")) {
+        await db.queryAsync("ALTER TABLE messages ADD COLUMN streaming_state TEXT");
       }
 
-      await db.queryAsync(
-        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
-        [7, Date.now()],
-      );
-
-      await db.queryAsync("COMMIT");
-      ztoolkit.log("[StorageDatabase] Schema upgraded to v7");
-    } catch (error) {
-      try {
-        await db.queryAsync("ROLLBACK");
-      } catch {
-        // ignore rollback error
-      }
-      ztoolkit.log("[StorageDatabase] Failed to upgrade to v7:", error);
-      throw error;
-    }
-  }
-
-  private async upgradeToV8(db: ZoteroDBConnection): Promise<void> {
-    ztoolkit.log("[StorageDatabase] Upgrading schema v7 → v8...");
-
-    await db.queryAsync("BEGIN TRANSACTION");
-    try {
-      const cols = (await db.queryAsync("PRAGMA table_info(messages)")) || [];
-      const colNames = new Set(cols.map((c: any) => String(c.name)));
-
-      if (!colNames.has("streaming_state")) {
-        await db.queryAsync(
-          "ALTER TABLE messages ADD COLUMN streaming_state TEXT",
-        );
-      }
-
-      await db.queryAsync(
-        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
-        [8, Date.now()],
-      );
-
-      await db.queryAsync("COMMIT");
-      ztoolkit.log("[StorageDatabase] Schema upgraded to v8");
-    } catch (error) {
-      try {
-        await db.queryAsync("ROLLBACK");
-      } catch {
-        // ignore rollback error
-      }
-      ztoolkit.log("[StorageDatabase] Failed to upgrade to v8:", error);
-      throw error;
-    }
-  }
-
-  private async upgradeToV9(db: ZoteroDBConnection): Promise<void> {
-    ztoolkit.log("[StorageDatabase] Upgrading schema v8 → v9...");
-
-    await db.queryAsync("BEGIN TRANSACTION");
-    try {
+      // Create tasks and task_events tables
       await db.queryAsync(`
         CREATE TABLE IF NOT EXISTS tasks (
           id TEXT PRIMARY KEY,
@@ -708,15 +593,11 @@ export class StorageDatabase {
           FOREIGN KEY (parent_task_id) REFERENCES tasks(id) ON DELETE SET NULL
         )
       `);
-
       await db.queryAsync(`
-        CREATE INDEX IF NOT EXISTS idx_tasks_updated_at
-        ON tasks (updated_at DESC)
+        CREATE INDEX IF NOT EXISTS idx_tasks_updated_at ON tasks (updated_at DESC)
       `);
-
       await db.queryAsync(`
-        CREATE INDEX IF NOT EXISTS idx_tasks_session_updated
-        ON tasks (session_id, updated_at DESC)
+        CREATE INDEX IF NOT EXISTS idx_tasks_session_updated ON tasks (session_id, updated_at DESC)
       `);
 
       await db.queryAsync(`
@@ -729,26 +610,20 @@ export class StorageDatabase {
           FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
         )
       `);
-
       await db.queryAsync(`
-        CREATE INDEX IF NOT EXISTS idx_task_events_task_created
-        ON task_events (task_id, created_at ASC)
+        CREATE INDEX IF NOT EXISTS idx_task_events_task_created ON task_events (task_id, created_at ASC)
       `);
 
       await db.queryAsync(
         "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
-        [9, Date.now()],
+        [5, Date.now()],
       );
 
       await db.queryAsync("COMMIT");
-      ztoolkit.log("[StorageDatabase] Schema upgraded to v9");
+      ztoolkit.log("[StorageDatabase] Schema upgraded to v5");
     } catch (error) {
-      try {
-        await db.queryAsync("ROLLBACK");
-      } catch {
-        // ignore rollback error
-      }
-      ztoolkit.log("[StorageDatabase] Failed to upgrade to v9:", error);
+      try { await db.queryAsync("ROLLBACK"); } catch { /* ignore */ }
+      ztoolkit.log("[StorageDatabase] Failed to upgrade to v5:", getErrorMessage(error));
       throw error;
     }
   }
