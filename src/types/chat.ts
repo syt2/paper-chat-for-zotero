@@ -17,7 +17,15 @@ export interface FileAttachment {
   type: string;
 }
 
-import type { ToolCall } from "./tool";
+import type {
+  ToolApprovalRequest,
+  ToolCall,
+  ToolExecutionResult,
+  ToolPermissionRiskLevel,
+  ToolPermissionScope,
+} from "./tool";
+
+export type ChatMessageStreamingState = "in_progress" | "interrupted";
 
 // 聊天消息
 export interface ChatMessage {
@@ -33,6 +41,7 @@ export interface ChatMessage {
   // Tool calling 相关
   tool_calls?: ToolCall[]; // AI 请求调用的工具
   tool_call_id?: string; // tool 角色消息的工具调用ID
+  streamingState?: ChatMessageStreamingState;
   // 系统通知标记 (用于显示 item 切换提示等)
   isSystemNotice?: boolean;
 }
@@ -62,6 +71,7 @@ export type ExecutionPlanStepStatus =
   | "pending"
   | "in_progress"
   | "completed"
+  | "denied"
   | "failed";
 
 export interface ExecutionPlanStep {
@@ -85,6 +95,173 @@ export interface ExecutionPlan {
   createdAt: number;
   updatedAt: number;
 }
+
+export interface ToolExecutionState {
+  planId?: string;
+  turnStartedAt: number;
+  updatedAt: number;
+  results: ToolExecutionResult[];
+}
+
+export interface ToolApprovalState {
+  pendingRequests: ToolApprovalRequest[];
+  updatedAt: number;
+}
+
+export type TaskType =
+  | "compare_papers"
+  | "batch_update_tags"
+  | "batch_note_generation"
+  | "deep_library_search"
+  | "memory_maintenance"
+  | "custom";
+
+export type TaskStatus =
+  | "pending"
+  | "running"
+  | "cancel_requested"
+  | "cancelled"
+  | "completed"
+  | "failed";
+
+export interface TaskProgress {
+  current: number;
+  total?: number;
+  label?: string;
+}
+
+export interface TaskRecord {
+  id: string;
+  type: TaskType;
+  status: TaskStatus;
+  title: string;
+  sessionId?: string;
+  sourceMessageId?: string;
+  executionPlanId?: string;
+  parentTaskId?: string;
+  progress?: TaskProgress;
+  input?: Record<string, unknown>;
+  output?: Record<string, unknown>;
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
+  startedAt?: number;
+  completedAt?: number;
+  cancelledAt?: number;
+}
+
+export type TaskEventType =
+  | "created"
+  | "started"
+  | "progress"
+  | "cancel_requested"
+  | "cancelled"
+  | "completed"
+  | "failed"
+  | "recovered"
+  | "note";
+
+export interface TaskEvent {
+  id: string;
+  taskId: string;
+  type: TaskEventType;
+  payload?: Record<string, unknown>;
+  createdAt: number;
+}
+
+export type AgentRuntimeEventType =
+  | "turn_started"
+  | "text_delta"
+  | "reasoning_delta"
+  | "tool_started"
+  | "tool_completed"
+  | "approval_requested"
+  | "approval_resolved"
+  | "turn_completed"
+  | "turn_failed";
+
+interface AgentRuntimeEventBase {
+  type: AgentRuntimeEventType;
+  sessionId: string;
+  assistantMessageId: string;
+  timestamp: number;
+  planId?: string;
+  iteration?: number;
+}
+
+export interface AgentRuntimeTurnStartedEvent extends AgentRuntimeEventBase {
+  type: "turn_started";
+  summary: string;
+  streaming: boolean;
+}
+
+export interface AgentRuntimeTextDeltaEvent extends AgentRuntimeEventBase {
+  type: "text_delta";
+  delta: string;
+  content: string;
+}
+
+export interface AgentRuntimeReasoningDeltaEvent extends AgentRuntimeEventBase {
+  type: "reasoning_delta";
+  delta: string;
+  reasoning: string;
+}
+
+export interface AgentRuntimeToolStartedEvent extends AgentRuntimeEventBase {
+  type: "tool_started";
+  toolCallId: string;
+  toolName: string;
+  args: string;
+}
+
+export interface AgentRuntimeToolCompletedEvent extends AgentRuntimeEventBase {
+  type: "tool_completed";
+  toolCallId: string;
+  toolName: string;
+  args: string;
+  resultPreview: string;
+  status: "completed" | "failed" | "denied";
+}
+
+export interface AgentRuntimeApprovalRequestedEvent extends AgentRuntimeEventBase {
+  type: "approval_requested";
+  requestId: string;
+  toolCallId: string;
+  toolName: string;
+  riskLevel: ToolPermissionRiskLevel;
+  pendingCount: number;
+}
+
+export interface AgentRuntimeApprovalResolvedEvent extends AgentRuntimeEventBase {
+  type: "approval_resolved";
+  requestId: string;
+  toolCallId: string;
+  toolName: string;
+  verdict: "allow" | "deny";
+  scope: ToolPermissionScope;
+  pendingCount: number;
+}
+
+export interface AgentRuntimeTurnCompletedEvent extends AgentRuntimeEventBase {
+  type: "turn_completed";
+  content: string;
+}
+
+export interface AgentRuntimeTurnFailedEvent extends AgentRuntimeEventBase {
+  type: "turn_failed";
+  error: string;
+}
+
+export type AgentRuntimeEvent =
+  | AgentRuntimeTurnStartedEvent
+  | AgentRuntimeTextDeltaEvent
+  | AgentRuntimeReasoningDeltaEvent
+  | AgentRuntimeToolStartedEvent
+  | AgentRuntimeToolCompletedEvent
+  | AgentRuntimeApprovalRequestedEvent
+  | AgentRuntimeApprovalResolvedEvent
+  | AgentRuntimeTurnCompletedEvent
+  | AgentRuntimeTurnFailedEvent;
 
 // Session 索引 (用于快速加载 session 列表)
 export interface SessionIndex {
@@ -114,6 +291,8 @@ export interface ChatSession {
   contextSummary?: ContextSummary;
   contextState?: ContextState;
   executionPlan?: ExecutionPlan;
+  toolExecutionState?: ToolExecutionState;
+  toolApprovalState?: ToolApprovalState;
   // Memory extraction tracking (persisted to DB)
   memoryExtractedAt?: number;       // timestamp of last extraction
   memoryExtractedMsgCount?: number; // conversational msg count at last extraction
@@ -240,5 +419,7 @@ export interface LegacyChatSession {
   contextSummary?: ContextSummary;
   contextState?: ContextState;
   executionPlan?: ExecutionPlan;
+  toolExecutionState?: ToolExecutionState;
+  toolApprovalState?: ToolApprovalState;
   paperStructure?: unknown;
 }

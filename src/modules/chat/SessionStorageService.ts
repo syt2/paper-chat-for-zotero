@@ -11,7 +11,12 @@
  * Push → INSERT, splice → DELETE, content update → UPDATE.
  */
 
-import type { ChatMessage, ChatSession, SessionMeta } from "../../types/chat";
+import type {
+  ChatMessage,
+  ChatMessageStreamingState,
+  ChatSession,
+  SessionMeta,
+} from "../../types/chat";
 import { filterValidMessages, generateShortId } from "../../utils/common";
 import { getStorageDatabase } from "./db/StorageDatabase";
 
@@ -27,6 +32,8 @@ type SessionRow = {
   context_summary: string | null;
   context_state: string | null;
   execution_plan?: string | null;
+  tool_execution_state?: string | null;
+  tool_approval_state?: string | null;
   memory_extracted_at: number | null;
   memory_extracted_msg_count: number | null;
   selected_tier: string | null;
@@ -82,6 +89,14 @@ export function mapSessionRowToChatSession(
       : undefined,
     contextState: row.context_state ? JSON.parse(row.context_state) : undefined,
     executionPlan: row.execution_plan ? JSON.parse(row.execution_plan) : undefined,
+    toolExecutionState:
+      row.tool_execution_state
+        ? JSON.parse(row.tool_execution_state)
+        : undefined,
+    toolApprovalState:
+      row.tool_approval_state
+        ? JSON.parse(row.tool_approval_state)
+        : undefined,
     memoryExtractedAt:
       row.memory_extracted_at != null
         ? (row.memory_extracted_at as number)
@@ -188,8 +203,8 @@ export class SessionStorageService {
       const nextSeq = (seqRows[0]?.max_seq ?? -1) + 1;
 
       await db.queryAsync(
-        `INSERT INTO messages (id, session_id, seq, role, content, reasoning, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, is_system_notice)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO messages (id, session_id, seq, role, content, reasoning, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, streaming_state, is_system_notice)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           message.id,
           sessionId,
@@ -204,6 +219,7 @@ export class SessionStorageService {
           message.selectedText || null,
           message.tool_calls ? JSON.stringify(message.tool_calls) : null,
           message.tool_call_id || null,
+          message.streamingState || null,
           message.isSystemNotice ? 1 : null,
         ],
       );
@@ -316,15 +332,30 @@ export class SessionStorageService {
   /**
    * 更新消息内容 (streaming 完成后更新 assistant message 的最终内容)
    */
-  async updateMessageContent(sessionId: string, messageId: string, content: string, reasoning?: string): Promise<void> {
+  async updateMessageContent(
+    sessionId: string,
+    messageId: string,
+    content: string,
+    reasoning?: string,
+    options?: {
+      streamingState?: ChatMessageStreamingState | null;
+    },
+  ): Promise<void> {
     await this.init();
 
     try {
       const db = await getStorageDatabase().ensureInit();
 
       await db.queryAsync(
-        "UPDATE messages SET content = ?, reasoning = ?, timestamp = ? WHERE id = ? AND session_id = ?",
-        [content, reasoning || null, Date.now(), messageId, sessionId],
+        "UPDATE messages SET content = ?, reasoning = ?, timestamp = ?, streaming_state = ? WHERE id = ? AND session_id = ?",
+        [
+          content,
+          reasoning || null,
+          Date.now(),
+          options?.streamingState ?? null,
+          messageId,
+          sessionId,
+        ],
       );
 
       // Update session_meta preview with the latest content
@@ -363,7 +394,9 @@ export class SessionStorageService {
             last_active_item_keys = ?,
             context_summary = ?,
             context_state = ?,
-            execution_plan = ?
+            execution_plan = ?,
+            tool_execution_state = ?,
+            tool_approval_state = ?
           WHERE id = ?`,
           [
             session.updatedAt,
@@ -372,9 +405,11 @@ export class SessionStorageService {
             session.contextSummary ? JSON.stringify(session.contextSummary) : null,
             session.contextState ? JSON.stringify(session.contextState) : null,
             session.executionPlan ? JSON.stringify(session.executionPlan) : null,
-          session.id,
-        ],
-      );
+            session.toolExecutionState ? JSON.stringify(session.toolExecutionState) : null,
+            session.toolApprovalState ? JSON.stringify(session.toolApprovalState) : null,
+            session.id,
+          ],
+        );
 
         await db.queryAsync(
           `INSERT INTO paperchat_session_state
@@ -483,8 +518,8 @@ export class SessionStorageService {
         // Upsert session (no messages column)
         await db.queryAsync(
           `INSERT INTO sessions
-           (id, created_at, updated_at, last_active_item_key, last_active_item_keys, context_summary, context_state, execution_plan, memory_extracted_at, memory_extracted_msg_count)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           (id, created_at, updated_at, last_active_item_key, last_active_item_keys, context_summary, context_state, execution_plan, tool_execution_state, tool_approval_state, memory_extracted_at, memory_extracted_msg_count)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              created_at = excluded.created_at,
              updated_at = excluded.updated_at,
@@ -493,6 +528,8 @@ export class SessionStorageService {
              context_summary = excluded.context_summary,
              context_state = excluded.context_state,
              execution_plan = excluded.execution_plan,
+             tool_execution_state = excluded.tool_execution_state,
+             tool_approval_state = excluded.tool_approval_state,
              memory_extracted_at = excluded.memory_extracted_at,
              memory_extracted_msg_count = excluded.memory_extracted_msg_count`,
           [
@@ -504,6 +541,8 @@ export class SessionStorageService {
             session.contextSummary ? JSON.stringify(session.contextSummary) : null,
             session.contextState ? JSON.stringify(session.contextState) : null,
             session.executionPlan ? JSON.stringify(session.executionPlan) : null,
+            session.toolExecutionState ? JSON.stringify(session.toolExecutionState) : null,
+            session.toolApprovalState ? JSON.stringify(session.toolApprovalState) : null,
             session.memoryExtractedAt ?? null,
             session.memoryExtractedMsgCount ?? null,
           ],
@@ -539,8 +578,8 @@ export class SessionStorageService {
           for (let seq = 0; seq < session.messages.length; seq++) {
             const msg = session.messages[seq];
             await db.queryAsync(
-              `INSERT INTO messages (id, session_id, seq, role, content, reasoning, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, is_system_notice)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              `INSERT INTO messages (id, session_id, seq, role, content, reasoning, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, streaming_state, is_system_notice)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               [
                 msg.id,
                 session.id,
@@ -555,6 +594,7 @@ export class SessionStorageService {
                 msg.selectedText || null,
                 msg.tool_calls ? JSON.stringify(msg.tool_calls) : null,
                 msg.tool_call_id || null,
+                msg.streamingState || null,
                 msg.isSystemNotice ? 1 : null,
               ],
             );
@@ -600,6 +640,7 @@ export class SessionStorageService {
 
     try {
       const db = await getStorageDatabase().ensureInit();
+      await this.markInterruptedMessages(sessionId);
 
       // 1. Load session row (without messages)
       const sessionRows = (await db.queryAsync(
@@ -635,6 +676,14 @@ export class SessionStorageService {
         execution_plan:
           typeof baseRowRaw.execution_plan === "string"
             ? baseRowRaw.execution_plan
+            : null,
+        tool_execution_state:
+          typeof baseRowRaw.tool_execution_state === "string"
+            ? baseRowRaw.tool_execution_state
+            : null,
+        tool_approval_state:
+          typeof baseRowRaw.tool_approval_state === "string"
+            ? baseRowRaw.tool_approval_state
             : null,
         memory_extracted_at:
           typeof baseRowRaw.memory_extracted_at === "number"
@@ -706,6 +755,7 @@ export class SessionStorageService {
         if (m.selected_text) msg.selectedText = m.selected_text;
         if (m.tool_calls) msg.tool_calls = JSON.parse(m.tool_calls);
         if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
+        if (m.streaming_state) msg.streamingState = m.streaming_state;
         if (m.is_system_notice) msg.isSystemNotice = true;
         return msg;
       });
@@ -729,13 +779,7 @@ export class SessionStorageService {
 
       // Explicitly delete from all tables (don't rely on CASCADE alone,
       // since PRAGMA foreign_keys may not persist across reconnections)
-      await db.queryAsync(
-        "DELETE FROM paperchat_session_state WHERE session_id = ?",
-        [sessionId],
-      );
-      await db.queryAsync("DELETE FROM messages WHERE session_id = ?", [sessionId]);
-      await db.queryAsync("DELETE FROM session_meta WHERE id = ?", [sessionId]);
-      await db.queryAsync("DELETE FROM sessions WHERE id = ?", [sessionId]);
+      await this.deleteSessionData(db, sessionId);
 
       // If deleted session was active, switch to most recent
       if (this.activeSessionIdCache === sessionId) {
@@ -851,13 +895,7 @@ export class SessionStorageService {
       const rows = (await db.queryAsync(query, params)) || [];
 
       for (const row of rows) {
-        await db.queryAsync(
-          "DELETE FROM paperchat_session_state WHERE session_id = ?",
-          [row.id],
-        );
-        await db.queryAsync("DELETE FROM messages WHERE session_id = ?", [row.id]);
-        await db.queryAsync("DELETE FROM session_meta WHERE id = ?", [row.id]);
-        await db.queryAsync("DELETE FROM sessions WHERE id = ?", [row.id]);
+        await this.deleteSessionData(db, row.id);
       }
 
       ztoolkit.log("[SessionStorageService] Cleaned up empty sessions:", rows.length);
@@ -893,13 +931,7 @@ export class SessionStorageService {
       )) || [];
 
       for (const row of toDeleteRows) {
-        await db.queryAsync(
-          "DELETE FROM paperchat_session_state WHERE session_id = ?",
-          [row.id],
-        );
-        await db.queryAsync("DELETE FROM messages WHERE session_id = ?", [row.id]);
-        await db.queryAsync("DELETE FROM session_meta WHERE id = ?", [row.id]);
-        await db.queryAsync("DELETE FROM sessions WHERE id = ?", [row.id]);
+        await this.deleteSessionData(db, row.id);
       }
 
       if (toDeleteRows.length > 0) {
@@ -929,6 +961,36 @@ export class SessionStorageService {
     }
 
     return this.createSession();
+  }
+
+  private async markInterruptedMessages(sessionId: string): Promise<void> {
+    const db = await getStorageDatabase().ensureInit();
+    await db.queryAsync(
+      `UPDATE messages
+       SET streaming_state = 'interrupted'
+       WHERE session_id = ? AND streaming_state = 'in_progress'`,
+      [sessionId],
+    );
+  }
+
+  private async deleteSessionData(
+    db: {
+      queryAsync(sql: string, params?: unknown[]): Promise<any[] | undefined>;
+    },
+    sessionId: string,
+  ): Promise<void> {
+    await db.queryAsync(
+      "DELETE FROM task_events WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)",
+      [sessionId],
+    );
+    await db.queryAsync("DELETE FROM tasks WHERE session_id = ?", [sessionId]);
+    await db.queryAsync(
+      "DELETE FROM paperchat_session_state WHERE session_id = ?",
+      [sessionId],
+    );
+    await db.queryAsync("DELETE FROM messages WHERE session_id = ?", [sessionId]);
+    await db.queryAsync("DELETE FROM session_meta WHERE id = ?", [sessionId]);
+    await db.queryAsync("DELETE FROM sessions WHERE id = ?", [sessionId]);
   }
 
   /**
