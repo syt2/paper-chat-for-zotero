@@ -9,18 +9,29 @@
  */
 
 import type {
+  AgentRuntimeEvent,
   ChatMessage,
+  ChatMessageStreamingState,
   ChatSession,
+  ExecutionPlan,
   SendMessageOptions,
+  ToolApprovalState,
   StreamCallbacks,
   SessionMeta,
 } from "../../types/chat";
-import type { ToolDefinition } from "../../types/tool";
+import type {
+  ToolApprovalRequest,
+  ToolApprovalResolution,
+  ToolDefinition,
+  ToolPermissionDecision,
+} from "../../types/tool";
 import type { ToolCallingProvider, AIProvider } from "../../types/provider";
 import { SessionStorageService } from "./SessionStorageService";
 import { PdfExtractor } from "./PdfExtractor";
 import { getContextManager } from "./ContextManager";
 import { getPdfToolManager } from "./pdf-tools";
+import { getTaskManager } from "./task-manager";
+import { getToolPermissionManager } from "./tool-permissions";
 import { getProviderManager } from "../providers";
 import { getAuthManager } from "../auth";
 import { getString } from "../../utils/locale";
@@ -61,6 +72,12 @@ function providerSupportsStreamingToolCalling(
 }
 // 使用 common.ts 中的 getItemTitleSmart 获取 item 标题
 
+class SessionRunInvalidatedError extends Error {
+  constructor() {
+    super("Session run invalidated");
+  }
+}
+
 export class ChatManager {
   private sessionStorage: SessionStorageService;
   private pdfExtractor: PdfExtractor;
@@ -85,6 +102,8 @@ export class ChatManager {
   private onError?: (error: Error) => void;
   private onPdfAttached?: () => void;
   private onMessageComplete?: () => void;
+  private onExecutionPlanUpdate?: (plan?: ExecutionPlan) => void;
+  private onRuntimeEvent?: (event: AgentRuntimeEvent) => void;
   private onSelectedItemsChange?: (itemKeys: string[]) => void; // 多文档选择变化回调
   private onFallbackNotice?: (fromProvider: string, toProvider: string) => void; // 降级通知回调
 
@@ -94,14 +113,25 @@ export class ChatManager {
     this.memoryManager = new MemoryManager(this.sessionStorage);
     this.agentRuntime = new AgentRuntime(this.sessionStorage, {
       isSessionActive: (session) => this.isSessionActive(session),
+      isSessionTracked: (session) => this.isSessionTracked(session),
       onStreamingUpdate: (content) => this.onStreamingUpdate?.(content),
       onReasoningUpdate: (reasoning) => this.onReasoningUpdate?.(reasoning),
       onMessageUpdate: (messages) => this.onMessageUpdate?.(messages),
       onPdfAttached: () => this.onPdfAttached?.(),
       onMessageComplete: () => this.onMessageComplete?.(),
+      onExecutionPlanUpdate: (plan) => this.onExecutionPlanUpdate?.(plan),
+      onRuntimeEvent: (event) => this.onRuntimeEvent?.(event),
       formatToolCallCard: (toolName, args, status, resultPreview) =>
         this.formatToolCallCard(toolName, args, status, resultPreview),
       generateId: () => this.generateId(),
+    });
+    getToolPermissionManager().addApprovalObserver({
+      onApprovalRequested: (approvalRequest) => {
+        this.handleApprovalRequested(approvalRequest);
+      },
+      onApprovalResolved: (approvalRequest, decision) => {
+        this.handleApprovalResolved(approvalRequest, decision);
+      },
     });
   }
 
@@ -113,9 +143,11 @@ export class ChatManager {
 
     // 初始化存储服务 (migration handled at startup in hooks.ts)
     await this.sessionStorage.init();
+    await getTaskManager().recoverInterruptedTasks();
 
     // 加载活动 session
     this.currentSession = await this.sessionStorage.getOrCreateActiveSession();
+    this.reconcileApprovalState(this.currentSession);
 
     this.initialized = true;
     ztoolkit.log("[ChatManager] Initialized");
@@ -130,6 +162,41 @@ export class ChatManager {
    */
   private getActiveProvider() {
     return getProviderManager().getActiveProvider();
+  }
+
+  private buildToolCallingSystemPrompt(params: {
+    currentMessages: ChatMessage[];
+    paperStructure?: Awaited<
+      ReturnType<typeof getPdfToolManager.prototype.extractAndParsePaper>
+    >;
+    hasCurrentItem: boolean;
+    item?: Zotero.Item;
+    memoryContext?: string;
+    sendingSession: ChatSession;
+  }): string {
+    const {
+      currentMessages,
+      paperStructure,
+      hasCurrentItem,
+      item,
+      memoryContext,
+      sendingSession,
+    } = params;
+    const pdfToolManager = getPdfToolManager();
+    const recentToolResults =
+      sendingSession.toolExecutionState?.results.slice(-3) || [];
+
+    return pdfToolManager.generatePaperContextPrompt(
+      paperStructure || undefined,
+      hasCurrentItem ? item?.key : undefined,
+      hasCurrentItem && item ? getItemTitleSmart(item) : undefined,
+      hasCurrentItem,
+      memoryContext,
+      {
+        executionPlan: sendingSession.executionPlan,
+        recentToolResults,
+      },
+    );
   }
 
   /**
@@ -170,6 +237,18 @@ export class ChatManager {
   }
 
   /**
+   * Check whether a session object is still the authoritative in-memory
+   * instance for its session id. Clearing/deleting a session replaces or
+   * detaches the old object so late async callbacks can be ignored.
+   */
+  private isSessionTracked(session: ChatSession): boolean {
+    return (
+      this.currentSession === session ||
+      this.streamingSessions.get(session.id) === session
+    );
+  }
+
+  /**
    * 设置UI回调
    */
   setCallbacks(callbacks: {
@@ -179,6 +258,8 @@ export class ChatManager {
     onError?: (error: Error) => void;
     onPdfAttached?: () => void;
     onMessageComplete?: () => void;
+    onExecutionPlanUpdate?: (plan?: ExecutionPlan) => void;
+    onRuntimeEvent?: (event: AgentRuntimeEvent) => void;
     onSelectedItemsChange?: (itemKeys: string[]) => void;
     onFallbackNotice?: (fromProvider: string, toProvider: string) => void;
   }): void {
@@ -188,6 +269,8 @@ export class ChatManager {
     this.onError = callbacks.onError;
     this.onPdfAttached = callbacks.onPdfAttached;
     this.onMessageComplete = callbacks.onMessageComplete;
+    this.onExecutionPlanUpdate = callbacks.onExecutionPlanUpdate;
+    this.onRuntimeEvent = callbacks.onRuntimeEvent;
     this.onSelectedItemsChange = callbacks.onSelectedItemsChange;
     this.onFallbackNotice = callbacks.onFallbackNotice;
 
@@ -279,12 +362,29 @@ export class ChatManager {
     return this.currentSession;
   }
 
+  listPendingToolApprovals(sessionId?: string): ToolApprovalRequest[] {
+    return getToolPermissionManager().listPendingApprovals(
+      sessionId ?? this.currentSession?.id,
+    );
+  }
+
+  resolveToolApprovalRequest(
+    requestId: string,
+    resolution: ToolApprovalResolution,
+  ): ToolPermissionDecision | null {
+    return getToolPermissionManager().resolveApprovalRequest(
+      requestId,
+      resolution,
+    );
+  }
+
   /**
    * 创建新 session
    */
   async createNewSession(): Promise<ChatSession> {
     await this.init();
     this.currentSession = await this.sessionStorage.createSession();
+    this.reconcileApprovalState(this.currentSession);
     return this.currentSession;
   }
 
@@ -304,6 +404,7 @@ export class ChatManager {
       ?? await this.sessionStorage.loadSession(sessionId);
 
     if (session) {
+      this.reconcileApprovalState(session);
       this.currentSession = session;
       await this.sessionStorage.setActiveSession(sessionId);
       // 恢复 lastActiveItemKey 和 lastActiveItemKeys
@@ -320,16 +421,33 @@ export class ChatManager {
    */
   async deleteSession(sessionId: string): Promise<void> {
     await this.init();
+    getToolPermissionManager().denyPendingApprovals({
+      sessionId,
+      reason: "Pending tool approvals were denied because the session was deleted.",
+    });
+    getToolPermissionManager().clearSessionPolicies(sessionId);
+
+    const deletingCurrentSession = this.currentSession?.id === sessionId;
+    this.streamingSessions.delete(sessionId);
+    if (deletingCurrentSession) {
+      this.currentSession = null;
+    }
+
     await this.sessionStorage.deleteSession(sessionId);
 
     // 清理 ContextManager 中的相关状态
     getContextManager().onSessionDeleted(sessionId);
-    this.streamingSessions.delete(sessionId);
 
     // 如果删除的是当前 session，切换到最近的或创建新的
-    if (this.currentSession?.id === sessionId) {
-      this.currentSession =
-        await this.sessionStorage.getOrCreateActiveSession();
+    if (deletingCurrentSession) {
+      this.currentSession = await this.sessionStorage.getOrCreateActiveSession();
+      this.reconcileApprovalState(this.currentSession);
+      this.currentItemKey = this.currentSession.lastActiveItemKey;
+      this.currentItemKeys =
+        this.currentSession.lastActiveItemKeys ||
+        (this.currentItemKey ? [this.currentItemKey] : []);
+      getPdfToolManager().setCurrentItemKey(this.currentItemKey);
+      getPdfToolManager().setCurrentItemKeys(this.currentItemKeys);
     }
   }
 
@@ -590,13 +708,19 @@ export class ChatManager {
       id: this.generateId(),
       role: "assistant",
       content: "",
+      streamingState: "in_progress",
       timestamp: Date.now(),
     };
 
     sendingSession.messages.push(assistantMessage);
     await this.sessionStorage.insertMessage(sendingSession.id, assistantMessage);
     sendingSession.executionPlan = undefined;
+    sendingSession.toolExecutionState = undefined;
+    sendingSession.toolApprovalState = undefined;
     await this.sessionStorage.updateSessionMeta(sendingSession);
+    if (this.isSessionActive(sendingSession)) {
+      this.onExecutionPlanUpdate?.(sendingSession.executionPlan);
+    }
     if (this.isSessionActive(sendingSession)) {
       this.onMessageUpdate?.(sendingSession.messages);
     }
@@ -646,26 +770,103 @@ export class ChatManager {
 
       try {
         await providerManager.executeWithFallback(async (currentProvider) => {
+          if (!this.isSessionTracked(sendingSession)) {
+            throw new SessionRunInvalidatedError();
+          }
+
           // 重置 assistant 消息内容（降级时需要清空之前的部分内容）
           assistantMessage.content = "";
           assistantMessage.reasoning = "";
+          assistantMessage.streamingState = "in_progress";
+
+          let checkpointTimer: ReturnType<typeof setTimeout> | null = null;
+          let checkpointQueue: Promise<void> = Promise.resolve();
+
+          const enqueueCheckpoint = (
+            streamingState: ChatMessageStreamingState | null,
+          ): Promise<void> => {
+            if (!this.isSessionTracked(sendingSession)) {
+              return checkpointQueue;
+            }
+            checkpointQueue = checkpointQueue
+              .catch(() => undefined)
+              .then(async () => {
+                if (!this.isSessionTracked(sendingSession)) {
+                  return;
+                }
+                await this.sessionStorage.updateMessageContent(
+                  sendingSession.id,
+                  assistantMessage.id,
+                  assistantMessage.content,
+                  assistantMessage.reasoning,
+                  { streamingState },
+                );
+              });
+            return checkpointQueue;
+          };
+
+          const scheduleCheckpoint = (): void => {
+            if (!this.isSessionTracked(sendingSession)) {
+              return;
+            }
+            if (checkpointTimer) {
+              return;
+            }
+            checkpointTimer = setTimeout(() => {
+              checkpointTimer = null;
+              if (!this.isSessionTracked(sendingSession)) {
+                return;
+              }
+              void enqueueCheckpoint("in_progress");
+            }, 1000);
+          };
+
+          const flushCheckpoint = async (
+            streamingState: ChatMessageStreamingState | null,
+          ): Promise<void> => {
+            if (checkpointTimer) {
+              clearTimeout(checkpointTimer);
+              checkpointTimer = null;
+            }
+            if (!this.isSessionTracked(sendingSession)) {
+              return;
+            }
+            await enqueueCheckpoint(streamingState);
+          };
 
           return new Promise<void>((resolve, reject) => {
             const callbacks: StreamCallbacks = {
               onChunk: (chunk: string) => {
+                if (!this.isSessionTracked(sendingSession)) {
+                  return;
+                }
                 assistantMessage.content += chunk;
+                scheduleCheckpoint();
                 if (this.isSessionActive(sendingSession)) {
                   this.onStreamingUpdate?.(assistantMessage.content);
                 }
               },
               onReasoningChunk: (chunk: string) => {
+                if (!this.isSessionTracked(sendingSession)) {
+                  return;
+                }
                 assistantMessage.reasoning = (assistantMessage.reasoning || "") + chunk;
+                scheduleCheckpoint();
                 if (this.isSessionActive(sendingSession)) {
                   this.onReasoningUpdate?.(assistantMessage.reasoning);
                 }
               },
               onComplete: async (fullContent: string) => {
+                if (!this.isSessionTracked(sendingSession)) {
+                  if (checkpointTimer) {
+                    clearTimeout(checkpointTimer);
+                    checkpointTimer = null;
+                  }
+                  resolve();
+                  return;
+                }
                 assistantMessage.content = fullContent;
+                assistantMessage.streamingState = undefined;
                 assistantMessage.timestamp = Date.now();
                 sendingSession.updatedAt = Date.now();
 
@@ -674,7 +875,7 @@ export class ChatManager {
                   delete assistantMessage.reasoning;
                 }
 
-                await this.sessionStorage.updateMessageContent(sendingSession.id, assistantMessage.id, fullContent, assistantMessage.reasoning);
+                await flushCheckpoint(null);
                 await this.sessionStorage.updateSessionMeta(sendingSession);
                 if (this.isSessionActive(sendingSession)) {
                   this.onMessageUpdate?.(sendingSession.messages);
@@ -700,6 +901,14 @@ export class ChatManager {
               },
               onError: async (error: Error) => {
                 ztoolkit.log("[API Error]", error.message);
+                if (checkpointTimer) {
+                  clearTimeout(checkpointTimer);
+                  checkpointTimer = null;
+                }
+                if (!this.isSessionTracked(sendingSession)) {
+                  resolve();
+                  return;
+                }
 
                 // 对于 PaperChat 的认证错误，尝试刷新 token
                 if (this.isAuthError(error) && currentProvider.getName() === "PaperChat") {
@@ -721,6 +930,9 @@ export class ChatManager {
           });
         });
       } catch (error) {
+        if (error instanceof SessionRunInvalidatedError) {
+          return;
+        }
         // 所有 provider 都失败了
         ztoolkit.log("[ChatManager] All providers failed:", error);
 
@@ -785,13 +997,17 @@ export class ChatManager {
     );
 
     // 添加论文上下文系统提示
-    const paperContextPrompt = pdfToolManager.generatePaperContextPrompt(
-      paperStructure || undefined,
-      hasCurrentItem ? item.key : undefined,
-      hasCurrentItem ? getItemTitleSmart(item) : undefined,
-      hasCurrentItem,
-      memoryContext,
-    );
+    const buildSystemPrompt = (currentMessages: ChatMessage[]) =>
+      this.buildToolCallingSystemPrompt({
+        currentMessages,
+        paperStructure,
+        hasCurrentItem,
+        item: hasCurrentItem ? item : undefined,
+        memoryContext,
+        sendingSession,
+      });
+
+    const paperContextPrompt = buildSystemPrompt(messagesForApi);
 
     const messagesWithContext: ChatMessage[] = [
       {
@@ -832,6 +1048,7 @@ export class ChatManager {
             tools,
             paperStructure,
             sendingSession,
+            buildSystemPrompt,
           );
         } else {
           ztoolkit.log(`[Tool Calling] Using non-streaming mode with ${currentProvider.getName()}`);
@@ -844,6 +1061,7 @@ export class ChatManager {
             tools,
             paperStructure,
             sendingSession,
+            buildSystemPrompt,
           );
         }
       });
@@ -965,6 +1183,7 @@ export class ChatManager {
       ReturnType<typeof getPdfToolManager.prototype.extractAndParsePaper>
     >,
     sendingSession: ChatSession,
+    buildSystemPrompt: (currentMessages: ChatMessage[]) => string,
   ): Promise<void> {
     await this.agentRuntime.executeStreamingToolLoop({
       provider,
@@ -975,6 +1194,7 @@ export class ChatManager {
       tools,
       paperStructure,
       sendingSession,
+      refreshSystemPrompt: buildSystemPrompt,
     });
   }
 
@@ -993,6 +1213,7 @@ export class ChatManager {
       ReturnType<typeof getPdfToolManager.prototype.extractAndParsePaper>
     >,
     sendingSession: ChatSession,
+    buildSystemPrompt: (currentMessages: ChatMessage[]) => string,
   ): Promise<void> {
     await this.agentRuntime.executeNonStreamingToolLoop({
       provider,
@@ -1003,6 +1224,7 @@ export class ChatManager {
       tools,
       paperStructure,
       sendingSession,
+      refreshSystemPrompt: buildSystemPrompt,
     });
   }
 
@@ -1012,17 +1234,18 @@ export class ChatManager {
   async clearCurrentSession(): Promise<void> {
     if (!this.currentSession) return;
 
-    this.currentSession.messages = [];
-    this.currentSession.contextSummary = undefined;
-    this.currentSession.contextState = undefined;
-    this.currentSession.executionPlan = undefined;
-    this.currentSession.lastActiveItemKey = null;
-    this.currentSession.lastActiveItemKeys = [];
-    this.currentSession.updatedAt = Date.now();
+    const clearedSession = this.createClearedSession(this.currentSession);
+    getToolPermissionManager().denyPendingApprovals({
+      sessionId: clearedSession.id,
+      reason: "Pending tool approvals were denied because the session was cleared.",
+    });
+    this.streamingSessions.delete(clearedSession.id);
+    this.currentSession = clearedSession;
 
-    await this.sessionStorage.deleteAllMessages(this.currentSession.id);
-    await this.sessionStorage.updateSessionMeta(this.currentSession);
-    this.onMessageUpdate?.(this.currentSession.messages);
+    await this.sessionStorage.deleteAllMessages(clearedSession.id);
+    await this.sessionStorage.updateSessionMeta(clearedSession);
+    this.onExecutionPlanUpdate?.(clearedSession.executionPlan);
+    this.onMessageUpdate?.(clearedSession.messages);
 
     ztoolkit.log("Current session cleared");
   }
@@ -1053,6 +1276,173 @@ export class ChatManager {
    */
   private generateId(): string {
     return generateTimestampId();
+  }
+
+  private handleApprovalRequested(
+    approvalRequest: ToolApprovalRequest,
+  ): void {
+    const session = this.getTrackedSessionById(approvalRequest.request.sessionId);
+    if (!session) {
+      return;
+    }
+
+    const pendingRequests = [
+      ...(session.toolApprovalState?.pendingRequests || []).filter(
+        (entry) => entry.id !== approvalRequest.id,
+      ),
+      approvalRequest,
+    ].sort((a, b) => a.createdAt - b.createdAt);
+
+    session.toolApprovalState = {
+      pendingRequests,
+      updatedAt: Date.now(),
+    };
+    this.persistApprovalState(session);
+    this.notifyApprovalStateChanged(session);
+    this.emitApprovalRuntimeEvent(session, {
+      type: "approval_requested",
+      requestId: approvalRequest.id,
+      toolCallId: approvalRequest.request.toolCall.id,
+      toolName: approvalRequest.toolName,
+      riskLevel: approvalRequest.descriptor.riskLevel,
+      pendingCount: pendingRequests.length,
+    });
+  }
+
+  private handleApprovalResolved(
+    approvalRequest: ToolApprovalRequest,
+    decision: ToolPermissionDecision,
+  ): void {
+    const session = this.getTrackedSessionById(approvalRequest.request.sessionId);
+    if (!session) {
+      return;
+    }
+
+    const pendingRequests = (
+      session.toolApprovalState?.pendingRequests || []
+    ).filter((entry) => entry.id !== approvalRequest.id);
+
+    session.toolApprovalState =
+      pendingRequests.length > 0
+        ? {
+            pendingRequests,
+            updatedAt: Date.now(),
+          }
+        : undefined;
+
+    this.persistApprovalState(session);
+    this.notifyApprovalStateChanged(session);
+    this.emitApprovalRuntimeEvent(session, {
+      type: "approval_resolved",
+      requestId: approvalRequest.id,
+      toolCallId: approvalRequest.request.toolCall.id,
+      toolName: approvalRequest.toolName,
+      verdict: decision.verdict,
+      scope: decision.scope,
+      pendingCount: pendingRequests.length,
+    });
+  }
+
+  private getTrackedSessionById(sessionId?: string): ChatSession | null {
+    if (!sessionId) {
+      return null;
+    }
+    const streamingSession = this.streamingSessions.get(sessionId);
+    if (streamingSession) {
+      return streamingSession;
+    }
+    if (this.currentSession?.id === sessionId) {
+      return this.currentSession;
+    }
+    return null;
+  }
+
+  private createClearedSession(session: ChatSession): ChatSession {
+    const now = Date.now();
+    return {
+      id: session.id,
+      createdAt: session.createdAt,
+      updatedAt: now,
+      lastActiveItemKey: null,
+      lastActiveItemKeys: [],
+      messages: [],
+      memoryExtractedAt: undefined,
+      memoryExtractedMsgCount: undefined,
+    };
+  }
+
+  private reconcileApprovalState(session: ChatSession | null): void {
+    if (!session) {
+      return;
+    }
+
+    const pendingRequests = getToolPermissionManager().listPendingApprovals(
+      session.id,
+    );
+    const normalizedState: ToolApprovalState | undefined =
+      pendingRequests.length > 0
+        ? {
+            pendingRequests,
+            updatedAt: Date.now(),
+          }
+        : undefined;
+
+    const currentIds = (session.toolApprovalState?.pendingRequests || [])
+      .map((entry) => entry.id)
+      .sort();
+    const normalizedIds = pendingRequests.map((entry) => entry.id).sort();
+    const isSameState =
+      currentIds.length === normalizedIds.length &&
+      currentIds.every((id, index) => id === normalizedIds[index]);
+
+    if (isSameState && (!!session.toolApprovalState === !!normalizedState)) {
+      return;
+    }
+
+    session.toolApprovalState = normalizedState;
+    this.persistApprovalState(session);
+  }
+
+  private persistApprovalState(session: ChatSession): void {
+    this.sessionStorage.updateSessionMeta(session).catch((error) => {
+      ztoolkit.log(
+        "[ChatManager] Failed to persist tool approval state:",
+        error,
+      );
+    });
+  }
+
+  private notifyApprovalStateChanged(session: ChatSession): void {
+    if (this.isSessionActive(session)) {
+      this.onExecutionPlanUpdate?.(session.executionPlan);
+    }
+  }
+
+  private emitApprovalRuntimeEvent(
+    session: ChatSession,
+    payload:
+      | Omit<
+          Extract<AgentRuntimeEvent, { type: "approval_requested" }>,
+          "sessionId" | "assistantMessageId" | "timestamp" | "planId"
+        >
+      | Omit<
+          Extract<AgentRuntimeEvent, { type: "approval_resolved" }>,
+          "sessionId" | "assistantMessageId" | "timestamp" | "planId"
+        >,
+  ): void {
+    const assistantMessageId =
+      [...session.messages]
+        .reverse()
+        .find((message) => message.role === "assistant")?.id ||
+      payload.toolCallId;
+
+    this.onRuntimeEvent?.({
+      ...payload,
+      sessionId: session.id,
+      assistantMessageId,
+      timestamp: Date.now(),
+      planId: session.executionPlan?.id,
+    } as AgentRuntimeEvent);
   }
 
   /**

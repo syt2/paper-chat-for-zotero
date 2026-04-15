@@ -428,6 +428,7 @@ export function setupEventHandlers(context: ChatPanelContext): void {
           }
 
           context.renderMessages(loadedSession.messages);
+          context.renderExecutionPlan(loadedSession.executionPlan);
         }
       },
       // onDelete callback

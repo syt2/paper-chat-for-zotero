@@ -2,7 +2,13 @@
  * MessageRenderer - Create and manage message bubble elements
  */
 
-import type { ChatMessage } from "../../chat";
+import type {
+  ChatMessage,
+  ExecutionPlan,
+  ExecutionPlanStep,
+  ToolApprovalState,
+} from "../../chat";
+import type { ToolApprovalResolution } from "../../../types/tool";
 import { chatColors } from "../../../utils/colors";
 import type { ThemeColors } from "./types";
 import { HTML_NS } from "./types";
@@ -224,6 +230,24 @@ export function createMessageElement(
 
   // Add reasoning section for assistant messages (before content)
   if (msg.role === "assistant") {
+    if (msg.streamingState === "interrupted") {
+      const interruptedBadge = createElement(doc, "div", {
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "4px",
+        marginBottom: "8px",
+        padding: "3px 8px",
+        fontSize: "11px",
+        fontWeight: "600",
+        color: "#b45309",
+        background: theme.buttonBg,
+        border: `1px solid ${theme.borderColor}`,
+        borderRadius: "999px",
+      });
+      interruptedBadge.textContent = "Interrupted";
+      bubble.appendChild(interruptedBadge);
+    }
+
     if (msg.reasoning) {
       // Completed message with reasoning - show collapsed
       const reasoningContainer = createReasoningContainer(doc, theme, msg.reasoning, false);
@@ -427,6 +451,316 @@ export function renderMessages(
 
   // Scroll to bottom
   chatHistory.scrollTop = chatHistory.scrollHeight;
+}
+
+export function updateExecutionPlanView(
+  panel: HTMLElement,
+  theme: ThemeColors,
+  executionPlan?: ExecutionPlan,
+  toolApprovalState?: ToolApprovalState,
+  approvalActions?: {
+    onResolveApproval: (
+      requestId: string,
+      resolution: ToolApprovalResolution,
+    ) => void | Promise<void>;
+  },
+): void {
+  const existing = panel.querySelector("#chat-execution-plan");
+  if (existing) {
+    existing.remove();
+  }
+
+  if (toolApprovalState?.pendingRequests.length) {
+    const doc = panel.ownerDocument;
+    if (!doc) return;
+
+    const approvalElement = createApprovalElement(
+      doc,
+      toolApprovalState,
+      theme,
+      approvalActions,
+    );
+    panel.style.display = "block";
+    panel.appendChild(approvalElement);
+    return;
+  }
+
+  if (!executionPlan || executionPlan.status !== "in_progress") {
+    panel.style.display = "none";
+    return;
+  }
+
+  const doc = panel.ownerDocument;
+  if (!doc) return;
+
+  const planElement = createExecutionPlanElement(doc, executionPlan, theme);
+  panel.style.display = "block";
+  panel.appendChild(planElement);
+}
+
+function createApprovalElement(
+  doc: Document,
+  toolApprovalState: ToolApprovalState,
+  theme: ThemeColors,
+  approvalActions?: {
+    onResolveApproval: (
+      requestId: string,
+      resolution: ToolApprovalResolution,
+    ) => void | Promise<void>;
+  },
+): HTMLElement {
+  const activeRequest = toolApprovalState.pendingRequests[0];
+  const extraCount = Math.max(toolApprovalState.pendingRequests.length - 1, 0);
+
+  const wrapper = createElement(
+    doc,
+    "div",
+    {
+      display: "block",
+      margin: "0 0 8px 0",
+    },
+    { id: "chat-execution-plan", class: "chat-execution-plan" },
+  );
+
+  const bar = createElement(
+    doc,
+    "div",
+    {
+      border: `1px solid ${theme.borderColor}`,
+      background: theme.assistantBubbleBg,
+      borderRadius: "999px",
+      padding: "6px 10px",
+      boxShadow: "0 1px 2px rgba(0, 0, 0, 0.05)",
+      display: "flex",
+      alignItems: "center",
+      gap: "8px",
+      minWidth: "0",
+      flexWrap: "wrap",
+    },
+  );
+
+  const badge = createElement(doc, "span", {
+    fontSize: "12px",
+    fontWeight: "700",
+    color: "#b45309",
+    flexShrink: "0",
+  });
+  badge.textContent = "!";
+
+  const title = createElement(doc, "span", {
+    fontSize: "12px",
+    fontWeight: "600",
+    color: theme.textPrimary,
+    whiteSpace: "nowrap",
+    flexShrink: "0",
+  });
+  title.textContent = "Permission";
+
+  const detail = createElement(doc, "div", {
+    fontSize: "12px",
+    color: theme.textSecondary,
+    minWidth: "0",
+    flex: "1 1 160px",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  });
+  detail.textContent = formatApprovalDetail(activeRequest, extraCount);
+
+  const actions = createElement(doc, "div", {
+    display: "flex",
+    alignItems: "center",
+    gap: "6px",
+    flexWrap: "wrap",
+    flexShrink: "0",
+  });
+
+  const buttonSpecs: Array<{
+    label: string;
+    resolution: ToolApprovalResolution;
+  }> = [
+    {
+      label: "Allow Once",
+      resolution: { verdict: "allow", scope: "once" },
+    },
+    {
+      label: "Session",
+      resolution: { verdict: "allow", scope: "session" },
+    },
+    {
+      label: "Always",
+      resolution: { verdict: "allow", scope: "always" },
+    },
+    {
+      label: "Deny",
+      resolution: { verdict: "deny", scope: "once" },
+    },
+  ];
+
+  for (const spec of buttonSpecs) {
+    const button = createElement(
+      doc,
+      "button",
+      {
+        border: `1px solid ${theme.borderColor}`,
+        background:
+          spec.resolution.verdict === "deny"
+            ? theme.buttonBg
+            : theme.inputAreaBg,
+        color: theme.textPrimary,
+        borderRadius: "999px",
+        padding: "3px 8px",
+        fontSize: "11px",
+        fontWeight: "600",
+        cursor: approvalActions ? "pointer" : "default",
+        opacity: approvalActions ? "1" : "0.6",
+      },
+    ) as HTMLButtonElement;
+    button.textContent = spec.label;
+    button.disabled = !approvalActions;
+    if (approvalActions) {
+      button.addEventListener("click", () => {
+        void approvalActions.onResolveApproval(activeRequest.id, spec.resolution);
+      });
+    }
+    actions.appendChild(button);
+  }
+
+  bar.appendChild(badge);
+  bar.appendChild(title);
+  bar.appendChild(detail);
+  bar.appendChild(actions);
+  wrapper.appendChild(bar);
+  return wrapper;
+}
+
+function createExecutionPlanElement(
+  doc: Document,
+  plan: ExecutionPlan,
+  theme: ThemeColors,
+): HTMLElement {
+  const activeStep = getActiveExecutionStep(plan);
+  const completedCount = plan.steps.filter(
+    (step) => step.status === "completed",
+  ).length;
+  const totalCount = plan.steps.length;
+
+  const wrapper = createElement(
+    doc,
+    "div",
+    {
+      display: "block",
+      margin: "0 0 8px 0",
+    },
+    { id: "chat-execution-plan", class: "chat-execution-plan" },
+  );
+
+  const bar = createElement(
+    doc,
+    "div",
+    {
+      border: `1px solid ${theme.borderColor}`,
+      background: theme.assistantBubbleBg,
+      borderRadius: "999px",
+      padding: "7px 12px",
+      boxShadow: "0 1px 2px rgba(0, 0, 0, 0.05)",
+      display: "flex",
+      alignItems: "center",
+      gap: "8px",
+      minWidth: "0",
+    },
+  );
+
+  const badge = createElement(doc, "span", {
+    fontSize: "12px",
+    fontWeight: "700",
+    color: getPlanStatusColor("in_progress", theme),
+    flexShrink: "0",
+  });
+  badge.textContent = "⏳";
+
+  const title = createElement(doc, "span", {
+    fontSize: "12px",
+    fontWeight: "600",
+    color: theme.textPrimary,
+    whiteSpace: "nowrap",
+    flexShrink: "0",
+  });
+  title.textContent = "Execution Plan";
+
+  const detail = createElement(doc, "div", {
+    fontSize: "12px",
+    color: theme.textSecondary,
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    minWidth: "0",
+    flex: "1",
+  });
+
+  detail.textContent = formatExecutionPlanDetail(
+    plan,
+    activeStep,
+    completedCount,
+    totalCount,
+  );
+
+  bar.appendChild(badge);
+  bar.appendChild(title);
+  bar.appendChild(detail);
+
+  wrapper.appendChild(bar);
+  return wrapper;
+}
+
+function getActiveExecutionStep(plan: ExecutionPlan): ExecutionPlanStep | undefined {
+  if (plan.activeStepId) {
+    const activeStep = plan.steps.find((step) => step.id === plan.activeStepId);
+    if (activeStep) return activeStep;
+  }
+
+  return (
+    plan.steps.find((step) => step.status === "in_progress") ||
+    plan.steps[plan.steps.length - 1]
+  );
+}
+
+function formatExecutionPlanDetail(
+  plan: ExecutionPlan,
+  activeStep: ExecutionPlanStep | undefined,
+  completedCount: number,
+  totalCount: number,
+): string {
+  const progressText =
+    totalCount > 0 ? `${completedCount}/${totalCount} steps` : "preparing";
+  const activeLabel = activeStep?.toolName || activeStep?.title || plan.summary;
+  return `${progressText} · ${activeLabel}`;
+}
+
+function formatApprovalDetail(
+  request: ToolApprovalState["pendingRequests"][number],
+  extraCount: number,
+): string {
+  const suffix = extraCount > 0 ? ` +${extraCount}` : "";
+  return `${request.toolName} · ${request.descriptor.riskLevel}${suffix}`;
+}
+
+function getPlanStatusColor(
+  status: ExecutionPlan["status"] | ExecutionPlanStep["status"],
+  theme: ThemeColors,
+): string {
+  switch (status) {
+    case "completed":
+      return "#1a7f37";
+    case "denied":
+      return "#b26b00";
+    case "failed":
+      return chatColors.errorBubbleText;
+    case "in_progress":
+      return theme.textPrimary;
+    default:
+      return theme.textMuted;
+  }
 }
 
 /**
