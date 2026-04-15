@@ -273,30 +273,38 @@ export class StorageDatabase {
         [SCHEMA_VERSION, Date.now()],
       );
     } else {
-      const currentVersion = rows[0].version;
+      let currentVersion = rows[0].version;
       if (currentVersion < 2) {
         await this.devUpgradeToV2(db);
+        currentVersion = 2;
       }
       if (currentVersion < 3) {
         await this.upgradeToV3(db);
+        currentVersion = 3;
       }
       if (currentVersion < 4) {
         await this.upgradeToV4(db);
+        currentVersion = 4;
       }
       if (currentVersion < 5) {
         await this.upgradeToV5(db);
+        currentVersion = 5;
       }
       if (currentVersion < 6) {
         await this.upgradeToV6(db);
+        currentVersion = 6;
       }
       if (currentVersion < 7) {
         await this.upgradeToV7(db);
+        currentVersion = 7;
       }
       if (currentVersion < 8) {
         await this.upgradeToV8(db);
+        currentVersion = 8;
       }
       if (currentVersion < 9) {
         await this.upgradeToV9(db);
+        currentVersion = 9;
       }
     }
   }

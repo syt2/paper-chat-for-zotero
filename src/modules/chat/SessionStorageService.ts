@@ -265,18 +265,20 @@ export class SessionStorageService {
         ],
       );
 
-      // Update session_meta preview with the latest content
-      const preview = content.substring(0, 50) + (content.length > 50 ? "..." : "");
-      const now = Date.now();
-
-      await db.queryAsync(
-        `UPDATE session_meta SET
-          last_message_preview = ?,
-          last_message_time = ?,
-          updated_at = ?
-        WHERE id = ?`,
-        [preview, now, now, sessionId],
-      );
+      // Only update session_meta preview on the final flush (not during streaming)
+      // to avoid garbled tool-call XML appearing in the history list
+      if (!options?.streamingState) {
+        const preview = content.substring(0, 50) + (content.length > 50 ? "..." : "");
+        const now = Date.now();
+        await db.queryAsync(
+          `UPDATE session_meta SET
+            last_message_preview = ?,
+            last_message_time = ?,
+            updated_at = ?
+          WHERE id = ?`,
+          [preview, now, now, sessionId],
+        );
+      }
     } catch (error) {
       ztoolkit.log("[SessionStorageService] Update message content error:", error);
       throw error;
@@ -756,14 +758,21 @@ export class SessionStorageService {
     },
     sessionId: string,
   ): Promise<void> {
-    await db.queryAsync(
-      "DELETE FROM task_events WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)",
-      [sessionId],
-    );
-    await db.queryAsync("DELETE FROM tasks WHERE session_id = ?", [sessionId]);
-    await db.queryAsync("DELETE FROM messages WHERE session_id = ?", [sessionId]);
-    await db.queryAsync("DELETE FROM session_meta WHERE id = ?", [sessionId]);
-    await db.queryAsync("DELETE FROM sessions WHERE id = ?", [sessionId]);
+    await db.queryAsync("BEGIN TRANSACTION");
+    try {
+      await db.queryAsync(
+        "DELETE FROM task_events WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)",
+        [sessionId],
+      );
+      await db.queryAsync("DELETE FROM tasks WHERE session_id = ?", [sessionId]);
+      await db.queryAsync("DELETE FROM messages WHERE session_id = ?", [sessionId]);
+      await db.queryAsync("DELETE FROM session_meta WHERE id = ?", [sessionId]);
+      await db.queryAsync("DELETE FROM sessions WHERE id = ?", [sessionId]);
+      await db.queryAsync("COMMIT");
+    } catch (error) {
+      try { await db.queryAsync("ROLLBACK"); } catch {}
+      throw error;
+    }
   }
 
   /**

@@ -17,6 +17,7 @@ import type {
 import type { ToolCallingProvider } from "../../../types/provider";
 import { getErrorMessage } from "../../../utils/common";
 import { getContextManager } from "../ContextManager";
+import { SessionRunInvalidatedError } from "../errors";
 import type { SessionStorageService } from "../SessionStorageService";
 import { getToolScheduler } from "../tool-scheduler";
 import { ExecutionPlanManager } from "./ExecutionPlanManager";
@@ -67,12 +68,6 @@ type RuntimeEventPayload<T extends AgentRuntimeEventType> = Omit<
   Extract<AgentRuntimeEvent, { type: T }>,
   "sessionId" | "assistantMessageId" | "timestamp" | "planId"
 >;
-
-class SessionRunInvalidatedError extends Error {
-  constructor() {
-    super("Session run invalidated");
-  }
-}
 
 export class AgentRuntime {
   private executionPlanManager = new ExecutionPlanManager();
@@ -242,6 +237,7 @@ export class AgentRuntime {
             result.toolCalls.map((toolCall) => ({
               toolCall,
               sessionId: sendingSession.id,
+              assistantMessageId: assistantMessage.id,
               fallbackStructure: paperStructure || undefined,
             })),
           );
@@ -551,6 +547,7 @@ export class AgentRuntime {
             result.toolCalls.map((toolCall) => ({
               toolCall,
               sessionId: sendingSession.id,
+              assistantMessageId: assistantMessage.id,
               fallbackStructure: paperStructure || undefined,
             })),
           );
