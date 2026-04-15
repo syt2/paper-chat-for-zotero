@@ -21,6 +21,10 @@ import { SessionRunInvalidatedError } from "../errors";
 import type { SessionStorageService } from "../SessionStorageService";
 import { getToolScheduler } from "../tool-scheduler";
 import { ExecutionPlanManager } from "./ExecutionPlanManager";
+import {
+  awaitWhileSessionTracked,
+  ensureTrackedSession,
+} from "./sessionTracking";
 
 interface AgentRuntimeCallbacks {
   isSessionActive: (session: ChatSession) => boolean;
@@ -286,8 +290,11 @@ export class AgentRuntime {
               this.callbacks.onStreamingUpdate?.(callingDisplay);
             }
 
-            const batchResults = await this.toolScheduler.executeBatch(batch);
-            this.ensureSessionTracked(sendingSession);
+            const batchResults = await awaitWhileSessionTracked(
+              sendingSession,
+              this.callbacks.isSessionTracked,
+              () => this.toolScheduler.executeBatch(batch),
+            );
             this.appendToolExecutionResults(sendingSession, batchResults);
             await this.sessionStorage.updateSessionMeta(sendingSession);
             this.emitPlanUpdate(sendingSession);
@@ -606,8 +613,11 @@ export class AgentRuntime {
               this.callbacks.onStreamingUpdate?.(callingDisplay);
             }
 
-            const batchResults = await this.toolScheduler.executeBatch(batch);
-            this.ensureSessionTracked(sendingSession);
+            const batchResults = await awaitWhileSessionTracked(
+              sendingSession,
+              this.callbacks.isSessionTracked,
+              () => this.toolScheduler.executeBatch(batch),
+            );
             this.appendToolExecutionResults(sendingSession, batchResults);
             await this.sessionStorage.updateSessionMeta(sendingSession);
             this.emitPlanUpdate(sendingSession);
@@ -988,9 +998,7 @@ export class AgentRuntime {
   }
 
   private ensureSessionTracked(session: ChatSession): void {
-    if (!this.callbacks.isSessionTracked(session)) {
-      throw new SessionRunInvalidatedError();
-    }
+    ensureTrackedSession(session, this.callbacks.isSessionTracked);
   }
 }
 
