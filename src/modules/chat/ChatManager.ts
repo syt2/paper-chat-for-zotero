@@ -66,6 +66,7 @@ import {
 } from "./paperchat-retry-orchestration";
 import { MemoryManager } from "./memory/MemoryManager";
 import { AgentRuntime } from "./agent-runtime/AgentRuntime";
+import { SessionRunInvalidatedError } from "./errors";
 // V1 migration now handled by migrateToSQLite.ts at startup
 
 /**
@@ -120,12 +121,6 @@ function getPaperChatChatModels(): string[] {
 }
 
 // 使用 common.ts 中的 getItemTitleSmart 获取 item 标题
-
-class SessionRunInvalidatedError extends Error {
-  constructor() {
-    super("Session run invalidated");
-  }
-}
 
 export class ChatManager {
   private sessionStorage: SessionStorageService;
@@ -1997,14 +1992,18 @@ export class ChatManager {
     };
     this.persistApprovalState(session);
     this.notifyApprovalStateChanged(session);
-    this.emitApprovalRuntimeEvent(session, {
-      type: "approval_requested",
-      requestId: approvalRequest.id,
-      toolCallId: approvalRequest.request.toolCall.id,
-      toolName: approvalRequest.toolName,
-      riskLevel: approvalRequest.descriptor.riskLevel,
-      pendingCount: pendingRequests.length,
-    });
+    this.emitApprovalRuntimeEvent(
+      session,
+      {
+        type: "approval_requested",
+        requestId: approvalRequest.id,
+        toolCallId: approvalRequest.request.toolCall.id,
+        toolName: approvalRequest.toolName,
+        riskLevel: approvalRequest.descriptor.riskLevel,
+        pendingCount: pendingRequests.length,
+      },
+      approvalRequest.assistantMessageId,
+    );
   }
 
   private handleApprovalResolved(
@@ -2030,15 +2029,19 @@ export class ChatManager {
 
     this.persistApprovalState(session);
     this.notifyApprovalStateChanged(session);
-    this.emitApprovalRuntimeEvent(session, {
-      type: "approval_resolved",
-      requestId: approvalRequest.id,
-      toolCallId: approvalRequest.request.toolCall.id,
-      toolName: approvalRequest.toolName,
-      verdict: decision.verdict,
-      scope: decision.scope,
-      pendingCount: pendingRequests.length,
-    });
+    this.emitApprovalRuntimeEvent(
+      session,
+      {
+        type: "approval_resolved",
+        requestId: approvalRequest.id,
+        toolCallId: approvalRequest.request.toolCall.id,
+        toolName: approvalRequest.toolName,
+        verdict: decision.verdict,
+        scope: decision.scope,
+        pendingCount: pendingRequests.length,
+      },
+      approvalRequest.assistantMessageId,
+    );
   }
 
   private getTrackedSessionById(sessionId?: string): ChatSession | null {
@@ -2127,17 +2130,17 @@ export class ChatManager {
           Extract<AgentRuntimeEvent, { type: "approval_resolved" }>,
           "sessionId" | "assistantMessageId" | "timestamp" | "planId"
         >,
+    assistantMessageId?: string,
   ): void {
-    const assistantMessageId =
-      [...session.messages]
-        .reverse()
-        .find((message) => message.role === "assistant")?.id ||
+    const resolvedAssistantMessageId =
+      assistantMessageId ||
+      [...session.messages].reverse().find((m) => m.role === "assistant")?.id ||
       payload.toolCallId;
 
     this.onRuntimeEvent?.({
       ...payload,
       sessionId: session.id,
-      assistantMessageId,
+      assistantMessageId: resolvedAssistantMessageId,
       timestamp: Date.now(),
       planId: session.executionPlan?.id,
     } as AgentRuntimeEvent);

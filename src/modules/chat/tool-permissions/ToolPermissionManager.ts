@@ -638,6 +638,7 @@ export class ToolPermissionManager {
       descriptor,
       request,
       createdAt: Date.now(),
+      assistantMessageId: request.assistantMessageId,
     };
   }
 

@@ -16,6 +16,7 @@ import { getToolRuntimeMetadata } from "./ToolMetadataRegistry";
 export interface ToolSchedulerRequest {
   toolCall: ToolCall;
   sessionId?: string;
+  assistantMessageId?: string;
   fallbackStructure?: PaperStructure | PaperStructureExtended;
 }
 
@@ -50,7 +51,7 @@ export class ToolScheduler {
 
     for (const request of requests) {
       const metadata = getToolRuntimeMetadata(request.toolCall.function.name);
-      if (this.isParallelSafeRead(metadata)) {
+      if (this.isParallelSafe(metadata)) {
         currentParallelBatch.push(request);
         continue;
       }
@@ -107,7 +108,7 @@ export class ToolScheduler {
 
     const runInParallel =
       runnable.length > 1 &&
-      runnable.every((item) => this.isParallelSafeRead(item.prepared.metadata));
+      runnable.every((item) => this.isParallelSafe(item.prepared.metadata));
 
     if (runInParallel) {
       const executed = await Promise.all(
@@ -262,6 +263,7 @@ export class ToolScheduler {
       toolCall: request.toolCall,
       args: argsResult.args,
       sessionId: request.sessionId,
+      assistantMessageId: request.assistantMessageId,
     };
 
     const permissionManager = getToolPermissionManager();
@@ -330,10 +332,10 @@ export class ToolScheduler {
     }
   }
 
-  private isParallelSafeRead(metadata?: ToolRuntimeMetadata | null): boolean {
+  private isParallelSafe(metadata?: ToolRuntimeMetadata | null): boolean {
     return (
       metadata?.concurrency === "parallel_safe" &&
-      metadata.executionClass === "read" &&
+      (metadata.executionClass === "read" || metadata.executionClass === "network") &&
       metadata.mutatesState === false
     );
   }

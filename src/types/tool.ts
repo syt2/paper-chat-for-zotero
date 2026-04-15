@@ -55,6 +55,7 @@ export interface ToolPermissionRequest {
   toolCall: ToolCall;
   args: Record<string, unknown>;
   sessionId?: string;
+  assistantMessageId?: string;
 }
 
 export interface ToolPermissionDecision {
@@ -71,6 +72,7 @@ export interface ToolApprovalRequest {
   descriptor: ToolPermissionDescriptor;
   request: ToolPermissionRequest;
   createdAt: number;
+  assistantMessageId?: string;
 }
 
 export interface ToolApprovalResolution {
@@ -119,6 +121,7 @@ export interface ToolExecutionRequest {
   toolCall: ToolCall;
   args: Record<string, unknown>;
   sessionId?: string;
+  assistantMessageId?: string;
 }
 
 export interface ToolExecutionResult {
