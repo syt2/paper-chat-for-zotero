@@ -5,7 +5,11 @@
 import { config } from "../../../../package.json";
 import { getString } from "../../../utils/locale";
 import { ChatManager, type ChatMessage } from "../../chat";
-import type { ImageAttachment, FileAttachment } from "../../../types/chat";
+import type {
+  ExecutionPlan,
+  ImageAttachment,
+  FileAttachment,
+} from "../../../types/chat";
 import { getAuthManager } from "../../auth";
 import { getProviderManager } from "../../providers";
 import { getPref, setPref } from "../../../utils/prefs";
@@ -19,7 +23,10 @@ import {
   setupThemeListener,
 } from "./ChatPanelTheme";
 import { createChatContainer } from "./ChatPanelBuilder";
-import { renderMessages as renderMessageElements } from "./MessageRenderer";
+import {
+  renderMessages as renderMessageElements,
+  updateExecutionPlanView,
+} from "./MessageRenderer";
 import { renderMarkdownToElement } from "./MarkdownRenderer";
 import {
   setupEventHandlers,
@@ -454,6 +461,7 @@ async function initializeChatContentCommon(
   const session = manager.getActiveSession();
   if (session) {
     context.renderMessages(session.messages);
+    context.renderExecutionPlan(session.executionPlan);
   }
   updateModelSelectorDisplay(container);
 
@@ -497,6 +505,22 @@ async function refreshChatForContainer(container: HTMLElement): Promise<void> {
       session.messages,
       getCurrentTheme(),
     );
+    const planPanel = container.querySelector(
+      "#chat-execution-plan-panel",
+    ) as HTMLElement;
+    if (planPanel) {
+      updateExecutionPlanView(
+        planPanel,
+        getCurrentTheme(),
+        session.executionPlan,
+        session.toolApprovalState,
+        {
+          onResolveApproval: (requestId, resolution) => {
+            manager.resolveToolApprovalRequest(requestId, resolution);
+          },
+        },
+      );
+    }
   }
 
   const messageInput = container.querySelector(
@@ -725,6 +749,20 @@ function setupChatManagerCallbacks(
             reasoningContainer.style.display = "block";
           }
         }
+      }
+    },
+    onExecutionPlanUpdate: (plan) => {
+      context.renderExecutionPlan(plan);
+    },
+    onRuntimeEvent: (event) => {
+      if (manager.getActiveSession()?.id !== event.sessionId) {
+        return;
+      }
+      if (
+        event.type === "approval_requested" ||
+        event.type === "approval_resolved"
+      ) {
+        context.renderExecutionPlan(manager.getActiveSession()?.executionPlan);
       }
     },
     onError: (error) => {
@@ -1050,6 +1088,9 @@ function createContext(container: HTMLElement): ChatPanelContext {
         const chatHistory = container.querySelector(
           "#chat-history",
         ) as HTMLElement;
+        const planPanel = container.querySelector(
+          "#chat-execution-plan-panel",
+        ) as HTMLElement;
         const emptyState = container.querySelector(
           "#chat-empty-state",
         ) as HTMLElement;
@@ -1073,6 +1114,40 @@ function createContext(container: HTMLElement): ChatPanelContext {
             },
           );
         }
+        if (planPanel) {
+          const executionPlan = manager.getActiveSession()?.executionPlan;
+          const toolApprovalState = manager.getActiveSession()?.toolApprovalState;
+          updateExecutionPlanView(
+            planPanel,
+            getCurrentTheme(),
+            executionPlan,
+            toolApprovalState,
+            {
+              onResolveApproval: (requestId, resolution) => {
+                manager.resolveToolApprovalRequest(requestId, resolution);
+              },
+            },
+          );
+        }
+      }
+    },
+    renderExecutionPlan: (plan?: ExecutionPlan) => {
+      if (!container) return;
+      const planPanel = container.querySelector(
+        "#chat-execution-plan-panel",
+      ) as HTMLElement;
+      if (planPanel) {
+        updateExecutionPlanView(
+          planPanel,
+          getCurrentTheme(),
+          plan,
+          manager.getActiveSession()?.toolApprovalState,
+          {
+            onResolveApproval: (requestId, resolution) => {
+              manager.resolveToolApprovalRequest(requestId, resolution);
+            },
+          },
+        );
       }
     },
     appendError: (errorMessage: string) => {

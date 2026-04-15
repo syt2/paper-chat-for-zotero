@@ -232,6 +232,19 @@ export function createChatContainer(
   userBar.appendChild(userInfo);
   userBar.appendChild(userBarRight);
 
+  const executionPlanPanel = createElement(
+    doc,
+    "div",
+    {
+      display: "none",
+      padding: "6px 14px 0 14px",
+      background: theme.chatHistoryBg,
+      borderBottom: `1px solid ${theme.borderColor}`,
+      flexShrink: "0",
+    },
+    { id: "chat-execution-plan-panel" },
+  );
+
   // Chat History
   const chatHistory = createElement(
     doc,
@@ -668,6 +681,7 @@ export function createChatContainer(
   // Assemble
   root.appendChild(dragBar);
   root.appendChild(userBar);
+  root.appendChild(executionPlanPanel);
   root.appendChild(chatHistory);
   root.appendChild(toolbar);
   root.appendChild(attachmentsPreview);

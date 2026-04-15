@@ -2,7 +2,7 @@
  * Chat Panel Types - Shared interfaces for chat panel modules
  */
 
-import type { ChatManager, ChatMessage } from "../../chat";
+import type { ChatManager, ChatMessage, ExecutionPlan } from "../../chat";
 import type { AuthManager } from "../../auth";
 import type { PaperChatTier } from "../../providers/paperchat-tier-routing";
 
@@ -75,6 +75,7 @@ export interface ChatPanelContext {
   updateUserBar: () => void;
   updatePdfCheckboxVisibility: (item: Zotero.Item | null) => Promise<void>;
   renderMessages: (messages: ChatMessage[]) => void;
+  renderExecutionPlan: (plan?: ExecutionPlan) => void;
   appendError: (errorMessage: string) => void;
   rerollPaperChatTierForCurrentSession: () => Promise<{
     previousModel: string;
@@ -88,6 +89,7 @@ export interface ChatPanelContext {
     onError?: (error: Error) => void;
     onPdfAttached?: () => void;
     onMessageComplete?: () => void;
+    onExecutionPlanUpdate?: (plan?: ExecutionPlan) => void;
     onSelectedItemsChange?: (itemKeys: string[]) => void;
   };
 }

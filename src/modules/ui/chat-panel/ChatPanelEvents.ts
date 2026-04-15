@@ -447,6 +447,7 @@ export function setupEventHandlers(context: ChatPanelContext): void {
 
           const activeSession = chatManager.getActiveSession() || loadedSession;
           context.renderMessages(activeSession.messages);
+          context.renderExecutionPlan(activeSession.executionPlan);
           updateModelSelectorDisplay(container);
           container.ownerDocument?.defaultView?.requestAnimationFrame(() => {
             const latestSession = chatManager.getActiveSession();
@@ -454,6 +455,7 @@ export function setupEventHandlers(context: ChatPanelContext): void {
               return;
             }
             context.renderMessages(latestSession.messages);
+            context.renderExecutionPlan(latestSession.executionPlan);
             updateModelSelectorDisplay(container);
           });
         }
