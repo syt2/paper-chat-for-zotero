@@ -31,7 +31,10 @@ import { PdfExtractor } from "./PdfExtractor";
 import { getContextManager } from "./ContextManager";
 import { getPdfToolManager } from "./pdf-tools";
 import { getTaskManager } from "./task-manager";
-import { getToolPermissionManager } from "./tool-permissions";
+import {
+  getToolPermissionManager,
+  type ToolApprovalObserver,
+} from "./tool-permissions";
 import { getProviderManager } from "../providers";
 import { getAuthManager } from "../auth";
 import { getString } from "../../utils/locale";
@@ -101,6 +104,7 @@ export class ChatManager {
   private onRuntimeEvent?: (event: AgentRuntimeEvent) => void;
   private onSelectedItemsChange?: (itemKeys: string[]) => void; // 多文档选择变化回调
   private onFallbackNotice?: (fromProvider: string, toProvider: string) => void; // 降级通知回调
+  private approvalObserver: ToolApprovalObserver;
 
   constructor() {
     this.sessionStorage = new SessionStorageService();
@@ -120,14 +124,15 @@ export class ChatManager {
         this.formatToolCallCard(toolName, args, status, resultPreview),
       generateId: () => this.generateId(),
     });
-    getToolPermissionManager().addApprovalObserver({
+    this.approvalObserver = {
       onApprovalRequested: (approvalRequest) => {
         this.handleApprovalRequested(approvalRequest);
       },
       onApprovalResolved: (approvalRequest, decision) => {
         this.handleApprovalResolved(approvalRequest, decision);
       },
-    });
+    };
+    getToolPermissionManager().addApprovalObserver(this.approvalObserver);
   }
 
   /**
@@ -1456,6 +1461,7 @@ export class ChatManager {
     if (this.currentSession) {
       await this.sessionStorage.updateSessionMeta(this.currentSession);
     }
+    getToolPermissionManager().removeApprovalObserver(this.approvalObserver);
     this.currentSession = null;
     this.currentItemKey = null;
     this.currentItemKeys = [];

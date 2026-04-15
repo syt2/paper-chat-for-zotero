@@ -489,8 +489,8 @@ export class SessionStorageService {
     await this.init();
 
     try {
-      const db = await getStorageDatabase().ensureInit();
       await this.markInterruptedMessages(sessionId);
+      const db = await getStorageDatabase().ensureInit();
 
       // 1. Load session row (without messages)
       const sessionRows = (await db.queryAsync(
@@ -744,11 +744,38 @@ export class SessionStorageService {
 
   private async markInterruptedMessages(sessionId: string): Promise<void> {
     const db = await getStorageDatabase().ensureInit();
+    const rows = (await db.queryAsync(
+      `SELECT COUNT(*) as count
+       FROM messages
+       WHERE session_id = ? AND streaming_state = 'in_progress'`,
+      [sessionId],
+    )) || [];
+    const interruptedCount = rows[0]?.count || 0;
+    if (interruptedCount === 0) {
+      return;
+    }
+
+    const now = Date.now();
     await db.queryAsync(
       `UPDATE messages
        SET streaming_state = 'interrupted'
        WHERE session_id = ? AND streaming_state = 'in_progress'`,
       [sessionId],
+    );
+    await db.queryAsync(
+      `UPDATE sessions
+       SET execution_plan = NULL,
+           tool_execution_state = NULL,
+           tool_approval_state = NULL,
+           updated_at = ?
+       WHERE id = ?`,
+      [now, sessionId],
+    );
+    await db.queryAsync(
+      `UPDATE session_meta
+       SET updated_at = ?
+       WHERE id = ?`,
+      [now, sessionId],
     );
   }
 
