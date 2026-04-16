@@ -193,8 +193,7 @@ export type PaperToolName =
   | "create_note"
   | "batch_update_tags"
   | "add_item"
-  // 多文档比较工具
-  | "compare_papers"
+  // 多文档工具
   | "search_across_papers"
   // Memory tool
   | "save_memory";
@@ -356,19 +355,12 @@ export interface AddItemArgs {
   collection_key?: string; // 可选，指定添加到的分类
 }
 
-// ========== 多文档比较工具参数类型 ==========
-
-// 比较多篇论文的参数
-export interface ComparePapersArgs {
-  itemKeys: string[]; // 要比较的论文 keys
-  aspect?: "methodology" | "results" | "conclusions" | "all"; // 比较方面
-  section?: string; // 比较特定章节
-}
+// ========== 多文档工具参数类型 ==========
 
 // 跨论文搜索的参数
 export interface SearchAcrossPapersArgs {
   query: string; // 搜索查询
-  itemKeys?: string[]; // 指定论文 keys，不传则搜索所有当前选中的论文
+  itemKeys: string[]; // 指定论文 keys
   max_results_per_paper?: number; // 每篇论文最多返回结果数
 }
 

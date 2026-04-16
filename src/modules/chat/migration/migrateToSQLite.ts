@@ -88,14 +88,13 @@ async function insertSession(
   // Insert session row (no messages column in v2 schema)
   await db.queryAsync(
     `INSERT OR REPLACE INTO sessions
-     (id, created_at, updated_at, last_active_item_key, last_active_item_keys, context_summary, context_state)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+     (id, created_at, updated_at, last_active_item_key, context_summary, context_state)
+     VALUES (?, ?, ?, ?, ?, ?)`,
     [
       session.id,
       session.createdAt,
       session.updatedAt,
       session.lastActiveItemKey || null,
-      session.lastActiveItemKeys ? JSON.stringify(session.lastActiveItemKeys) : null,
       session.contextSummary ? JSON.stringify(session.contextSummary) : null,
       session.contextState ? JSON.stringify(session.contextState) : null,
     ],

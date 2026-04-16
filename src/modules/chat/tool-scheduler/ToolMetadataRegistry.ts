@@ -187,13 +187,6 @@ const TOOL_RUNTIME_METADATA: Record<PaperToolName, ToolRuntimeMetadata> = {
     targetScope: "library",
     mutatesState: true,
   },
-  compare_papers: {
-    name: "compare_papers",
-    executionClass: "high_cost",
-    concurrency: "serial",
-    targetScope: "multi_paper",
-    mutatesState: false,
-  },
   search_across_papers: {
     name: "search_across_papers",
     executionClass: "read",

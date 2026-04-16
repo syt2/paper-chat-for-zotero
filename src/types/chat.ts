@@ -109,7 +109,6 @@ export interface ToolApprovalState {
 }
 
 export type TaskType =
-  | "compare_papers"
   | "batch_update_tags"
   | "batch_note_generation"
   | "deep_library_search"
@@ -285,7 +284,6 @@ export interface ChatSession {
   createdAt: number;
   updatedAt: number;
   lastActiveItemKey: string | null; // 上次活动的 item key (向后兼容)
-  lastActiveItemKeys?: string[]; // 多文档支持：当前活动的 item keys
   messages: ChatMessage[];
   // 上下文管理相关
   contextSummary?: ContextSummary;

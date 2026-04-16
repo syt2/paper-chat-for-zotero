@@ -1279,10 +1279,10 @@ function populateModelDropdown(
 /**
  * Setup @ mention selector for the chat input
  * When user types @, show a popup to select resources (Items, Attachments, Notes)
- * Selected resource will be inserted as @[title] and added to context
+ * Selected resource will be inserted as @[title](key:XXX)
  */
 function setupMentionSelector(context: ChatPanelContext): void {
-  const { container, chatManager } = context;
+  const { container } = context;
   const theme = getCurrentTheme();
 
   const messageInput = container.querySelector(
@@ -1310,8 +1310,6 @@ function setupMentionSelector(context: ChatPanelContext): void {
         // Insert new mention
         insertMentionIntoInput(messageInput, resource);
       }
-      // Add resource to chat context
-      chatManager.addItemToSelection(resource.key);
       ztoolkit.log(
         `[MentionSelector] Selected: ${resource.type}/${resource.key} - ${resource.title}`,
       );

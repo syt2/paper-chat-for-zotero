@@ -193,12 +193,6 @@ const TOOL_PERMISSION_DESCRIPTORS: Record<
     mode: "auto_allow",
     description: "Add a new Zotero item.",
   },
-  compare_papers: {
-    name: "compare_papers",
-    riskLevel: "read",
-    mode: "auto_allow",
-    description: "Compare multiple papers.",
-  },
   search_across_papers: {
     name: "search_across_papers",
     riskLevel: "read",

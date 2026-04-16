@@ -90,7 +90,6 @@ export interface ChatPanelContext {
     onPdfAttached?: () => void;
     onMessageComplete?: () => void;
     onExecutionPlanUpdate?: (plan?: ExecutionPlan) => void;
-    onSelectedItemsChange?: (itemKeys: string[]) => void;
   };
 }
 
