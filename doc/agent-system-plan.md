@@ -2,15 +2,16 @@
 
 ## Goal
 
-Evolve `paper-chat-for-zotero` from a chat-with-tools plugin into a task-oriented agent runtime for Zotero workflows.
+Evolve `paper-chat-for-zotero` from a chat-with-tools plugin into a turn-oriented agent runtime for Zotero research workflows.
 
 The target system should support:
 
 - structured execution plans
-- resumable task state
 - tool scheduling and permission decisions
-- long-running/background work
-- eventual multi-agent delegation
+- source-grounded answers
+- denial-aware replanning
+- optional background work where it is actually useful
+- eventual specialized delegation only after the single-agent runtime is mature
 
 This document is the implementation plan and should be updated as work progresses.
 
@@ -23,8 +24,16 @@ The current architecture already has several useful building blocks:
 - Zotero and PDF tools
 - summary and memory extraction
 - basic streaming tool-call visualization
+- structured execution plans
+- scheduler-level tool metadata and batching
+- persisted approval state and approval UI strip
 
-The main limitation is that execution still lives inside `ChatManager` as a single tool-calling loop. That makes it hard to add planning, approvals, task resumption, and delegation without repeatedly reworking the same path.
+The main limitation is no longer runtime extraction. The remaining gaps are higher-level:
+
+- plans are still mostly tool-step mirrors rather than user-task plans
+- permission policy exists but is still mostly `auto_allow`
+- answers can still lose source structure after multiple tool calls
+- the product has very few genuine long-running workflows, so `TaskManager` should stay secondary until a real need appears
 
 ## Target Architecture
 
@@ -37,7 +46,7 @@ The main limitation is that execution still lives inside `ChatManager` as a sing
    Owns a single turn execution loop, tool orchestration, and runtime state transitions.
 
 3. `ExecutionPlan`
-   Stores the current plan and step statuses for a turn or long-running task.
+   Stores the current plan and step statuses for a single user turn.
 
 4. `ToolScheduler`
    Runs tools serially or concurrently based on tool class and safety.
@@ -46,18 +55,20 @@ The main limitation is that execution still lives inside `ChatManager` as a sing
    Decides whether tools are auto-allowed, denied, or require approval.
 
 6. `TaskManager`
-   Persists long-running/background work and supports resume, cancel, and progress display.
+   Persists long-running/background work when a workflow truly needs it.
 
 7. `DelegationRuntime`
-   Launches child agents or specialized workers after the base runtime is stable.
+   Launches specialized workers only after the base runtime is stable and there is a concrete product need.
 
 ## Principles
 
 - Preserve current behavior while extracting architecture.
 - Prefer internal seams before UI changes.
 - Keep all new layers serializable where possible.
-- Avoid introducing multi-agent complexity before task/runtime foundations exist.
+- Avoid introducing multi-agent complexity before the single-agent runtime is strong.
 - Treat plan state as first-class persisted data, not prompt text only.
+- Prefer explicit tool inputs over hidden UI-driven state.
+- Do not invent background-task machinery unless a real Zotero workflow needs it.
 
 ## Phases
 
@@ -128,6 +139,7 @@ Goals:
 - give each turn an explicit execution plan
 - persist plan state for display and recovery
 - allow the model to revise a plan after tool failures or denials
+- make steps represent user-intent progress, not only raw tool calls
 
 Data model:
 
@@ -157,6 +169,7 @@ Exit criteria:
 
 - a running turn has a visible structured plan
 - tool results update step status instead of only appending message text
+- denied or failed steps cause a visible plan revision path
 
 ## Phase 3: Add `ToolScheduler`
 
@@ -187,6 +200,7 @@ Exit criteria:
 
 - tools run through one scheduler
 - scheduler emits progress and result objects
+- runtime can safely distinguish between read, network, write, memory, and high-cost execution paths
 
 Delivered so far:
 
@@ -218,9 +232,10 @@ Policy capabilities:
 Concrete tasks:
 
 1. Extend `ToolPermissionManager` to maintain policy state.
-2. Add UI approval dialogs.
+2. Keep compact in-context approval UI instead of building heavyweight dialogs first.
 3. Return structured denial results back into runtime.
 4. Let the model continue planning after denial instead of failing the turn.
+5. Move selected tool classes from `auto_allow` to real policy-driven behavior.
 
 Exit criteria:
 
@@ -237,62 +252,82 @@ Delivered so far:
 - the top execution bar now switches to a compact permission approval strip with `once / session / always / deny` actions when a tool enters `ask`
 - pending approval state is now persisted with the session and reconciled against live in-memory requests on load, so stale approval UI does not survive a runtime restart
 
-## Phase 5: Add `TaskManager`
+## Phase 5: Strengthen Answer Grounding And Replanning
 
 Status: in progress
 
 Goals:
 
-- support long-running and background operations
-- make execution resumable and cancellable
-
-Candidate task types:
-
-- multi-paper comparison
-- batch tagging
-- batch note generation
-- deep library search
-- memory extraction and maintenance
+- make final answers reflect tool provenance more clearly
+- make replanning after denial/failure part of normal turn execution
+- reduce cases where the model loses structure after multiple tool calls
 
 Concrete tasks:
 
-1. Add task persistence schema.
-2. Add task state machine.
-3. Expose task progress in UI.
-4. Support cancellation and recovery after restart.
+1. Improve plan-step labeling so the UI reflects user-facing intent, not only tool names.
+2. Strengthen denial-aware prompt instructions and runtime recovery paths.
+3. Improve answer composition so citations / paper identities / note identities survive tool orchestration.
+4. Decide whether tool results need explicit source-grouped rendering in the UI.
 
 Delivered so far:
 
-- added dedicated `tasks` and `task_events` persistence tables
-- introduced `TaskManager` with create/list/get/progress/complete/fail/cancel APIs
-- added startup recovery that marks leftover `running` tasks as `failed` and leftover `cancel_requested` tasks as `cancelled`
+- execution plan state is persisted with the session
+- scheduler results are stored as structured runtime state
+- denial outcomes already feed back into the runtime as structured results
 
 Exit criteria:
 
-- long-running work is no longer tied only to one assistant message
+- plan / tool / answer flow feels like one coherent agent turn rather than “chat plus raw tool traces”
 
-## Phase 6: Add Multi-Agent Delegation
+## Phase 6: Selective `TaskManager` Adoption
+
+Status: deferred unless concrete workflows emerge
 
 Goals:
 
-- support specialized agents once runtime, plan, permissions, and tasks are stable
+- use background tasks only for workflows that are genuinely long-running or batch-oriented
+- avoid forcing ordinary paper chat into a task model
+
+Candidate workflows:
+
+- batch note generation
+- batch tagging
+- deep library search across many items
+- pre-indexing or maintenance jobs
+
+Concrete tasks:
+
+1. Keep existing `TaskManager` and persistence schema available.
+2. Wire in the first real background workflow only after validating that it cannot stay inside one turn.
+3. Add minimal task UI only when an adopted workflow actually needs progress, cancel, or resume.
+
+Exit criteria:
+
+- at least one real workflow benefits from persisted background execution
+
+## Phase 7: Add Specialized Delegation
+
+Status: deferred
+
+Goals:
+
+- support specialized sub-agents only after the single-agent runtime is stable
 
 Delegation candidates:
 
-- literature search agent
-- comparison agent
-- note drafting agent
-- metadata cleanup agent
+- literature search specialist
+- note drafting specialist
+- metadata cleanup specialist
 
 Concrete tasks:
 
 1. Add `delegate_to_agent` or equivalent runtime primitive.
 2. Give child agents isolated context and constrained tool sets.
-3. Merge child outputs back into parent plan/task state.
+3. Merge child outputs back into parent plan and permission systems.
 
 Exit criteria:
 
-- child agents can be launched without bypassing task, permission, or plan systems
+- child agents can be launched without bypassing plan, permission, or source-grounding rules
 
 ## Suggested Storage Changes
 
@@ -307,6 +342,7 @@ Medium-term:
   - `execution_plan_steps`
   - `tasks`
   - `task_events`
+only if the single-session metadata model becomes a bottleneck
 
 ## UI Changes By Stage
 
@@ -318,17 +354,19 @@ Near-term:
 Mid-term:
 
 - plan panel
-- tool activity panel
-- permission dialog
-- task list and task detail view
+- richer tool activity panel
+- compact approval controls
+- optional source-grouped answer rendering
 
 Later:
 
+- task list and task detail view for adopted background workflows
 - child agent status and transcript view
 
 ## Immediate Next Steps
 
-1. Keep permission decisions as `auto_allow`, but start routing denial outcomes back into replanning paths.
-2. Decide whether `ExecutionPlan` and scheduler results should graduate from session metadata into dedicated storage tables.
-3. Evaluate whether mixed read/network batches need additional throttling or ordering rules.
-4. Decide whether runtime state needs dedicated UI beyond the current compact execution plan bar.
+1. Make `ExecutionPlan` steps more user-task-oriented and less tool-name-oriented.
+2. Upgrade selected permission classes from `auto_allow` to real policy-driven behavior, starting with `network`, `write`, `memory`, and `high_cost`.
+3. Improve denial/failure replanning so the model revises the plan instead of repeating rejected calls.
+4. Improve source-grounded answer composition and decide whether the UI needs explicit source-grouped rendering.
+5. Revisit `TaskManager` only when a real background or batch workflow appears.
