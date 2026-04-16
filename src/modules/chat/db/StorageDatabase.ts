@@ -108,7 +108,6 @@ export class StorageDatabase {
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         last_active_item_key TEXT,
-        last_active_item_keys TEXT,
         context_summary TEXT,
         context_state TEXT,
         execution_plan TEXT,
@@ -307,7 +306,7 @@ export class StorageDatabase {
     try {
       // 1. Read all existing session rows (with messages JSON blob)
       const sessionRows = (await db.queryAsync(
-        "SELECT id, created_at, updated_at, last_active_item_key, last_active_item_keys, messages, context_summary, context_state FROM sessions",
+        "SELECT id, created_at, updated_at, last_active_item_key, messages, context_summary, context_state FROM sessions",
       )) || [];
 
       // 2. Create new sessions table without messages column
@@ -317,7 +316,6 @@ export class StorageDatabase {
           created_at INTEGER NOT NULL,
           updated_at INTEGER NOT NULL,
           last_active_item_key TEXT,
-          last_active_item_keys TEXT,
           context_summary TEXT,
           context_state TEXT
         )
@@ -347,14 +345,13 @@ export class StorageDatabase {
       for (const row of sessionRows) {
         // Insert into sessions_new (without messages)
         await db.queryAsync(
-          `INSERT INTO sessions_new (id, created_at, updated_at, last_active_item_key, last_active_item_keys, context_summary, context_state)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO sessions_new (id, created_at, updated_at, last_active_item_key, context_summary, context_state)
+           VALUES (?, ?, ?, ?, ?, ?)`,
           [
             row.id,
             row.created_at,
             row.updated_at,
             row.last_active_item_key,
-            row.last_active_item_keys,
             row.context_summary,
             row.context_state,
           ],

@@ -81,7 +81,6 @@ export class ChatManager {
   private pdfExtractor: PdfExtractor;
   private currentSession: ChatSession | null = null;
   private currentItemKey: string | null = null;
-  private currentItemKeys: string[] = []; // 多文档支持
   private initialized: boolean = false;
 
   // Sessions that currently have an in-flight send/stream operation.
@@ -102,7 +101,6 @@ export class ChatManager {
   private onMessageComplete?: () => void;
   private onExecutionPlanUpdate?: (plan?: ExecutionPlan) => void;
   private onRuntimeEvent?: (event: AgentRuntimeEvent) => void;
-  private onSelectedItemsChange?: (itemKeys: string[]) => void; // 多文档选择变化回调
   private onFallbackNotice?: (fromProvider: string, toProvider: string) => void; // 降级通知回调
   private approvalObserver: ToolApprovalObserver;
 
@@ -147,6 +145,7 @@ export class ChatManager {
 
     // 加载活动 session
     this.currentSession = await this.sessionStorage.getOrCreateActiveSession();
+    this.applySessionItemContext(this.currentSession);
     this.reconcileApprovalState(this.currentSession);
 
     this.initialized = true;
@@ -260,7 +259,6 @@ export class ChatManager {
     onMessageComplete?: () => void;
     onExecutionPlanUpdate?: (plan?: ExecutionPlan) => void;
     onRuntimeEvent?: (event: AgentRuntimeEvent) => void;
-    onSelectedItemsChange?: (itemKeys: string[]) => void;
     onFallbackNotice?: (fromProvider: string, toProvider: string) => void;
   }): void {
     this.onMessageUpdate = callbacks.onMessageUpdate;
@@ -271,7 +269,6 @@ export class ChatManager {
     this.onMessageComplete = callbacks.onMessageComplete;
     this.onExecutionPlanUpdate = callbacks.onExecutionPlanUpdate;
     this.onRuntimeEvent = callbacks.onRuntimeEvent;
-    this.onSelectedItemsChange = callbacks.onSelectedItemsChange;
     this.onFallbackNotice = callbacks.onFallbackNotice;
 
     // 设置 ProviderManager 的降级回调
@@ -292,11 +289,10 @@ export class ChatManager {
    */
   setCurrentItemKey(itemKey: string | null): void {
     this.currentItemKey = itemKey;
-    // 同步更新多文档列表
-    this.currentItemKeys = itemKey ? [itemKey] : [];
-    // 同步更新 PdfToolManager
+    if (this.currentSession) {
+      this.currentSession.lastActiveItemKey = itemKey;
+    }
     getPdfToolManager().setCurrentItemKey(itemKey);
-    getPdfToolManager().setCurrentItemKeys(this.currentItemKeys);
   }
 
   /**
@@ -304,55 +300,6 @@ export class ChatManager {
    */
   getCurrentItemKey(): string | null {
     return this.currentItemKey;
-  }
-
-  /**
-   * 设置当前活动的多个 Item Keys (多文档模式)
-   */
-  setCurrentItemKeys(itemKeys: string[]): void {
-    this.currentItemKeys = itemKeys;
-    // 保持向后兼容：单文档 key 取第一个
-    this.currentItemKey = itemKeys[0] || null;
-    // 同步更新 PdfToolManager
-    getPdfToolManager().setCurrentItemKeys(itemKeys);
-    getPdfToolManager().setCurrentItemKey(this.currentItemKey);
-    // 更新 session
-    if (this.currentSession) {
-      this.currentSession.lastActiveItemKeys = itemKeys;
-      this.currentSession.lastActiveItemKey = this.currentItemKey;
-    }
-    // 通知 UI
-    this.onSelectedItemsChange?.(itemKeys);
-  }
-
-  /**
-   * 获取当前活动的多个 Item Keys
-   */
-  getCurrentItemKeys(): string[] {
-    return this.currentItemKeys;
-  }
-
-  /**
-   * 添加一个 Item 到当前选择
-   */
-  addItemToSelection(itemKey: string): void {
-    if (!this.currentItemKeys.includes(itemKey)) {
-      this.setCurrentItemKeys([...this.currentItemKeys, itemKey]);
-    }
-  }
-
-  /**
-   * 从当前选择移除一个 Item
-   */
-  removeItemFromSelection(itemKey: string): void {
-    this.setCurrentItemKeys(this.currentItemKeys.filter(k => k !== itemKey));
-  }
-
-  /**
-   * 清空所有选择的 Items
-   */
-  clearItemSelection(): void {
-    this.setCurrentItemKeys([]);
   }
 
   /**
@@ -384,6 +331,7 @@ export class ChatManager {
   async createNewSession(): Promise<ChatSession> {
     await this.init();
     this.currentSession = await this.sessionStorage.createSession();
+    this.applySessionItemContext(this.currentSession);
     this.reconcileApprovalState(this.currentSession);
     return this.currentSession;
   }
@@ -404,14 +352,10 @@ export class ChatManager {
       ?? await this.sessionStorage.loadSession(sessionId);
 
     if (session) {
-      this.reconcileApprovalState(session);
       this.currentSession = session;
+      this.applySessionItemContext(session);
+      this.reconcileApprovalState(session);
       await this.sessionStorage.setActiveSession(sessionId);
-      // 恢复 lastActiveItemKey 和 lastActiveItemKeys
-      this.currentItemKey = session.lastActiveItemKey;
-      this.currentItemKeys = session.lastActiveItemKeys || (this.currentItemKey ? [this.currentItemKey] : []);
-      getPdfToolManager().setCurrentItemKey(this.currentItemKey);
-      getPdfToolManager().setCurrentItemKeys(this.currentItemKeys);
     }
     return session;
   }
@@ -441,13 +385,8 @@ export class ChatManager {
     // 如果删除的是当前 session，切换到最近的或创建新的
     if (deletingCurrentSession) {
       this.currentSession = await this.sessionStorage.getOrCreateActiveSession();
+      this.applySessionItemContext(this.currentSession);
       this.reconcileApprovalState(this.currentSession);
-      this.currentItemKey = this.currentSession.lastActiveItemKey;
-      this.currentItemKeys =
-        this.currentSession.lastActiveItemKeys ||
-        (this.currentItemKey ? [this.currentItemKey] : []);
-      getPdfToolManager().setCurrentItemKey(this.currentItemKey);
-      getPdfToolManager().setCurrentItemKeys(this.currentItemKeys);
     }
   }
 
@@ -1372,11 +1311,15 @@ export class ChatManager {
       createdAt: session.createdAt,
       updatedAt: now,
       lastActiveItemKey: null,
-      lastActiveItemKeys: [],
       messages: [],
       memoryExtractedAt: undefined,
       memoryExtractedMsgCount: undefined,
     };
+  }
+
+  private applySessionItemContext(session: ChatSession | null): void {
+    this.currentItemKey = session?.lastActiveItemKey ?? null;
+    getPdfToolManager().setCurrentItemKey(this.currentItemKey);
   }
 
   private reconcileApprovalState(session: ChatSession | null): void {
@@ -1464,8 +1407,8 @@ export class ChatManager {
     getToolPermissionManager().removeApprovalObserver(this.approvalObserver);
     this.currentSession = null;
     this.currentItemKey = null;
-    this.currentItemKeys = [];
     this.streamingSessions.clear();
+    getPdfToolManager().setCurrentItemKey(null);
     this.memoryManager.clear();
     this.initialized = false;
   }
