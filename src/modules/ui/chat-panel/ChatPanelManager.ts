@@ -589,6 +589,7 @@ function closeFloatingWindow(): void {
 function showSidebarPanel(): void {
   const doc = Zotero.getMainWindow().document;
   const win = Zotero.getMainWindow();
+  const manager = getChatManager();
 
   // Create container if not exists
   if (!chatContainer || !chatContainer.isConnected) {
@@ -616,9 +617,21 @@ function showSidebarPanel(): void {
     themeCleanup = setupThemeListener(() => {
       if (chatContainer) {
         applyThemeToContainer(chatContainer);
+        const session = manager.getActiveSession();
+        if (session) {
+          const context = createContext(chatContainer);
+          context.renderMessages(session.messages);
+          context.renderExecutionPlan(session.executionPlan);
+        }
       }
       if (floatingContainer) {
         applyThemeToContainer(floatingContainer);
+        const session = manager.getActiveSession();
+        if (session) {
+          const context = createContext(floatingContainer);
+          context.renderMessages(session.messages);
+          context.renderExecutionPlan(session.executionPlan);
+        }
       }
     });
 
@@ -629,9 +642,21 @@ function showSidebarPanel(): void {
       updateCurrentTheme();
       if (chatContainer) {
         applyThemeToContainer(chatContainer);
+        const session = manager.getActiveSession();
+        if (session) {
+          const context = createContext(chatContainer);
+          context.renderMessages(session.messages);
+          context.renderExecutionPlan(session.executionPlan);
+        }
       }
       if (floatingContainer) {
         applyThemeToContainer(floatingContainer);
+        const session = manager.getActiveSession();
+        if (session) {
+          const context = createContext(floatingContainer);
+          context.renderMessages(session.messages);
+          context.renderExecutionPlan(session.executionPlan);
+        }
       }
     };
     // 立即检测一次

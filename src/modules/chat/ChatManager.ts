@@ -504,9 +504,6 @@ export class ChatManager {
    */
   setCurrentItemKey(itemKey: string | null): void {
     this.currentItemKey = itemKey;
-    if (this.currentSession) {
-      this.currentSession.lastActiveItemKey = itemKey;
-    }
     getPdfToolManager().setCurrentItemKey(itemKey);
   }
 
@@ -1729,7 +1726,10 @@ export class ChatManager {
         this.onMessageUpdate?.(sendingSession.messages);
       }
 
-      return false;
+      // The user message has already been persisted into the session.
+      // Keep tool-calling failure semantics aligned with the non-tool path so
+      // the UI does not treat this as an unaccepted draft.
+      return true;
     }
   }
 

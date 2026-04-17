@@ -361,6 +361,28 @@ describe("paperchat storage and chat manager", function () {
     assert.equal(session.updatedAt, 100);
   });
 
+  it("does not mutate session paper context when syncing the current reader item", function () {
+    const manager = Object.create(ChatManager.prototype) as ChatManager & {
+      currentSession: ChatSession;
+      currentItemKey: string | null;
+    };
+    const session: ChatSession = {
+      id: "session-reader-sync",
+      createdAt: 1,
+      updatedAt: 100,
+      lastActiveItemKey: "SESSION-ITEM",
+      messages: [],
+    };
+
+    manager.currentSession = session;
+    manager.currentItemKey = null;
+
+    manager.setCurrentItemKey("READER-ITEM");
+
+    assert.equal(manager.getCurrentItemKey(), "READER-ITEM");
+    assert.equal(session.lastActiveItemKey, "SESSION-ITEM");
+  });
+
   it("wraps session metadata writes in a transaction", async function () {
     const recorded: RecordedQuery[] = [];
     const fakeDb = {

@@ -111,6 +111,14 @@ export function applyThemeToContainer(container: HTMLElement): void {
     chatHistory.style.background = theme.chatHistoryBg;
   }
 
+  const executionPlanPanel = container.querySelector(
+    "#chat-execution-plan-panel",
+  ) as HTMLElement;
+  if (executionPlanPanel) {
+    executionPlanPanel.style.background = theme.chatHistoryBg;
+    executionPlanPanel.style.borderBottomColor = theme.borderColor;
+  }
+
   // Empty state
   const emptyState = container.querySelector(
     "#chat-empty-state",
