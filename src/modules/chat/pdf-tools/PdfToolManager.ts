@@ -90,7 +90,6 @@ import {
 } from "./libraryExecutors";
 import { getPref } from "../../../utils/prefs";
 import { getErrorMessage } from "../../../utils/common";
-import { getToolPermissionManager } from "../tool-permissions";
 
 // 缓存条目类型
 interface CacheEntry {
@@ -1178,38 +1177,13 @@ export class PdfToolManager {
 
   /**
    * 执行工具调用（异步，按需提取 PDF）
-   * @param toolCall AI 请求的工具调用
-   * @param fallbackStructure 后备的 paperStructure（当前 item 的，如果无法按 itemKey 找到）
+   *
+   * Permission checks are the caller's responsibility — in practice this
+   * runs only via ToolScheduler, which decides permission before dispatching.
+   * The method takes pre-parsed args so the scheduler's JSON.parse result can
+   * flow through without re-parsing.
    */
   async executeToolCall(
-    toolCall: ToolCall,
-    fallbackStructure?: PaperStructure | PaperStructureExtended,
-  ): Promise<string> {
-    const { name, arguments: argsString } = toolCall.function;
-
-    let args: Record<string, unknown>;
-    try {
-      args = JSON.parse(argsString);
-    } catch {
-      return `Error: Invalid arguments JSON: ${argsString}`;
-    }
-
-    const permissionDecision = await getToolPermissionManager().decide({
-      toolCall,
-      args,
-    });
-    if (permissionDecision.verdict !== "allow") {
-      ztoolkit.log(
-        `[PdfToolManager] Tool permission denied: ${name}`,
-        permissionDecision.reason,
-      );
-      return getToolPermissionManager().formatDeniedResult(permissionDecision);
-    }
-
-    return this.executeToolCallUnchecked(toolCall, fallbackStructure, args);
-  }
-
-  async executeToolCallUnchecked(
     toolCall: ToolCall,
     fallbackStructure?: PaperStructure | PaperStructureExtended,
     parsedArgs?: Record<string, unknown>,

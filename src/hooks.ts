@@ -21,6 +21,7 @@ import { getStorageDatabase, destroyStorageDatabase } from "./modules/chat/db/St
 import { checkAndMigrateToV3 } from "./modules/chat/migration/migrateToSQLite";
 import { destroyMemoryStores } from "./modules/chat/memory/MemoryStore";
 import { destroyMemoryIndexers, getMemoryIndexer } from "./modules/chat/memory/MemoryIndexer";
+import { getTaskManager } from "./modules/chat/task-manager";
 
 async function onStartup() {
   await Promise.all([
@@ -45,6 +46,14 @@ async function onStartup() {
   try {
     await getStorageDatabase().init();
     await checkAndMigrateToV3();
+    // Sweep up tasks that were running when the app last closed. Running here
+    // (not in ChatManager.init) guarantees recovery even if the user never
+    // opens the chat panel this session.
+    try {
+      await getTaskManager().recoverInterruptedTasks();
+    } catch (recoverErr) {
+      ztoolkit.log("[Startup] Task recovery failed:", recoverErr);
+    }
     // Kick off memory embedding check after DB is ready (fire-and-forget)
     getMemoryIndexer().checkAndReindex().catch((err) => {
       ztoolkit.log("[Startup] Memory reindex failed:", err);

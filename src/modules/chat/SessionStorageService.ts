@@ -1022,27 +1022,36 @@ export class SessionStorageService {
     }
 
     const now = Date.now();
-    await db.queryAsync(
-      `UPDATE messages
-       SET streaming_state = 'interrupted'
-       WHERE session_id = ? AND streaming_state = 'in_progress'`,
-      [sessionId],
-    );
-    await db.queryAsync(
-      `UPDATE sessions
-       SET execution_plan = NULL,
-           tool_execution_state = NULL,
-           tool_approval_state = NULL,
-           updated_at = ?
-       WHERE id = ?`,
-      [now, sessionId],
-    );
-    await db.queryAsync(
-      `UPDATE session_meta
-       SET updated_at = ?
-       WHERE id = ?`,
-      [now, sessionId],
-    );
+    await db.queryAsync("BEGIN TRANSACTION");
+    try {
+      await db.queryAsync(
+        `UPDATE messages
+         SET streaming_state = 'interrupted'
+         WHERE session_id = ? AND streaming_state = 'in_progress'`,
+        [sessionId],
+      );
+      await db.queryAsync(
+        `UPDATE sessions
+         SET execution_plan = NULL,
+             tool_execution_state = NULL,
+             tool_approval_state = NULL,
+             updated_at = ?
+         WHERE id = ?`,
+        [now, sessionId],
+      );
+      await db.queryAsync(
+        `UPDATE session_meta
+         SET updated_at = ?
+         WHERE id = ?`,
+        [now, sessionId],
+      );
+      await db.queryAsync("COMMIT");
+    } catch (error) {
+      try {
+        await db.queryAsync("ROLLBACK");
+      } catch {}
+      throw error;
+    }
   }
 
   private async deleteSessionData(

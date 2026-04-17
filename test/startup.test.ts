@@ -148,10 +148,41 @@ describe("chat agent safeguards", function () {
     const { getStorageDatabase } = await import(
       "../src/modules/chat/db/StorageDatabase"
     );
-    const queries: Array<{ sql: string; params?: unknown[] }> = [];
+    // Track transaction state so a regression that drops BEGIN/COMMIT
+    // wrapping will surface as a failed assertion rather than silently pass.
+    const queries: Array<{
+      sql: string;
+      params?: unknown[];
+      inTransaction: boolean;
+    }> = [];
+    let transactionDepth = 0;
+    let committedTransactions = 0;
     const fakeDb = {
       queryAsync: async (sql: string, params?: unknown[]) => {
-        queries.push({ sql, params });
+        const trimmed = sql.trim().toUpperCase();
+        if (trimmed === "BEGIN TRANSACTION" || trimmed === "BEGIN") {
+          transactionDepth += 1;
+          return [];
+        }
+        if (trimmed === "COMMIT") {
+          if (transactionDepth === 0) {
+            throw new Error("COMMIT without matching BEGIN");
+          }
+          transactionDepth -= 1;
+          committedTransactions += 1;
+          return [];
+        }
+        if (trimmed === "ROLLBACK") {
+          if (transactionDepth > 0) {
+            transactionDepth -= 1;
+          }
+          return [];
+        }
+        queries.push({
+          sql,
+          params,
+          inTransaction: transactionDepth > 0,
+        });
         if (sql.includes("SELECT COUNT(*) as count")) {
           return [{ count: 1 }];
         }
@@ -170,19 +201,23 @@ describe("chat agent safeguards", function () {
       storageDatabase.ensureInit = originalEnsureInit;
     }
 
-    assert.isTrue(
-      queries.some((entry) =>
-        entry.sql.includes("SET streaming_state = 'interrupted'"),
-      ),
-    );
-    assert.isTrue(
-      queries.some((entry) =>
-        entry.sql.includes("SET execution_plan = NULL"),
-      ),
-    );
-    assert.isTrue(
-      queries.some((entry) => entry.sql.includes("UPDATE session_meta")),
-    );
+    const findQuery = (needle: string) =>
+      queries.find((entry) => entry.sql.includes(needle));
+    const interruptQ = findQuery("SET streaming_state = 'interrupted'");
+    const planQ = findQuery("SET execution_plan = NULL");
+    const sessionMetaQ = findQuery("UPDATE session_meta");
+
+    assert.isDefined(interruptQ);
+    assert.isDefined(planQ);
+    assert.isDefined(sessionMetaQ);
+
+    // The three writes must all run inside the same transaction, and the
+    // transaction must commit cleanly.
+    assert.isTrue(interruptQ!.inTransaction, "messages update must be transactional");
+    assert.isTrue(planQ!.inTransaction, "sessions update must be transactional");
+    assert.isTrue(sessionMetaQ!.inTransaction, "session_meta update must be transactional");
+    assert.equal(committedTransactions, 1);
+    assert.equal(transactionDepth, 0);
   });
 
   it("stops persisting tool state after a session run is invalidated", async function () {

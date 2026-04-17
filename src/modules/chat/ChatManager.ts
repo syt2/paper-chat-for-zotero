@@ -38,7 +38,6 @@ import {
 import { PdfExtractor } from "./PdfExtractor";
 import { getContextManager } from "./ContextManager";
 import { getPdfToolManager } from "./pdf-tools";
-import { getTaskManager } from "./task-manager";
 import {
   getToolPermissionManager,
   type ToolApprovalObserver,
@@ -188,9 +187,8 @@ export class ChatManager {
   async init(): Promise<void> {
     if (this.initialized) return;
 
-    // 初始化存储服务 (migration handled at startup in hooks.ts)
+    // 初始化存储服务 (migration + task recovery handled at startup in hooks.ts)
     await this.sessionStorage.init();
-    await getTaskManager().recoverInterruptedTasks();
 
     // 加载活动 session
     try {
@@ -591,19 +589,24 @@ export class ChatManager {
    */
   async deleteSession(sessionId: string): Promise<void> {
     await this.init();
+    const deletingCurrentSession = this.currentSession?.id === sessionId;
+
+    // Durable delete first. If the storage delete throws, pending approvals
+    // and session policies remain intact so the user can retry or recover —
+    // denying them before the delete would leave approvals killed while the
+    // session still exists on disk.
+    await this.sessionStorage.deleteSession(sessionId);
+
     getToolPermissionManager().denyPendingApprovals({
       sessionId,
       reason: "Pending tool approvals were denied because the session was deleted.",
     });
     getToolPermissionManager().clearSessionPolicies(sessionId);
 
-    const deletingCurrentSession = this.currentSession?.id === sessionId;
     this.streamingSessions.delete(sessionId);
     if (deletingCurrentSession) {
       this.currentSession = null;
     }
-
-    await this.sessionStorage.deleteSession(sessionId);
 
     // 清理 ContextManager 中的相关状态
     getContextManager().onSessionDeleted(sessionId);

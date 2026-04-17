@@ -59,7 +59,7 @@ export class ToolScheduler {
     this.executor =
       executor ??
       ((toolCall, fallbackStructure, args) =>
-        getPdfToolManager().executeToolCallUnchecked(
+        getPdfToolManager().executeToolCall(
           toolCall,
           fallbackStructure,
           args,
