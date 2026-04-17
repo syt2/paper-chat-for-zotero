@@ -174,6 +174,9 @@ function formatAgentPromptContext(agentContext?: AgentPromptContext): string {
       section += `Recent steps:\n`;
       for (const step of relevantSteps) {
         section += `- [${step.status}] ${step.title}`;
+        if (step.toolName) {
+          section += ` | tool=${step.toolName}`;
+        }
         if (step.detail) {
           section += ` | ${truncateInline(step.detail, 120)}`;
         }
@@ -188,13 +191,68 @@ function formatAgentPromptContext(agentContext?: AgentPromptContext): string {
   if (toolResults.length > 0) {
     section += `\n=== RECENT TOOL RESULTS ===\n`;
     for (const result of toolResults) {
-      const toolName = result.toolCall.function.name;
-      section += `- [${result.status}] ${toolName}: ${truncateInline(result.content, 180)}\n`;
+      section += `${formatToolResultLine(result)}\n`;
     }
     section += `Treat these tool results as the latest ground truth for the current turn.\n`;
   }
 
+  section += `\n=== FINAL ANSWER REQUIREMENTS ===\n`;
+  section += `- Base each material claim on tool results from this turn or explicit user-provided content.\n`;
+  section += `- Attribute claims to the correct paper, Zotero note, annotation, or web source instead of giving unattributed summaries.\n`;
+  section += `- For comparisons, keep evidence grouped by paper or source so the user can see which finding came from where.\n`;
+  section += `- If a tool was denied or failed and evidence is incomplete, state that limitation instead of guessing.\n`;
+
   return section ? `${section}\n` : "";
+}
+
+function formatToolResultLine(result: ToolExecutionResult): string {
+  const toolName = result.toolCall.function.name;
+  const scopeHints = getToolResultSourceHints(result);
+  const sourceText = scopeHints.length > 0 ? ` | source: ${scopeHints.join(", ")}` : "";
+  return `- [${result.status}] ${toolName}${sourceText}: ${truncateInline(result.content, 180)}`;
+}
+
+function getToolResultSourceHints(result: ToolExecutionResult): string[] {
+  const hints: string[] = [];
+  const scopeLabel = getToolScopeLabel(result);
+  if (scopeLabel) {
+    hints.push(scopeLabel);
+  }
+
+  if (typeof result.args?.itemKey === "string" && result.args.itemKey) {
+    hints.push(`itemKey=${result.args.itemKey}`);
+  }
+
+  if (typeof result.args?.noteKey === "string" && result.args.noteKey) {
+    hints.push(`noteKey=${result.args.noteKey}`);
+  }
+
+  if (
+    result.metadata?.targetScope === "external"
+    && typeof result.args?.query === "string"
+    && result.args.query
+  ) {
+    hints.push(`query=${truncateInline(result.args.query, 60)}`);
+  }
+
+  return hints;
+}
+
+function getToolScopeLabel(result: ToolExecutionResult): string | null {
+  switch (result.metadata?.targetScope) {
+    case "paper":
+      return typeof result.args?.itemKey === "string" ? "paper" : "current paper";
+    case "library":
+      return "Zotero library";
+    case "multi_paper":
+      return "multi-paper search";
+    case "external":
+      return "web";
+    case "memory":
+      return "memory store";
+    default:
+      return null;
+  }
 }
 
 function truncateInline(text: string, maxLength: number): string {

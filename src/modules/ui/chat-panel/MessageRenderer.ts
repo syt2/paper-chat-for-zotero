@@ -857,7 +857,7 @@ function formatExecutionPlanDetail(
 ): string {
   const progressText =
     totalCount > 0 ? `${completedCount}/${totalCount} steps` : "preparing";
-  const activeLabel = activeStep?.toolName || activeStep?.title || plan.summary;
+  const activeLabel = activeStep?.title || activeStep?.toolName || plan.summary;
   return `${progressText} · ${activeLabel}`;
 }
 

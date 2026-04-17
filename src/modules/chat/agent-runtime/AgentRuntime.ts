@@ -574,7 +574,20 @@ export class AgentRuntime {
         }
       }
 
-      this.appendDenialRecoveryMessage(currentMessages, batchResults);
+      const needsRecovery = batchResults.some(
+        (result) => result.status === "denied" || result.status === "failed",
+      );
+      if (needsRecovery) {
+        this.executionPlanManager.recordRecoveryStep(
+          sendingSession,
+          currentMessages,
+          batchResults,
+        );
+        await this.sessionStorage.updateSessionMeta(sendingSession);
+        this.emitPlanUpdate(sendingSession);
+      }
+
+      this.appendRecoveryGuidanceMessage(currentMessages, batchResults);
     }
 
     this.ensureSessionTracked(sendingSession);
@@ -850,16 +863,18 @@ export class AgentRuntime {
     }
   }
 
-  private appendDenialRecoveryMessage(
+  private appendRecoveryGuidanceMessage(
     currentMessages: ChatMessage[],
     results: ToolExecutionResult[],
   ): void {
-    const deniedResults = results.filter((result) => result.status === "denied");
-    if (deniedResults.length === 0) {
+    const affectedResults = results.filter(
+      (result) => result.status === "denied" || result.status === "failed",
+    );
+    if (affectedResults.length === 0) {
       return;
     }
 
-    const lines = deniedResults.map((result) => {
+    const lines = affectedResults.map((result) => {
       const descriptor = result.permissionDecision?.descriptor;
       const toolName = result.toolCall.function.name;
       const riskLevel = descriptor?.riskLevel || "unknown";
@@ -867,18 +882,19 @@ export class AgentRuntime {
         result.permissionDecision?.reason ||
         result.error ||
         "No explicit denial reason was returned.";
-      return `- ${toolName} (risk: ${riskLevel}): ${reason}`;
+      return `- [${result.status}] ${toolName} (risk: ${riskLevel}): ${reason}`;
     });
 
     currentMessages.push({
       id: this.callbacks.generateId(),
       role: "system",
       content: [
-        "Tool denial notice:",
-        "The following tool calls were denied by the permission policy in this turn.",
+        "Tool recovery notice:",
+        "The following tool calls did not complete successfully in this turn.",
         ...lines,
         "Do not repeat denied tool calls in this turn unless the user changes approval.",
-        "Revise the plan, choose safer alternatives, or ask the user for permission if the denied action is necessary.",
+        "For failed tool calls, prefer narrower or safer alternatives instead of retrying the exact same call.",
+        "Revise the plan, use the successful tool results as ground truth, and explain any remaining evidence gaps explicitly.",
       ].join("\n"),
       timestamp: Date.now(),
     });
