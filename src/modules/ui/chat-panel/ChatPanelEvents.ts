@@ -38,6 +38,9 @@ const sessionSendLocks = new Set<string>();
 
 // Duration (ms) to show the "+quota" flash on the check-in button after a successful check-in
 const CHECKIN_FLASH_DURATION_MS = 5000;
+const MESSAGE_INPUT_MIN_HEIGHT = 60;
+const MESSAGE_INPUT_MAX_HEIGHT = 140;
+const CHAT_HISTORY_BOTTOM_STICKY_THRESHOLD = 24;
 
 function getPaperChatTierLabel(tier: PaperChatTier): string {
   if (tier === "paperchat-lite") {
@@ -49,6 +52,61 @@ function getPaperChatTierLabel(tier: PaperChatTier): string {
   }
 
   return getString("chat-tier-standard");
+}
+
+function focusTextarea(input: HTMLTextAreaElement | null | undefined): void {
+  if (!input) return;
+
+  try {
+    input.focus({ preventScroll: true });
+  } catch {
+    input.focus();
+  }
+}
+
+function resizeMessageInput(
+  messageInput: HTMLTextAreaElement | null | undefined,
+  chatHistory?: HTMLElement | null,
+): void {
+  if (!messageInput) {
+    return;
+  }
+
+  const previousChatHistoryHeight = chatHistory?.clientHeight ?? 0;
+  const previousChatHistoryScrollTop = chatHistory?.scrollTop ?? 0;
+  const previousBottomOffset = chatHistory
+    ? chatHistory.scrollHeight - chatHistory.scrollTop - chatHistory.clientHeight
+    : 0;
+
+  messageInput.style.height = `${MESSAGE_INPUT_MIN_HEIGHT}px`;
+  const measuredHeight = messageInput.scrollHeight;
+  const nextHeight = Math.max(
+    MESSAGE_INPUT_MIN_HEIGHT,
+    Math.min(measuredHeight, MESSAGE_INPUT_MAX_HEIGHT),
+  );
+  messageInput.style.height = `${nextHeight}px`;
+  messageInput.style.overflowY =
+    measuredHeight > MESSAGE_INPUT_MAX_HEIGHT ? "auto" : "hidden";
+
+  if (!chatHistory) {
+    return;
+  }
+
+  const nextChatHistoryHeight = chatHistory.clientHeight;
+  if (nextChatHistoryHeight === previousChatHistoryHeight) {
+    return;
+  }
+
+  if (previousBottomOffset <= CHAT_HISTORY_BOTTOM_STICKY_THRESHOLD) {
+    chatHistory.scrollTop = chatHistory.scrollHeight;
+    return;
+  }
+
+  const heightDelta = previousChatHistoryHeight - nextChatHistoryHeight;
+  chatHistory.scrollTop = Math.max(
+    0,
+    previousChatHistoryScrollTop + heightDelta,
+  );
 }
 
 /**
@@ -254,11 +312,7 @@ export function setupEventHandlers(context: ChatPanelContext): void {
 
   // Input auto-resize
   messageInput?.addEventListener("input", () => {
-    if (messageInput) {
-      messageInput.style.height = "auto";
-      messageInput.style.height =
-        Math.min(messageInput.scrollHeight, 140) + "px";
-    }
+    resizeMessageInput(messageInput, chatHistory);
   });
 
   // Set current item when input is focused
@@ -293,6 +347,8 @@ export function setupEventHandlers(context: ChatPanelContext): void {
   if (!container.hasAttribute("tabindex")) {
     container.setAttribute("tabindex", "-1");
   }
+
+  resizeMessageInput(messageInput, chatHistory);
 
   // New chat button - create a new session
   newChatBtn?.addEventListener("click", async () => {
@@ -699,6 +755,9 @@ async function sendMessage(
   _attachmentsPreview: HTMLElement | null,
 ): Promise<void> {
   const { chatManager, authManager } = context;
+  const chatHistory = context.container.querySelector(
+    "#chat-history",
+  ) as HTMLElement | null;
 
   // 获取当前 session ID，用于按 session 分配锁
   const session = chatManager.getActiveSession();
@@ -808,7 +867,7 @@ async function sendMessage(
     // reflects "message sent" while the async request is still streaming.
     if (messageInput) {
       messageInput.value = "";
-      messageInput.style.height = "auto";
+      resizeMessageInput(messageInput, chatHistory);
     }
     context.clearAttachments();
     context.updateAttachmentsPreview();
@@ -851,8 +910,7 @@ async function sendMessage(
       if (draftState) {
         if (messageInput) {
           messageInput.value = draftState.content;
-          messageInput.style.height = "auto";
-          messageInput.style.height = Math.min(messageInput.scrollHeight, 140) + "px";
+          resizeMessageInput(messageInput, chatHistory);
         }
         context.setAttachmentState(draftState.attachmentState);
         context.updateAttachmentsPreview();
@@ -866,8 +924,7 @@ async function sendMessage(
     if (draftState) {
       if (messageInput) {
         messageInput.value = draftState.content;
-        messageInput.style.height = "auto";
-        messageInput.style.height = Math.min(messageInput.scrollHeight, 140) + "px";
+        resizeMessageInput(messageInput, chatHistory);
       }
       context.setAttachmentState(draftState.attachmentState);
       context.updateAttachmentsPreview();
@@ -879,7 +936,7 @@ async function sendMessage(
     releaseSendLock(sessionId);
     // 根据当前活跃 session 的锁状态同步按钮（而非无条件恢复，避免覆盖其他 session 的 disabled 状态）
     syncSendButtonState(sendButton, chatManager);
-    messageInput?.focus();
+    focusTextarea(messageInput);
   }
 }
 
@@ -970,7 +1027,7 @@ export function focusInput(container: HTMLElement): void {
   const messageInput = container.querySelector(
     "#chat-message-input",
   ) as HTMLTextAreaElement;
-  messageInput?.focus();
+  focusTextarea(messageInput);
 }
 
 /**
@@ -1601,7 +1658,7 @@ function insertMentionIntoInput(
   // Move cursor after the mention
   const newCursorPos = atPos + mentionText.length;
   input.setSelectionRange(newCursorPos, newCursorPos);
-  input.focus();
+  focusTextarea(input);
 
   // Trigger input event for auto-resize
   input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -1628,7 +1685,7 @@ function replaceMentionInInput(
   // Move cursor after the new mention
   const newCursorPos = range.start + mentionText.length;
   input.setSelectionRange(newCursorPos, newCursorPos);
-  input.focus();
+  focusTextarea(input);
 
   // Trigger input event for auto-resize
   input.dispatchEvent(new Event("input", { bubbles: true }));

@@ -556,11 +556,13 @@ export function updateExecutionPlanView(
     );
     panel.style.display = "block";
     panel.appendChild(approvalElement);
+    syncExecutionPlanInset(panel);
     return;
   }
 
   if (!executionPlan || executionPlan.status !== "in_progress") {
     panel.style.display = "none";
+    syncExecutionPlanInset(panel);
     return;
   }
 
@@ -570,6 +572,52 @@ export function updateExecutionPlanView(
   const planElement = createExecutionPlanElement(doc, executionPlan, theme);
   panel.style.display = "block";
   panel.appendChild(planElement);
+  syncExecutionPlanInset(panel);
+}
+
+function syncExecutionPlanInset(panel: HTMLElement): void {
+  const viewport = panel.parentElement;
+  if (!viewport) {
+    return;
+  }
+
+  const chatHistory = viewport.querySelector("#chat-history") as HTMLElement | null;
+  if (!chatHistory) {
+    return;
+  }
+
+  const inlinePaddingTop = parseFloat(chatHistory.style.paddingTop || "14");
+  const computedPaddingTop = Number.isFinite(inlinePaddingTop)
+    ? inlinePaddingTop
+    : 14;
+  const basePaddingTop = Number(
+    chatHistory.dataset.basePaddingTop || computedPaddingTop || 14,
+  );
+  chatHistory.dataset.basePaddingTop = String(basePaddingTop);
+
+  const currentPaddingTop = Number.isFinite(inlinePaddingTop)
+    ? inlinePaddingTop
+    : basePaddingTop;
+  const nextPaddingTop =
+    panel.style.display === "none" ? basePaddingTop : basePaddingTop + panel.offsetHeight;
+
+  if (Math.abs(nextPaddingTop - currentPaddingTop) < 1) {
+    chatHistory.style.scrollPaddingTop = `${nextPaddingTop}px`;
+    return;
+  }
+
+  const previousScrollTop = chatHistory.scrollTop;
+  const shouldPreserveViewport = previousScrollTop > 0;
+
+  chatHistory.style.paddingTop = `${nextPaddingTop}px`;
+  chatHistory.style.scrollPaddingTop = `${nextPaddingTop}px`;
+
+  if (shouldPreserveViewport) {
+    chatHistory.scrollTop = Math.max(
+      0,
+      previousScrollTop + (nextPaddingTop - currentPaddingTop),
+    );
+  }
 }
 
 function createApprovalElement(
@@ -591,7 +639,8 @@ function createApprovalElement(
     "div",
     {
       display: "block",
-      margin: "0 0 8px 0",
+      margin: "0",
+      pointerEvents: "auto",
     },
     { id: "chat-execution-plan", class: "chat-execution-plan" },
   );
@@ -724,7 +773,8 @@ function createExecutionPlanElement(
     "div",
     {
       display: "block",
-      margin: "0 0 8px 0",
+      margin: "0",
+      pointerEvents: "auto",
     },
     { id: "chat-execution-plan", class: "chat-execution-plan" },
   );

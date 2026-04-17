@@ -535,10 +535,7 @@ async function refreshChatForContainer(container: HTMLElement): Promise<void> {
     }
   }
 
-  const messageInput = container.querySelector(
-    "#chat-message-input",
-  ) as HTMLTextAreaElement;
-  messageInput?.focus();
+  focusInput(container);
 }
 
 /**
@@ -619,18 +616,16 @@ function showSidebarPanel(): void {
         applyThemeToContainer(chatContainer);
         const session = manager.getActiveSession();
         if (session) {
-          const context = createContext(chatContainer);
-          context.renderMessages(session.messages);
-          context.renderExecutionPlan(session.executionPlan);
+          createContext(chatContainer).renderExecutionPlan(session.executionPlan);
         }
       }
       if (floatingContainer) {
         applyThemeToContainer(floatingContainer);
         const session = manager.getActiveSession();
         if (session) {
-          const context = createContext(floatingContainer);
-          context.renderMessages(session.messages);
-          context.renderExecutionPlan(session.executionPlan);
+          createContext(floatingContainer).renderExecutionPlan(
+            session.executionPlan,
+          );
         }
       }
     });
@@ -644,18 +639,16 @@ function showSidebarPanel(): void {
         applyThemeToContainer(chatContainer);
         const session = manager.getActiveSession();
         if (session) {
-          const context = createContext(chatContainer);
-          context.renderMessages(session.messages);
-          context.renderExecutionPlan(session.executionPlan);
+          createContext(chatContainer).renderExecutionPlan(session.executionPlan);
         }
       }
       if (floatingContainer) {
         applyThemeToContainer(floatingContainer);
         const session = manager.getActiveSession();
         if (session) {
-          const context = createContext(floatingContainer);
-          context.renderMessages(session.messages);
-          context.renderExecutionPlan(session.executionPlan);
+          createContext(floatingContainer).renderExecutionPlan(
+            session.executionPlan,
+          );
         }
       }
     };

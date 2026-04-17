@@ -232,15 +232,32 @@ export function createChatContainer(
   userBar.appendChild(userInfo);
   userBar.appendChild(userBarRight);
 
+  const chatViewport = createElement(
+    doc,
+    "div",
+    {
+      position: "relative",
+      flex: "1",
+      minHeight: "0",
+      overflow: "hidden",
+      background: theme.chatHistoryBg,
+    },
+    { id: "chat-viewport" },
+  );
+
   const executionPlanPanel = createElement(
     doc,
     "div",
     {
       display: "none",
-      padding: "6px 14px 0 14px",
-      background: theme.chatHistoryBg,
-      borderBottom: `1px solid ${theme.borderColor}`,
-      flexShrink: "0",
+      position: "absolute",
+      top: "0",
+      left: "0",
+      right: "0",
+      padding: "0 14px",
+      background: "transparent",
+      pointerEvents: "none",
+      zIndex: "2",
     },
     { id: "chat-execution-plan-panel" },
   );
@@ -250,7 +267,9 @@ export function createChatContainer(
     doc,
     "div",
     {
-      flex: "1",
+      height: "100%",
+      minHeight: "0",
+      boxSizing: "border-box",
       overflowY: "auto",
       overflowX: "hidden",
       padding: "14px",
@@ -410,20 +429,24 @@ export function createChatContainer(
     "textarea",
     {
       flex: "1",
+      height: "60px",
       minHeight: "60px",
       maxHeight: "140px",
       padding: "12px 14px",
       border: "none",
+      boxSizing: "border-box",
       fontFamily: "inherit",
       fontSize: "14px",
+      lineHeight: "18px",
       resize: "none",
       outline: "none",
+      overflowY: "hidden",
       background: "transparent",
       color: theme.textPrimary,
     },
     {
       id: "chat-message-input",
-      rows: "3",
+      rows: "1",
       placeholder: getString("chat-input-placeholder"),
     },
   ) as HTMLTextAreaElement;
@@ -681,8 +704,9 @@ export function createChatContainer(
   // Assemble
   root.appendChild(dragBar);
   root.appendChild(userBar);
-  root.appendChild(executionPlanPanel);
-  root.appendChild(chatHistory);
+  chatViewport.appendChild(chatHistory);
+  chatViewport.appendChild(executionPlanPanel);
+  root.appendChild(chatViewport);
   root.appendChild(toolbar);
   root.appendChild(attachmentsPreview);
   root.appendChild(inputArea);
