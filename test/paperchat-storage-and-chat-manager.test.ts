@@ -147,7 +147,6 @@ describe("paperchat storage and chat manager", function () {
       createdAt: 100,
       updatedAt: 100,
       lastActiveItemKey: "ITEM-1",
-      lastActiveItemKeys: ["ITEM-1"],
       messages: [
         {
           id: "msg-1",
@@ -203,7 +202,6 @@ describe("paperchat storage and chat manager", function () {
               created_at: 100,
               updated_at: 200,
               last_active_item_key: "ITEM-1",
-              last_active_item_keys: JSON.stringify(["ITEM-1", "ITEM-2"]),
               context_summary: null,
               context_state: null,
             },
@@ -250,7 +248,7 @@ describe("paperchat storage and chat manager", function () {
 
     assert.exists(session);
     assert.equal(session?.id, "session-load-1");
-    assert.deepEqual(session?.lastActiveItemKeys, ["ITEM-1", "ITEM-2"]);
+    assert.equal(session?.lastActiveItemKey, "ITEM-1");
     assert.equal(session?.selectedTier, "paperchat-pro");
     assert.equal(session?.resolvedModelId, "model-pro-9");
     assert.equal(session?.lastRetryableUserMessageId, "user-1");
@@ -375,7 +373,6 @@ describe("paperchat storage and chat manager", function () {
       createdAt: 100,
       updatedAt: 100,
       lastActiveItemKey: "ITEM-1",
-      lastActiveItemKeys: ["ITEM-1"],
       messages: [],
       selectedTier: "paperchat-standard",
       resolvedModelId: "model-pro-2",
@@ -386,7 +383,7 @@ describe("paperchat storage and chat manager", function () {
       [
         "SELECT value FROM settings WHERE key = ?",
         "BEGIN TRANSACTION",
-        "UPDATE sessions SET updated_at = ?, last_active_item_key = ?, last_active_item_keys = ?, context_summary = ?, context_state = ? WHERE id = ?",
+        "UPDATE sessions SET updated_at = ?, last_active_item_key = ?, context_summary = ?, context_state = ?, execution_plan = ?, tool_execution_state = ?, tool_approval_state = ? WHERE id = ?",
         "INSERT INTO paperchat_session_state (session_id, selected_tier, resolved_model_id, last_retryable_user_message_id, last_retryable_error_message_id, last_retryable_failed_model_id) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET selected_tier = excluded.selected_tier, resolved_model_id = excluded.resolved_model_id, last_retryable_user_message_id = excluded.last_retryable_user_message_id, last_retryable_error_message_id = excluded.last_retryable_error_message_id, last_retryable_failed_model_id = excluded.last_retryable_failed_model_id",
         "UPDATE session_meta SET updated_at = ? WHERE id = ?",
         "COMMIT",
@@ -423,7 +420,6 @@ describe("paperchat storage and chat manager", function () {
         createdAt: 100,
         updatedAt: 100,
         lastActiveItemKey: "ITEM-1",
-        lastActiveItemKeys: ["ITEM-1"],
         messages: [],
         selectedTier: "paperchat-standard",
         resolvedModelId: "model-pro-2",

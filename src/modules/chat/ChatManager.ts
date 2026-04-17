@@ -1451,7 +1451,7 @@ export class ChatManager {
         return true;
       } catch (error) {
         if (error instanceof SessionRunInvalidatedError) {
-          return;
+          return false;
         }
         // 所有 provider 都失败了
         ztoolkit.log("[ChatManager] All providers failed:", error);

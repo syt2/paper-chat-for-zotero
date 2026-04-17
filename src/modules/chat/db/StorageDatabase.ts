@@ -552,6 +552,11 @@ export class StorageDatabase {
         "execution_plan TEXT",
         "tool_execution_state TEXT",
         "tool_approval_state TEXT",
+        "selected_tier TEXT",
+        "resolved_model_id TEXT",
+        "last_retryable_user_message_id TEXT",
+        "last_retryable_error_message_id TEXT",
+        "last_retryable_failed_model_id TEXT",
       ]) {
         if (!sessionCols.has(col.split(" ")[0])) {
           await db.queryAsync(`ALTER TABLE sessions ADD COLUMN ${col}`);
@@ -611,43 +616,6 @@ export class StorageDatabase {
         CREATE INDEX IF NOT EXISTS idx_task_events_task_created ON task_events (task_id, created_at ASC)
       `);
 
-      await db.queryAsync(
-        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
-        [5, Date.now()],
-      );
-
-      await db.queryAsync("COMMIT");
-      ztoolkit.log("[StorageDatabase] Schema upgraded to v5");
-    } catch (error) {
-      try { await db.queryAsync("ROLLBACK"); } catch { /* ignore */ }
-      ztoolkit.log("[StorageDatabase] Failed to upgrade to v5:", getErrorMessage(error));
-      throw error;
-    }
-  }
-
-  /**
-   * Upgrade schema v4 → v5: add PaperChat session state columns and companion table.
-   */
-  private async upgradeToV5(db: ZoteroDBConnection): Promise<void> {
-    ztoolkit.log("[StorageDatabase] Upgrading schema v4 → v5...");
-
-    await db.queryAsync("BEGIN TRANSACTION");
-    try {
-      for (const col of [
-        "selected_tier TEXT",
-        "resolved_model_id TEXT",
-        "last_retryable_user_message_id TEXT",
-        "last_retryable_error_message_id TEXT",
-        "last_retryable_failed_model_id TEXT",
-      ]) {
-        try {
-          await db.queryAsync(`ALTER TABLE sessions ADD COLUMN ${col}`);
-        } catch (err) {
-          const msg = getErrorMessage(err);
-          if (!msg.includes("duplicate column name") && !msg.includes("already exists")) throw err;
-        }
-      }
-
       await db.queryAsync(`
         CREATE TABLE IF NOT EXISTS paperchat_session_state (
           session_id TEXT PRIMARY KEY,
@@ -699,10 +667,10 @@ export class StorageDatabase {
       );
 
       await db.queryAsync("COMMIT");
-      ztoolkit.log("[StorageDatabase] Schema upgrade v4 → v5 completed");
+      ztoolkit.log("[StorageDatabase] Schema upgraded to v5");
     } catch (error) {
       try { await db.queryAsync("ROLLBACK"); } catch { /* ignore */ }
-      ztoolkit.log("[StorageDatabase] Schema upgrade v4 → v5 failed:", getErrorMessage(error));
+      ztoolkit.log("[StorageDatabase] Failed to upgrade to v5:", getErrorMessage(error));
       throw error;
     }
   }
