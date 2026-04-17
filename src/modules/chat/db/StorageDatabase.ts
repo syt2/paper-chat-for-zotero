@@ -19,6 +19,17 @@ function getDBPath(): string {
 }
 
 /**
+ * Extract the column identifier from a DDL column spec such as
+ * `"execution_plan TEXT"`. Tolerant of leading whitespace and
+ * backticked/double-quoted identifiers so future ALTER specs don't silently
+ * skip the "column already exists" guard.
+ */
+function parseColumnName(spec: string): string {
+  const first = spec.trim().split(/\s+/)[0] || "";
+  return first.replace(/^["`]|["`]$/g, "");
+}
+
+/**
  * Minimal type definition for Zotero.DBConnection
  */
 interface ZoteroDBConnection {
@@ -79,7 +90,9 @@ export class StorageDatabase {
       // Mark as fully initialized only after everything succeeds
       this.db = db;
 
-      ztoolkit.log("[StorageDatabase] SQLite database initialized successfully");
+      ztoolkit.log(
+        "[StorageDatabase] SQLite database initialized successfully",
+      );
     } catch (error) {
       ztoolkit.log(
         "[StorageDatabase] Failed to initialize database:",
@@ -278,9 +291,10 @@ export class StorageDatabase {
   }
 
   private async initSchemaVersion(db: ZoteroDBConnection): Promise<void> {
-    const rows = (await db.queryAsync(
-      "SELECT version FROM schema_version WHERE id = 1",
-    )) || [];
+    const rows =
+      (await db.queryAsync(
+        "SELECT version FROM schema_version WHERE id = 1",
+      )) || [];
 
     if (rows.length === 0) {
       // Fresh install — tables already created with current schema
@@ -322,9 +336,10 @@ export class StorageDatabase {
     await db.queryAsync("BEGIN TRANSACTION");
     try {
       // 1. Read all existing session rows (with messages JSON blob)
-      const sessionRows = (await db.queryAsync(
-        "SELECT id, created_at, updated_at, last_active_item_key, messages, context_summary, context_state FROM sessions",
-      )) || [];
+      const sessionRows =
+        (await db.queryAsync(
+          "SELECT id, created_at, updated_at, last_active_item_key, messages, context_summary, context_state FROM sessions",
+        )) || [];
 
       // 2. Create new sessions table without messages column
       await db.queryAsync(`
@@ -431,8 +446,15 @@ export class StorageDatabase {
       await db.queryAsync("COMMIT");
       ztoolkit.log("[StorageDatabase] Schema upgrade v1 → v2 completed");
     } catch (error) {
-      try { await db.queryAsync("ROLLBACK"); } catch { /* ignore */ }
-      ztoolkit.log("[StorageDatabase] Schema upgrade failed:", getErrorMessage(error));
+      try {
+        await db.queryAsync("ROLLBACK");
+      } catch {
+        /* ignore */
+      }
+      ztoolkit.log(
+        "[StorageDatabase] Schema upgrade failed:",
+        getErrorMessage(error),
+      );
       throw error;
     }
   }
@@ -445,9 +467,7 @@ export class StorageDatabase {
 
     try {
       // Add reasoning column (nullable, no default needed)
-      await db.queryAsync(
-        "ALTER TABLE messages ADD COLUMN reasoning TEXT",
-      );
+      await db.queryAsync("ALTER TABLE messages ADD COLUMN reasoning TEXT");
 
       await db.queryAsync(
         "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
@@ -459,7 +479,9 @@ export class StorageDatabase {
       // If column already exists (e.g. from a fresh install), ignore the error
       const msg = getErrorMessage(error);
       if (msg.includes("duplicate column") || msg.includes("already exists")) {
-        ztoolkit.log("[StorageDatabase] reasoning column already exists, updating version");
+        ztoolkit.log(
+          "[StorageDatabase] reasoning column already exists, updating version",
+        );
         await db.queryAsync(
           "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
           [3, Date.now()],
@@ -500,7 +522,11 @@ export class StorageDatabase {
           await db.queryAsync(`ALTER TABLE memories ADD COLUMN ${col}`);
         } catch (err) {
           const msg = getErrorMessage(err);
-          if (!msg.includes("duplicate column name") && !msg.includes("already exists")) throw err;
+          if (
+            !msg.includes("duplicate column name") &&
+            !msg.includes("already exists")
+          )
+            throw err;
         }
       }
 
@@ -510,12 +536,19 @@ export class StorageDatabase {
       `);
 
       // Add memory extraction tracking columns to sessions
-      for (const col of ["memory_extracted_at INTEGER", "memory_extracted_msg_count INTEGER"]) {
+      for (const col of [
+        "memory_extracted_at INTEGER",
+        "memory_extracted_msg_count INTEGER",
+      ]) {
         try {
           await db.queryAsync(`ALTER TABLE sessions ADD COLUMN ${col}`);
         } catch (err) {
           const msg = getErrorMessage(err);
-          if (!msg.includes("duplicate column name") && !msg.includes("already exists")) throw err;
+          if (
+            !msg.includes("duplicate column name") &&
+            !msg.includes("already exists")
+          )
+            throw err;
         }
       }
 
@@ -527,8 +560,15 @@ export class StorageDatabase {
       await db.queryAsync("COMMIT");
       ztoolkit.log("[StorageDatabase] Schema upgrade v3 → v4 completed");
     } catch (error) {
-      try { await db.queryAsync("ROLLBACK"); } catch { /* ignore */ }
-      ztoolkit.log("[StorageDatabase] Schema upgrade v3 → v4 failed:", getErrorMessage(error));
+      try {
+        await db.queryAsync("ROLLBACK");
+      } catch {
+        /* ignore */
+      }
+      ztoolkit.log(
+        "[StorageDatabase] Schema upgrade v3 → v4 failed:",
+        getErrorMessage(error),
+      );
       throw error;
     }
   }
@@ -546,7 +586,9 @@ export class StorageDatabase {
     try {
       // Add new columns to sessions (guard against partial prior installs)
       const sessionCols = new Set(
-        ((await db.queryAsync("PRAGMA table_info(sessions)")) || []).map((c: any) => String(c.name)),
+        ((await db.queryAsync("PRAGMA table_info(sessions)")) || []).map(
+          (c: any) => String(c.name),
+        ),
       );
       for (const col of [
         "execution_plan TEXT",
@@ -558,17 +600,22 @@ export class StorageDatabase {
         "last_retryable_error_message_id TEXT",
         "last_retryable_failed_model_id TEXT",
       ]) {
-        if (!sessionCols.has(col.split(" ")[0])) {
+        const columnName = parseColumnName(col);
+        if (!sessionCols.has(columnName)) {
           await db.queryAsync(`ALTER TABLE sessions ADD COLUMN ${col}`);
         }
       }
 
       // Add streaming_state to messages
       const msgCols = new Set(
-        ((await db.queryAsync("PRAGMA table_info(messages)")) || []).map((c: any) => String(c.name)),
+        ((await db.queryAsync("PRAGMA table_info(messages)")) || []).map(
+          (c: any) => String(c.name),
+        ),
       );
       if (!msgCols.has("streaming_state")) {
-        await db.queryAsync("ALTER TABLE messages ADD COLUMN streaming_state TEXT");
+        await db.queryAsync(
+          "ALTER TABLE messages ADD COLUMN streaming_state TEXT",
+        );
       }
 
       // Create tasks and task_events tables
@@ -628,8 +675,9 @@ export class StorageDatabase {
         )
       `);
 
-      const sessionRows = (await db.queryAsync(
-        `SELECT
+      const sessionRows =
+        (await db.queryAsync(
+          `SELECT
            id,
            selected_tier,
            resolved_model_id,
@@ -637,7 +685,7 @@ export class StorageDatabase {
            last_retryable_error_message_id,
            last_retryable_failed_model_id
          FROM sessions`,
-      )) || [];
+        )) || [];
 
       for (const row of sessionRows) {
         await db.queryAsync(
@@ -669,8 +717,15 @@ export class StorageDatabase {
       await db.queryAsync("COMMIT");
       ztoolkit.log("[StorageDatabase] Schema upgraded to v5");
     } catch (error) {
-      try { await db.queryAsync("ROLLBACK"); } catch { /* ignore */ }
-      ztoolkit.log("[StorageDatabase] Failed to upgrade to v5:", getErrorMessage(error));
+      try {
+        await db.queryAsync("ROLLBACK");
+      } catch {
+        /* ignore */
+      }
+      ztoolkit.log(
+        "[StorageDatabase] Failed to upgrade to v5:",
+        getErrorMessage(error),
+      );
       throw error;
     }
   }

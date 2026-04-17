@@ -1,7 +1,18 @@
-import type {
-  PaperToolName,
-  ToolRuntimeMetadata,
-} from "../../../types/tool";
+import type { PaperToolName, ToolRuntimeMetadata } from "../../../types/tool";
+
+function assertParallelSafeInvariants(
+  registry: Record<string, ToolRuntimeMetadata>,
+): void {
+  for (const metadata of Object.values(registry)) {
+    if (metadata.concurrency === "parallel_safe" && metadata.mutatesState) {
+      throw new Error(
+        `[ToolMetadataRegistry] invariant violation: tool "${metadata.name}" ` +
+          `is marked parallel_safe but mutatesState=true. A write-class tool ` +
+          `must run serially.`,
+      );
+    }
+  }
+}
 
 const TOOL_RUNTIME_METADATA: Record<PaperToolName, ToolRuntimeMetadata> = {
   web_search: {
@@ -203,11 +214,14 @@ const TOOL_RUNTIME_METADATA: Record<PaperToolName, ToolRuntimeMetadata> = {
   },
 };
 
+assertParallelSafeInvariants(TOOL_RUNTIME_METADATA);
+
 export function getToolRuntimeMetadata(
   toolName: string,
 ): ToolRuntimeMetadata | null {
   return (
-    TOOL_RUNTIME_METADATA[toolName as keyof typeof TOOL_RUNTIME_METADATA] ?? null
+    TOOL_RUNTIME_METADATA[toolName as keyof typeof TOOL_RUNTIME_METADATA] ??
+    null
   );
 }
 
@@ -218,7 +232,17 @@ export function listToolRuntimeMetadata(
     return Object.values(TOOL_RUNTIME_METADATA);
   }
 
-  return toolNames
-    .map((toolName) => getToolRuntimeMetadata(toolName))
-    .filter((metadata): metadata is ToolRuntimeMetadata => metadata !== null);
+  const results: ToolRuntimeMetadata[] = [];
+  for (const toolName of toolNames) {
+    const metadata = getToolRuntimeMetadata(toolName);
+    if (metadata) {
+      results.push(metadata);
+    } else {
+      ztoolkit.log(
+        `[ToolMetadataRegistry] No runtime metadata for tool "${toolName}". ` +
+          `Tools without metadata default to serial execution — check the registry.`,
+      );
+    }
+  }
+  return results;
 }

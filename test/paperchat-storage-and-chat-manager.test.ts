@@ -1,17 +1,23 @@
 import { assert } from "chai";
 import { destroyAuthManager } from "../src/modules/auth/index.ts";
 import { ChatManager } from "../src/modules/chat/ChatManager.ts";
+import { destroyContextManager, getContextManager } from "../src/modules/chat/ContextManager.ts";
 import { SessionStorageService } from "../src/modules/chat/SessionStorageService.ts";
 import {
   StorageDatabase,
   destroyStorageDatabase,
   getStorageDatabase,
 } from "../src/modules/chat/db/StorageDatabase.ts";
+import { destroyPdfToolManager } from "../src/modules/chat/pdf-tools/index.ts";
 import {
   repairPaperChatSessionAfterHardFailureWithRollback,
   rerollPaperChatFailureAndReplay,
 } from "../src/modules/chat/paperchat-retry-orchestration.ts";
 import { PaperChatProvider } from "../src/modules/providers/PaperChatProvider.ts";
+import {
+  destroyProviderManager,
+  getProviderManager,
+} from "../src/modules/providers/ProviderManager.ts";
 import type { ChatMessage, ChatSession } from "../src/types/chat";
 
 const PREFS_PREFIX = "extensions.zotero.paperchat";
@@ -63,11 +69,17 @@ describe("paperchat storage and chat manager", function () {
     prefStore = createPrefEnvironment();
     destroyStorageDatabase();
     destroyAuthManager();
+    destroyContextManager();
+    destroyPdfToolManager();
+    destroyProviderManager();
   });
 
   afterEach(function () {
     destroyStorageDatabase();
     destroyAuthManager();
+    destroyContextManager();
+    destroyPdfToolManager();
+    destroyProviderManager();
     (globalThis as any).Zotero = originalZotero;
     (globalThis as any).ztoolkit = originalZtoolkit;
   });
@@ -647,5 +659,189 @@ describe("paperchat storage and chat manager", function () {
       session.messages.map((message) => message.id),
       ["system-1", "notice-1"],
     );
+  });
+
+  it("preserves the paperchat binding when clearing the current session", async function () {
+    const deletedSessionIds: string[] = [];
+    const persistedSessions: ChatSession[] = [];
+    const renderedMessages: ChatMessage[][] = [];
+    const appliedContexts: Array<ChatSession | null> = [];
+
+    const manager = Object.create(ChatManager.prototype) as ChatManager & {
+      currentSession: ChatSession;
+      sessionStorage: {
+        deleteAllMessages: (sessionId: string) => Promise<void>;
+        updateSessionMeta: (session: ChatSession) => Promise<void>;
+      };
+      streamingSessions: Map<string, ChatSession>;
+      applySessionItemContext: (session: ChatSession | null) => void;
+      onExecutionPlanUpdate?: (plan?: unknown) => void;
+      onMessageUpdate?: (messages: ChatMessage[]) => void;
+    };
+
+    const session: ChatSession = {
+      id: "session-clear-1",
+      createdAt: 1,
+      updatedAt: 100,
+      lastActiveItemKey: "ITEM-1",
+      messages: [
+        {
+          id: "user-1",
+          role: "user",
+          content: "hello",
+          timestamp: 101,
+        },
+      ],
+      contextSummary: "summary",
+      contextState: {
+        summaryMode: "full",
+        lastSummaryIndex: 1,
+        totalMessages: 1,
+        needsSummary: false,
+        isSummarizing: false,
+      },
+      executionPlan: {
+        steps: [],
+        status: "completed",
+        createdAt: 100,
+      },
+      toolExecutionState: {
+        toolCalls: [],
+        updatedAt: 100,
+      },
+      toolApprovalState: {
+        pendingRequests: [],
+        updatedAt: 100,
+      },
+      memoryExtractedAt: 99,
+      memoryExtractedMsgCount: 1,
+      selectedTier: "paperchat-pro",
+      resolvedModelId: "model-pro-9",
+      lastRetryableUserMessageId: "user-1",
+      lastRetryableErrorMessageId: "error-1",
+      lastRetryableFailedModelId: "model-pro-8",
+    };
+
+    manager.currentSession = session;
+    manager.sessionStorage = {
+      deleteAllMessages: async (sessionId: string) => {
+        deletedSessionIds.push(sessionId);
+      },
+      updateSessionMeta: async (persisted: ChatSession) => {
+        persistedSessions.push(persisted);
+      },
+    };
+    manager.streamingSessions = new Map([[session.id, session]]);
+    manager.applySessionItemContext = (appliedSession) => {
+      appliedContexts.push(appliedSession);
+    };
+    manager.onExecutionPlanUpdate = () => undefined;
+    manager.onMessageUpdate = (messages) => {
+      renderedMessages.push(messages);
+    };
+
+    await manager.clearCurrentSession();
+
+    const clearedSession = manager.currentSession;
+    assert.notStrictEqual(clearedSession, session);
+    assert.equal(clearedSession.id, "session-clear-1");
+    assert.equal(clearedSession.selectedTier, "paperchat-pro");
+    assert.equal(clearedSession.resolvedModelId, "model-pro-9");
+    assert.isUndefined(clearedSession.lastRetryableUserMessageId);
+    assert.isUndefined(clearedSession.lastRetryableErrorMessageId);
+    assert.isUndefined(clearedSession.lastRetryableFailedModelId);
+    assert.isUndefined(clearedSession.contextSummary);
+    assert.isUndefined(clearedSession.contextState);
+    assert.isUndefined(clearedSession.executionPlan);
+    assert.isUndefined(clearedSession.toolExecutionState);
+    assert.isUndefined(clearedSession.toolApprovalState);
+    assert.equal(clearedSession.lastActiveItemKey, null);
+    assert.deepEqual(clearedSession.messages, []);
+    assert.deepEqual(deletedSessionIds, ["session-clear-1"]);
+    assert.deepEqual(persistedSessions, [clearedSession]);
+    assert.deepEqual(appliedContexts, [clearedSession]);
+    assert.deepEqual(renderedMessages, [[]]);
+    assert.isFalse(manager.streamingSessions.has("session-clear-1"));
+  });
+
+  it("treats session invalidation after message persistence as an accepted send", async function () {
+    const providerManager = getProviderManager() as any;
+    const originalGetActiveProviderId = providerManager.getActiveProviderId;
+    const originalExecuteWithFallback = providerManager.executeWithFallback;
+    const contextManager = getContextManager() as any;
+    const originalFilterMessages = contextManager.filterMessages;
+
+    const insertedMessages: ChatMessage[] = [];
+    const updatedSessions: ChatSession[] = [];
+    const session: ChatSession = {
+      id: "session-invalidated-1",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      messages: [],
+    };
+
+    const provider = {
+      config: { id: "openai" },
+      getName: () => "OpenAI",
+      isReady: () => true,
+    };
+
+    providerManager.getActiveProviderId = () => "openai";
+    providerManager.executeWithFallback = async (
+      operation: (currentProvider: typeof provider) => Promise<unknown>,
+    ) => operation(provider);
+    contextManager.filterMessages = (targetSession: ChatSession) => ({
+      messages: [...targetSession.messages],
+      summaryTriggered: false,
+    });
+
+    try {
+      const manager = Object.create(ChatManager.prototype) as ChatManager & {
+        currentSession: ChatSession;
+        sessionStorage: {
+          insertMessage: (sessionId: string, message: ChatMessage) => Promise<void>;
+          updateSessionMeta: (targetSession: ChatSession) => Promise<void>;
+        };
+        streamingSessions: Map<string, ChatSession>;
+        currentItemKey: string | null;
+        init: () => Promise<void>;
+        getActiveProvider: () => typeof provider;
+        isSessionTracked: (targetSession: ChatSession) => boolean;
+      };
+
+      manager.currentSession = session;
+      manager.sessionStorage = {
+        insertMessage: async (_sessionId: string, message: ChatMessage) => {
+          insertedMessages.push(message);
+        },
+        updateSessionMeta: async (targetSession: ChatSession) => {
+          updatedSessions.push(targetSession);
+        },
+      };
+      manager.streamingSessions = new Map();
+      manager.currentItemKey = null;
+      manager.init = async () => undefined;
+      manager.getActiveProvider = () => provider as any;
+      manager.isSessionTracked = () => false;
+
+      const accepted = await manager.sendMessage("already sent");
+
+      assert.isTrue(accepted);
+      assert.lengthOf(insertedMessages, 2);
+      assert.deepEqual(
+        insertedMessages.map((message) => message.role),
+        ["user", "assistant"],
+      );
+      assert.deepEqual(
+        session.messages.map((message) => message.role),
+        ["user", "assistant"],
+      );
+      assert.lengthOf(updatedSessions, 1);
+    } finally {
+      providerManager.getActiveProviderId = originalGetActiveProviderId;
+      providerManager.executeWithFallback = originalExecuteWithFallback;
+      contextManager.filterMessages = originalFilterMessages;
+    }
   });
 });

@@ -10,6 +10,7 @@ import type {
   ImageAttachment,
   FileAttachment,
 } from "../../../types/chat";
+import type { ToolApprovalResolution } from "../../../types/tool";
 import { getAuthManager } from "../../auth";
 import { getProviderManager } from "../../providers";
 import { getPref, setPref } from "../../../utils/prefs";
@@ -45,6 +46,19 @@ import { Guide } from "../Guide";
 
 // Panel display mode: 'sidebar' or 'floating'
 export type PanelMode = "sidebar" | "floating";
+
+function buildApprovalActions(manager: ChatManager): {
+  onResolveApproval: (
+    requestId: string,
+    resolution: ToolApprovalResolution,
+  ) => void;
+} {
+  return {
+    onResolveApproval: (requestId, resolution) => {
+      manager.resolveToolApprovalRequest(requestId, resolution);
+    },
+  };
+}
 
 // Floating window default size
 const FLOATING_WIDTH = 420;
@@ -190,7 +204,9 @@ function getSidebar(): HTMLElement | null {
   const currentTab = mainWindow.Zotero_Tabs?.selectedType;
   // Both 'reader' and 'note' tabs use context pane
   const useContextPane = currentTab === "reader" || currentTab === "note";
-  const paneName = useContextPane ? "#zotero-context-pane" : "#zotero-item-pane";
+  const paneName = useContextPane
+    ? "#zotero-context-pane"
+    : "#zotero-item-pane";
   return mainWindow.document.querySelector(paneName) as HTMLElement | null;
 }
 
@@ -514,11 +530,7 @@ async function refreshChatForContainer(container: HTMLElement): Promise<void> {
         getCurrentTheme(),
         session.executionPlan,
         session.toolApprovalState,
-        {
-          onResolveApproval: (requestId, resolution) => {
-            manager.resolveToolApprovalRequest(requestId, resolution);
-          },
-        },
+        buildApprovalActions(manager),
       );
     }
   }
@@ -738,7 +750,9 @@ function setupChatManagerCallbacks(
     },
     onReasoningUpdate: (reasoning) => {
       if (container) {
-        const reasoningEl = container.querySelector("#chat-streaming-reasoning");
+        const reasoningEl = container.querySelector(
+          "#chat-streaming-reasoning",
+        );
         if (reasoningEl) {
           reasoningEl.textContent = reasoning;
           // Show the reasoning container when content arrives
@@ -1048,11 +1062,12 @@ function createContext(container: HTMLElement): ChatPanelContext {
       moduleCurrentItem = item;
     },
     getTheme: getCurrentTheme,
-    getAttachmentState: () => cloneAttachmentState({
-      pendingImages,
-      pendingFiles,
-      pendingSelectedText,
-    }),
+    getAttachmentState: () =>
+      cloneAttachmentState({
+        pendingImages,
+        pendingFiles,
+        pendingSelectedText,
+      }),
     setAttachmentState: (state) => {
       const nextState = cloneAttachmentState(state);
       pendingImages = nextState.pendingImages;
@@ -1116,17 +1131,14 @@ function createContext(container: HTMLElement): ChatPanelContext {
         }
         if (planPanel) {
           const executionPlan = manager.getActiveSession()?.executionPlan;
-          const toolApprovalState = manager.getActiveSession()?.toolApprovalState;
+          const toolApprovalState =
+            manager.getActiveSession()?.toolApprovalState;
           updateExecutionPlanView(
             planPanel,
             getCurrentTheme(),
             executionPlan,
             toolApprovalState,
-            {
-              onResolveApproval: (requestId, resolution) => {
-                manager.resolveToolApprovalRequest(requestId, resolution);
-              },
-            },
+            buildApprovalActions(manager),
           );
         }
       }
@@ -1142,11 +1154,7 @@ function createContext(container: HTMLElement): ChatPanelContext {
           getCurrentTheme(),
           plan,
           manager.getActiveSession()?.toolApprovalState,
-          {
-            onResolveApproval: (requestId, resolution) => {
-              manager.resolveToolApprovalRequest(requestId, resolution);
-            },
-          },
+          buildApprovalActions(manager),
         );
       }
     },
@@ -1191,7 +1199,9 @@ function createContext(container: HTMLElement): ChatPanelContext {
     rerollPaperChatTierForCurrentSession: async () => {
       const reroute = await manager.rerollCurrentPaperChatFailureAndRetry();
       if (!reroute) {
-        throw new Error("No alternate PaperChat model is available for this tier.");
+        throw new Error(
+          "No alternate PaperChat model is available for this tier.",
+        );
       }
       updateModelSelectorDisplay(container);
       return reroute;

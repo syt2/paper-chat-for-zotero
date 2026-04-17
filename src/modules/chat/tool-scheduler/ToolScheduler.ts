@@ -20,6 +20,17 @@ export interface ToolSchedulerRequest {
   fallbackStructure?: PaperStructure | PaperStructureExtended;
 }
 
+/**
+ * Callable that actually runs a tool once permissions are resolved. Keeping
+ * this as an injectable keeps ToolScheduler free of a hard PdfToolManager
+ * dependency (simplifies tests and future non-PDF tool back-ends).
+ */
+export type ToolExecutor = (
+  toolCall: ToolCall,
+  fallbackStructure: PaperStructure | PaperStructureExtended | undefined,
+  args: Record<string, unknown>,
+) => Promise<string>;
+
 interface PreparedToolExecution {
   request: ToolSchedulerRequest;
   metadata?: ToolRuntimeMetadata;
@@ -39,10 +50,22 @@ interface ToolFaultInjectionConfig {
   message?: string;
 }
 
-const FAULT_INJECTION_PREF =
-  `${config.prefsPrefix}.devToolFaultInjection`;
+const FAULT_INJECTION_PREF = `${config.prefsPrefix}.devToolFaultInjection`;
 
 export class ToolScheduler {
+  private readonly executor: ToolExecutor;
+
+  constructor(executor?: ToolExecutor) {
+    this.executor =
+      executor ??
+      ((toolCall, fallbackStructure, args) =>
+        getPdfToolManager().executeToolCallUnchecked(
+          toolCall,
+          fallbackStructure,
+          args,
+        ));
+  }
+
   createExecutionBatches(
     requests: ToolSchedulerRequest[],
   ): ToolSchedulerRequest[][] {
@@ -93,7 +116,8 @@ export class ToolScheduler {
     }
 
     const results: ToolExecutionResult[] = new Array(requests.length);
-    const runnable: Array<{ index: number; prepared: PreparedToolExecution }> = [];
+    const runnable: Array<{ index: number; prepared: PreparedToolExecution }> =
+      [];
 
     for (const item of prepared) {
       if ("status" in item.prepared) {
@@ -129,12 +153,14 @@ export class ToolScheduler {
     return results;
   }
 
-  private parseArguments(
-    toolCall: ToolCall,
-  ): ParsedArgsResult {
+  private parseArguments(toolCall: ToolCall): ParsedArgsResult {
     try {
       const parsed = JSON.parse(toolCall.function.arguments);
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        Array.isArray(parsed)
+      ) {
         return {
           ok: false,
           result: {
@@ -174,8 +200,7 @@ export class ToolScheduler {
 
     const toolName = toolCall.function.name;
     const shouldFailNext = cfg.failNextToolCall === true;
-    const shouldFailNamed =
-      cfg.failToolNames?.includes(toolName) === true;
+    const shouldFailNamed = cfg.failToolNames?.includes(toolName) === true;
 
     if (!shouldFailNext && !shouldFailNamed) {
       return null;
@@ -191,8 +216,7 @@ export class ToolScheduler {
         ...permissionDecision,
         verdict: "deny",
         reason:
-          cfg.message ||
-          "Injected permission denial for development testing.",
+          cfg.message || "Injected permission denial for development testing.",
       };
       return {
         toolCall,
@@ -223,6 +247,12 @@ export class ToolScheduler {
     config: ToolFaultInjectionConfig | null;
     raw: string;
   } {
+    // Fault injection is a dev-only debugging aid. Never honor a stray pref
+    // in a production build, even if it was set in a previous dev session.
+    if (__env__ === "production") {
+      return { config: null, raw: "" };
+    }
+
     const raw = (Zotero.Prefs.get(FAULT_INJECTION_PREF, true) as string) || "";
     if (!raw) {
       return { config: null, raw: "" };
@@ -230,7 +260,11 @@ export class ToolScheduler {
 
     try {
       const parsed = JSON.parse(raw);
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        Array.isArray(parsed)
+      ) {
         return { config: null, raw };
       }
       return { config: parsed as ToolFaultInjectionConfig, raw };
@@ -239,12 +273,10 @@ export class ToolScheduler {
     }
   }
 
-  private writeFaultInjectionConfig(configValue: ToolFaultInjectionConfig): void {
-    Zotero.Prefs.set(
-      FAULT_INJECTION_PREF,
-      JSON.stringify(configValue),
-      true,
-    );
+  private writeFaultInjectionConfig(
+    configValue: ToolFaultInjectionConfig,
+  ): void {
+    Zotero.Prefs.set(FAULT_INJECTION_PREF, JSON.stringify(configValue), true);
   }
 
   private async prepareExecution(
@@ -303,7 +335,7 @@ export class ToolScheduler {
     prepared: PreparedToolExecution,
   ): Promise<ToolExecutionResult> {
     try {
-      const content = await getPdfToolManager().executeToolCallUnchecked(
+      const content = await this.executor(
         prepared.request.toolCall,
         prepared.request.fallbackStructure,
         prepared.args,
@@ -314,7 +346,9 @@ export class ToolScheduler {
         args: prepared.args,
         metadata: prepared.metadata,
         permissionDecision: prepared.permissionDecision,
-        status: content.trimStart().startsWith("Error:") ? "failed" : "completed",
+        status: content.trimStart().startsWith("Error:")
+          ? "failed"
+          : "completed",
         content,
         error: content.trimStart().startsWith("Error:") ? content : undefined,
       };
@@ -335,7 +369,8 @@ export class ToolScheduler {
   private isParallelSafe(metadata?: ToolRuntimeMetadata | null): boolean {
     return (
       metadata?.concurrency === "parallel_safe" &&
-      (metadata.executionClass === "read" || metadata.executionClass === "network") &&
+      (metadata.executionClass === "read" ||
+        metadata.executionClass === "network") &&
       metadata.mutatesState === false
     );
   }

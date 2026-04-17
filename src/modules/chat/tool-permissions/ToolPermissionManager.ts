@@ -225,8 +225,7 @@ class AutoAllowToolPermissionDecider implements ToolPermissionDecider {
   }
 }
 
-const TOOL_PERMISSION_POLICIES_PREF =
-  `${config.prefsPrefix}.toolPermissionPolicies`;
+const TOOL_PERMISSION_POLICIES_PREF = `${config.prefsPrefix}.toolPermissionPolicies`;
 
 type SessionPolicyMap = Map<string, ToolPermissionPolicyEntry>;
 
@@ -273,9 +272,7 @@ export class ToolPermissionManager {
     this.descriptorModeOverrides.delete(toolName);
   }
 
-  setPolicy(
-    entry: Omit<ToolPermissionPolicyEntry, "updatedAt">,
-  ): void {
+  setPolicy(entry: Omit<ToolPermissionPolicyEntry, "updatedAt">): void {
     const normalized: ToolPermissionPolicyEntry = {
       ...entry,
       updatedAt: Date.now(),
@@ -283,7 +280,10 @@ export class ToolPermissionManager {
 
     switch (entry.scope) {
       case "once":
-        this.oncePolicies.set(this.buildPolicyKey(entry.toolName, entry.sessionId), normalized);
+        this.oncePolicies.set(
+          this.buildPolicyKey(entry.toolName, entry.sessionId),
+          normalized,
+        );
         return;
       case "session":
         this.sessionPolicies.set(
@@ -325,10 +325,7 @@ export class ToolPermissionManager {
     });
   }
 
-  allowAlways(
-    toolName: PaperToolName,
-    reason?: string,
-  ): void {
+  allowAlways(toolName: PaperToolName, reason?: string): void {
     this.setPolicy({
       toolName,
       verdict: "allow",
@@ -337,11 +334,7 @@ export class ToolPermissionManager {
     });
   }
 
-  denyOnce(
-    toolName: PaperToolName,
-    sessionId?: string,
-    reason?: string,
-  ): void {
+  denyOnce(toolName: PaperToolName, sessionId?: string, reason?: string): void {
     this.setPolicy({
       toolName,
       verdict: "deny",
@@ -365,10 +358,7 @@ export class ToolPermissionManager {
     });
   }
 
-  denyAlways(
-    toolName: PaperToolName,
-    reason?: string,
-  ): void {
+  denyAlways(toolName: PaperToolName, reason?: string): void {
     this.setPolicy({
       toolName,
       verdict: "deny",
@@ -379,7 +369,10 @@ export class ToolPermissionManager {
 
   clearSessionPolicies(sessionId?: string): void {
     this.oncePolicies = this.filterPolicyMap(this.oncePolicies, sessionId);
-    this.sessionPolicies = this.filterPolicyMap(this.sessionPolicies, sessionId);
+    this.sessionPolicies = this.filterPolicyMap(
+      this.sessionPolicies,
+      sessionId,
+    );
   }
 
   clearPersistentPolicy(toolName: PaperToolName): void {
@@ -424,7 +417,9 @@ export class ToolPermissionManager {
     };
   }
 
-  async decide(request: ToolPermissionRequest): Promise<ToolPermissionDecision> {
+  async decide(
+    request: ToolPermissionRequest,
+  ): Promise<ToolPermissionDecision> {
     const descriptor = this.getDescriptor(request.toolCall.function.name);
     if (!descriptor) {
       return {
@@ -459,9 +454,7 @@ export class ToolPermissionManager {
   listPendingApprovals(sessionId?: string): ToolApprovalRequest[] {
     return [...this.pendingApprovals.values()]
       .map((entry) => entry.request)
-      .filter(
-        (entry) => !sessionId || entry.request.sessionId === sessionId,
-      )
+      .filter((entry) => !sessionId || entry.request.sessionId === sessionId)
       .sort((a, b) => a.createdAt - b.createdAt);
   }
 
@@ -479,20 +472,20 @@ export class ToolPermissionManager {
       resolution,
     );
 
-    if (
-      effectiveResolution.scope === "session" &&
-      pending.request.request.sessionId
-    ) {
+    const toolName = pending.request.toolName;
+    const sessionId = pending.request.request.sessionId;
+
+    if (effectiveResolution.scope === "session" && sessionId) {
       this.setPolicy({
-        toolName: pending.request.toolName,
+        toolName,
         verdict: effectiveResolution.verdict,
         scope: "session",
-        sessionId: pending.request.request.sessionId,
+        sessionId,
         reason: effectiveResolution.reason,
       });
     } else if (effectiveResolution.scope === "always") {
       this.setPolicy({
-        toolName: pending.request.toolName,
+        toolName,
         verdict: effectiveResolution.verdict,
         scope: "always",
         reason: effectiveResolution.reason,
@@ -504,7 +497,52 @@ export class ToolPermissionManager {
       effectiveResolution,
     );
     this.finalizePendingApproval(approvalRequestId, pending, decision);
+
+    // For scopes that establish a durable policy, apply the same verdict to
+    // any other pending approvals that are now covered by that policy. The UI
+    // only shows one "+N" badge for a batch, so a single Always/Session click
+    // should clear the whole batch instead of forcing the user to repeat.
+    if (
+      effectiveResolution.scope === "session" ||
+      effectiveResolution.scope === "always"
+    ) {
+      this.resolvePendingCoveredByPolicy(
+        toolName,
+        sessionId,
+        effectiveResolution,
+      );
+    }
+
     return decision;
+  }
+
+  private resolvePendingCoveredByPolicy(
+    toolName: PaperToolName,
+    sessionId: string | undefined,
+    triggering: ToolApprovalResolution,
+  ): void {
+    // Snapshot to avoid mutating the map during iteration.
+    const entries = [...this.pendingApprovals.entries()];
+    for (const [approvalRequestId, pending] of entries) {
+      if (pending.request.toolName !== toolName) continue;
+
+      if (triggering.scope === "session") {
+        // Only resolve pending approvals in the same session; other sessions
+        // have their own policy scope.
+        if (pending.request.request.sessionId !== sessionId) continue;
+      }
+
+      const follower: ToolApprovalResolution = {
+        verdict: triggering.verdict,
+        scope: "once",
+        reason: triggering.reason,
+      };
+      const decision = this.buildApprovalDecision(
+        pending.request.descriptor,
+        follower,
+      );
+      this.finalizePendingApproval(approvalRequestId, pending, decision);
+    }
   }
 
   denyPendingApprovals(
@@ -516,21 +554,21 @@ export class ToolPermissionManager {
     const { sessionId, reason } = options;
     const resolved: ToolPermissionDecision[] = [];
 
-    for (const [approvalRequestId, pending] of this.pendingApprovals.entries()) {
+    for (const [
+      approvalRequestId,
+      pending,
+    ] of this.pendingApprovals.entries()) {
       if (sessionId && pending.request.request.sessionId !== sessionId) {
         continue;
       }
 
-      const decision = this.buildApprovalDecision(
-        pending.request.descriptor,
-        {
-          verdict: "deny",
-          scope: "once",
-          reason:
-            reason ||
-            `Tool ${pending.request.toolName} was denied because the session state changed before approval completed.`,
-        },
-      );
+      const decision = this.buildApprovalDecision(pending.request.descriptor, {
+        verdict: "deny",
+        scope: "once",
+        reason:
+          reason ||
+          `Tool ${pending.request.toolName} was denied because the session state changed before approval completed.`,
+      });
       this.finalizePendingApproval(approvalRequestId, pending, decision);
       resolved.push(decision);
     }
@@ -607,8 +645,7 @@ export class ToolPermissionManager {
           }
         }
       } catch (error) {
-        const reason =
-          error instanceof Error ? error.message : String(error);
+        const reason = error instanceof Error ? error.message : String(error);
         const fallbackDecision: ToolPermissionDecision = {
           verdict: "deny",
           mode: "ask",
@@ -689,9 +726,7 @@ export class ToolPermissionManager {
       mode: "ask",
       scope: policy.scope,
       descriptor,
-      reason:
-        policy.reason ||
-        this.formatPolicyReason(descriptor.name, policy),
+      reason: policy.reason || this.formatPolicyReason(descriptor.name, policy),
     };
   }
 
@@ -704,7 +739,8 @@ export class ToolPermissionManager {
   }
 
   private readPersistentPolicies(): ToolPermissionPolicyEntry[] {
-    const raw = (Zotero.Prefs.get(TOOL_PERMISSION_POLICIES_PREF, true) as string) || "";
+    const raw =
+      (Zotero.Prefs.get(TOOL_PERMISSION_POLICIES_PREF, true) as string) || "";
     if (!raw) return [];
 
     try {
@@ -737,7 +773,9 @@ export class ToolPermissionManager {
     }
 
     return new Map(
-      [...source.entries()].filter(([, entry]) => entry.sessionId !== sessionId),
+      [...source.entries()].filter(
+        ([, entry]) => entry.sessionId !== sessionId,
+      ),
     );
   }
 

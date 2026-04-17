@@ -59,7 +59,9 @@ export class MissingActiveSessionError extends SessionLoadError {
   }
 }
 
-function toValidSelectedTier(value: string | null): ChatSession["selectedTier"] {
+function toValidSelectedTier(
+  value: string | null,
+): ChatSession["selectedTier"] {
   if (
     value === "paperchat-lite" ||
     value === "paperchat-standard" ||
@@ -84,15 +86,15 @@ export function mapSessionRowToChatSession(
       ? JSON.parse(row.context_summary)
       : undefined,
     contextState: row.context_state ? JSON.parse(row.context_state) : undefined,
-    executionPlan: row.execution_plan ? JSON.parse(row.execution_plan) : undefined,
-    toolExecutionState:
-      row.tool_execution_state
-        ? JSON.parse(row.tool_execution_state)
-        : undefined,
-    toolApprovalState:
-      row.tool_approval_state
-        ? JSON.parse(row.tool_approval_state)
-        : undefined,
+    executionPlan: row.execution_plan
+      ? JSON.parse(row.execution_plan)
+      : undefined,
+    toolExecutionState: row.tool_execution_state
+      ? JSON.parse(row.tool_execution_state)
+      : undefined,
+    toolApprovalState: row.tool_approval_state
+      ? JSON.parse(row.tool_approval_state)
+      : undefined,
     memoryExtractedAt:
       row.memory_extracted_at != null
         ? (row.memory_extracted_at as number)
@@ -103,12 +105,10 @@ export function mapSessionRowToChatSession(
         : undefined,
     selectedTier: toValidSelectedTier(row.selected_tier),
     resolvedModelId: row.resolved_model_id || undefined,
-    lastRetryableUserMessageId:
-      row.last_retryable_user_message_id || undefined,
+    lastRetryableUserMessageId: row.last_retryable_user_message_id || undefined,
     lastRetryableErrorMessageId:
       row.last_retryable_error_message_id || undefined,
-    lastRetryableFailedModelId:
-      row.last_retryable_failed_model_id || undefined,
+    lastRetryableFailedModelId: row.last_retryable_failed_model_id || undefined,
   };
 }
 
@@ -126,10 +126,10 @@ export class SessionStorageService {
       const db = await getStorageDatabase().ensureInit();
 
       // Load activeSessionId from settings
-      const rows = (await db.queryAsync(
-        "SELECT value FROM settings WHERE key = ?",
-        ["active_session_id"],
-      )) || [];
+      const rows =
+        (await db.queryAsync("SELECT value FROM settings WHERE key = ?", [
+          "active_session_id",
+        ])) || [];
 
       this.activeSessionIdCache = rows.length > 0 ? rows[0].value : null;
 
@@ -192,10 +192,11 @@ export class SessionStorageService {
       const db = await getStorageDatabase().ensureInit();
 
       // Get the next seq number for this session
-      const seqRows = (await db.queryAsync(
-        "SELECT COALESCE(MAX(seq), -1) as max_seq FROM messages WHERE session_id = ?",
-        [sessionId],
-      )) || [];
+      const seqRows =
+        (await db.queryAsync(
+          "SELECT COALESCE(MAX(seq), -1) as max_seq FROM messages WHERE session_id = ?",
+          [sessionId],
+        )) || [];
       const nextSeq = (seqRows[0]?.max_seq ?? -1) + 1;
 
       await db.queryAsync(
@@ -222,9 +223,11 @@ export class SessionStorageService {
 
       // Incrementally update session_meta
       const now = Date.now();
-      const preview = (message.role !== "tool" && message.content)
-        ? message.content.substring(0, 50) + (message.content.length > 50 ? "..." : "")
-        : undefined;
+      const preview =
+        message.role !== "tool" && message.content
+          ? message.content.substring(0, 50) +
+            (message.content.length > 50 ? "..." : "")
+          : undefined;
 
       if (preview !== undefined) {
         await db.queryAsync(
@@ -247,10 +250,10 @@ export class SessionStorageService {
       }
 
       // Update sessions.updated_at
-      await db.queryAsync(
-        "UPDATE sessions SET updated_at = ? WHERE id = ?",
-        [now, sessionId],
-      );
+      await db.queryAsync("UPDATE sessions SET updated_at = ? WHERE id = ?", [
+        now,
+        sessionId,
+      ]);
     } catch (error) {
       ztoolkit.log("[SessionStorageService] Insert message error:", error);
       throw error;
@@ -280,10 +283,10 @@ export class SessionStorageService {
         [now, sessionId],
       );
 
-      await db.queryAsync(
-        "UPDATE sessions SET updated_at = ? WHERE id = ?",
-        [now, sessionId],
-      );
+      await db.queryAsync("UPDATE sessions SET updated_at = ? WHERE id = ?", [
+        now,
+        sessionId,
+      ]);
     } catch (error) {
       ztoolkit.log("[SessionStorageService] Delete message error:", error);
       throw error;
@@ -300,10 +303,9 @@ export class SessionStorageService {
       const db = await getStorageDatabase().ensureInit();
       const now = Date.now();
 
-      await db.queryAsync(
-        "DELETE FROM messages WHERE session_id = ?",
-        [sessionId],
-      );
+      await db.queryAsync("DELETE FROM messages WHERE session_id = ?", [
+        sessionId,
+      ]);
 
       await db.queryAsync(
         `UPDATE session_meta SET
@@ -315,10 +317,10 @@ export class SessionStorageService {
         [now, now, sessionId],
       );
 
-      await db.queryAsync(
-        "UPDATE sessions SET updated_at = ? WHERE id = ?",
-        [now, sessionId],
-      );
+      await db.queryAsync("UPDATE sessions SET updated_at = ? WHERE id = ?", [
+        now,
+        sessionId,
+      ]);
     } catch (error) {
       ztoolkit.log("[SessionStorageService] Delete all messages error:", error);
       throw error;
@@ -357,7 +359,8 @@ export class SessionStorageService {
       // Only update session_meta preview on the final flush (not during streaming)
       // to avoid garbled tool-call XML appearing in the history list
       if (!options?.streamingState) {
-        const preview = content.substring(0, 50) + (content.length > 50 ? "..." : "");
+        const preview =
+          content.substring(0, 50) + (content.length > 50 ? "..." : "");
         const now = Date.now();
         await db.queryAsync(
           `UPDATE session_meta SET
@@ -369,7 +372,10 @@ export class SessionStorageService {
         );
       }
     } catch (error) {
-      ztoolkit.log("[SessionStorageService] Update message content error:", error);
+      ztoolkit.log(
+        "[SessionStorageService] Update message content error:",
+        error,
+      );
       throw error;
     }
   }
@@ -382,7 +388,7 @@ export class SessionStorageService {
 
     try {
       const db = await getStorageDatabase().ensureInit();
-      session.updatedAt = Date.now();
+      const nextUpdatedAt = Date.now();
       await db.queryAsync("BEGIN TRANSACTION");
       try {
         await db.queryAsync(
@@ -396,13 +402,21 @@ export class SessionStorageService {
             tool_approval_state = ?
           WHERE id = ?`,
           [
-            session.updatedAt,
+            nextUpdatedAt,
             session.lastActiveItemKey || null,
-            session.contextSummary ? JSON.stringify(session.contextSummary) : null,
+            session.contextSummary
+              ? JSON.stringify(session.contextSummary)
+              : null,
             session.contextState ? JSON.stringify(session.contextState) : null,
-            session.executionPlan ? JSON.stringify(session.executionPlan) : null,
-            session.toolExecutionState ? JSON.stringify(session.toolExecutionState) : null,
-            session.toolApprovalState ? JSON.stringify(session.toolApprovalState) : null,
+            session.executionPlan
+              ? JSON.stringify(session.executionPlan)
+              : null,
+            session.toolExecutionState
+              ? JSON.stringify(session.toolExecutionState)
+              : null,
+            session.toolApprovalState
+              ? JSON.stringify(session.toolApprovalState)
+              : null,
             session.id,
           ],
         );
@@ -429,14 +443,20 @@ export class SessionStorageService {
         // Also keep session_meta.updated_at in sync
         await db.queryAsync(
           "UPDATE session_meta SET updated_at = ? WHERE id = ?",
-          [session.updatedAt, session.id],
+          [nextUpdatedAt, session.id],
         );
 
         await db.queryAsync("COMMIT");
       } catch (error) {
-        try { await db.queryAsync("ROLLBACK"); } catch { /* ignore */ }
+        try {
+          await db.queryAsync("ROLLBACK");
+        } catch {
+          /* ignore */
+        }
         throw error;
       }
+      // Only mutate caller state after the write committed.
+      session.updatedAt = nextUpdatedAt;
     } catch (error) {
       ztoolkit.log("[SessionStorageService] Update session meta error:", error);
       throw error;
@@ -460,7 +480,10 @@ export class SessionStorageService {
         [extractedAt, extractedMsgCount, sessionId],
       );
     } catch (error) {
-      ztoolkit.log("[SessionStorageService] updateMemoryExtractionState error:", error);
+      ztoolkit.log(
+        "[SessionStorageService] updateMemoryExtractionState error:",
+        error,
+      );
       throw error;
     }
   }
@@ -504,9 +527,13 @@ export class SessionStorageService {
 
     try {
       const db = await getStorageDatabase().ensureInit();
-      session.updatedAt = Date.now();
+      const nextUpdatedAt = Date.now();
+      const sessionForMeta: ChatSession = {
+        ...session,
+        updatedAt: nextUpdatedAt,
+      };
 
-      const meta = this.buildSessionMeta(session);
+      const meta = this.buildSessionMeta(sessionForMeta);
 
       await db.queryAsync("BEGIN TRANSACTION");
       try {
@@ -529,13 +556,21 @@ export class SessionStorageService {
           [
             session.id,
             session.createdAt,
-            session.updatedAt,
+            nextUpdatedAt,
             session.lastActiveItemKey || null,
-            session.contextSummary ? JSON.stringify(session.contextSummary) : null,
+            session.contextSummary
+              ? JSON.stringify(session.contextSummary)
+              : null,
             session.contextState ? JSON.stringify(session.contextState) : null,
-            session.executionPlan ? JSON.stringify(session.executionPlan) : null,
-            session.toolExecutionState ? JSON.stringify(session.toolExecutionState) : null,
-            session.toolApprovalState ? JSON.stringify(session.toolApprovalState) : null,
+            session.executionPlan
+              ? JSON.stringify(session.executionPlan)
+              : null,
+            session.toolExecutionState
+              ? JSON.stringify(session.toolExecutionState)
+              : null,
+            session.toolApprovalState
+              ? JSON.stringify(session.toolApprovalState)
+              : null,
             session.memoryExtractedAt ?? null,
             session.memoryExtractedMsgCount ?? null,
           ],
@@ -562,10 +597,9 @@ export class SessionStorageService {
         );
 
         // Replace all messages: delete existing, then insert
-        await db.queryAsync(
-          "DELETE FROM messages WHERE session_id = ?",
-          [session.id],
-        );
+        await db.queryAsync("DELETE FROM messages WHERE session_id = ?", [
+          session.id,
+        ]);
 
         if (session.messages && session.messages.length > 0) {
           for (let seq = 0; seq < session.messages.length; seq++) {
@@ -611,9 +645,15 @@ export class SessionStorageService {
 
         await db.queryAsync("COMMIT");
       } catch (error) {
-        try { await db.queryAsync("ROLLBACK"); } catch { /* ignore */ }
+        try {
+          await db.queryAsync("ROLLBACK");
+        } catch {
+          /* ignore */
+        }
         throw error;
       }
+      // Only mutate caller state after the write committed.
+      session.updatedAt = nextUpdatedAt;
 
       // 检查是否超过最大限制
       await this.enforceMaxSessions();
@@ -636,16 +676,17 @@ export class SessionStorageService {
       const db = await getStorageDatabase().ensureInit();
 
       // 1. Load session row (without messages)
-      const sessionRows = (await db.queryAsync(
-        "SELECT * FROM sessions WHERE id = ?",
-        [sessionId],
-      )) || [];
+      const sessionRows =
+        (await db.queryAsync("SELECT * FROM sessions WHERE id = ?", [
+          sessionId,
+        ])) || [];
 
       if (sessionRows.length === 0) {
         return null;
       }
 
-      const baseRowRaw = sessionRows[0] as Partial<SessionRow> & Record<string, unknown>;
+      const baseRowRaw = sessionRows[0] as Partial<SessionRow> &
+        Record<string, unknown>;
       const baseRow: SessionRow = {
         id: String(baseRowRaw.id || ""),
         created_at: Number(baseRowRaw.created_at || 0),
@@ -703,32 +744,36 @@ export class SessionStorageService {
             ? baseRowRaw.last_retryable_failed_model_id
             : null,
       };
-      const paperchatStateRows = (await db.queryAsync(
-        "SELECT * FROM paperchat_session_state WHERE session_id = ?",
-        [sessionId],
-      )) || [];
-      const paperchatState = paperchatStateRows[0] as Partial<SessionRow> | undefined;
+      const paperchatStateRows =
+        (await db.queryAsync(
+          "SELECT * FROM paperchat_session_state WHERE session_id = ?",
+          [sessionId],
+        )) || [];
+      const paperchatState = paperchatStateRows[0] as
+        | Partial<SessionRow>
+        | undefined;
       const row: SessionRow = {
         ...baseRow,
         selected_tier: paperchatState?.selected_tier ?? baseRow.selected_tier,
         resolved_model_id:
           paperchatState?.resolved_model_id ?? baseRow.resolved_model_id,
         last_retryable_user_message_id:
-          paperchatState?.last_retryable_user_message_id
-          ?? baseRow.last_retryable_user_message_id,
+          paperchatState?.last_retryable_user_message_id ??
+          baseRow.last_retryable_user_message_id,
         last_retryable_error_message_id:
-          paperchatState?.last_retryable_error_message_id
-          ?? baseRow.last_retryable_error_message_id,
+          paperchatState?.last_retryable_error_message_id ??
+          baseRow.last_retryable_error_message_id,
         last_retryable_failed_model_id:
-          paperchatState?.last_retryable_failed_model_id
-          ?? baseRow.last_retryable_failed_model_id,
+          paperchatState?.last_retryable_failed_model_id ??
+          baseRow.last_retryable_failed_model_id,
       };
 
       // 2. Load messages from messages table
-      const messageRows = (await db.queryAsync(
-        "SELECT * FROM messages WHERE session_id = ? ORDER BY seq ASC",
-        [sessionId],
-      )) || [];
+      const messageRows =
+        (await db.queryAsync(
+          "SELECT * FROM messages WHERE session_id = ? ORDER BY seq ASC",
+          [sessionId],
+        )) || [];
 
       const messages: ChatMessage[] = messageRows.map((m: any) => {
         const msg: ChatMessage = {
@@ -772,9 +817,10 @@ export class SessionStorageService {
 
       // If deleted session was active, switch to most recent
       if (this.activeSessionIdCache === sessionId) {
-        const metaRows = (await db.queryAsync(
-          "SELECT id FROM session_meta ORDER BY updated_at DESC LIMIT 1",
-        )) || [];
+        const metaRows =
+          (await db.queryAsync(
+            "SELECT id FROM session_meta ORDER BY updated_at DESC LIMIT 1",
+          )) || [];
 
         const newActiveId = metaRows.length > 0 ? metaRows[0].id : null;
         await this.setActiveSession(newActiveId);
@@ -795,9 +841,10 @@ export class SessionStorageService {
 
     try {
       const db = await getStorageDatabase().ensureInit();
-      const rows = (await db.queryAsync(
-        "SELECT * FROM session_meta ORDER BY updated_at DESC",
-      )) || [];
+      const rows =
+        (await db.queryAsync(
+          "SELECT * FROM session_meta ORDER BY updated_at DESC",
+        )) || [];
 
       return rows.map((row: any) => ({
         id: row.id,
@@ -849,10 +896,9 @@ export class SessionStorageService {
           ["active_session_id", sessionId],
         );
       } else {
-        await db.queryAsync(
-          "DELETE FROM settings WHERE key = ?",
-          ["active_session_id"],
-        );
+        await db.queryAsync("DELETE FROM settings WHERE key = ?", [
+          "active_session_id",
+        ]);
       }
 
       this.activeSessionIdCache = sessionId;
@@ -887,7 +933,10 @@ export class SessionStorageService {
         await this.deleteSessionData(db, row.id);
       }
 
-      ztoolkit.log("[SessionStorageService] Cleaned up empty sessions:", rows.length);
+      ztoolkit.log(
+        "[SessionStorageService] Cleaned up empty sessions:",
+        rows.length,
+      );
       return rows.length;
     } catch (error) {
       ztoolkit.log("[SessionStorageService] Cleanup error:", error);
@@ -902,22 +951,23 @@ export class SessionStorageService {
     try {
       const db = await getStorageDatabase().ensureInit();
 
-      const countRows = (await db.queryAsync(
-        "SELECT COUNT(*) as count FROM session_meta",
-      )) || [];
+      const countRows =
+        (await db.queryAsync("SELECT COUNT(*) as count FROM session_meta")) ||
+        [];
 
       const totalCount = countRows[0]?.count || 0;
       if (totalCount <= MAX_SESSIONS) return;
 
       // Find sessions to delete: oldest beyond MAX_SESSIONS, excluding active
       const activeId = this.activeSessionIdCache;
-      const toDeleteRows = (await db.queryAsync(
-        `SELECT id FROM session_meta
+      const toDeleteRows =
+        (await db.queryAsync(
+          `SELECT id FROM session_meta
          WHERE id != ?
          ORDER BY updated_at DESC
          LIMIT -1 OFFSET ?`,
-        [activeId || "", MAX_SESSIONS - 1],
-      )) || [];
+          [activeId || "", MAX_SESSIONS - 1],
+        )) || [];
 
       for (const row of toDeleteRows) {
         await this.deleteSessionData(db, row.id);
@@ -930,7 +980,10 @@ export class SessionStorageService {
         );
       }
     } catch (error) {
-      ztoolkit.log("[SessionStorageService] Enforce max sessions error:", error);
+      ztoolkit.log(
+        "[SessionStorageService] Enforce max sessions error:",
+        error,
+      );
     }
   }
 
@@ -946,7 +999,9 @@ export class SessionStorageService {
       if (session) {
         return session;
       }
-      throw new MissingActiveSessionError(`Active session ${activeId} is missing`);
+      throw new MissingActiveSessionError(
+        `Active session ${activeId} is missing`,
+      );
     }
 
     return this.createSession();
@@ -954,12 +1009,13 @@ export class SessionStorageService {
 
   private async markInterruptedMessages(sessionId: string): Promise<void> {
     const db = await getStorageDatabase().ensureInit();
-    const rows = (await db.queryAsync(
-      `SELECT COUNT(*) as count
+    const rows =
+      (await db.queryAsync(
+        `SELECT COUNT(*) as count
        FROM messages
        WHERE session_id = ? AND streaming_state = 'in_progress'`,
-      [sessionId],
-    )) || [];
+        [sessionId],
+      )) || [];
     const interruptedCount = rows[0]?.count || 0;
     if (interruptedCount === 0) {
       return;
@@ -1001,17 +1057,23 @@ export class SessionStorageService {
         "DELETE FROM task_events WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)",
         [sessionId],
       );
-      await db.queryAsync("DELETE FROM tasks WHERE session_id = ?", [sessionId]);
+      await db.queryAsync("DELETE FROM tasks WHERE session_id = ?", [
+        sessionId,
+      ]);
       await db.queryAsync(
         "DELETE FROM paperchat_session_state WHERE session_id = ?",
         [sessionId],
       );
-      await db.queryAsync("DELETE FROM messages WHERE session_id = ?", [sessionId]);
+      await db.queryAsync("DELETE FROM messages WHERE session_id = ?", [
+        sessionId,
+      ]);
       await db.queryAsync("DELETE FROM session_meta WHERE id = ?", [sessionId]);
       await db.queryAsync("DELETE FROM sessions WHERE id = ?", [sessionId]);
       await db.queryAsync("COMMIT");
     } catch (error) {
-      try { await db.queryAsync("ROLLBACK"); } catch {}
+      try {
+        await db.queryAsync("ROLLBACK");
+      } catch {}
       throw error;
     }
   }

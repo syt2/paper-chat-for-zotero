@@ -31,6 +31,16 @@ interface UpdateTaskInput {
   cancelledAt?: number | null;
 }
 
+// Tri-state patch: `undefined` = unchanged, `null` = clear, value = set.
+function resolveNullablePatch<T>(
+  patch: T | null | undefined,
+  existing: T | undefined,
+): T | undefined {
+  if (patch === undefined) return existing;
+  if (patch === null) return undefined;
+  return patch;
+}
+
 export class TaskManager {
   async createTask(input: CreateTaskInput): Promise<TaskRecord> {
     const db = await getStorageDatabase().ensureInit();
@@ -85,10 +95,8 @@ export class TaskManager {
 
   async getTask(taskId: string): Promise<TaskRecord | null> {
     const db = await getStorageDatabase().ensureInit();
-    const rows = (await db.queryAsync(
-      "SELECT * FROM tasks WHERE id = ?",
-      [taskId],
-    )) || [];
+    const rows =
+      (await db.queryAsync("SELECT * FROM tasks WHERE id = ?", [taskId])) || [];
 
     if (rows.length === 0) {
       return null;
@@ -97,11 +105,13 @@ export class TaskManager {
     return this.mapTaskRow(rows[0]);
   }
 
-  async listTasks(options: {
-    sessionId?: string;
-    statuses?: TaskStatus[];
-    limit?: number;
-  } = {}): Promise<TaskRecord[]> {
+  async listTasks(
+    options: {
+      sessionId?: string;
+      statuses?: TaskStatus[];
+      limit?: number;
+    } = {},
+  ): Promise<TaskRecord[]> {
     const db = await getStorageDatabase().ensureInit();
     const where: string[] = [];
     const params: unknown[] = [];
@@ -112,9 +122,7 @@ export class TaskManager {
     }
 
     if (options.statuses && options.statuses.length > 0) {
-      where.push(
-        `status IN (${options.statuses.map(() => "?").join(", ")})`,
-      );
+      where.push(`status IN (${options.statuses.map(() => "?").join(", ")})`);
       params.push(...options.statuses);
     }
 
@@ -137,14 +145,18 @@ export class TaskManager {
 
   async listTaskEvents(taskId: string): Promise<TaskEvent[]> {
     const db = await getStorageDatabase().ensureInit();
-    const rows = (await db.queryAsync(
-      "SELECT * FROM task_events WHERE task_id = ? ORDER BY created_at ASC",
-      [taskId],
-    )) || [];
+    const rows =
+      (await db.queryAsync(
+        "SELECT * FROM task_events WHERE task_id = ? ORDER BY created_at ASC",
+        [taskId],
+      )) || [];
     return rows.map((row) => this.mapTaskEventRow(row));
   }
 
-  async startTask(taskId: string, progress?: TaskProgress): Promise<TaskRecord | null> {
+  async startTask(
+    taskId: string,
+    progress?: TaskProgress,
+  ): Promise<TaskRecord | null> {
     const now = Date.now();
     const task = await this.updateTask(taskId, {
       status: "running",
@@ -162,7 +174,10 @@ export class TaskManager {
     return task;
   }
 
-  async requestCancelTask(taskId: string, reason?: string): Promise<TaskRecord | null> {
+  async requestCancelTask(
+    taskId: string,
+    reason?: string,
+  ): Promise<TaskRecord | null> {
     const task = await this.updateTask(taskId, {
       status: "cancel_requested",
       error: reason || null,
@@ -175,7 +190,10 @@ export class TaskManager {
     return task;
   }
 
-  async cancelTask(taskId: string, reason?: string): Promise<TaskRecord | null> {
+  async cancelTask(
+    taskId: string,
+    reason?: string,
+  ): Promise<TaskRecord | null> {
     const now = Date.now();
     const task = await this.updateTask(taskId, {
       status: "cancelled",
@@ -250,15 +268,20 @@ export class TaskManager {
 
     const recovered: TaskRecord[] = [];
     for (const task of recoverable) {
-      const status = task.status === "cancel_requested" ? "cancelled" : "failed";
+      const status =
+        task.status === "cancel_requested" ? "cancelled" : "failed";
       const message =
         task.status === "cancel_requested"
           ? "Task cancellation completed during recovery."
           : "Task was interrupted before completion.";
       const next = await this.updateTask(task.id, {
         status,
-        error: task.status === "cancel_requested" ? task.error || null : message,
-        cancelledAt: task.status === "cancel_requested" ? Date.now() : task.cancelledAt ?? null,
+        error:
+          task.status === "cancel_requested" ? task.error || null : message,
+        cancelledAt:
+          task.status === "cancel_requested"
+            ? Date.now()
+            : (task.cancelledAt ?? null),
         completedAt: Date.now(),
       });
       if (next) {
@@ -288,31 +311,17 @@ export class TaskManager {
       title: input.title ?? existing.title,
       progress: input.progress ?? existing.progress,
       output: input.output ?? existing.output,
-      error:
-        input.error === null
-          ? undefined
-          : input.error !== undefined
-            ? input.error
-            : existing.error,
+      error: resolveNullablePatch(input.error, existing.error),
       updatedAt: Date.now(),
-      startedAt:
-        input.startedAt === null
-          ? undefined
-          : input.startedAt !== undefined
-            ? input.startedAt
-            : existing.startedAt,
-      completedAt:
-        input.completedAt === null
-          ? undefined
-          : input.completedAt !== undefined
-            ? input.completedAt
-            : existing.completedAt,
-      cancelledAt:
-        input.cancelledAt === null
-          ? undefined
-          : input.cancelledAt !== undefined
-            ? input.cancelledAt
-            : existing.cancelledAt,
+      startedAt: resolveNullablePatch(input.startedAt, existing.startedAt),
+      completedAt: resolveNullablePatch(
+        input.completedAt,
+        existing.completedAt,
+      ),
+      cancelledAt: resolveNullablePatch(
+        input.cancelledAt,
+        existing.cancelledAt,
+      ),
     };
 
     const db = await getStorageDatabase().ensureInit();

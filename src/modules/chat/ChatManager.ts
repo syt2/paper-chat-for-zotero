@@ -1451,7 +1451,7 @@ export class ChatManager {
         return true;
       } catch (error) {
         if (error instanceof SessionRunInvalidatedError) {
-          return false;
+          return true;
         }
         // 所有 provider 都失败了
         ztoolkit.log("[ChatManager] All providers failed:", error);
@@ -1881,6 +1881,7 @@ export class ChatManager {
     });
     this.streamingSessions.delete(clearedSession.id);
     this.currentSession = clearedSession;
+    this.applySessionItemContext(clearedSession);
 
     await this.sessionStorage.deleteAllMessages(clearedSession.id);
     await this.sessionStorage.updateSessionMeta(clearedSession);
@@ -2013,8 +2014,18 @@ export class ChatManager {
       updatedAt: now,
       lastActiveItemKey: null,
       messages: [],
+      contextSummary: undefined,
+      contextState: undefined,
+      executionPlan: undefined,
+      toolExecutionState: undefined,
+      toolApprovalState: undefined,
       memoryExtractedAt: undefined,
       memoryExtractedMsgCount: undefined,
+      selectedTier: session.selectedTier,
+      resolvedModelId: session.resolvedModelId,
+      lastRetryableUserMessageId: undefined,
+      lastRetryableErrorMessageId: undefined,
+      lastRetryableFailedModelId: undefined,
     };
   }
 
