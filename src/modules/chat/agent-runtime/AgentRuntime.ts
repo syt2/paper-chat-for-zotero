@@ -16,10 +16,9 @@ import type {
 } from "../../../types/tool";
 import type { ToolCallingProvider } from "../../../types/provider";
 import { getErrorMessage } from "../../../utils/common";
-import { getContextManager } from "../ContextManager";
 import { SessionRunInvalidatedError } from "../errors";
 import type { SessionStorageService } from "../SessionStorageService";
-import { getToolScheduler } from "../tool-scheduler";
+import type { ToolSchedulerRequest } from "../tool-scheduler";
 import { ExecutionPlanManager } from "./ExecutionPlanManager";
 import {
   planToolExecutionEntries,
@@ -48,6 +47,13 @@ interface AgentRuntimeCallbacks {
     resultPreview?: string,
   ) => string;
   generateId: () => string;
+}
+
+interface RuntimeToolScheduler {
+  createExecutionBatches(
+    requests: ToolSchedulerRequest[],
+  ): ToolSchedulerRequest[][];
+  executeBatch(requests: ToolSchedulerRequest[]): Promise<ToolExecutionResult[]>;
 }
 
 interface RuntimeExecutionOptions {
@@ -98,13 +104,13 @@ const MAX_ITERATIONS_ERROR = "Maximum tool-calling iterations reached.";
 
 export class AgentRuntime {
   private executionPlanManager = new ExecutionPlanManager();
-  private toolScheduler = getToolScheduler();
   private messageCheckpointTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private messageCheckpointQueues = new Map<string, Promise<void>>();
 
   constructor(
     private sessionStorage: SessionStorageService,
     private callbacks: AgentRuntimeCallbacks,
+    private toolScheduler: RuntimeToolScheduler,
   ) {}
 
   async executeStreamingToolLoop(
@@ -690,11 +696,13 @@ export class AgentRuntime {
     }
 
     if (summaryTriggered) {
-      getContextManager()
-        .generateSummaryAsync(sendingSession, async () => {
-          this.ensureSessionTracked(sendingSession);
-          await this.sessionStorage.updateSessionMeta(sendingSession);
-        })
+      void import("../ContextManager")
+        .then(({ getContextManager }) =>
+          getContextManager().generateSummaryAsync(sendingSession, async () => {
+            this.ensureSessionTracked(sendingSession);
+            await this.sessionStorage.updateSessionMeta(sendingSession);
+          }),
+        )
         .catch((err) => {
           ztoolkit.log("[AgentRuntime] Summary generation failed:", err);
         });

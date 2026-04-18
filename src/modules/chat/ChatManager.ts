@@ -42,6 +42,7 @@ import {
   getToolPermissionManager,
   type ToolApprovalObserver,
 } from "./tool-permissions";
+import { getToolScheduler } from "./tool-scheduler";
 import { getProviderManager } from "../providers";
 import { getAuthManager } from "../auth";
 import { getString } from "../../utils/locale";
@@ -156,20 +157,24 @@ export class ChatManager {
     this.sessionStorage = new SessionStorageService();
     this.pdfExtractor = new PdfExtractor();
     this.memoryManager = new MemoryManager(this.sessionStorage);
-    this.agentRuntime = new AgentRuntime(this.sessionStorage, {
-      isSessionActive: (session) => this.isSessionActive(session),
-      isSessionTracked: (session) => this.isSessionTracked(session),
-      onStreamingUpdate: (content) => this.onStreamingUpdate?.(content),
-      onReasoningUpdate: (reasoning) => this.onReasoningUpdate?.(reasoning),
-      onMessageUpdate: (messages) => this.onMessageUpdate?.(messages),
-      onPdfAttached: () => this.onPdfAttached?.(),
-      onMessageComplete: () => this.onMessageComplete?.(),
-      onExecutionPlanUpdate: (plan) => this.onExecutionPlanUpdate?.(plan),
-      onRuntimeEvent: (event) => this.onRuntimeEvent?.(event),
-      formatToolCallCard: (toolName, args, status, resultPreview) =>
-        this.formatToolCallCard(toolName, args, status, resultPreview),
-      generateId: () => this.generateId(),
-    });
+    this.agentRuntime = new AgentRuntime(
+      this.sessionStorage,
+      {
+        isSessionActive: (session) => this.isSessionActive(session),
+        isSessionTracked: (session) => this.isSessionTracked(session),
+        onStreamingUpdate: (content) => this.onStreamingUpdate?.(content),
+        onReasoningUpdate: (reasoning) => this.onReasoningUpdate?.(reasoning),
+        onMessageUpdate: (messages) => this.onMessageUpdate?.(messages),
+        onPdfAttached: () => this.onPdfAttached?.(),
+        onMessageComplete: () => this.onMessageComplete?.(),
+        onExecutionPlanUpdate: (plan) => this.onExecutionPlanUpdate?.(plan),
+        onRuntimeEvent: (event) => this.onRuntimeEvent?.(event),
+        formatToolCallCard: (toolName, args, status, resultPreview) =>
+          this.formatToolCallCard(toolName, args, status, resultPreview),
+        generateId: () => this.generateId(),
+      },
+      getToolScheduler(),
+    );
     this.approvalObserver = {
       onApprovalRequested: (approvalRequest) => {
         this.handleApprovalRequested(approvalRequest);
