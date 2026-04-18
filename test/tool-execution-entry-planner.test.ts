@@ -127,7 +127,7 @@ describe("tool execution entry planner", function () {
     }
   });
 
-  it("blocks a second get_full_text call in the same turn after one already ran", async function () {
+  it("blocks a fourth get_full_text call in the same turn after three already ran", async function () {
     const { planToolExecutionEntries } = await import(
       "../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts"
     );
@@ -145,17 +145,29 @@ describe("tool execution entry planner", function () {
         content: "Found method section references.",
       },
       {
-        toolCall: createToolCall("tool-fulltext", "ITEM-1", "get_full_text"),
+        toolCall: createToolCall("tool-fulltext-1", "ITEM-1", "get_full_text"),
         args: { itemKey: "ITEM-1" },
         status: "completed",
         content: "Full text content",
+      },
+      {
+        toolCall: createToolCall("tool-fulltext-2", "ITEM-2", "get_full_text"),
+        args: { itemKey: "ITEM-2" },
+        status: "completed",
+        content: "Full text content 2",
+      },
+      {
+        toolCall: createToolCall("tool-fulltext-3", "ITEM-3", "get_full_text"),
+        args: { itemKey: "ITEM-3" },
+        status: "completed",
+        content: "Full text content 3",
       },
     ];
 
     const entries = planToolExecutionEntries({
       sessionId: "session-1",
       assistantMessage,
-      toolCalls: [createToolCall("tool-2", "ITEM-2", "get_full_text")],
+      toolCalls: [createToolCall("tool-2", "ITEM-4", "get_full_text")],
       previousResults,
       createExecutionBatches: (requests) => [requests],
     });
@@ -164,7 +176,7 @@ describe("tool execution entry planner", function () {
     assert.equal(entries[0].kind, "synthetic");
     if (entries[0].kind === "synthetic") {
       assert.include(entries[0].results[0].content, "Category: budget_exhausted");
-      assert.include(entries[0].results[0].content, "may only run once per user turn");
+      assert.include(entries[0].results[0].content, "may only run 3 times per user turn");
     }
   });
 
@@ -218,12 +230,30 @@ describe("tool execution entry planner", function () {
         status: "completed",
         content: "web result 2",
       },
+      {
+        toolCall: createWebSearchCall("tool-3", "query three"),
+        args: { query: "query three" },
+        status: "completed",
+        content: "web result 3",
+      },
+      {
+        toolCall: createWebSearchCall("tool-4", "query four"),
+        args: { query: "query four" },
+        status: "completed",
+        content: "web result 4",
+      },
+      {
+        toolCall: createWebSearchCall("tool-5", "query five"),
+        args: { query: "query five" },
+        status: "completed",
+        content: "web result 5",
+      },
     ];
 
     const entries = planToolExecutionEntries({
       sessionId: "session-1",
       assistantMessage,
-      toolCalls: [createWebSearchCall("tool-3", "query three")],
+      toolCalls: [createWebSearchCall("tool-6", "query six")],
       previousResults,
       createExecutionBatches: (requests) => [requests],
     });
@@ -232,7 +262,7 @@ describe("tool execution entry planner", function () {
     assert.equal(entries[0].kind, "synthetic");
     if (entries[0].kind === "synthetic") {
       assert.include(entries[0].results[0].content, "Category: budget_exhausted");
-      assert.include(entries[0].results[0].content, "may only run twice per user turn");
+      assert.include(entries[0].results[0].content, "may only run 5 times per user turn");
     }
   });
 });

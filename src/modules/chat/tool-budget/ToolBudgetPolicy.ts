@@ -4,8 +4,8 @@ import { formatToolError, parseToolError } from "../tool-errors/ToolErrorFormatt
 import { getToolRuntimeMetadata } from "../tool-scheduler/ToolMetadataRegistry";
 
 const CURRENT_PAPER_TARGET = "__current_paper__";
-const MAX_FULL_TEXT_CALLS_PER_TURN = 1;
-const MAX_WEB_SEARCH_CALLS_PER_TURN = 2;
+const MAX_FULL_TEXT_CALLS_PER_TURN = 3;
+const MAX_WEB_SEARCH_CALLS_PER_TURN = 5;
 
 const NARROW_PAPER_TOOLS = new Set([
   "get_paper_section",
@@ -77,7 +77,7 @@ export function applyToolBudgetPolicy(
     if (state.getFullTextCalls >= MAX_FULL_TEXT_CALLS_PER_TURN) {
       return createBudgetBlockedResult(toolCall, args, {
         cause:
-          "High-cost tool limit reached: get_full_text may only run once per user turn.",
+          `High-cost tool limit reached: get_full_text may only run ${MAX_FULL_TEXT_CALLS_PER_TURN} times per user turn.`,
         suggestedFix:
           "Use the full-text result already gathered in this turn, or wait for a new user turn before requesting full text again.",
         saferAlternative:
@@ -115,7 +115,7 @@ export function applyToolBudgetPolicy(
     if (state.webSearchCalls >= MAX_WEB_SEARCH_CALLS_PER_TURN) {
       return createBudgetBlockedResult(toolCall, args, {
         cause:
-          "High-cost tool limit reached: web_search may only run twice per user turn.",
+          `High-cost tool limit reached: web_search may only run ${MAX_WEB_SEARCH_CALLS_PER_TURN} times per user turn.`,
         suggestedFix:
           "Use the web results already gathered in this turn, or wait for a new user turn before searching again.",
         saferAlternative:

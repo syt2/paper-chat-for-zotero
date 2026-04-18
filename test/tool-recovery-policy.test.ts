@@ -145,7 +145,7 @@ describe("tool recovery policy", function () {
         "Error: Tool budget exhausted for get_full_text.",
         "Category: budget_exhausted",
         "Retryable: no",
-        "Cause: High-cost tool limit reached: get_full_text may only run once per user turn.",
+        "Cause: High-cost tool limit reached: get_full_text may only run 3 times per user turn.",
       ].join("\n"),
     } satisfies ToolExecutionResult);
 
