@@ -1,8 +1,14 @@
 import { assert } from "chai";
 import {
+  assertAssistantContentMatches,
+  assertExecutedTools,
+  assertExecutionPlanTerminalState,
+  assertRecoveryNoticeIncludes,
+  assertToolResultContains,
+  assertTraceContainsSequence,
   createToolCall,
+  getToolCompletionStatuses,
   runAgentTraceScenario,
-  summarizeAgentTrace,
 } from "./helpers/agentTraceHarness.ts";
 
 describe("agent trace eval harness", function () {
@@ -52,31 +58,21 @@ describe("agent trace eval harness", function () {
       },
     });
 
-    const trace = summarizeAgentTrace(result);
-    assert.include(
-      trace,
+    assertTraceContainsSequence(result, [
       "turn_started:Check whether this paper has a note summary.",
-    );
-    assert.include(trace, "tool_completed:web_search:denied");
-    assert.include(trace, "tool_started:get_item_metadata");
-    assert.include(trace, "tool_completed:get_item_metadata:completed");
-    assert.match(
-      trace[trace.length - 1] || "",
+      "tool_completed:web_search:denied",
+      "tool_started:get_item_metadata",
+      "tool_completed:get_item_metadata:completed",
       /^turn_completed:I will check outside Zotero first\./,
-    );
-    assert.deepEqual(
-      result.executedToolCalls.map((entry) => entry.toolName),
-      ["get_item_metadata"],
-    );
-    assert.equal(result.session.executionPlan?.status, "completed");
-    assert.include(
-      result.assistantMessage.content,
-      "answer without web search",
-    );
-    assert.include(
-      result.session.toolExecutionState?.results[0]?.content || "",
+    ]);
+    assertExecutedTools(result, ["get_item_metadata"]);
+    assertExecutionPlanTerminalState(result, "completed", "Compose final answer");
+    assertRecoveryNoticeIncludes(result, "permission_denied", [
+      "Do not retry this tool",
       "permission_denied",
-    );
+    ]);
+    assertAssistantContentMatches(result, "answer without web search");
+    assertToolResultContains(result, "web_search", "permission_denied");
   });
 
   it("replans after get_full_text is budget-blocked and uses a narrower paper tool", async function () {
@@ -127,25 +123,24 @@ describe("agent trace eval harness", function () {
       },
     });
 
-    const toolStatuses = result.runtimeEvents
-      .filter((event) => event.type === "tool_completed")
-      .map((event) => `${event.toolName}:${event.status}`);
-    assert.deepEqual(toolStatuses, [
+    assertTraceContainsSequence(result, [
+      "turn_started:Read the full paper and tell me the method.",
+      "tool_completed:get_full_text:failed",
+      "tool_started:search_paper_content",
+      "tool_completed:search_paper_content:completed",
+      /^turn_completed:I will fetch the full paper text\./,
+    ]);
+    assert.deepEqual(getToolCompletionStatuses(result), [
       "get_full_text:failed",
       "search_paper_content:completed",
     ]);
-    assert.deepEqual(
-      result.executedToolCalls.map((entry) => entry.toolName),
-      ["search_paper_content"],
-    );
-    assert.include(
-      result.session.toolExecutionState?.results[0]?.content || "",
-      "Use narrower tools first",
-    );
-    assert.equal(
-      result.session.executionPlan?.steps.at(-1)?.title,
-      "Compose final answer",
-    );
+    assertExecutedTools(result, ["search_paper_content"]);
+    assertExecutionPlanTerminalState(result, "completed", "Compose final answer");
+    assertRecoveryNoticeIncludes(result, "budget_exhausted", [
+      "search_paper_content",
+      "get_paper_section",
+    ]);
+    assertToolResultContains(result, "get_full_text", "Use narrower tools first");
   });
 
   it("surfaces a denied write tool in the trace and still completes the turn", async function () {
@@ -178,20 +173,60 @@ describe("agent trace eval harness", function () {
       ],
     });
 
-    const trace = summarizeAgentTrace(result);
-    assert.deepEqual(trace.slice(0, 2), [
+    assertTraceContainsSequence(result, [
       "turn_started:Create a note with the summary.",
       "tool_completed:create_note:denied",
-    ]);
-    assert.match(
-      trace[trace.length - 1] || "",
       /^turn_completed:I will save the summary to Zotero\./,
-    );
-    assert.deepEqual(result.executedToolCalls, []);
-    assert.include(
-      result.assistantMessage.content,
-      "summary inline instead",
-    );
-    assert.equal(result.session.executionPlan?.status, "completed");
+    ]);
+    assertExecutedTools(result, []);
+    assertExecutionPlanTerminalState(result, "completed", "Compose final answer");
+    assertRecoveryNoticeIncludes(result, "permission_denied", [
+      "Replan around read-only or already-allowed tools",
+    ]);
+    assertAssistantContentMatches(result, "summary inline instead");
+  });
+
+  it("provides stable plan and trace helpers for generic failure scenes", async function () {
+    const result = await runAgentTraceScenario({
+      userContent: "Find the key claim from the paper.",
+      rounds: [
+        {
+          content: "I will search the paper for the main claim.",
+          toolCalls: [
+            createToolCall("tool-search-1", "search_paper_content", {
+              itemKey: "ITEM-1",
+              query: "claim",
+            }),
+          ],
+        },
+        {
+          content:
+            "The search tool failed, so I will explain the limitation instead of guessing.",
+        },
+      ],
+      executeTool: (toolCall) => {
+        if (toolCall.function.name === "search_paper_content") {
+          return [
+            "Error: Search index unavailable for search_paper_content.",
+            "Category: execution_failed",
+            "Retryable: yes",
+          ].join("\n");
+        }
+        throw new Error(`Unexpected tool execution: ${toolCall.function.name}`);
+      },
+    });
+
+    assertTraceContainsSequence(result, [
+      "turn_started:Find the key claim from the paper.",
+      "tool_started:search_paper_content",
+      "tool_completed:search_paper_content:failed",
+      /^turn_completed:I will search the paper for the main claim\./,
+    ]);
+    assertExecutedTools(result, ["search_paper_content"]);
+    assertExecutionPlanTerminalState(result, "completed", "Compose final answer");
+    assertRecoveryNoticeIncludes(result, "execution_failed", [
+      "avoid repeating the same call unchanged",
+    ]);
+    assertAssistantContentMatches(result, "explain the limitation instead");
   });
 });

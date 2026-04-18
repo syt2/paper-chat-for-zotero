@@ -75,6 +75,11 @@ export interface AgentTraceRunResult {
   >;
 }
 
+export type TraceExpectation =
+  | string
+  | RegExp
+  | ((entry: string, index: number, trace: string[]) => boolean);
+
 export function createTraceSession(userContent: string): ChatSession {
   const now = Date.now();
   return {
@@ -310,6 +315,138 @@ export function summarizeAgentTrace(result: AgentTraceRunResult): string[] {
   });
 }
 
+export function getExecutedToolNames(result: AgentTraceRunResult): string[] {
+  return result.executedToolCalls.map((entry) => entry.toolName);
+}
+
+export function getToolCompletionStatuses(
+  result: AgentTraceRunResult,
+): string[] {
+  return result.runtimeEvents
+    .filter((event) => event.type === "tool_completed")
+    .map((event) => `${event.toolName}:${event.status}`);
+}
+
+export function getLatestExecutionPlan(
+  result: AgentTraceRunResult,
+): ExecutionPlan | undefined {
+  return [...result.planSnapshots].reverse().find(Boolean);
+}
+
+export function getRecoveryNoticeMessages(
+  result: AgentTraceRunResult,
+): ChatMessage[] {
+  return result.providerRounds
+    .flat()
+    .filter(
+      (message) =>
+        message.role === "system" &&
+        message.content.includes("Tool recovery notice:"),
+    );
+}
+
+export function assertTraceContainsSequence(
+  result: AgentTraceRunResult,
+  expectations: TraceExpectation[],
+): void {
+  const trace = summarizeAgentTrace(result);
+  let cursor = 0;
+
+  for (const expected of expectations) {
+    let matchedIndex = -1;
+    for (let i = cursor; i < trace.length; i += 1) {
+      if (matchesTraceExpectation(trace[i], i, trace, expected)) {
+        matchedIndex = i;
+        break;
+      }
+    }
+
+    assert.isAtLeast(
+      matchedIndex,
+      0,
+      [
+        `Missing trace expectation after index ${cursor - 1}:`,
+        formatTraceExpectation(expected),
+        "Actual trace:",
+        ...trace.map((line) => `- ${line}`),
+      ].join("\n"),
+    );
+    cursor = matchedIndex + 1;
+  }
+}
+
+export function assertExecutedTools(
+  result: AgentTraceRunResult,
+  expectedToolNames: string[],
+): void {
+  assert.deepEqual(getExecutedToolNames(result), expectedToolNames);
+}
+
+export function assertExecutionPlanTerminalState(
+  result: AgentTraceRunResult,
+  status: ExecutionPlan["status"],
+  finalStepTitle?: string | RegExp,
+): void {
+  const plan = getLatestExecutionPlan(result) || result.session.executionPlan;
+  assert.isDefined(plan, "Expected an execution plan snapshot.");
+  assert.equal(plan?.status, status);
+
+  if (!finalStepTitle) {
+    return;
+  }
+
+  const finalStep = plan?.steps.at(-1);
+  assert.isDefined(finalStep, "Expected the execution plan to contain steps.");
+  if (typeof finalStepTitle === "string") {
+    assert.equal(finalStep?.title, finalStepTitle);
+    return;
+  }
+  assert.match(finalStep?.title || "", finalStepTitle);
+}
+
+export function assertRecoveryNoticeIncludes(
+  result: AgentTraceRunResult,
+  category: string,
+  requiredSnippets: string[],
+): void {
+  const notice = getRecoveryNoticeMessages(result).find((message) =>
+    message.content.includes(category),
+  );
+  assert.isDefined(
+    notice,
+    `Expected a recovery notice containing category "${category}".`,
+  );
+  for (const snippet of requiredSnippets) {
+    assert.include(notice?.content || "", snippet);
+  }
+}
+
+export function assertAssistantContentMatches(
+  result: AgentTraceRunResult,
+  expectation: string | RegExp,
+): void {
+  if (typeof expectation === "string") {
+    assert.include(result.assistantMessage.content, expectation);
+    return;
+  }
+  assert.match(result.assistantMessage.content, expectation);
+}
+
+export function assertToolResultContains(
+  result: AgentTraceRunResult,
+  toolName: string,
+  requiredSnippet: string,
+): void {
+  const matchingResult = result.session.toolExecutionState?.results.find(
+    (entry) => entry.toolCall.function.name === toolName,
+  );
+  assert.isDefined(
+    matchingResult,
+    `Expected a tool result for ${toolName}, but none was recorded.`,
+  );
+  assert.include(matchingResult?.content || "", requiredSnippet);
+}
+
 class ScriptedToolProvider implements ToolCallingProvider {
   readonly config = {
     id: "scripted-provider",
@@ -408,6 +545,31 @@ function truncateLine(value: string, maxLength: number): string {
     return normalized;
   }
   return `${normalized.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+function matchesTraceExpectation(
+  entry: string,
+  index: number,
+  trace: string[],
+  expected: TraceExpectation,
+): boolean {
+  if (typeof expected === "string") {
+    return entry === expected;
+  }
+  if (expected instanceof RegExp) {
+    return expected.test(entry);
+  }
+  return expected(entry, index, trace);
+}
+
+function formatTraceExpectation(expected: TraceExpectation): string {
+  if (typeof expected === "string") {
+    return expected;
+  }
+  if (expected instanceof RegExp) {
+    return expected.toString();
+  }
+  return "[custom predicate]";
 }
 
 function ensureRuntimeGlobals(): void {
