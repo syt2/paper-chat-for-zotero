@@ -750,12 +750,8 @@ export class PdfToolManager {
       },
     ];
 
-    // 如果没有当前 item，只返回 library 工具 + memory 工具
-    if (!hasCurrentItem) {
-      return [...libraryTools, ...memoryTools];
-    }
-
-    // PDF 内容工具 (需要有当前 item)
+    // PDF 内容工具。Most of them can still work without an active reader tab
+    // when the model provides an explicit itemKey.
     const pdfTools: ToolDefinition[] = [
       {
         type: "function",
@@ -949,6 +945,10 @@ export class PdfToolManager {
         },
       },
     ];
+
+    if (!hasCurrentItem) {
+      return [...libraryTools, ...memoryTools, ...pdfTools];
+    }
 
     // 多文档工具（通过显式 itemKeys 工作）
     const comparisonTools: ToolDefinition[] = [

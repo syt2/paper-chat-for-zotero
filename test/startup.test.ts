@@ -265,6 +265,21 @@ describe("chat agent safeguards", function () {
     assert.notInclude(result, "Invalid arguments for get_full_text");
   });
 
+  it("keeps PDF tools available without an active paper when itemKey can be provided", async function () {
+    const { PdfToolManager } = await import(
+      "../src/modules/chat/pdf-tools/PdfToolManager"
+    );
+    const manager = new PdfToolManager();
+
+    const toolNames = manager
+      .getToolDefinitions(false)
+      .map((tool) => tool.function.name);
+
+    assert.include(toolNames, "get_full_text");
+    assert.include(toolNames, "get_paper_section");
+    assert.include(toolNames, "search_paper_content");
+  });
+
   it("clears persisted plan and tool state when recovering interrupted messages", async function () {
     const { SessionStorageService } = await import(
       "../src/modules/chat/SessionStorageService"
