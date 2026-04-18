@@ -269,6 +269,16 @@ export function extractSourceGroupFragments(
   let hasSourceGroup = false;
   let match: RegExpExecArray | null;
 
+  const pushMarkdownFragment = (fragmentContent: string): void => {
+    if (!fragmentContent.trim()) {
+      return;
+    }
+    fragments.push({
+      kind: "markdown",
+      content: fragmentContent,
+    });
+  };
+
   while ((match = sourceGroupRegex.exec(content)) !== null) {
     const attrs = match[1] || "";
     const label = getTagAttribute(attrs, "label");
@@ -279,10 +289,7 @@ export function extractSourceGroupFragments(
     }
 
     if (match.index > cursor) {
-      fragments.push({
-        kind: "markdown",
-        content: content.slice(cursor, match.index),
-      });
+      pushMarkdownFragment(content.slice(cursor, match.index));
     }
 
     fragments.push({
@@ -301,10 +308,7 @@ export function extractSourceGroupFragments(
   }
 
   if (cursor < content.length) {
-    fragments.push({
-      kind: "markdown",
-      content: content.slice(cursor),
-    });
+    pushMarkdownFragment(content.slice(cursor));
   }
 
   return fragments;
