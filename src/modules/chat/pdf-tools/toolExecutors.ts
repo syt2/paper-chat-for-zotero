@@ -8,7 +8,6 @@ import type {
   SearchPaperContentArgs,
   GetPagesArgs,
   SearchWithRegexArgs,
-  GetFullTextArgs,
 } from "../../../types/tool";
 import { SECTION_ALIASES } from "./constants";
 import { parsePageRange } from "./paperParser";
@@ -487,13 +486,8 @@ export function executeListSections(
  * 执行 get_full_text - 获取完整原文（高 token 消耗）
  */
 export function executeGetFullText(
-  args: GetFullTextArgs,
   paperStructure: PaperStructureExtended,
 ): string {
-  if (!args.confirm) {
-    return `Error: You must set confirm=true to use this tool. This tool returns the entire paper content and consumes many tokens. Please consider using targeted tools like get_paper_section, get_pages, or search_paper_content first.`;
-  }
-
   const { fullText, pageCount } = paperStructure;
   const charCount = fullText.length;
   const estimatedTokens = Math.ceil(charCount / 4); // 粗略估算 token 数

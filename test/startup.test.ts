@@ -289,7 +289,7 @@ describe("chat agent safeguards", function () {
     assert.equal(secondDecision.scope, "once");
   });
 
-  it("coerces string boolean tool args for get_full_text", async function () {
+  it("allows get_full_text without a confirm flag", async function () {
     const { PdfToolManager } =
       await import("../src/modules/chat/pdf-tools/PdfToolManager");
     const manager = new PdfToolManager();
@@ -302,7 +302,6 @@ describe("chat agent safeguards", function () {
           name: "get_full_text",
           arguments: JSON.stringify({
             itemKey: "ITEM-1",
-            confirm: "true",
           }),
         },
       },

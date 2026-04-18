@@ -938,13 +938,7 @@ export class PdfToolManager {
             type: "object",
             properties: {
               ...itemKeyProp,
-              confirm: {
-                type: "boolean",
-                description:
-                  "Must be set to true to confirm you understand this will consume many tokens. Set to true only if absolutely necessary.",
-              },
             },
-            required: ["confirm"],
           },
         },
       },
@@ -1058,11 +1052,7 @@ export class PdfToolManager {
   }
 
   private isGetFullTextArgs(args: unknown): args is GetFullTextArgs {
-    return (
-      typeof args === "object" &&
-      args !== null &&
-      typeof (args as GetFullTextArgs).confirm === "boolean"
-    );
+    return typeof args === "object" && args !== null;
   }
 
   // === 新增工具的类型守卫 ===
@@ -1407,9 +1397,9 @@ export class PdfToolManager {
         return executeListSections(paperStructure);
       case "get_full_text":
         if (!this.isGetFullTextArgs(args)) {
-          return "Error: Invalid arguments for get_full_text. Required: confirm (boolean)";
+          return "Error: Invalid arguments for get_full_text.";
         }
-        return executeGetFullText(args, paperStructure);
+        return executeGetFullText(paperStructure);
       default:
         return `Error: Unknown tool: ${name}`;
     }

@@ -5,7 +5,6 @@ import type {
 
 export type ToolErrorCategory =
   | "invalid_arguments"
-  | "confirmation_required"
   | "permission_denied"
   | "missing_context"
   | "not_found"
@@ -77,19 +76,6 @@ function inferToolError(
         ? `Retry ${toolName} with ${requiredHint}.`
         : `Retry ${toolName} with the required fields and correct value types.`,
       saferAlternative: "Use a narrower tool call with fewer arguments.",
-    };
-  }
-
-  if (/set confirm\s*=\s*true/i.test(message)) {
-    return {
-      summary: `${toolName} requires explicit confirmation.`,
-      category: "confirmation_required",
-      retryable: true,
-      cause: message,
-      suggestedFix:
-        "Retry with confirm set to the boolean value true, not a string.",
-      saferAlternative:
-        "Use targeted tools such as get_paper_section, get_pages, or search_paper_content first.",
     };
   }
 

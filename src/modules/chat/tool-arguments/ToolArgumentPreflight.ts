@@ -49,7 +49,6 @@ const TOOL_SPECIFIC_ALIASES: Record<string, Record<string, string>> = {
 };
 
 const BOOLEAN_KEYS = new Set([
-  "confirm",
   "hasPdf",
   "selectedOnly",
   "includePosition",

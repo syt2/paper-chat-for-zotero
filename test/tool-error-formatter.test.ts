@@ -53,12 +53,12 @@ describe("tool error formatting", function () {
     assert.include(result.content, "Do not retry this tool");
   });
 
-  it("normalizes raw executor errors into structured confirmation hints", async function () {
+  it("normalizes raw executor errors into structured missing-context hints", async function () {
     const scheduler = new ToolScheduler(async () => {
-      return "Error: You must set confirm=true to use this tool. This tool returns the entire paper content and consumes many tokens.";
+      return "Error: Could not extract PDF content for item \"ITEM-1\". The item may not exist or may not have a PDF attachment.";
     });
     const toolCall: ToolCall = {
-      id: "tool-confirm",
+      id: "tool-missing-context",
       type: "function",
       function: {
         name: "get_full_text",
@@ -70,9 +70,9 @@ describe("tool error formatting", function () {
     const parsed = parseToolError(result.content);
 
     assert.equal(result.status, "failed");
-    assert.equal(parsed?.category, "confirmation_required");
-    assert.include(parsed?.suggestedFix || "", "confirm");
-    assert.include(parsed?.saferAlternative || "", "get_paper_section");
+    assert.equal(parsed?.category, "missing_context");
+    assert.include(parsed?.suggestedFix || "", "itemKey");
+    assert.include(parsed?.saferAlternative || "", "metadata");
   });
 
   it("adds structured fix guidance into the recovery system message", function () {
@@ -88,13 +88,13 @@ describe("tool error formatting", function () {
     const messages: ChatMessage[] = [];
     const normalized = normalizeToolErrorContent(
       "get_full_text",
-      "Error: You must set confirm=true to use this tool.",
+      "Error: Could not extract PDF content for item \"ITEM-1\". The item may not exist or may not have a PDF attachment.",
     );
 
     (runtime as any).appendRecoveryGuidanceMessage(messages, [
       {
         toolCall: {
-          id: "tool-confirm",
+          id: "tool-missing-context",
           type: "function",
           function: {
             name: "get_full_text",
@@ -109,7 +109,7 @@ describe("tool error formatting", function () {
 
     assert.lengthOf(messages, 1);
     assert.include(messages[0].content, "Fix:");
-    assert.include(messages[0].content, "confirm");
+    assert.include(messages[0].content, "itemKey");
     assert.include(messages[0].content, "Alternative:");
   });
 });

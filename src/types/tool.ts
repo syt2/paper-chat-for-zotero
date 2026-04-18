@@ -233,9 +233,7 @@ export type GetOutlineArgs = BaseToolArgs;
 
 export type ListSectionsArgs = BaseToolArgs;
 
-export interface GetFullTextArgs extends BaseToolArgs {
-  confirm: boolean;
-}
+export type GetFullTextArgs = BaseToolArgs;
 
 // 列出所有 items 的参数
 export interface ListAllItemsArgs {
