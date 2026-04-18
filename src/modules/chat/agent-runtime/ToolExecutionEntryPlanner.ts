@@ -7,6 +7,10 @@ import type {
 } from "../../../types/tool";
 import type { ToolSchedulerRequest } from "../tool-scheduler/ToolScheduler";
 import {
+  applyToolBudgetPolicy,
+  createToolBudgetState,
+} from "../tool-budget/ToolBudgetPolicy";
+import {
   createBlockedRetryResult,
   findBlockedRetryMatch,
 } from "../tool-retry/ToolRetryPolicy";
@@ -41,6 +45,7 @@ export function planToolExecutionEntries(params: {
   } = params;
   const entries: ToolExecutionBatchEntry[] = [];
   let runnableSegment: ToolSchedulerRequest[] = [];
+  const budgetState = createToolBudgetState(previousResults);
 
   const flushRunnableSegment = () => {
     if (runnableSegment.length === 0) {
@@ -62,6 +67,16 @@ export function planToolExecutionEntries(params: {
       entries.push({
         kind: "synthetic",
         results: [createBlockedRetryResult(toolCall, blockedRetry.previousResult)],
+      });
+      continue;
+    }
+
+    const blockedByBudget = applyToolBudgetPolicy(toolCall, budgetState);
+    if (blockedByBudget) {
+      flushRunnableSegment();
+      entries.push({
+        kind: "synthetic",
+        results: [blockedByBudget],
       });
       continue;
     }

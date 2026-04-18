@@ -23,6 +23,7 @@ describe("tool error formatting", function () {
       "../src/modules/chat/tool-permissions/index.ts"
     );
     getToolPermissionManager().setDescriptorModeOverride("create_note", null);
+    getToolPermissionManager().setDescriptorModeOverride("get_full_text", null);
     (globalThis as any).Zotero = originalZotero;
   });
 
@@ -75,11 +76,18 @@ describe("tool error formatting", function () {
   });
 
   it("normalizes raw executor errors into structured missing-context hints", async function () {
+    const { getToolPermissionManager } = await import(
+      "../src/modules/chat/tool-permissions/index.ts"
+    );
     const { ToolScheduler } = await import(
       "../src/modules/chat/tool-scheduler/ToolScheduler.ts"
     );
     const { parseToolError } = await import(
       "../src/modules/chat/tool-errors/ToolErrorFormatter.ts"
+    );
+    getToolPermissionManager().setDescriptorModeOverride(
+      "get_full_text",
+      "auto_allow",
     );
     const scheduler = new ToolScheduler(async () => {
       return "Error: Could not extract PDF content for item \"ITEM-1\". The item may not exist or may not have a PDF attachment.";

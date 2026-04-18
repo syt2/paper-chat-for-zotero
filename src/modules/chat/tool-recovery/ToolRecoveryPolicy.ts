@@ -114,6 +114,10 @@ export function deriveRecoveryCategory(
     return "permission_denied";
   }
 
+  if (parsed?.category === "budget_exhausted") {
+    return "budget_exhausted";
+  }
+
   return parsed?.category || "unspecified";
 }
 
@@ -156,6 +160,15 @@ function getDirectiveTemplate(
           "Do not retry this tool in the current turn. Switch to lower-risk tools or explain the limitation.",
         planningInstruction:
           "For denied tools, do not repeat the call unless the user changes approval. Replan around read-only or already-allowed tools.",
+      };
+    case "budget_exhausted":
+      return {
+        immediateAction:
+          toolName === "get_full_text"
+            ? "Do not call get_full_text again in this turn. Use narrower paper tools or the evidence already collected."
+            : "Do not spend more web-search budget in this turn. Use the results already gathered or pivot to local tools.",
+        planningInstruction:
+          "For budget-exhausted tools, treat the runtime limit as final for this turn. Replan with narrower or cheaper tools instead of retrying.",
       };
     case "missing_context":
       return {
@@ -206,6 +219,10 @@ function getDefaultAlternative(
   switch (category) {
     case "permission_denied":
       return "Continue with lower-risk read-only tools.";
+    case "budget_exhausted":
+      return toolName === "web_search"
+        ? "Use Zotero library tools or the current-turn web results instead of another search."
+        : "Use narrower paper tools or synthesize from the evidence already gathered.";
     case "missing_context":
       return "Use metadata, notes, annotations, or library search first.";
     case "not_found":
@@ -252,6 +269,17 @@ function getRecommendedTools(
         "get_item_metadata",
         "get_item_notes",
       ]);
+    case "budget_exhausted":
+      return toolName === "web_search"
+        ? ["search_items", "search_notes", "list_all_items"]
+        : dedupeStrings([
+            ...getReaderIndependentFallbacks(toolName),
+            "get_paper_section",
+            "search_paper_content",
+            "get_pages",
+            "get_item_metadata",
+            "get_item_notes",
+          ]);
     case "unavailable":
       return toolName === "web_search"
         ? ["search_items", "search_notes", "list_all_items"]

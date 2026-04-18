@@ -10,13 +10,29 @@ describe("tool execution entry planner", function () {
     timestamp: 1,
   };
 
-  function createToolCall(id: string, itemKey: string): ToolCall {
+  function createToolCall(
+    id: string,
+    itemKey: string,
+    toolName: string = "get_item_metadata",
+    extraArgs?: Record<string, unknown>,
+  ): ToolCall {
     return {
       id,
       type: "function",
       function: {
-        name: "get_item_metadata",
-        arguments: JSON.stringify({ itemKey }),
+        name: toolName,
+        arguments: JSON.stringify({ itemKey, ...(extraArgs || {}) }),
+      },
+    };
+  }
+
+  function createWebSearchCall(id: string, query: string): ToolCall {
+    return {
+      id,
+      type: "function",
+      function: {
+        name: "web_search",
+        arguments: JSON.stringify({ query }),
       },
     };
   }
@@ -87,6 +103,136 @@ describe("tool execution entry planner", function () {
     if (entries[0].kind === "execute") {
       assert.equal(entries[0].requests[0].assistantMessageId, "assistant-1");
       assert.equal(entries[0].requests[0].sessionId, "session-1");
+    }
+  });
+
+  it("blocks get_full_text until a narrower paper tool has been used in the turn", async function () {
+    const { planToolExecutionEntries } = await import(
+      "../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts"
+    );
+
+    const entries = planToolExecutionEntries({
+      sessionId: "session-1",
+      assistantMessage,
+      toolCalls: [createToolCall("tool-1", "ITEM-1", "get_full_text")],
+      previousResults: [],
+      createExecutionBatches: (requests) => [requests],
+    });
+
+    assert.lengthOf(entries, 1);
+    assert.equal(entries[0].kind, "synthetic");
+    if (entries[0].kind === "synthetic") {
+      assert.include(entries[0].results[0].content, "Category: budget_exhausted");
+      assert.include(entries[0].results[0].content, "Use narrower tools first");
+    }
+  });
+
+  it("blocks a second get_full_text call in the same turn after one already ran", async function () {
+    const { planToolExecutionEntries } = await import(
+      "../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts"
+    );
+
+    const previousResults: ToolExecutionResult[] = [
+      {
+        toolCall: createToolCall(
+          "tool-narrow",
+          "ITEM-1",
+          "search_paper_content",
+          { query: "method" },
+        ),
+        args: { itemKey: "ITEM-1", query: "method" },
+        status: "completed",
+        content: "Found method section references.",
+      },
+      {
+        toolCall: createToolCall("tool-fulltext", "ITEM-1", "get_full_text"),
+        args: { itemKey: "ITEM-1" },
+        status: "completed",
+        content: "Full text content",
+      },
+    ];
+
+    const entries = planToolExecutionEntries({
+      sessionId: "session-1",
+      assistantMessage,
+      toolCalls: [createToolCall("tool-2", "ITEM-2", "get_full_text")],
+      previousResults,
+      createExecutionBatches: (requests) => [requests],
+    });
+
+    assert.lengthOf(entries, 1);
+    assert.equal(entries[0].kind, "synthetic");
+    if (entries[0].kind === "synthetic") {
+      assert.include(entries[0].results[0].content, "Category: budget_exhausted");
+      assert.include(entries[0].results[0].content, "may only run once per user turn");
+    }
+  });
+
+  it("blocks obviously repeated web searches in the same turn", async function () {
+    const { planToolExecutionEntries } = await import(
+      "../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts"
+    );
+
+    const previousResults: ToolExecutionResult[] = [
+      {
+        toolCall: createWebSearchCall("tool-1", "transformer interpretability"),
+        args: { query: "transformer interpretability" },
+        status: "completed",
+        content: "web result",
+      },
+    ];
+
+    const entries = planToolExecutionEntries({
+      sessionId: "session-1",
+      assistantMessage,
+      toolCalls: [
+        createWebSearchCall("tool-2", "transformer interpretability summary"),
+      ],
+      previousResults,
+      createExecutionBatches: (requests) => [requests],
+    });
+
+    assert.lengthOf(entries, 1);
+    assert.equal(entries[0].kind, "synthetic");
+    if (entries[0].kind === "synthetic") {
+      assert.include(entries[0].results[0].content, "Category: budget_exhausted");
+      assert.include(entries[0].results[0].content, "similar web_search query already used");
+    }
+  });
+
+  it("blocks web_search after the turn budget is exhausted", async function () {
+    const { planToolExecutionEntries } = await import(
+      "../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts"
+    );
+
+    const previousResults: ToolExecutionResult[] = [
+      {
+        toolCall: createWebSearchCall("tool-1", "query one"),
+        args: { query: "query one" },
+        status: "completed",
+        content: "web result 1",
+      },
+      {
+        toolCall: createWebSearchCall("tool-2", "query two"),
+        args: { query: "query two" },
+        status: "completed",
+        content: "web result 2",
+      },
+    ];
+
+    const entries = planToolExecutionEntries({
+      sessionId: "session-1",
+      assistantMessage,
+      toolCalls: [createWebSearchCall("tool-3", "query three")],
+      previousResults,
+      createExecutionBatches: (requests) => [requests],
+    });
+
+    assert.lengthOf(entries, 1);
+    assert.equal(entries[0].kind, "synthetic");
+    if (entries[0].kind === "synthetic") {
+      assert.include(entries[0].results[0].content, "Category: budget_exhausted");
+      assert.include(entries[0].results[0].content, "may only run twice per user turn");
     }
   });
 });

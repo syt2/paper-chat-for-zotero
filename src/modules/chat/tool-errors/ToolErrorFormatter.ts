@@ -6,6 +6,7 @@ import type {
 export type ToolErrorCategory =
   | "invalid_arguments"
   | "permission_denied"
+  | "budget_exhausted"
   | "missing_context"
   | "not_found"
   | "unavailable"
@@ -93,6 +94,28 @@ function inferToolError(
         "Do not retry this tool in the current turn unless the user changes approval.",
       saferAlternative:
         "Continue with lower-risk read-only tools or explain the limitation.",
+    };
+  }
+
+  if (
+    /budget exhausted/i.test(message) ||
+    /high-cost tool limit/i.test(message) ||
+    /use narrower tools first/i.test(message) ||
+    /similar web_search query already used/i.test(message)
+  ) {
+    return {
+      summary: `Tool budget exhausted for ${toolName}.`,
+      category: "budget_exhausted",
+      retryable: false,
+      cause: message,
+      suggestedFix:
+        toolName === "get_full_text"
+          ? "Use narrower paper tools first, or wait for a new user turn before requesting full text again."
+          : "Use the existing search results, narrow the question, or wait for a new user turn before searching again.",
+      saferAlternative:
+        toolName === "web_search"
+          ? "Use Zotero library tools or synthesize from results already gathered in this turn."
+          : "Use targeted section, page, metadata, notes, or annotation tools instead of full text.",
     };
   }
 

@@ -115,7 +115,7 @@ describe("chat agent safeguards", function () {
     (globalThis as any).IOUtils = originalIOUtils;
   });
 
-  it("auto-allows risky tools when no explicit ask policy is configured", async function () {
+  it("denies ask-mode risky tools when no approval channel is configured", async function () {
     const { ToolPermissionManager } =
       await import("../src/modules/chat/tool-permissions/ToolPermissionManager");
     const manager = new ToolPermissionManager();
@@ -133,23 +133,23 @@ describe("chat agent safeguards", function () {
       assistantMessageId: "assistant-1",
     });
 
-    assert.equal(decision.verdict, "allow");
-    assert.equal(decision.mode, "auto_allow");
+    assert.equal(decision.verdict, "deny");
+    assert.equal(decision.mode, "ask");
     assert.equal(decision.scope, "once");
-    assert.include(decision.reason || "", "auto-allowed");
+    assert.include(decision.reason || "", "requires approval");
     assert.deepEqual(manager.listPendingApprovals(), []);
   });
 
-  it("uses auto-allow by default for network, write, memory, and high-cost tools", async function () {
+  it("uses ask by default for network/high-cost tools and auto-allow for write/memory", async function () {
     const { ToolPermissionManager } =
       await import("../src/modules/chat/tool-permissions/ToolPermissionManager");
     const manager = new ToolPermissionManager();
 
     assert.equal(manager.getDescriptor("list_all_items")?.mode, "auto_allow");
-    assert.equal(manager.getDescriptor("web_search")?.mode, "auto_allow");
+    assert.equal(manager.getDescriptor("web_search")?.mode, "ask");
     assert.equal(manager.getDescriptor("create_note")?.mode, "auto_allow");
     assert.equal(manager.getDescriptor("save_memory")?.mode, "auto_allow");
-    assert.equal(manager.getDescriptor("get_full_text")?.mode, "auto_allow");
+    assert.equal(manager.getDescriptor("get_full_text")?.mode, "ask");
   });
 
   it("loads configurable default risk modes from prefs", async function () {
@@ -190,9 +190,10 @@ describe("chat agent safeguards", function () {
       await import("../src/modules/chat/tool-permissions/ToolPermissionManager");
     const manager = new ToolPermissionManager();
 
-    assert.equal(manager.getDescriptor("web_search")?.mode, "auto_allow");
+    assert.equal(manager.getDescriptor("web_search")?.mode, "ask");
     assert.equal(manager.getDescriptor("create_note")?.mode, "deny");
     assert.equal(manager.getDescriptor("save_memory")?.mode, "auto_allow");
+    assert.equal(manager.getDescriptor("get_full_text")?.mode, "ask");
   });
 
   it("denies ask-mode write tools when no approval channel is available", async function () {

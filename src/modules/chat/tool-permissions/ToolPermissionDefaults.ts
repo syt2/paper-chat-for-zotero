@@ -9,10 +9,10 @@ export const DEFAULT_MODE_BY_RISK_LEVEL: Record<
   ToolPermissionMode
 > = {
   read: "auto_allow",
-  network: "auto_allow",
+  network: "ask",
   write: "auto_allow",
   memory: "auto_allow",
-  high_cost: "auto_allow",
+  high_cost: "ask",
 };
 
 export const CONFIGURABLE_TOOL_PERMISSION_RISK_LEVELS: ToolPermissionRiskLevel[] =
@@ -39,7 +39,12 @@ export function getToolPermissionDefaultModes(): Record<
   ToolPermissionMode
 > {
   const mergedDefaults = { ...DEFAULT_MODE_BY_RISK_LEVEL };
-  const raw = getPref("toolPermissionDefaultModes");
+  let raw: unknown;
+  try {
+    raw = getPref("toolPermissionDefaultModes");
+  } catch {
+    return mergedDefaults;
+  }
   if (!raw || typeof raw !== "string") {
     return mergedDefaults;
   }

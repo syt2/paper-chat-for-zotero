@@ -125,4 +125,36 @@ describe("tool recovery policy", function () {
     assert.include(lines[0] || "", "Discover valid Zotero keys");
     assert.include(lines[0] || "", "tools=search_items, list_all_items");
   });
+
+  it("maps budget-exhausted full-text failures to cheaper fallback tools", async function () {
+    const { getRecoveryDirective } = await import(
+      "../src/modules/chat/tool-recovery/ToolRecoveryPolicy.ts"
+    );
+
+    const directive = getRecoveryDirective({
+      toolCall: {
+        id: "tool-1",
+        type: "function",
+        function: {
+          name: "get_full_text",
+          arguments: JSON.stringify({ itemKey: "ITEM-1" }),
+        },
+      },
+      status: "failed",
+      content: [
+        "Error: Tool budget exhausted for get_full_text.",
+        "Category: budget_exhausted",
+        "Retryable: no",
+        "Cause: High-cost tool limit reached: get_full_text may only run once per user turn.",
+      ].join("\n"),
+    } satisfies ToolExecutionResult);
+
+    assert.equal(directive.category, "budget_exhausted");
+    assert.include(directive.immediateAction, "Do not call get_full_text again");
+    assert.includeMembers(directive.recommendedTools, [
+      "get_paper_section",
+      "search_paper_content",
+      "get_pages",
+    ]);
+  });
 });
