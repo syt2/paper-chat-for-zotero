@@ -10,6 +10,12 @@ import type {
 import { config } from "../../../../package.json";
 import { getErrorMessage } from "../../../utils/common";
 import { getPdfToolManager } from "../pdf-tools";
+import { preflightToolArguments } from "../tool-arguments/ToolArgumentPreflight";
+import {
+  formatDeniedToolResult,
+  formatToolArgumentParseError,
+  normalizeToolErrorContent,
+} from "../tool-errors/ToolErrorFormatter";
 import { getToolPermissionManager } from "../tool-permissions";
 import { getToolRuntimeMetadata } from "./ToolMetadataRegistry";
 
@@ -59,11 +65,7 @@ export class ToolScheduler {
     this.executor =
       executor ??
       ((toolCall, fallbackStructure, args) =>
-        getPdfToolManager().executeToolCall(
-          toolCall,
-          fallbackStructure,
-          args,
-        ));
+        getPdfToolManager().executeToolCall(toolCall, fallbackStructure, args));
   }
 
   createExecutionBatches(
@@ -161,24 +163,38 @@ export class ToolScheduler {
         parsed === null ||
         Array.isArray(parsed)
       ) {
+        const cause = `Invalid arguments JSON: ${toolCall.function.arguments}`;
         return {
           ok: false,
           result: {
             toolCall,
             status: "failed",
-            content: `Error: Invalid arguments JSON: ${toolCall.function.arguments}`,
+            content: formatToolArgumentParseError(
+              toolCall,
+              `${cause}. Tool arguments must decode to an object.`,
+            ),
             error: "Tool arguments must decode to an object.",
           },
         };
       }
-      return { ok: true, args: parsed as Record<string, unknown> };
+      return {
+        ok: true,
+        args: preflightToolArguments(
+          toolCall.function.name,
+          parsed as Record<string, unknown>,
+        ),
+      };
     } catch {
+      const cause = `Invalid arguments JSON: ${toolCall.function.arguments}`;
       return {
         ok: false,
         result: {
           toolCall,
           status: "failed",
-          content: `Error: Invalid arguments JSON: ${toolCall.function.arguments}`,
+          content: formatToolArgumentParseError(
+            toolCall,
+            `${cause}. Tool arguments are not valid JSON.`,
+          ),
           error: "Tool arguments are not valid JSON.",
         },
       };
@@ -190,7 +206,6 @@ export class ToolScheduler {
     args: Record<string, unknown>,
     metadata: ToolExecutionResult["metadata"],
     permissionDecision: ToolPermissionDecision,
-    permissionManager: ReturnType<typeof getToolPermissionManager>,
   ): ToolExecutionResult | null {
     const state = this.readFaultInjectionConfig();
     const cfg = state.config;
@@ -224,7 +239,7 @@ export class ToolScheduler {
         metadata,
         permissionDecision: deniedDecision,
         status: "denied",
-        content: permissionManager.formatDeniedResult(deniedDecision),
+        content: formatDeniedToolResult(deniedDecision),
         error: deniedDecision.reason,
       };
     }
@@ -232,14 +247,15 @@ export class ToolScheduler {
     const message =
       cfg.message ||
       `Injected tool failure for development testing (${toolName}).`;
+    const normalizedError = normalizeToolErrorContent(toolName, `Error: ${message}`);
     return {
       toolCall,
       args,
       metadata,
       permissionDecision,
       status: "failed",
-      content: `Error: ${message}`,
-      error: message,
+      content: normalizedError.content,
+      error: normalizedError.parsed.cause || normalizedError.parsed.summary,
     };
   }
 
@@ -307,7 +323,7 @@ export class ToolScheduler {
         metadata: metadata || undefined,
         permissionDecision,
         status: "denied",
-        content: permissionManager.formatDeniedResult(permissionDecision),
+        content: formatDeniedToolResult(permissionDecision),
         error: permissionDecision.reason,
       };
     }
@@ -317,7 +333,6 @@ export class ToolScheduler {
       argsResult.args,
       metadata || undefined,
       permissionDecision,
-      permissionManager,
     );
     if (injectedResult) {
       return injectedResult;
@@ -340,28 +355,38 @@ export class ToolScheduler {
         prepared.request.fallbackStructure,
         prepared.args,
       );
+      const normalizedError = content.trimStart().startsWith("Error:")
+        ? normalizeToolErrorContent(
+            prepared.request.toolCall.function.name,
+            content,
+          )
+        : null;
 
       return {
         toolCall: prepared.request.toolCall,
         args: prepared.args,
         metadata: prepared.metadata,
         permissionDecision: prepared.permissionDecision,
-        status: content.trimStart().startsWith("Error:")
-          ? "failed"
-          : "completed",
-        content,
-        error: content.trimStart().startsWith("Error:") ? content : undefined,
+        status: normalizedError ? "failed" : "completed",
+        content: normalizedError ? normalizedError.content : content,
+        error: normalizedError
+          ? normalizedError.parsed.cause || normalizedError.parsed.summary
+          : undefined,
       };
     } catch (error) {
       const message = getErrorMessage(error);
+      const normalizedError = normalizeToolErrorContent(
+        prepared.request.toolCall.function.name,
+        `Error: Tool execution failed: ${message}`,
+      );
       return {
         toolCall: prepared.request.toolCall,
         args: prepared.args,
         metadata: prepared.metadata,
         permissionDecision: prepared.permissionDecision,
         status: "failed",
-        content: `Error: Tool execution failed: ${message}`,
-        error: message,
+        content: normalizedError.content,
+        error: normalizedError.parsed.cause || normalizedError.parsed.summary,
       };
     }
   }

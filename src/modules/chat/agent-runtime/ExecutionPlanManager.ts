@@ -7,6 +7,7 @@ import type {
   ExecutionPlanStepStatus,
 } from "../../../types/chat";
 import type { ToolExecutionResult } from "../../../types/tool";
+import { parseToolError } from "../tool-errors/ToolErrorFormatter";
 
 const RECOVERY_STEP_PREFIX = "replan:";
 
@@ -75,8 +76,13 @@ function getToolIntentTitle(toolName: string): string {
 }
 
 function summarizeRecoveryResult(result: ToolExecutionResult): string {
+  const parsed = parseToolError(result.content);
   const issue =
-    result.permissionDecision?.reason || result.error || result.content || "";
+    parsed?.summary ||
+    result.permissionDecision?.reason ||
+    result.error ||
+    result.content ||
+    "";
   return `${result.toolCall.function.name}: ${truncate(issue, 100)}`;
 }
 

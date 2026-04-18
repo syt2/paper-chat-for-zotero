@@ -30,6 +30,7 @@ declare namespace _ZoteroTypes {
       "enableAIWriteOperations": boolean;
       "enableWebSearch": boolean;
       "webSearchProvider": string;
+      "toolPermissionDefaultModes": string;
       "enableSemanticSearch": boolean;
     };
   }

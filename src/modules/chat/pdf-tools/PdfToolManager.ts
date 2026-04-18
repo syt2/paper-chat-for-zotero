@@ -54,6 +54,7 @@ import type {
 } from "../../../types/tool";
 import { getMemoryService } from "../memory/MemoryService";
 import { executeWebSearch, isValidWebSearchArgs } from "../web-search";
+import { preflightToolArguments } from "../tool-arguments/ToolArgumentPreflight";
 import { parsePaperStructure, parsePages } from "./paperParser";
 import type { AgentPromptContext } from "./promptGenerator";
 import { generatePaperContextPrompt as generatePaperContextPromptFn } from "./promptGenerator";
@@ -126,7 +127,11 @@ export class PdfToolManager {
   async extractAndParsePapers(
     itemKeys: string[],
     options?: {
-      onProgress?: (completed: number, total: number, itemKey: string) => Promise<void> | void;
+      onProgress?: (
+        completed: number,
+        total: number,
+        itemKey: string,
+      ) => Promise<void> | void;
     },
   ): Promise<Map<string, PaperStructureExtended>> {
     const results = new Map<string, PaperStructureExtended>();
@@ -292,7 +297,7 @@ export class PdfToolManager {
 
     // Library 工具 (始终可用，不需要 PDF)
     const libraryTools: ToolDefinition[] = [
-      ...(getPref("enableWebSearch") as boolean
+      ...((getPref("enableWebSearch") as boolean)
         ? [
             {
               type: "function" as const,
@@ -512,8 +517,7 @@ export class PdfToolManager {
         type: "function",
         function: {
           name: "get_collection_items",
-          description:
-            "Get all items in a specific collection by its key.",
+          description: "Get all items in a specific collection by its key.",
           parameters: {
             type: "object",
             properties: {
@@ -973,8 +977,7 @@ export class PdfToolManager {
               },
               max_results_per_paper: {
                 type: "number",
-                description:
-                  "Maximum results per paper (default: 3, max: 10).",
+                description: "Maximum results per paper (default: 3, max: 10).",
               },
             },
             required: ["query", "itemKeys"],
@@ -1194,7 +1197,11 @@ export class PdfToolManager {
     if (!args) {
       try {
         const parsed = JSON.parse(argsString);
-        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        if (
+          typeof parsed !== "object" ||
+          parsed === null ||
+          Array.isArray(parsed)
+        ) {
           return `Error: Invalid arguments JSON: ${argsString}`;
         }
         args = parsed as Record<string, unknown>;
@@ -1202,7 +1209,7 @@ export class PdfToolManager {
         return `Error: Invalid arguments JSON: ${argsString}`;
       }
     }
-    args = this.normalizeToolArgs(name, args);
+    args = preflightToolArguments(name, args);
 
     // === Zotero Library 工具（不需要 PDF）===
     switch (name) {
@@ -1372,9 +1379,16 @@ export class PdfToolManager {
         if (!this.isSearchPaperContentArgs(args)) {
           return "Error: Invalid arguments for search_paper_content. Required: query (string)";
         }
-        return executeSearchPaperContent(args, paperStructure, targetItemKey ?? undefined);
+        return executeSearchPaperContent(
+          args,
+          paperStructure,
+          targetItemKey ?? undefined,
+        );
       case "get_paper_metadata":
-        return executeGetPaperMetadata(paperStructure, targetItemKey ?? undefined);
+        return executeGetPaperMetadata(
+          paperStructure,
+          targetItemKey ?? undefined,
+        );
       case "get_pages":
         if (!this.isGetPagesArgs(args)) {
           return "Error: Invalid arguments for get_pages. Required: pages (string)";
@@ -1398,50 +1412,6 @@ export class PdfToolManager {
         return executeGetFullText(args, paperStructure);
       default:
         return `Error: Unknown tool: ${name}`;
-    }
-  }
-
-  private normalizeToolArgs(
-    toolName: string,
-    args: Record<string, unknown>,
-  ): Record<string, unknown> {
-    const normalized = { ...args };
-
-    switch (toolName) {
-      case "get_full_text":
-        this.coerceBooleanArg(normalized, "confirm");
-        break;
-      case "list_all_items":
-        this.coerceBooleanArg(normalized, "hasPdf");
-        break;
-      case "get_annotations":
-        this.coerceBooleanArg(normalized, "selectedOnly");
-        this.coerceBooleanArg(normalized, "includePosition");
-        break;
-      case "web_search":
-        this.coerceBooleanArg(normalized, "include_content");
-        break;
-    }
-
-    return normalized;
-  }
-
-  private coerceBooleanArg(
-    args: Record<string, unknown>,
-    key: string,
-  ): void {
-    const value = args[key];
-    if (typeof value !== "string") {
-      return;
-    }
-
-    const normalizedValue = value.trim().toLowerCase();
-    if (normalizedValue === "true") {
-      args[key] = true;
-      return;
-    }
-    if (normalizedValue === "false") {
-      args[key] = false;
     }
   }
 
@@ -1512,7 +1482,9 @@ export class PdfToolManager {
     }
 
     const results: string[] = [];
-    results.push(`=== Search Results for "${query}" across ${papersMap.size} papers ===\n`);
+    results.push(
+      `=== Search Results for "${query}" across ${papersMap.size} papers ===\n`,
+    );
 
     // 尝试使用语义搜索
     const { getRAGService } = await import("../../embedding");
@@ -1522,7 +1494,7 @@ export class PdfToolManager {
     if (useSemanticSearch) {
       // 确保所有论文都已索引
       for (const [key, structure] of papersMap) {
-        if (!await ragService.isIndexed(key)) {
+        if (!(await ragService.isIndexed(key))) {
           ztoolkit.log(`[searchAcrossPapers] Indexing paper: ${key}`);
           await ragService.indexPaper(key, structure.fullText);
         }
@@ -1552,12 +1524,18 @@ export class PdfToolManager {
 
           const paperResults = resultsByPaper.get(key);
           if (paperResults && paperResults.length > 0) {
-            results.push(`Found ${paperResults.length} semantically relevant match(es):\n`);
+            results.push(
+              `Found ${paperResults.length} semantically relevant match(es):\n`,
+            );
             paperResults.forEach((match, i) => {
               const truncated =
-                match.text.length > 500 ? match.text.substring(0, 500) + "..." : match.text;
+                match.text.length > 500
+                  ? match.text.substring(0, 500) + "..."
+                  : match.text;
               const pageInfo = match.page ? ` (Page ${match.page})` : "";
-              results.push(`${i + 1}. [Score: ${(match.score * 100).toFixed(1)}%${pageInfo}] ${truncated}\n`);
+              results.push(
+                `${i + 1}. [Score: ${(match.score * 100).toFixed(1)}%${pageInfo}] ${truncated}\n`,
+              );
             });
           } else {
             results.push("No semantic matches found in this paper.\n");
@@ -1581,7 +1559,10 @@ export class PdfToolManager {
       const matches: string[] = [];
 
       for (const para of paragraphs) {
-        if (para.toLowerCase().includes(queryLower) && para.trim().length > 20) {
+        if (
+          para.toLowerCase().includes(queryLower) &&
+          para.trim().length > 20
+        ) {
           // 高亮匹配
           const highlighted = para.trim();
           matches.push(highlighted);

@@ -10,6 +10,7 @@ import type {
   ToolPermissionRequest,
 } from "../../../types/tool";
 import { config } from "../../../../package.json";
+import { formatDeniedToolResult } from "../tool-errors/ToolErrorFormatter";
 import { getToolPermissionDefaultMode } from "./ToolPermissionDefaults";
 
 export interface ToolPermissionDecider {
@@ -563,14 +564,7 @@ export class ToolPermissionManager {
   }
 
   formatDeniedResult(decision: ToolPermissionDecision): string {
-    return [
-      `Error: Permission denied for tool "${decision.descriptor.name}".`,
-      `Risk level: ${decision.descriptor.riskLevel}.`,
-      decision.reason
-        ? `Reason: ${decision.reason}`
-        : "Reason: No permission was granted.",
-      "Please continue without this tool or choose a safer alternative.",
-    ].join(" ");
+    return formatDeniedToolResult(decision);
   }
 
   private consumeOrGetPolicy(

@@ -19,6 +19,7 @@ import { getErrorMessage } from "../../../utils/common";
 import { getContextManager } from "../ContextManager";
 import { SessionRunInvalidatedError } from "../errors";
 import type { SessionStorageService } from "../SessionStorageService";
+import { parseToolError } from "../tool-errors/ToolErrorFormatter";
 import { getToolScheduler } from "../tool-scheduler";
 import { ExecutionPlanManager } from "./ExecutionPlanManager";
 import {
@@ -878,11 +879,21 @@ export class AgentRuntime {
       const descriptor = result.permissionDecision?.descriptor;
       const toolName = result.toolCall.function.name;
       const riskLevel = descriptor?.riskLevel || "unknown";
+      const parsedError = parseToolError(result.content);
       const reason =
+        parsedError?.summary ||
         result.permissionDecision?.reason ||
         result.error ||
         "No explicit denial reason was returned.";
-      return `- [${result.status}] ${toolName} (risk: ${riskLevel}): ${reason}`;
+      const guidance = [
+        parsedError?.suggestedFix ? `Fix: ${parsedError.suggestedFix}` : "",
+        parsedError?.saferAlternative
+          ? `Alternative: ${parsedError.saferAlternative}`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      return `- [${result.status}] ${toolName} (risk: ${riskLevel}): ${reason}${guidance ? ` ${guidance}` : ""}`;
     });
 
     currentMessages.push({
@@ -893,7 +904,7 @@ export class AgentRuntime {
         "The following tool calls did not complete successfully in this turn.",
         ...lines,
         "Do not repeat denied tool calls in this turn unless the user changes approval.",
-        "For failed tool calls, prefer narrower or safer alternatives instead of retrying the exact same call.",
+        "For failed tool calls, only retry after changing the arguments or following the suggested fix.",
         "Revise the plan, use the successful tool results as ground truth, and explain any remaining evidence gaps explicitly.",
       ].join("\n"),
       timestamp: Date.now(),
