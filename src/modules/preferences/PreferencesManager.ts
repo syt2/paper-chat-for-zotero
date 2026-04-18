@@ -24,14 +24,29 @@ import { getAISummaryManager } from "../ai-summary";
 import { getAllTemplates } from "../ai-summary/defaultTemplates";
 import { getEmbeddingProviderFactory } from "../embedding";
 import {
+  CONFIGURABLE_TOOL_PERMISSION_RISK_LEVELS,
+  getToolPermissionDefaultMode,
+  setToolPermissionDefaultMode,
+} from "../chat/tool-permissions/ToolPermissionDefaults";
+import {
   DEFAULT_WEB_SEARCH_PROVIDER_ID,
   listWebSearchProviders,
   normalizeWebSearchProviderId,
 } from "../chat/web-search/WebSearchRegistry";
 import { getErrorMessage } from "../../utils/common";
+import type {
+  ToolPermissionMode,
+  ToolPermissionRiskLevel,
+} from "../../types/tool";
 
 // Current selected provider ID
 let currentProviderId: string = "paperchat";
+
+const TOOL_PERMISSION_MODE_L10N: Record<ToolPermissionMode, string> = {
+  auto_allow: "pref-tool-permission-mode-auto-allow",
+  ask: "pref-tool-permission-mode-ask",
+  deny: "pref-tool-permission-mode-deny",
+};
 
 /**
  * Get current provider ID
@@ -126,6 +141,7 @@ function initAIToolsSettingsCheckbox(doc: Document): void {
 
   populateWebSearchProviderOptions(doc);
   updateWebSearchControls(doc);
+  initToolPermissionDefaultsControls(doc);
 }
 
 /**
@@ -220,9 +236,14 @@ function bindAIToolsSettingsEvent(doc: Document): void {
   ) as unknown as XULMenuListElement | null;
   if (webSearchProviderSelect) {
     webSearchProviderSelect.addEventListener("command", () => {
-      setPref("webSearchProvider", webSearchProviderSelect.value || "duckduckgo");
+      setPref(
+        "webSearchProvider",
+        webSearchProviderSelect.value || "duckduckgo",
+      );
     });
   }
+
+  bindToolPermissionDefaultsEvents(doc);
 }
 
 function populateWebSearchProviderOptions(doc: Document): void {
@@ -270,6 +291,74 @@ function updateWebSearchControls(doc: Document): void {
   }
 
   webSearchProviderSelect.disabled = !enableWebSearchCheckbox.checked;
+}
+
+function initToolPermissionDefaultsControls(doc: Document): void {
+  for (const riskLevel of CONFIGURABLE_TOOL_PERMISSION_RISK_LEVELS) {
+    const menulist = doc.getElementById(
+      getToolPermissionMenulistId(riskLevel),
+    ) as unknown as XULMenuListElement | null;
+    const popup = doc.getElementById(
+      getToolPermissionPopupId(riskLevel),
+    ) as XUL.MenuPopup | null;
+    if (!menulist || !popup) {
+      continue;
+    }
+
+    populateToolPermissionModeOptions(doc, popup);
+    menulist.value = getToolPermissionDefaultMode(riskLevel);
+  }
+}
+
+function bindToolPermissionDefaultsEvents(doc: Document): void {
+  for (const riskLevel of CONFIGURABLE_TOOL_PERMISSION_RISK_LEVELS) {
+    const menulist = doc.getElementById(
+      getToolPermissionMenulistId(riskLevel),
+    ) as unknown as XULMenuListElement | null;
+    if (!menulist) {
+      continue;
+    }
+
+    menulist.addEventListener("command", () => {
+      const mode = menulist.value as ToolPermissionMode;
+      if (!isToolPermissionMode(mode)) {
+        return;
+      }
+      setToolPermissionDefaultMode(riskLevel, mode);
+    });
+  }
+}
+
+function populateToolPermissionModeOptions(
+  doc: Document,
+  popup: XUL.MenuPopup,
+): void {
+  if (popup.childElementCount > 0) {
+    return;
+  }
+
+  for (const mode of Object.keys(
+    TOOL_PERMISSION_MODE_L10N,
+  ) as ToolPermissionMode[]) {
+    const menuitem = doc.createXULElement("menuitem");
+    menuitem.setAttribute("label", getString(TOOL_PERMISSION_MODE_L10N[mode]));
+    menuitem.setAttribute("value", mode);
+    popup.appendChild(menuitem);
+  }
+}
+
+function getToolPermissionMenulistId(
+  riskLevel: ToolPermissionRiskLevel,
+): string {
+  return `pref-tool-permission-${riskLevel.replace(/_/g, "-")}`;
+}
+
+function getToolPermissionPopupId(riskLevel: ToolPermissionRiskLevel): string {
+  return `${getToolPermissionMenulistId(riskLevel)}-popup`;
+}
+
+function isToolPermissionMode(value: string): value is ToolPermissionMode {
+  return value === "auto_allow" || value === "ask" || value === "deny";
 }
 
 /**

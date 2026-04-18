@@ -10,6 +10,7 @@ import type {
   ToolPermissionRequest,
 } from "../../../types/tool";
 import { config } from "../../../../package.json";
+import { getToolPermissionDefaultMode } from "./ToolPermissionDefaults";
 
 export interface ToolPermissionDecider {
   decide(
@@ -34,17 +35,6 @@ export interface ToolApprovalObserver {
   ) => void;
 }
 
-const DEFAULT_MODE_BY_RISK_LEVEL: Record<
-  ToolPermissionRiskLevel,
-  ToolPermissionMode
-> = {
-  read: "auto_allow",
-  network: "ask",
-  write: "ask",
-  memory: "ask",
-  high_cost: "ask",
-};
-
 function createDescriptor(
   name: PaperToolName,
   riskLevel: ToolPermissionRiskLevel,
@@ -54,7 +44,7 @@ function createDescriptor(
   return {
     name,
     riskLevel,
-    mode: mode || DEFAULT_MODE_BY_RISK_LEVEL[riskLevel],
+    mode: mode || getToolPermissionDefaultMode(riskLevel),
     description,
   };
 }
@@ -64,35 +54,139 @@ const TOOL_PERMISSION_DESCRIPTORS: Record<
   ToolPermissionDescriptor
 > = {
   web_search: {
-    ...createDescriptor("web_search", "network", "Search external web content."),
+    ...createDescriptor(
+      "web_search",
+      "network",
+      "Search external web content.",
+    ),
   },
-  get_paper_section: createDescriptor("get_paper_section", "read", "Read a specific section from a paper."),
-  search_paper_content: createDescriptor("search_paper_content", "read", "Search within paper content."),
-  get_paper_metadata: createDescriptor("get_paper_metadata", "read", "Read metadata extracted from a paper."),
-  get_pages: createDescriptor("get_pages", "read", "Read selected page ranges from a paper."),
-  get_page_count: createDescriptor("get_page_count", "read", "Read page count and paper statistics."),
-  search_with_regex: createDescriptor("search_with_regex", "read", "Run a regex search over paper content."),
-  get_outline: createDescriptor("get_outline", "read", "Read the paper outline."),
-  list_sections: createDescriptor("list_sections", "read", "List available sections in a paper."),
-  get_full_text: createDescriptor("get_full_text", "high_cost", "Read the full paper text with higher token cost."),
-  list_all_items: createDescriptor("list_all_items", "read", "List Zotero library items."),
-  get_item_notes: createDescriptor("get_item_notes", "read", "Read notes attached to a Zotero item."),
-  get_note_content: createDescriptor("get_note_content", "read", "Read the full content of a Zotero note."),
-  get_item_metadata: createDescriptor("get_item_metadata", "read", "Read metadata of a Zotero item."),
-  get_annotations: createDescriptor("get_annotations", "read", "Read PDF annotations from Zotero."),
-  get_pdf_selection: createDescriptor("get_pdf_selection", "read", "Read the user's current PDF selection."),
-  search_items: createDescriptor("search_items", "read", "Search the Zotero library."),
-  get_collections: createDescriptor("get_collections", "read", "Read Zotero collections."),
-  get_collection_items: createDescriptor("get_collection_items", "read", "Read items from a Zotero collection."),
+  get_paper_section: createDescriptor(
+    "get_paper_section",
+    "read",
+    "Read a specific section from a paper.",
+  ),
+  search_paper_content: createDescriptor(
+    "search_paper_content",
+    "read",
+    "Search within paper content.",
+  ),
+  get_paper_metadata: createDescriptor(
+    "get_paper_metadata",
+    "read",
+    "Read metadata extracted from a paper.",
+  ),
+  get_pages: createDescriptor(
+    "get_pages",
+    "read",
+    "Read selected page ranges from a paper.",
+  ),
+  get_page_count: createDescriptor(
+    "get_page_count",
+    "read",
+    "Read page count and paper statistics.",
+  ),
+  search_with_regex: createDescriptor(
+    "search_with_regex",
+    "read",
+    "Run a regex search over paper content.",
+  ),
+  get_outline: createDescriptor(
+    "get_outline",
+    "read",
+    "Read the paper outline.",
+  ),
+  list_sections: createDescriptor(
+    "list_sections",
+    "read",
+    "List available sections in a paper.",
+  ),
+  get_full_text: createDescriptor(
+    "get_full_text",
+    "high_cost",
+    "Read the full paper text with higher token cost.",
+  ),
+  list_all_items: createDescriptor(
+    "list_all_items",
+    "read",
+    "List Zotero library items.",
+  ),
+  get_item_notes: createDescriptor(
+    "get_item_notes",
+    "read",
+    "Read notes attached to a Zotero item.",
+  ),
+  get_note_content: createDescriptor(
+    "get_note_content",
+    "read",
+    "Read the full content of a Zotero note.",
+  ),
+  get_item_metadata: createDescriptor(
+    "get_item_metadata",
+    "read",
+    "Read metadata of a Zotero item.",
+  ),
+  get_annotations: createDescriptor(
+    "get_annotations",
+    "read",
+    "Read PDF annotations from Zotero.",
+  ),
+  get_pdf_selection: createDescriptor(
+    "get_pdf_selection",
+    "read",
+    "Read the user's current PDF selection.",
+  ),
+  search_items: createDescriptor(
+    "search_items",
+    "read",
+    "Search the Zotero library.",
+  ),
+  get_collections: createDescriptor(
+    "get_collections",
+    "read",
+    "Read Zotero collections.",
+  ),
+  get_collection_items: createDescriptor(
+    "get_collection_items",
+    "read",
+    "Read items from a Zotero collection.",
+  ),
   get_tags: createDescriptor("get_tags", "read", "Read Zotero tags."),
-  search_by_tag: createDescriptor("search_by_tag", "read", "Search Zotero items by tag."),
-  get_recent: createDescriptor("get_recent", "read", "Read recently added Zotero items."),
-  search_notes: createDescriptor("search_notes", "read", "Search note content in Zotero."),
-  create_note: createDescriptor("create_note", "write", "Create a new Zotero note."),
-  batch_update_tags: createDescriptor("batch_update_tags", "write", "Modify tags on multiple Zotero items."),
+  search_by_tag: createDescriptor(
+    "search_by_tag",
+    "read",
+    "Search Zotero items by tag.",
+  ),
+  get_recent: createDescriptor(
+    "get_recent",
+    "read",
+    "Read recently added Zotero items.",
+  ),
+  search_notes: createDescriptor(
+    "search_notes",
+    "read",
+    "Search note content in Zotero.",
+  ),
+  create_note: createDescriptor(
+    "create_note",
+    "write",
+    "Create a new Zotero note.",
+  ),
+  batch_update_tags: createDescriptor(
+    "batch_update_tags",
+    "write",
+    "Modify tags on multiple Zotero items.",
+  ),
   add_item: createDescriptor("add_item", "write", "Add a new Zotero item."),
-  search_across_papers: createDescriptor("search_across_papers", "read", "Search across multiple selected papers."),
-  save_memory: createDescriptor("save_memory", "memory", "Write a long-term memory entry."),
+  search_across_papers: createDescriptor(
+    "search_across_papers",
+    "read",
+    "Search across multiple selected papers.",
+  ),
+  save_memory: createDescriptor(
+    "save_memory",
+    "memory",
+    "Write a long-term memory entry.",
+  ),
 };
 
 class AutoAllowToolPermissionDecider implements ToolPermissionDecider {
@@ -292,11 +386,15 @@ export class ToolPermissionManager {
       return null;
     }
 
+    const riskDefault = getToolPermissionDefaultMode(descriptor.riskLevel);
     const override = this.descriptorModeOverrides.get(
       descriptor.name as PaperToolName,
     );
-    if (!override || override === descriptor.mode) {
-      return descriptor;
+    if (!override || override === riskDefault) {
+      return {
+        ...descriptor,
+        mode: riskDefault,
+      };
     }
 
     return {

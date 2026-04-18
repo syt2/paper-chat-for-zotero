@@ -253,7 +253,12 @@ export function createMessageElement(
 
     if (msg.reasoning) {
       // Completed message with reasoning - show collapsed
-      const reasoningContainer = createReasoningContainer(doc, theme, msg.reasoning, false);
+      const reasoningContainer = createReasoningContainer(
+        doc,
+        theme,
+        msg.reasoning,
+        false,
+      );
       bubble.appendChild(reasoningContainer);
     } else if (isLastAssistant) {
       // Streaming placeholder - hidden by default, shown when reasoning arrives
@@ -309,8 +314,12 @@ function createReasoningContainer(
     color: theme.textMuted,
     opacity: "0.7",
   });
-  header.addEventListener("mouseenter", () => { header.style.opacity = "1"; });
-  header.addEventListener("mouseleave", () => { header.style.opacity = "0.7"; });
+  header.addEventListener("mouseenter", () => {
+    header.style.opacity = "1";
+  });
+  header.addEventListener("mouseleave", () => {
+    header.style.opacity = "0.7";
+  });
 
   const arrow = createElement(doc, "span", {
     fontSize: "10px",
@@ -405,7 +414,8 @@ function createRerollButton(
     btn.style.cursor = "wait";
     Promise.resolve(onClick())
       .catch((error: unknown) => {
-        const rerollError = error instanceof Error ? error : new Error(String(error));
+        const rerollError =
+          error instanceof Error ? error : new Error(String(error));
         ztoolkit.log("[MessageRenderer] Reroll failed:", rerollError);
         onError?.(rerollError);
       })
@@ -581,7 +591,9 @@ function syncExecutionPlanInset(panel: HTMLElement): void {
     return;
   }
 
-  const chatHistory = viewport.querySelector("#chat-history") as HTMLElement | null;
+  const chatHistory = viewport.querySelector(
+    "#chat-history",
+  ) as HTMLElement | null;
   if (!chatHistory) {
     return;
   }
@@ -599,7 +611,9 @@ function syncExecutionPlanInset(panel: HTMLElement): void {
     ? inlinePaddingTop
     : basePaddingTop;
   const nextPaddingTop =
-    panel.style.display === "none" ? basePaddingTop : basePaddingTop + panel.offsetHeight;
+    panel.style.display === "none"
+      ? basePaddingTop
+      : basePaddingTop + panel.offsetHeight;
 
   if (Math.abs(nextPaddingTop - currentPaddingTop) < 1) {
     chatHistory.style.scrollPaddingTop = `${nextPaddingTop}px`;
@@ -645,54 +659,75 @@ function createApprovalElement(
     { id: "chat-execution-plan", class: "chat-execution-plan" },
   );
 
-  const bar = createElement(
-    doc,
-    "div",
-    {
-      border: `1px solid ${theme.borderColor}`,
-      background: theme.assistantBubbleBg,
-      borderRadius: "999px",
-      padding: "6px 10px",
-      boxShadow: "0 1px 2px rgba(0, 0, 0, 0.05)",
-      display: "flex",
-      alignItems: "center",
-      gap: "8px",
-      minWidth: "0",
-      flexWrap: "wrap",
-    },
-  );
+  const bar = createElement(doc, "div", {
+    border: `1px solid ${theme.borderColor}`,
+    background: theme.assistantBubbleBg,
+    borderRadius: "14px",
+    padding: "8px 10px",
+    boxShadow: "0 6px 18px rgba(0, 0, 0, 0.08)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "10px",
+    minWidth: "0",
+    flexWrap: "wrap",
+  });
+
+  const info = createElement(doc, "div", {
+    display: "flex",
+    alignItems: "center",
+    gap: "10px",
+    minWidth: "0",
+    flex: "1 1 200px",
+  });
 
   const badge = createElement(doc, "span", {
+    width: "20px",
+    height: "20px",
+    minWidth: "20px",
+    borderRadius: "999px",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    background: "rgba(245, 158, 11, 0.16)",
+    color: "#b45309",
     fontSize: "12px",
     fontWeight: "700",
-    color: "#b45309",
     flexShrink: "0",
   });
   badge.textContent = "!";
 
+  const textGroup = createElement(doc, "div", {
+    display: "flex",
+    flexDirection: "column",
+    gap: "1px",
+    minWidth: "0",
+    flex: "1 1 auto",
+  });
+
   const title = createElement(doc, "span", {
     fontSize: "12px",
-    fontWeight: "600",
+    fontWeight: "700",
     color: theme.textPrimary,
-    whiteSpace: "nowrap",
-    flexShrink: "0",
+    lineHeight: "1.2",
   });
-  title.textContent = "Permission";
+  title.textContent = "Permission Required";
 
   const detail = createElement(doc, "div", {
-    fontSize: "12px",
+    fontSize: "11px",
     color: theme.textSecondary,
     minWidth: "0",
-    flex: "1 1 160px",
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
+    lineHeight: "1.2",
   });
   detail.textContent = formatApprovalDetail(activeRequest, extraCount);
 
   const actions = createElement(doc, "div", {
     display: "flex",
     alignItems: "center",
+    justifyContent: "flex-end",
     gap: "6px",
     flexWrap: "wrap",
     flexShrink: "0",
@@ -721,37 +756,43 @@ function createApprovalElement(
   ];
 
   for (const spec of buttonSpecs) {
-    const button = createElement(
-      doc,
-      "button",
-      {
-        border: `1px solid ${theme.borderColor}`,
-        background:
-          spec.resolution.verdict === "deny"
-            ? theme.buttonBg
-            : theme.inputAreaBg,
-        color: theme.textPrimary,
-        borderRadius: "999px",
-        padding: "3px 8px",
-        fontSize: "11px",
-        fontWeight: "600",
-        cursor: approvalActions ? "pointer" : "default",
-        opacity: approvalActions ? "1" : "0.6",
-      },
-    ) as HTMLButtonElement;
+    const button = createElement(doc, "button", {
+      border: `1px solid ${theme.borderColor}`,
+      background:
+        spec.resolution.verdict === "deny" ? theme.buttonBg : theme.inputBg,
+      color:
+        spec.resolution.verdict === "deny"
+          ? theme.textSecondary
+          : theme.textPrimary,
+      borderRadius: "999px",
+      padding: "4px 10px",
+      fontSize: "11px",
+      fontWeight: "600",
+      cursor: approvalActions ? "pointer" : "default",
+      opacity: approvalActions ? "1" : "0.6",
+      boxShadow:
+        spec.resolution.scope === "always"
+          ? "inset 0 0 0 1px rgba(59, 130, 246, 0.15)"
+          : "none",
+    }) as HTMLButtonElement;
     button.textContent = spec.label;
     button.disabled = !approvalActions;
     if (approvalActions) {
       button.addEventListener("click", () => {
-        void approvalActions.onResolveApproval(activeRequest.id, spec.resolution);
+        void approvalActions.onResolveApproval(
+          activeRequest.id,
+          spec.resolution,
+        );
       });
     }
     actions.appendChild(button);
   }
 
-  bar.appendChild(badge);
-  bar.appendChild(title);
-  bar.appendChild(detail);
+  textGroup.appendChild(title);
+  textGroup.appendChild(detail);
+  info.appendChild(badge);
+  info.appendChild(textGroup);
+  bar.appendChild(info);
   bar.appendChild(actions);
   wrapper.appendChild(bar);
   return wrapper;
@@ -779,21 +820,17 @@ function createExecutionPlanElement(
     { id: "chat-execution-plan", class: "chat-execution-plan" },
   );
 
-  const bar = createElement(
-    doc,
-    "div",
-    {
-      border: `1px solid ${theme.borderColor}`,
-      background: theme.assistantBubbleBg,
-      borderRadius: "999px",
-      padding: "7px 12px",
-      boxShadow: "0 1px 2px rgba(0, 0, 0, 0.05)",
-      display: "flex",
-      alignItems: "center",
-      gap: "8px",
-      minWidth: "0",
-    },
-  );
+  const bar = createElement(doc, "div", {
+    border: `1px solid ${theme.borderColor}`,
+    background: theme.assistantBubbleBg,
+    borderRadius: "999px",
+    padding: "7px 12px",
+    boxShadow: "0 1px 2px rgba(0, 0, 0, 0.05)",
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    minWidth: "0",
+  });
 
   const badge = createElement(doc, "span", {
     fontSize: "12px",
@@ -837,7 +874,9 @@ function createExecutionPlanElement(
   return wrapper;
 }
 
-function getActiveExecutionStep(plan: ExecutionPlan): ExecutionPlanStep | undefined {
+function getActiveExecutionStep(
+  plan: ExecutionPlan,
+): ExecutionPlanStep | undefined {
   if (plan.activeStepId) {
     const activeStep = plan.steps.find((step) => step.id === plan.activeStepId);
     if (activeStep) return activeStep;

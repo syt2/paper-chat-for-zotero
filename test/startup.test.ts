@@ -115,10 +115,9 @@ describe("chat agent safeguards", function () {
     (globalThis as any).IOUtils = originalIOUtils;
   });
 
-  it("denies ask-mode tools immediately when no approval channel is available", async function () {
-    const { ToolPermissionManager } = await import(
-      "../src/modules/chat/tool-permissions/ToolPermissionManager"
-    );
+  it("auto-allows risky tools when no explicit ask policy is configured", async function () {
+    const { ToolPermissionManager } =
+      await import("../src/modules/chat/tool-permissions/ToolPermissionManager");
     const manager = new ToolPermissionManager();
     const decision = await manager.decide({
       toolCall: {
@@ -134,30 +133,79 @@ describe("chat agent safeguards", function () {
       assistantMessageId: "assistant-1",
     });
 
-    assert.equal(decision.verdict, "deny");
-    assert.equal(decision.mode, "ask");
+    assert.equal(decision.verdict, "allow");
+    assert.equal(decision.mode, "auto_allow");
     assert.equal(decision.scope, "once");
-    assert.include(decision.reason || "", "requires approval");
+    assert.include(decision.reason || "", "auto-allowed");
     assert.deepEqual(manager.listPendingApprovals(), []);
   });
 
-  it("uses ask-by-default policy for network, write, memory, and high-cost tools", async function () {
-    const { ToolPermissionManager } = await import(
-      "../src/modules/chat/tool-permissions/ToolPermissionManager"
-    );
+  it("uses auto-allow by default for network, write, memory, and high-cost tools", async function () {
+    const { ToolPermissionManager } =
+      await import("../src/modules/chat/tool-permissions/ToolPermissionManager");
     const manager = new ToolPermissionManager();
 
     assert.equal(manager.getDescriptor("list_all_items")?.mode, "auto_allow");
-    assert.equal(manager.getDescriptor("web_search")?.mode, "ask");
-    assert.equal(manager.getDescriptor("create_note")?.mode, "ask");
-    assert.equal(manager.getDescriptor("save_memory")?.mode, "ask");
+    assert.equal(manager.getDescriptor("web_search")?.mode, "auto_allow");
+    assert.equal(manager.getDescriptor("create_note")?.mode, "auto_allow");
+    assert.equal(manager.getDescriptor("save_memory")?.mode, "auto_allow");
+    assert.equal(manager.getDescriptor("get_full_text")?.mode, "auto_allow");
+  });
+
+  it("loads configurable default risk modes from prefs", async function () {
+    Zotero.Prefs.set(
+      "extensions.zotero.paperchat.toolPermissionDefaultModes",
+      JSON.stringify({
+        network: "deny",
+        write: "auto_allow",
+        memory: "deny",
+        high_cost: "ask",
+      }),
+      true,
+    );
+
+    const { ToolPermissionManager } =
+      await import("../src/modules/chat/tool-permissions/ToolPermissionManager");
+    const manager = new ToolPermissionManager();
+
+    assert.equal(manager.getDescriptor("web_search")?.mode, "deny");
+    assert.equal(manager.getDescriptor("create_note")?.mode, "auto_allow");
+    assert.equal(manager.getDescriptor("save_memory")?.mode, "deny");
     assert.equal(manager.getDescriptor("get_full_text")?.mode, "ask");
+    assert.equal(manager.getDescriptor("list_all_items")?.mode, "auto_allow");
+  });
+
+  it("ignores malformed default risk mode entries in prefs", async function () {
+    Zotero.Prefs.set(
+      "extensions.zotero.paperchat.toolPermissionDefaultModes",
+      JSON.stringify({
+        network: "blocked",
+        write: "deny",
+        strange: "ask",
+      }),
+      true,
+    );
+
+    const { ToolPermissionManager } =
+      await import("../src/modules/chat/tool-permissions/ToolPermissionManager");
+    const manager = new ToolPermissionManager();
+
+    assert.equal(manager.getDescriptor("web_search")?.mode, "auto_allow");
+    assert.equal(manager.getDescriptor("create_note")?.mode, "deny");
+    assert.equal(manager.getDescriptor("save_memory")?.mode, "auto_allow");
   });
 
   it("denies ask-mode write tools when no approval channel is available", async function () {
-    const { ToolPermissionManager } = await import(
-      "../src/modules/chat/tool-permissions/ToolPermissionManager"
+    Zotero.Prefs.set(
+      "extensions.zotero.paperchat.toolPermissionDefaultModes",
+      JSON.stringify({
+        write: "ask",
+      }),
+      true,
     );
+
+    const { ToolPermissionManager } =
+      await import("../src/modules/chat/tool-permissions/ToolPermissionManager");
     const manager = new ToolPermissionManager();
     const decision = await manager.decide({
       toolCall: {
@@ -182,9 +230,16 @@ describe("chat agent safeguards", function () {
   });
 
   it("does not let a deny-once decision poison the next approval", async function () {
-    const { ToolPermissionManager } = await import(
-      "../src/modules/chat/tool-permissions/ToolPermissionManager"
+    Zotero.Prefs.set(
+      "extensions.zotero.paperchat.toolPermissionDefaultModes",
+      JSON.stringify({
+        write: "ask",
+      }),
+      true,
     );
+
+    const { ToolPermissionManager } =
+      await import("../src/modules/chat/tool-permissions/ToolPermissionManager");
     const manager = new ToolPermissionManager();
     manager.setApprovalHandler(async () => undefined);
 
@@ -235,9 +290,8 @@ describe("chat agent safeguards", function () {
   });
 
   it("coerces string boolean tool args for get_full_text", async function () {
-    const { PdfToolManager } = await import(
-      "../src/modules/chat/pdf-tools/PdfToolManager"
-    );
+    const { PdfToolManager } =
+      await import("../src/modules/chat/pdf-tools/PdfToolManager");
     const manager = new PdfToolManager();
 
     const result = await manager.executeToolCall(
@@ -266,9 +320,8 @@ describe("chat agent safeguards", function () {
   });
 
   it("keeps PDF tools available without an active paper when itemKey can be provided", async function () {
-    const { PdfToolManager } = await import(
-      "../src/modules/chat/pdf-tools/PdfToolManager"
-    );
+    const { PdfToolManager } =
+      await import("../src/modules/chat/pdf-tools/PdfToolManager");
     const manager = new PdfToolManager();
 
     const toolNames = manager
@@ -281,12 +334,10 @@ describe("chat agent safeguards", function () {
   });
 
   it("clears persisted plan and tool state when recovering interrupted messages", async function () {
-    const { SessionStorageService } = await import(
-      "../src/modules/chat/SessionStorageService"
-    );
-    const { getStorageDatabase } = await import(
-      "../src/modules/chat/db/StorageDatabase"
-    );
+    const { SessionStorageService } =
+      await import("../src/modules/chat/SessionStorageService");
+    const { getStorageDatabase } =
+      await import("../src/modules/chat/db/StorageDatabase");
     // Track transaction state so a regression that drops BEGIN/COMMIT
     // wrapping will surface as a failed assertion rather than silently pass.
     const queries: Array<{
@@ -352,22 +403,27 @@ describe("chat agent safeguards", function () {
 
     // The three writes must all run inside the same transaction, and the
     // transaction must commit cleanly.
-    assert.isTrue(interruptQ!.inTransaction, "messages update must be transactional");
-    assert.isTrue(planQ!.inTransaction, "sessions update must be transactional");
-    assert.isTrue(sessionMetaQ!.inTransaction, "session_meta update must be transactional");
+    assert.isTrue(
+      interruptQ!.inTransaction,
+      "messages update must be transactional",
+    );
+    assert.isTrue(
+      planQ!.inTransaction,
+      "sessions update must be transactional",
+    );
+    assert.isTrue(
+      sessionMetaQ!.inTransaction,
+      "session_meta update must be transactional",
+    );
     assert.equal(committedTransactions, 1);
     assert.equal(transactionDepth, 0);
   });
 
   it("stops persisting tool state after a session run is invalidated", async function () {
-    const {
-      awaitWhileSessionTracked,
-    } = await import(
-      "../src/modules/chat/agent-runtime/sessionTracking"
-    );
-    const { SessionRunInvalidatedError } = await import(
-      "../src/modules/chat/errors"
-    );
+    const { awaitWhileSessionTracked } =
+      await import("../src/modules/chat/agent-runtime/sessionTracking");
+    const { SessionRunInvalidatedError } =
+      await import("../src/modules/chat/errors");
     const session: ChatSession = {
       id: "session-1",
       createdAt: Date.now(),

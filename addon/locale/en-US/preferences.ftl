@@ -89,6 +89,15 @@ pref-enable-web-search-desc = When enabled, AI can query external websites and r
 pref-web-search-provider = Search Provider
 pref-web-search-provider-desc = The search backend used by the local web_search tool.
 pref-web-search-provider-duckduckgo = DuckDuckGo (HTML scraping)
+pref-tool-permission-defaults = Default Approval Policy
+pref-tool-permission-defaults-desc = Controls the default behavior for risky tool classes. Read-only tools remain auto-allowed.
+pref-tool-permission-network = Network tools
+pref-tool-permission-write = Write tools
+pref-tool-permission-memory = Memory tools
+pref-tool-permission-high-cost = High-cost tools
+pref-tool-permission-mode-auto-allow = Auto allow
+pref-tool-permission-mode-ask = Ask every time
+pref-tool-permission-mode-deny = Always deny
 
 # AISummary Settings
 pref-aisummary-settings = AI Summary
