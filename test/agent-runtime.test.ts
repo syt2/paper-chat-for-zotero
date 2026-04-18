@@ -125,7 +125,10 @@ describe("agent runtime plan semantics", function () {
               type: "function",
               function: {
                 name: "get_note_content",
-                arguments: JSON.stringify({ noteKey: "NOTE-1", itemKey: "ITEM-1" }),
+                arguments: JSON.stringify({
+                  noteKey: "NOTE-1",
+                  itemKey: "ITEM-1",
+                }),
               },
             },
             args: { noteKey: "NOTE-1", itemKey: "ITEM-1" },
@@ -145,6 +148,11 @@ describe("agent runtime plan semantics", function () {
 
     assert.include(prompt, "FINAL ANSWER REQUIREMENTS");
     assert.include(prompt, "Attribute claims to the correct paper");
-    assert.include(prompt, "source: Zotero library, itemKey=ITEM-1, noteKey=NOTE-1");
+    assert.include(
+      prompt,
+      "source: Zotero library, itemKey=ITEM-1, noteKey=NOTE-1",
+    );
+    assert.include(prompt, '<source-group label="Paper title or source name"');
+    assert.include(prompt, 'type="paper|note|annotation|web|library|memory"');
   });
 });

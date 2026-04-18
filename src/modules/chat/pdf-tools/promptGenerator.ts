@@ -3,7 +3,10 @@
  */
 
 import type { ExecutionPlan } from "../../../types/chat";
-import type { PaperStructureExtended, ToolExecutionResult } from "../../../types/tool";
+import type {
+  PaperStructureExtended,
+  ToolExecutionResult,
+} from "../../../types/tool";
 import { getPref } from "../../../utils/prefs";
 
 export interface AgentPromptContext {
@@ -166,7 +169,9 @@ function formatAgentPromptContext(agentContext?: AgentPromptContext): string {
     section += `Summary: ${plan.summary}\n`;
 
     if (plan.activeStepId) {
-      const activeStep = plan.steps.find((step) => step.id === plan.activeStepId);
+      const activeStep = plan.steps.find(
+        (step) => step.id === plan.activeStepId,
+      );
       if (activeStep) {
         section += `Active step: ${activeStep.title}\n`;
       }
@@ -202,6 +207,11 @@ function formatAgentPromptContext(agentContext?: AgentPromptContext): string {
   section += `- Base each material claim on tool results from this turn or explicit user-provided content.\n`;
   section += `- Attribute claims to the correct paper, Zotero note, annotation, or web source instead of giving unattributed summaries.\n`;
   section += `- For comparisons, keep evidence grouped by paper or source so the user can see which finding came from where.\n`;
+  section += `- When synthesizing from multiple sources, prefer explicit source blocks using this exact format:\n`;
+  section += `  <source-group label="Paper title or source name" type="paper|note|annotation|web|library|memory">\n`;
+  section += `  - grounded findings for that source\n`;
+  section += `  </source-group>\n`;
+  section += `- Use normal markdown outside the source-group blocks for the short conclusion or overall synthesis.\n`;
   section += `- If a tool was denied or failed and evidence is incomplete, state that limitation instead of guessing.\n`;
 
   return section ? `${section}\n` : "";
@@ -210,7 +220,8 @@ function formatAgentPromptContext(agentContext?: AgentPromptContext): string {
 function formatToolResultLine(result: ToolExecutionResult): string {
   const toolName = result.toolCall.function.name;
   const scopeHints = getToolResultSourceHints(result);
-  const sourceText = scopeHints.length > 0 ? ` | source: ${scopeHints.join(", ")}` : "";
+  const sourceText =
+    scopeHints.length > 0 ? ` | source: ${scopeHints.join(", ")}` : "";
   return `- [${result.status}] ${toolName}${sourceText}: ${truncateInline(result.content, 180)}`;
 }
 
@@ -230,9 +241,9 @@ function getToolResultSourceHints(result: ToolExecutionResult): string[] {
   }
 
   if (
-    result.metadata?.targetScope === "external"
-    && typeof result.args?.query === "string"
-    && result.args.query
+    result.metadata?.targetScope === "external" &&
+    typeof result.args?.query === "string" &&
+    result.args.query
   ) {
     hints.push(`query=${truncateInline(result.args.query, 60)}`);
   }
@@ -243,7 +254,9 @@ function getToolResultSourceHints(result: ToolExecutionResult): string[] {
 function getToolScopeLabel(result: ToolExecutionResult): string | null {
   switch (result.metadata?.targetScope) {
     case "paper":
-      return typeof result.args?.itemKey === "string" ? "paper" : "current paper";
+      return typeof result.args?.itemKey === "string"
+        ? "paper"
+        : "current paper";
     case "library":
       return "Zotero library";
     case "multi_paper":

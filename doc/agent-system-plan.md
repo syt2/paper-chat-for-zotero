@@ -274,6 +274,8 @@ Delivered so far:
 - execution plan state is persisted with the session
 - scheduler results are stored as structured runtime state
 - denial outcomes already feed back into the runtime as structured results
+- final-answer prompt now defines a stable `<source-group ...>` markup for multi-source synthesis
+- chat markdown rendering now turns `<source-group ...>` blocks into compact source-grouped evidence cards
 
 Exit criteria:
 
@@ -342,7 +344,7 @@ Medium-term:
   - `execution_plan_steps`
   - `tasks`
   - `task_events`
-only if the single-session metadata model becomes a bottleneck
+    only if the single-session metadata model becomes a bottleneck
 
 ## UI Changes By Stage
 

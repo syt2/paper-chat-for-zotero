@@ -23,92 +23,76 @@ const md = new MarkdownIt({
  */
 function mathPlugin(mdInstance: MarkdownIt) {
   // Inline math: $...$ and $$...$$
-  mdInstance.inline.ruler.after(
-    "escape",
-    "math_inline",
-    (state, silent) => {
-      const src = state.src;
-      const pos = state.pos;
+  mdInstance.inline.ruler.after("escape", "math_inline", (state, silent) => {
+    const src = state.src;
+    const pos = state.pos;
 
-      if (src.charCodeAt(pos) !== 0x24 /* $ */) return false;
+    if (src.charCodeAt(pos) !== 0x24 /* $ */) return false;
 
-      // Determine delimiter: $$ or $
-      const isDouble =
-        pos + 1 < state.posMax &&
-        src.charCodeAt(pos + 1) === 0x24;
-      const delimLen = isDouble ? 2 : 1;
+    // Determine delimiter: $$ or $
+    const isDouble = pos + 1 < state.posMax && src.charCodeAt(pos + 1) === 0x24;
+    const delimLen = isDouble ? 2 : 1;
 
-      // Find closing delimiter
-      let end = pos + delimLen;
-      while (end <= state.posMax - delimLen) {
-        if (src.charCodeAt(end) === 0x24) {
-          // Count preceding backslashes for escape detection:
-          // odd = escaped $, even = real closing $
-          let backslashCount = 0;
-          let bsPos = end - 1;
-          while (
-            bsPos >= pos + delimLen &&
-            src.charCodeAt(bsPos) === 0x5c
-          ) {
-            backslashCount++;
-            bsPos--;
-          }
-          if (backslashCount % 2 !== 0) {
-            end++;
-            continue;
-          }
+    // Find closing delimiter
+    let end = pos + delimLen;
+    while (end <= state.posMax - delimLen) {
+      if (src.charCodeAt(end) === 0x24) {
+        // Count preceding backslashes for escape detection:
+        // odd = escaped $, even = real closing $
+        let backslashCount = 0;
+        let bsPos = end - 1;
+        while (bsPos >= pos + delimLen && src.charCodeAt(bsPos) === 0x5c) {
+          backslashCount++;
+          bsPos--;
+        }
+        if (backslashCount % 2 !== 0) {
+          end++;
+          continue;
+        }
 
-          if (isDouble) {
-            // Need two consecutive $ for closing $$
-            if (
-              end + 1 < state.posMax &&
-              src.charCodeAt(end + 1) === 0x24
-            ) {
-              break;
-            }
-            // Single $ inside $$...$$ content, skip
-            end++;
-            continue;
-          } else {
+        if (isDouble) {
+          // Need two consecutive $ for closing $$
+          if (end + 1 < state.posMax && src.charCodeAt(end + 1) === 0x24) {
             break;
           }
+          // Single $ inside $$...$$ content, skip
+          end++;
+          continue;
+        } else {
+          break;
         }
-        end++;
       }
+      end++;
+    }
 
-      // Verify closing delimiter was found
-      if (isDouble) {
-        if (
-          end > state.posMax - delimLen ||
-          src.charCodeAt(end + 1) !== 0x24
-        ) {
-          return false;
-        }
-      } else {
-        if (end >= state.posMax) return false;
+    // Verify closing delimiter was found
+    if (isDouble) {
+      if (end > state.posMax - delimLen || src.charCodeAt(end + 1) !== 0x24) {
+        return false;
       }
+    } else {
+      if (end >= state.posMax) return false;
+    }
 
-      const content = src.slice(pos + delimLen, end);
-      if (!content.trim()) return false;
+    const content = src.slice(pos + delimLen, end);
+    if (!content.trim()) return false;
 
-      if (!silent) {
-        const token = state.push("math_inline", "math", 0);
-        token.content = content;
-        token.markup = isDouble ? "$$" : "$";
-      }
+    if (!silent) {
+      const token = state.push("math_inline", "math", 0);
+      token.content = content;
+      token.markup = isDouble ? "$$" : "$";
+    }
 
-      state.pos = end + delimLen;
-      return true;
-    },
-  );
+    state.pos = end + delimLen;
+    return true;
+  });
 
   // Block math: $$...$$
   mdInstance.block.ruler.after(
     "blockquote",
     "math_block",
     (state, startLine, endLine, silent) => {
-      const startPos =
-        state.bMarks[startLine] + state.tShift[startLine];
+      const startPos = state.bMarks[startLine] + state.tShift[startLine];
       const maxPos = state.eMarks[startLine];
 
       if (startPos + 2 > maxPos) return false;
@@ -119,9 +103,7 @@ function mathPlugin(mdInstance: MarkdownIt) {
         return false;
       }
 
-      const afterOpening = state.src
-        .slice(startPos + 2, maxPos)
-        .trim();
+      const afterOpening = state.src.slice(startPos + 2, maxPos).trim();
 
       // Single-line: $$...$$ on same line
       if (afterOpening.endsWith("$$") && afterOpening.length > 2) {
@@ -138,8 +120,7 @@ function mathPlugin(mdInstance: MarkdownIt) {
       let nextLine = startLine + 1;
       let found = false;
       while (nextLine < endLine) {
-        const lineStart =
-          state.bMarks[nextLine] + state.tShift[nextLine];
+        const lineStart = state.bMarks[nextLine] + state.tShift[nextLine];
         const lineEnd = state.eMarks[nextLine];
         const line = state.src.slice(lineStart, lineEnd).trim();
         if (line === "$$") {
@@ -201,6 +182,43 @@ const toolCallStyles = {
   },
 };
 
+type SourceGroupType =
+  | "paper"
+  | "note"
+  | "annotation"
+  | "web"
+  | "library"
+  | "memory";
+
+type SourceGroupFragment =
+  | {
+      kind: "markdown";
+      content: string;
+    }
+  | {
+      kind: "source-group";
+      label: string;
+      type: string;
+      content: string;
+    };
+
+const sourceGroupStyles = {
+  light: {
+    cardBg: "#ffffff",
+    cardBorder: "#d0d7de",
+    headerBg: "#f6f8fa",
+    labelText: "#24292f",
+    bodyText: "#334155",
+  },
+  dark: {
+    cardBg: "#161b22",
+    cardBorder: "#30363d",
+    headerBg: "#21262d",
+    labelText: "#e6edf3",
+    bodyText: "#c9d1d9",
+  },
+};
+
 /**
  * Unescape XML entities back to original characters
  * This reverses the escaping done in ChatManager.formatToolCallCard
@@ -212,6 +230,211 @@ function unescapeXml(str: string): string {
     .replace(/&gt;/g, ">")
     .replace(/&lt;/g, "<")
     .replace(/&amp;/g, "&");
+}
+
+function renderMarkdownFragment(
+  doc: Document,
+  parent: HTMLElement,
+  content: string,
+): void {
+  const normalized = content.trim();
+  if (!normalized) return;
+
+  const tokens = md.parse(preprocessMathDelimiters(normalized), {});
+  const builtContent = buildDOMFromTokens(doc, tokens);
+  while (builtContent.firstChild) {
+    parent.appendChild(builtContent.firstChild);
+  }
+}
+
+function getTagAttribute(attrs: string, name: string): string | undefined {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const attrRegex = new RegExp(
+    `(?:^|\\s)${escapedName}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`,
+  );
+  const match = attrs.match(attrRegex);
+  if (!match) {
+    return undefined;
+  }
+  return unescapeXml(match[1] || match[2] || "");
+}
+
+export function extractSourceGroupFragments(
+  content: string,
+): SourceGroupFragment[] {
+  const sourceGroupRegex = /<source-group\b([^>]*)>([\s\S]*?)<\/source-group>/g;
+  const fragments: SourceGroupFragment[] = [];
+
+  let cursor = 0;
+  let hasSourceGroup = false;
+  let match: RegExpExecArray | null;
+
+  while ((match = sourceGroupRegex.exec(content)) !== null) {
+    const attrs = match[1] || "";
+    const label = getTagAttribute(attrs, "label");
+    const type = getTagAttribute(attrs, "type") || "paper";
+
+    if (!label) {
+      continue;
+    }
+
+    if (match.index > cursor) {
+      fragments.push({
+        kind: "markdown",
+        content: content.slice(cursor, match.index),
+      });
+    }
+
+    fragments.push({
+      kind: "source-group",
+      label,
+      type,
+      content: match[2] || "",
+    });
+
+    hasSourceGroup = true;
+    cursor = match.index + match[0].length;
+  }
+
+  if (!hasSourceGroup) {
+    return [{ kind: "markdown", content }];
+  }
+
+  if (cursor < content.length) {
+    fragments.push({
+      kind: "markdown",
+      content: content.slice(cursor),
+    });
+  }
+
+  return fragments;
+}
+
+function getSourceGroupPalette(
+  type: string,
+  dark: boolean,
+): { badgeBg: string; badgeText: string; accent: string } {
+  const normalizedType = type.toLowerCase() as SourceGroupType;
+  switch (normalizedType) {
+    case "paper":
+      return dark
+        ? { badgeBg: "#1f6feb33", badgeText: "#79c0ff", accent: "#1f6feb" }
+        : { badgeBg: "#dbeafe", badgeText: "#1d4ed8", accent: "#60a5fa" };
+    case "note":
+      return dark
+        ? { badgeBg: "#9a670033", badgeText: "#e3b341", accent: "#d29922" }
+        : { badgeBg: "#fef3c7", badgeText: "#b45309", accent: "#f59e0b" };
+    case "annotation":
+      return dark
+        ? { badgeBg: "#bc4c0033", badgeText: "#ffb77c", accent: "#fb8500" }
+        : { badgeBg: "#ffedd5", badgeText: "#c2410c", accent: "#f97316" };
+    case "web":
+      return dark
+        ? { badgeBg: "#0f766e33", badgeText: "#5eead4", accent: "#14b8a6" }
+        : { badgeBg: "#ccfbf1", badgeText: "#0f766e", accent: "#2dd4bf" };
+    case "memory":
+      return dark
+        ? { badgeBg: "#16653433", badgeText: "#86efac", accent: "#22c55e" }
+        : { badgeBg: "#dcfce7", badgeText: "#15803d", accent: "#4ade80" };
+    case "library":
+    default:
+      return dark
+        ? { badgeBg: "#6e768133", badgeText: "#c9d1d9", accent: "#8b949e" }
+        : { badgeBg: "#e5e7eb", badgeText: "#475569", accent: "#94a3b8" };
+  }
+}
+
+function formatSourceGroupType(type: string): string {
+  const normalized = type.trim().toLowerCase();
+  if (!normalized) {
+    return "Source";
+  }
+  return normalized
+    .split(/[_\s-]+/)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function renderSourceGroupCard(
+  doc: Document,
+  parent: HTMLElement,
+  group: Extract<SourceGroupFragment, { kind: "source-group" }>,
+): void {
+  const dark = isDarkMode();
+  const colors = dark ? sourceGroupStyles.dark : sourceGroupStyles.light;
+  const palette = getSourceGroupPalette(group.type, dark);
+
+  const card = doc.createElementNS(HTML_NS, "div") as HTMLElement;
+  card.style.margin = "10px 0";
+  card.style.border = `1px solid ${colors.cardBorder}`;
+  card.style.borderLeft = `3px solid ${palette.accent}`;
+  card.style.borderRadius = "10px";
+  card.style.background = colors.cardBg;
+  card.style.overflow = "hidden";
+
+  const header = doc.createElementNS(HTML_NS, "div") as HTMLElement;
+  header.style.display = "flex";
+  header.style.alignItems = "center";
+  header.style.gap = "8px";
+  header.style.padding = "8px 10px";
+  header.style.background = colors.headerBg;
+  header.style.borderBottom = `1px solid ${colors.cardBorder}`;
+
+  const badge = doc.createElementNS(HTML_NS, "span") as HTMLElement;
+  badge.style.display = "inline-flex";
+  badge.style.alignItems = "center";
+  badge.style.padding = "2px 8px";
+  badge.style.borderRadius = "999px";
+  badge.style.fontSize = "11px";
+  badge.style.fontWeight = "600";
+  badge.style.background = palette.badgeBg;
+  badge.style.color = palette.badgeText;
+  badge.textContent = formatSourceGroupType(group.type);
+  header.appendChild(badge);
+
+  const label = doc.createElementNS(HTML_NS, "span") as HTMLElement;
+  label.style.fontSize = "13px";
+  label.style.fontWeight = "600";
+  label.style.color = colors.labelText;
+  label.style.flex = "1";
+  label.textContent = group.label;
+  header.appendChild(label);
+
+  card.appendChild(header);
+
+  const body = doc.createElementNS(HTML_NS, "div") as HTMLElement;
+  body.style.padding = "10px 12px";
+  body.style.color = colors.bodyText;
+  renderMarkdownFragment(doc, body, group.content);
+  card.appendChild(body);
+
+  parent.appendChild(card);
+}
+
+function renderSourceGroupBlocks(
+  doc: Document,
+  parent: HTMLElement,
+  content: string,
+): boolean {
+  const fragments = extractSourceGroupFragments(content);
+  const hasSourceGroups = fragments.some(
+    (fragment) => fragment.kind === "source-group",
+  );
+
+  if (!hasSourceGroups) {
+    return false;
+  }
+
+  for (const fragment of fragments) {
+    if (fragment.kind === "markdown") {
+      renderMarkdownFragment(doc, parent, fragment.content);
+      continue;
+    }
+
+    renderSourceGroupCard(doc, parent, fragment);
+  }
+
+  return true;
 }
 
 /**
@@ -241,17 +464,11 @@ function renderToolCallCards(
 
     // Add text before this match as remaining content to render as markdown
     if (match.index > lastIndex) {
-      const textBefore = content.slice(lastIndex, match.index).trim();
-      if (textBefore) {
-        // Render preceding markdown
-        const textContainer = doc.createElementNS(HTML_NS, "div") as HTMLElement;
-        const tokens = md.parse(preprocessMathDelimiters(textBefore), {});
-        const builtContent = buildDOMFromTokens(doc, tokens);
-        while (builtContent.firstChild) {
-          textContainer.appendChild(builtContent.firstChild);
-        }
-        parent.appendChild(textContainer);
-      }
+      renderMarkdownFragment(
+        doc,
+        parent,
+        content.slice(lastIndex, match.index),
+      );
     }
 
     const [, status, toolName, toolArgs, statusText, toolResult] = match;
@@ -265,7 +482,8 @@ function renderToolCallCards(
     card.style.borderRadius = "8px";
     card.style.background = colors.cardBg;
     card.style.overflow = "hidden";
-    card.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
+    card.style.fontFamily =
+      '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
     card.style.fontSize = "12px";
 
     // Header row (clickable for expand/collapse)
@@ -332,7 +550,9 @@ function renderToolCallCards(
         argsEl.style.color = colors.argsText;
         argsEl.style.fontFamily = '"SF Mono", Monaco, Consolas, monospace';
         argsEl.style.fontSize = "11px";
-        argsEl.style.borderBottom = toolResult ? `1px solid ${colors.cardBorder}` : "none";
+        argsEl.style.borderBottom = toolResult
+          ? `1px solid ${colors.cardBorder}`
+          : "none";
         argsEl.style.wordBreak = "break-all";
         argsEl.textContent = unescapeXml(toolArgs);
         detailsContainer.appendChild(argsEl);
@@ -415,10 +635,7 @@ function preprocessMathDelimiters(content: string): string {
     (_, math) => `$$${math}$$`,
   );
   // Convert \(...\) to $...$ (inline math)
-  processed = processed.replace(
-    /\\\((.*?)\\\)/g,
-    (_, math) => `$${math}$`,
-  );
+  processed = processed.replace(/\\\((.*?)\\\)/g, (_, math) => `$${math}$`);
 
   // Restore preserved blocks
   processed = processed.replace(
@@ -450,10 +667,7 @@ function renderMathToElement(
     // Parse KaTeX output into XHTML-compatible DOM nodes
     const parser = new DOMParser();
     const wrapper = `<span xmlns="${HTML_NS}">${html}</span>`;
-    const mathDoc = parser.parseFromString(
-      wrapper,
-      "application/xhtml+xml",
-    );
+    const mathDoc = parser.parseFromString(wrapper, "application/xhtml+xml");
 
     if (mathDoc.querySelector("parsererror")) {
       renderMathFallback(doc, parent, content, displayMode);
@@ -508,16 +722,15 @@ export function renderMarkdownToElement(
   // First, check for and render tool call cards
   const remainingContent = renderToolCallCards(doc, element, markdownContent);
 
-  // If there's remaining content after tool cards, render it as markdown
-  if (remainingContent) {
-    const preprocessed = preprocessMathDelimiters(remainingContent);
-    const tokens = md.parse(preprocessed, {});
-    const container = buildDOMFromTokens(doc, tokens);
-
-    while (container.firstChild) {
-      element.appendChild(container.firstChild);
-    }
+  if (!remainingContent) {
+    return;
   }
+
+  if (renderSourceGroupBlocks(doc, element, remainingContent)) {
+    return;
+  }
+
+  renderMarkdownFragment(doc, element, remainingContent);
 }
 
 /**
@@ -740,10 +953,7 @@ export function buildDOMFromTokens(
         break;
 
       case "math_block": {
-        const mathDiv = doc.createElementNS(
-          HTML_NS,
-          "div",
-        ) as HTMLElement;
+        const mathDiv = doc.createElementNS(HTML_NS, "div") as HTMLElement;
         mathDiv.style.textAlign = "center";
         mathDiv.style.margin = "12px 0";
         mathDiv.style.overflowX = "auto";
@@ -835,10 +1045,7 @@ export function renderInlineTokens(
         break;
 
       case "math_inline": {
-        const mathSpan = doc.createElementNS(
-          HTML_NS,
-          "span",
-        ) as HTMLElement;
+        const mathSpan = doc.createElementNS(HTML_NS, "span") as HTMLElement;
         // Always use displayMode: false for inline math to avoid
         // <math display="block"> which breaks paragraph flow in Firefox.
         // Block-level display math is handled by math_block tokens.
