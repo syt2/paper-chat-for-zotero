@@ -174,7 +174,7 @@ describe("agent runtime plan semantics", function () {
     assert.include(prompt, '<source-group label="Paper title or source name"');
     assert.include(prompt, 'type="paper|note|annotation|web|library|memory"');
     assert.include(prompt, "=== RETRY POLICY ===");
-    assert.include(prompt, "do not repeat the unchanged call");
+    assert.include(prompt, "Runtime already blocks unchanged failed or denied retries");
     assert.include(prompt, "=== FAILURE RECOVERY STRATEGY ===");
     assert.include(prompt, "category=missing_context");
     assert.include(prompt, "tools=get_item_metadata, get_item_notes");
