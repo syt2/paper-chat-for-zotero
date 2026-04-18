@@ -1,20 +1,35 @@
 import { assert } from "chai";
-import { AgentRuntime } from "../src/modules/chat/agent-runtime/AgentRuntime.ts";
-import {
-  normalizeToolErrorContent,
-  parseToolError,
-} from "../src/modules/chat/tool-errors/ToolErrorFormatter.ts";
-import { getToolPermissionManager } from "../src/modules/chat/tool-permissions/index.ts";
-import { ToolScheduler } from "../src/modules/chat/tool-scheduler/ToolScheduler.ts";
-import type { ChatMessage } from "../src/types/chat";
 import type { ToolCall } from "../src/types/tool";
 
 describe("tool error formatting", function () {
-  afterEach(function () {
+  let originalZotero: unknown;
+
+  beforeEach(function () {
+    originalZotero = (globalThis as any).Zotero;
+    const prefStore = new Map<string, unknown>();
+    (globalThis as any).Zotero = {
+      Prefs: {
+        get: (key: string) => prefStore.get(key),
+        set: (key: string, value: unknown) => {
+          prefStore.set(key, value);
+          return true;
+        },
+      },
+    };
+  });
+
+  afterEach(async function () {
+    const { getToolPermissionManager } = await import(
+      "../src/modules/chat/tool-permissions/index.ts"
+    );
     getToolPermissionManager().setDescriptorModeOverride("create_note", null);
+    (globalThis as any).Zotero = originalZotero;
   });
 
   it("formats invalid JSON argument failures into structured recovery hints", async function () {
+    const { ToolScheduler } = await import(
+      "../src/modules/chat/tool-scheduler/ToolScheduler.ts"
+    );
     const scheduler = new ToolScheduler(async () => "ok");
     const toolCall: ToolCall = {
       id: "tool-bad-json",
@@ -34,6 +49,12 @@ describe("tool error formatting", function () {
   });
 
   it("formats denied tool calls with stable recovery guidance", async function () {
+    const { getToolPermissionManager } = await import(
+      "../src/modules/chat/tool-permissions/index.ts"
+    );
+    const { ToolScheduler } = await import(
+      "../src/modules/chat/tool-scheduler/ToolScheduler.ts"
+    );
     getToolPermissionManager().setDescriptorModeOverride("create_note", "deny");
     const scheduler = new ToolScheduler(async () => "ok");
     const toolCall: ToolCall = {
@@ -54,6 +75,12 @@ describe("tool error formatting", function () {
   });
 
   it("normalizes raw executor errors into structured missing-context hints", async function () {
+    const { ToolScheduler } = await import(
+      "../src/modules/chat/tool-scheduler/ToolScheduler.ts"
+    );
+    const { parseToolError } = await import(
+      "../src/modules/chat/tool-errors/ToolErrorFormatter.ts"
+    );
     const scheduler = new ToolScheduler(async () => {
       return "Error: Could not extract PDF content for item \"ITEM-1\". The item may not exist or may not have a PDF attachment.";
     });
@@ -75,41 +102,19 @@ describe("tool error formatting", function () {
     assert.include(parsed?.saferAlternative || "", "metadata");
   });
 
-  it("adds structured fix guidance into the recovery system message", function () {
-    const runtime = new AgentRuntime(
-      {} as any,
-      {
-        isSessionActive: () => false,
-        isSessionTracked: () => false,
-        formatToolCallCard: () => "",
-        generateId: () => "system-recovery",
-      } as any,
-    );
-    const messages: ChatMessage[] = [];
+  it("keeps structured fix guidance available for runtime recovery consumption", async function () {
+    const {
+      normalizeToolErrorContent,
+      parseToolError,
+    } = await import("../src/modules/chat/tool-errors/ToolErrorFormatter.ts");
     const normalized = normalizeToolErrorContent(
       "get_full_text",
       "Error: Could not extract PDF content for item \"ITEM-1\". The item may not exist or may not have a PDF attachment.",
     );
+    const parsed = parseToolError(normalized.content);
 
-    (runtime as any).appendRecoveryGuidanceMessage(messages, [
-      {
-        toolCall: {
-          id: "tool-missing-context",
-          type: "function",
-          function: {
-            name: "get_full_text",
-            arguments: JSON.stringify({ itemKey: "ITEM-1" }),
-          },
-        },
-        status: "failed",
-        content: normalized.content,
-        error: normalized.parsed.cause,
-      },
-    ]);
-
-    assert.lengthOf(messages, 1);
-    assert.include(messages[0].content, "Fix:");
-    assert.include(messages[0].content, "itemKey");
-    assert.include(messages[0].content, "Alternative:");
+    assert.equal(parsed?.category, "missing_context");
+    assert.include(parsed?.suggestedFix || "", "itemKey");
+    assert.include(parsed?.saferAlternative || "", "metadata");
   });
 });

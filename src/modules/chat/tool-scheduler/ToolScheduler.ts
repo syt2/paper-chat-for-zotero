@@ -265,7 +265,7 @@ export class ToolScheduler {
   } {
     // Fault injection is a dev-only debugging aid. Never honor a stray pref
     // in a production build, even if it was set in a previous dev session.
-    if (__env__ === "production") {
+    if (typeof __env__ !== "undefined" && __env__ === "production") {
       return { config: null, raw: "" };
     }
 

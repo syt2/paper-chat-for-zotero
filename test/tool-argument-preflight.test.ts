@@ -1,6 +1,4 @@
 import { assert } from "chai";
-import { preflightToolArguments } from "../src/modules/chat/tool-arguments/ToolArgumentPreflight.ts";
-import { ToolScheduler } from "../src/modules/chat/tool-scheduler/ToolScheduler.ts";
 import type { ToolCall } from "../src/types/tool";
 
 describe("tool argument preflight", function () {
@@ -24,7 +22,10 @@ describe("tool argument preflight", function () {
     (globalThis as any).Zotero = originalZotero;
   });
 
-  it("repairs common aliases and scalar types for web_search", function () {
+  it("repairs common aliases and scalar types for web_search", async function () {
+    const { preflightToolArguments } = await import(
+      "../src/modules/chat/tool-arguments/ToolArgumentPreflight.ts"
+    );
     const normalized = preflightToolArguments("web_search", {
       query: "transformer scaling",
       maxResults: "3",
@@ -40,7 +41,10 @@ describe("tool argument preflight", function () {
     });
   });
 
-  it("fills create_note content and add_item identifier from common aliases", function () {
+  it("fills create_note content and add_item identifier from common aliases", async function () {
+    const { preflightToolArguments } = await import(
+      "../src/modules/chat/tool-arguments/ToolArgumentPreflight.ts"
+    );
     const createNoteArgs = preflightToolArguments("create_note", {
       item_key: "ABCD1234",
       text: "A short summary",
@@ -59,6 +63,9 @@ describe("tool argument preflight", function () {
   });
 
   it("normalizes cross-paper search arrays and numeric limits", async function () {
+    const { ToolScheduler } = await import(
+      "../src/modules/chat/tool-scheduler/ToolScheduler.ts"
+    );
     const calls: Record<string, unknown>[] = [];
     const scheduler = new ToolScheduler(async (_toolCall, _fallback, args) => {
       calls.push(args);

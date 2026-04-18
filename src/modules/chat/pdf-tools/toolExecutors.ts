@@ -11,7 +11,6 @@ import type {
 } from "../../../types/tool";
 import { SECTION_ALIASES } from "./constants";
 import { parsePageRange } from "./paperParser";
-import { getRAGService } from "../../embedding";
 import { getErrorMessage } from "../../../utils/common";
 
 /**
@@ -61,8 +60,9 @@ export async function executeSearchPaperContent(
 
   // 尝试使用语义搜索
   if (itemKey) {
-    const ragService = getRAGService();
     try {
+      const { getRAGService } = await import("../../embedding");
+      const ragService = getRAGService();
       if (await ragService.isAvailable()) {
         // 确保已索引
         if (!await ragService.isIndexed(itemKey)) {
