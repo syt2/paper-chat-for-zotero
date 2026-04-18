@@ -11,11 +11,12 @@ describe("tool retry policy", function () {
       id: "tool-1",
       type: "function",
       function: {
-        name: "search_across_papers",
+        name: "web_search",
         arguments: JSON.stringify({
           query: "attention heads",
-          item_keys: "AAA111, BBB222",
-          maxResultsPerPaper: "2",
+          maxResults: "2",
+          includeContent: "true",
+          domainFilter: "arxiv.org, aclanthology.org",
         }),
       },
     };
@@ -23,10 +24,11 @@ describe("tool retry policy", function () {
       id: "tool-2",
       type: "function",
       function: {
-        name: "search_across_papers",
+        name: "web_search",
         arguments: JSON.stringify({
-          max_results_per_paper: 2,
-          itemKeys: ["AAA111", "BBB222"],
+          max_results: 2,
+          include_content: true,
+          domain_filter: ["arxiv.org", "aclanthology.org"],
           query: "attention heads",
         }),
       },
@@ -55,7 +57,7 @@ describe("tool retry policy", function () {
         "Error: Required paper context is unavailable for get_full_text.",
         "Category: missing_context",
         "Retryable: yes",
-        "Suggested fix: Retry with a valid itemKey.",
+        "Fix hint: Retry with a valid itemKey.",
       ].join("\n"),
       error: "Required paper context is unavailable.",
     };

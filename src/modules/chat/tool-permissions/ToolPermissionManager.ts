@@ -178,11 +178,6 @@ const TOOL_PERMISSION_DESCRIPTORS: Record<
     "Modify tags on multiple Zotero items.",
   ),
   add_item: createDescriptor("add_item", "write", "Add a new Zotero item."),
-  search_across_papers: createDescriptor(
-    "search_across_papers",
-    "read",
-    "Search across multiple selected papers.",
-  ),
   save_memory: createDescriptor(
     "save_memory",
     "memory",

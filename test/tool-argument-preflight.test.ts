@@ -62,7 +62,7 @@ describe("tool argument preflight", function () {
     assert.equal(addItemArgs.collection_key, "COLL1234");
   });
 
-  it("normalizes cross-paper search arrays and numeric limits", async function () {
+  it("normalizes annotation aliases and scalar booleans", async function () {
     const { ToolScheduler } = await import(
       "../src/modules/chat/tool-scheduler/ToolScheduler.ts"
     );
@@ -76,11 +76,12 @@ describe("tool argument preflight", function () {
       id: "tool-1",
       type: "function",
       function: {
-        name: "search_across_papers",
+        name: "get_annotations",
         arguments: JSON.stringify({
-          query: "attention heads",
-          item_keys: "AAA111, BBB222",
-          maxResultsPerPaper: "2",
+          item_key: "AAA111",
+          annotation_type: "highlight",
+          selected_only: "true",
+          include_position: "1",
         }),
       },
     };
@@ -92,9 +93,10 @@ describe("tool argument preflight", function () {
 
     assert.equal(result.status, "completed");
     assert.deepEqual(calls[0], {
-      query: "attention heads",
-      itemKeys: ["AAA111", "BBB222"],
-      max_results_per_paper: 2,
+      itemKey: "AAA111",
+      annotationType: "highlight",
+      selectedOnly: true,
+      includePosition: true,
     });
     assert.deepEqual(result.args, calls[0]);
   });

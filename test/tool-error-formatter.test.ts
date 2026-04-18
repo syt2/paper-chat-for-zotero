@@ -46,7 +46,7 @@ describe("tool error formatting", function () {
     assert.equal(result.status, "failed");
     assert.include(result.content, "Category: invalid_arguments");
     assert.include(result.content, "Retryable: yes");
-    assert.include(result.content, "Suggested fix:");
+    assert.include(result.content, "Fix hint:");
   });
 
   it("formats denied tool calls with stable recovery guidance", async function () {
@@ -124,5 +124,30 @@ describe("tool error formatting", function () {
     assert.equal(parsed?.category, "missing_context");
     assert.include(parsed?.suggestedFix || "", "itemKey");
     assert.include(parsed?.saferAlternative || "", "metadata");
+  });
+
+  it("parses legacy structured labels during migration", async function () {
+    const { normalizeToolErrorContent, parseToolError } = await import(
+      "../src/modules/chat/tool-errors/ToolErrorFormatter.ts"
+    );
+    const legacyContent = [
+      "Error: Required paper context is unavailable for get_full_text.",
+      "Category: missing_context",
+      "Retryable: yes",
+      "Suggested fix: Retry with a valid itemKey.",
+      "Safer alternative: Use metadata first.",
+    ].join("\n");
+    const normalized = normalizeToolErrorContent("get_full_text", legacyContent);
+    const parsed = parseToolError(legacyContent);
+
+    assert.include(normalized.content, "Fix hint: Retry with a valid itemKey.");
+    assert.include(normalized.content, "Alternative: Use metadata first.");
+    assert.notInclude(normalized.content, "Suggested fix:");
+    assert.notInclude(normalized.content, "Safer alternative:");
+    assert.deepEqual(normalized.parsed, parsed);
+
+    assert.equal(parsed?.category, "missing_context");
+    assert.equal(parsed?.suggestedFix, "Retry with a valid itemKey.");
+    assert.equal(parsed?.saferAlternative, "Use metadata first.");
   });
 });

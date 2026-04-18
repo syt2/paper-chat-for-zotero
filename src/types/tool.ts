@@ -104,7 +104,6 @@ export type ToolConcurrencyMode = "parallel_safe" | "serial";
 export type ToolTargetScope =
   | "paper"
   | "library"
-  | "multi_paper"
   | "memory"
   | "external";
 
@@ -193,8 +192,6 @@ export type PaperToolName =
   | "create_note"
   | "batch_update_tags"
   | "add_item"
-  // 多文档工具
-  | "search_across_papers"
   // Memory tool
   | "save_memory";
 
@@ -351,15 +348,6 @@ export interface BatchUpdateTagsArgs {
 export interface AddItemArgs {
   identifier: string; // DOI, ISBN, PMID, arXiv ID
   collection_key?: string; // 可选，指定添加到的分类
-}
-
-// ========== 多文档工具参数类型 ==========
-
-// 跨论文搜索的参数
-export interface SearchAcrossPapersArgs {
-  query: string; // 搜索查询
-  itemKeys: string[]; // 指定论文 keys
-  max_results_per_paper?: number; // 每篇论文最多返回结果数
 }
 
 // 保存用户记忆的参数

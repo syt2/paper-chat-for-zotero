@@ -22,8 +22,8 @@ describe("tool recovery policy", function () {
         "Error: Required paper context is unavailable for get_full_text.",
         "Category: missing_context",
         "Retryable: yes",
-        "Suggested fix: Retry with a valid itemKey, or open the relevant PDF if the tool depends on the active reader.",
-        "Safer alternative: Use metadata, notes, or library search tools that do not require full PDF text.",
+        "Fix hint: Retry with a valid itemKey, or open the relevant PDF if the tool depends on the active reader.",
+        "Alternative: Use metadata, notes, or library search tools that do not require full PDF text.",
       ].join("\n"),
     };
 
@@ -109,15 +109,15 @@ describe("tool recovery policy", function () {
             name: "get_note_content",
             arguments: JSON.stringify({ noteKey: "MISSING" }),
           },
-        },
-        status: "failed",
-        content: [
-          "Error: Requested resource for get_note_content was not found.",
-          "Category: not_found",
-          "Retryable: yes",
-          "Suggested fix: Retry with a valid Zotero key, collection key, note key, or identifier.",
-          "Safer alternative: Discover valid targets first with list or search tools before retrying.",
-        ].join("\n"),
+      },
+      status: "failed",
+      content: [
+        "Error: Requested resource for get_note_content was not found.",
+        "Category: not_found",
+        "Retryable: yes",
+        "Fix hint: Retry with a valid Zotero key, collection key, note key, or identifier.",
+        "Alternative: Discover valid targets first with list or search tools before retrying.",
+      ].join("\n"),
       } satisfies ToolExecutionResult,
     ]);
 

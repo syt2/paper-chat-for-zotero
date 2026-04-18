@@ -22,6 +22,8 @@ export type PaperChatTierPools = Record<PaperChatTier, string[]>;
 export type PickRandom = (candidates: string[]) => string | null | undefined;
 
 const DEFAULT_SELECTED_TIER: PaperChatTier = "paperchat-standard";
+const STANDARD_MIN_RATIO = 0.5;
+const PRO_MIN_RATIO = 1.0;
 
 function isPaperChatTier(value: unknown): value is PaperChatTier {
   return (
@@ -135,30 +137,20 @@ export function deriveTierPools(
   }
 
   const sortedModels = sortModelsByRatio(availableModels, ratios);
-
-  if (count === 1) {
-    return {
-      "paperchat-lite": [sortedModels[0]],
-      "paperchat-standard": [sortedModels[0]],
-      "paperchat-pro": [sortedModels[0]],
-    };
-  }
-
-  if (count === 2) {
-    return {
-      "paperchat-lite": [sortedModels[0]],
-      "paperchat-standard": [sortedModels[1]],
-      "paperchat-pro": [sortedModels[1]],
-    };
-  }
-
-  const miniEnd = Math.ceil(count / 3);
-  const proEnd = Math.ceil((count * 2) / 3);
+  const fallbackModel = sortedModels[sortedModels.length - 1];
+  const liteModels = sortedModels.filter(
+    (model) => ratios[model] < STANDARD_MIN_RATIO,
+  );
+  const standardModels = sortedModels.filter((model) => {
+    const ratio = ratios[model];
+    return ratio >= STANDARD_MIN_RATIO && ratio <= PRO_MIN_RATIO;
+  });
+  const proModels = sortedModels.filter((model) => ratios[model] > PRO_MIN_RATIO);
 
   return {
-    "paperchat-lite": sortedModels.slice(0, miniEnd),
-    "paperchat-standard": sortedModels.slice(miniEnd, proEnd),
-    "paperchat-pro": sortedModels.slice(proEnd),
+    "paperchat-lite": liteModels.length > 0 ? liteModels : [fallbackModel],
+    "paperchat-standard": standardModels.length > 0 ? standardModels : [fallbackModel],
+    "paperchat-pro": proModels.length > 0 ? proModels : [fallbackModel],
   };
 }
 

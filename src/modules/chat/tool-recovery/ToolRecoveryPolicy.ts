@@ -325,8 +325,6 @@ function getReadOnlyNeighborTools(toolName: string): string[] {
       return ["get_item_metadata", "get_item_notes", "search_notes"];
     case "web_search":
       return ["search_items", "search_notes", "list_all_items"];
-    case "search_across_papers":
-      return ["search_items", "list_all_items", "get_item_metadata"];
     default:
       return [];
   }

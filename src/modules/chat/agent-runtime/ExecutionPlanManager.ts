@@ -58,8 +58,6 @@ function getToolIntentTitle(toolName: string): string {
     case "get_pdf_selection":
     case "get_full_text":
       return "Read paper evidence";
-    case "search_across_papers":
-      return "Compare evidence across papers";
     case "web_search":
       return "Check information outside Zotero";
     case "create_note":

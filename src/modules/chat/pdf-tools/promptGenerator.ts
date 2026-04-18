@@ -60,11 +60,11 @@ ${webSearchLine}
 - create_note: Create a Zotero note when write operations are allowed
 - batch_update_tags: Update tags on multiple items when write operations are allowed
 - add_item: Add a new Zotero item when write operations are allowed
-- search_across_papers: Search across multiple papers when you have explicit itemKeys
 
 PDF content tools such as get_paper_section, search_paper_content, get_pages, get_paper_metadata, and get_full_text can still work without an open reader tab if you pass itemKey explicitly.
 Only reader-dependent actions such as using the CURRENT paper implicitly or reading the live PDF selection require the paper to be open in the Zotero PDF reader.
 You can help the user by listing available papers with list_all_items, then using itemKey to inspect the right paper.
+For multi-paper comparisons, compose repeated atomic tool calls with explicit itemKeys instead of expecting a dedicated cross-paper tool.
 
 === MENTION FORMAT ===
 Users may reference Zotero items using @[title](key:XXX) format in their messages.
@@ -139,7 +139,6 @@ ${webSearchLine}
 - create_note: Create a Zotero note when write operations are allowed
 - batch_update_tags: Update tags on multiple items when write operations are allowed
 - add_item: Add a new Zotero item when write operations are allowed
-- search_across_papers: Search across multiple papers when you provide explicit itemKeys
 
 === MENTION FORMAT ===
 Users may reference Zotero items using @[title](key:XXX) format in their messages.
@@ -149,10 +148,9 @@ The "key" is the Zotero item key - use it directly with tools (e.g., itemKey, no
 1. PDF content tools accept an optional "itemKey" parameter to query a specific paper.
 2. If itemKey is not specified, PDF tools operate on the CURRENT paper.
 3. Even without a paper open in the reader, PDF content tools can still work when you provide itemKey for an item with a PDF attachment.
-4. Use list_all_items and explicit itemKeys for discovery and cross-paper work.
-5. search_across_papers requires explicit itemKeys; never assume an implicit selected-paper set.
-6. Use get_item_metadata to get bibliographic info even without a PDF.
-7. Prefer narrower/local tools before broader or external ones.
+4. Use list_all_items, search_items, and explicit itemKeys for discovery across papers.
+5. Use get_item_metadata to get bibliographic info even without a PDF.
+6. For multi-paper analysis, compose repeated atomic tool calls per itemKey instead of inventing a dedicated compare/search tool.
 ${importantNotesTail}`;
 
   return prompt;
@@ -193,7 +191,7 @@ function formatAgentPromptContext(agentContext?: AgentPromptContext): string {
       }
     }
 
-    section += `Use the current plan state to choose the next action. Revise the approach when a step was blocked or failed.\n`;
+    section += `Use the current plan state to choose the next action.\n`;
   }
 
   const toolResults = agentContext.recentToolResults?.slice(-5) || [];
@@ -213,13 +211,11 @@ function formatAgentPromptContext(agentContext?: AgentPromptContext): string {
     for (const line of retryBlockedCalls) {
       section += `${line}\n`;
     }
-    section += `Change the arguments, use a different tool, or state the limitation.\n`;
   }
 
   const recoveryDirectives = summarizeRecoveryDirectives(toolResults);
   if (recoveryDirectives.length > 0) {
     section += `\n=== FAILURE RECOVERY STRATEGY ===\n`;
-    section += `When runtime blocks or fails a tool call, follow the category-specific next move below.\n`;
     for (const line of recoveryDirectives) {
       section += `${line}\n`;
     }
@@ -281,8 +277,6 @@ function getToolScopeLabel(result: ToolExecutionResult): string | null {
         : "current paper";
     case "library":
       return "Zotero library";
-    case "multi_paper":
-      return "multi-paper search";
     case "external":
       return "web";
     case "memory":

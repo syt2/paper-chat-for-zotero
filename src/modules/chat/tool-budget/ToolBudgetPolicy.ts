@@ -65,6 +65,8 @@ export function applyToolBudgetPolicy(
   toolCall: ToolCall,
   state: ToolBudgetState,
 ): ToolExecutionResult | null {
+  // This policy is intentionally stateful: allowed calls update the per-turn
+  // budget snapshot so later calls in the same planning pass see the new usage.
   const toolName = toolCall.function.name;
   const args = getNormalizedArgsRecord(toolCall);
 

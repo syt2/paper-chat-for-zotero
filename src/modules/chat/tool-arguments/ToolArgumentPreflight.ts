@@ -39,10 +39,6 @@ const TOOL_SPECIFIC_ALIASES: Record<string, Record<string, string>> = {
   search_with_regex: {
     regex: "pattern",
   },
-  search_across_papers: {
-    item_keys: "itemKeys",
-    maxResultsPerPaper: "max_results_per_paper",
-  },
   add_item: {
     collectionKey: "collection_key",
   },
@@ -61,11 +57,10 @@ const NUMBER_KEYS = new Set([
   "limit",
   "days",
   "max_results",
-  "max_results_per_paper",
   "importance",
 ]);
 
-const STRING_ARRAY_KEYS = new Set(["itemKeys", "domain_filter"]);
+const STRING_ARRAY_KEYS = new Set(["domain_filter"]);
 const CSV_STRING_KEYS = new Set(["tags", "addTags", "removeTags"]);
 
 export function preflightToolArguments(

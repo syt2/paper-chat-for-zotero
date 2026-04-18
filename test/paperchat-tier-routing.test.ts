@@ -79,17 +79,17 @@ describe("paperchat tier routing", function () {
     });
   });
 
-  it("splits two models into mini and shared upper tiers", function () {
+  it("assigns low-ratio models to lite and falls back upper tiers to the max ratio", function () {
     const pools = deriveTierPools(["m2", "m1"], { m1: 0.2, m2: 0.4 });
 
     assert.deepEqual(pools, {
-      "paperchat-lite": ["m1"],
+      "paperchat-lite": ["m1", "m2"],
       "paperchat-standard": ["m2"],
       "paperchat-pro": ["m2"],
     });
   });
 
-  it("handles the minimal three-model split", function () {
+  it("uses threshold buckets instead of equal-count splits", function () {
     const pools = deriveTierPools(["m3", "m1", "m2"], {
       m1: 0.2,
       m2: 0.4,
@@ -97,13 +97,13 @@ describe("paperchat tier routing", function () {
     });
 
     assert.deepEqual(pools, {
-      "paperchat-lite": ["m1"],
-      "paperchat-standard": ["m2"],
+      "paperchat-lite": ["m1", "m2"],
+      "paperchat-standard": ["m3"],
       "paperchat-pro": ["m3"],
     });
   });
 
-  it("derives mini/pro/plus pools from ascending ratio order", function () {
+  it("derives tier pools from ratio thresholds", function () {
     const models = ["m4", "m1", "m6", "m2", "m5", "m3"];
     const ratios = {
       m1: 0.2,
@@ -117,8 +117,37 @@ describe("paperchat tier routing", function () {
     const pools = deriveTierPools(models, ratios);
 
     assert.deepEqual(pools["paperchat-lite"], ["m1", "m2"]);
-    assert.deepEqual(pools["paperchat-standard"], ["m3", "m4"]);
-    assert.deepEqual(pools["paperchat-pro"], ["m5", "m6"]);
+    assert.deepEqual(pools["paperchat-standard"], ["m3", "m4", "m5"]);
+    assert.deepEqual(pools["paperchat-pro"], ["m6"]);
+  });
+
+  it("treats 0.5x and 1.0x as standard boundaries", function () {
+    const pools = deriveTierPools(["m4", "m1", "m3", "m2"], {
+      m1: 0.49,
+      m2: 0.5,
+      m3: 1.0,
+      m4: 1.01,
+    });
+
+    assert.deepEqual(pools, {
+      "paperchat-lite": ["m1"],
+      "paperchat-standard": ["m2", "m3"],
+      "paperchat-pro": ["m4"],
+    });
+  });
+
+  it("falls back empty buckets to the max-ratio model", function () {
+    const pools = deriveTierPools(["m3", "m1", "m2"], {
+      m1: 0.1,
+      m2: 0.2,
+      m3: 0.3,
+    });
+
+    assert.deepEqual(pools, {
+      "paperchat-lite": ["m1", "m2", "m3"],
+      "paperchat-standard": ["m3"],
+      "paperchat-pro": ["m3"],
+    });
   });
 
   it("keeps existing auto bindings through boundary drift", function () {
@@ -177,7 +206,7 @@ describe("paperchat tier routing", function () {
 
     assert.equal(resolved.state.tiers["paperchat-standard"].mode, "auto");
     assert.equal(resolved.state.tiers["paperchat-standard"].modelId, "m3");
-    assert.deepEqual(resolved.pools["paperchat-standard"], ["m3", "m4", "m5"]);
+    assert.deepEqual(resolved.pools["paperchat-standard"], ["m6", "m3"]);
   });
 
   it("uses a shared deterministic pool when ratio coverage is incomplete", function () {
@@ -245,7 +274,7 @@ describe("paperchat tier routing", function () {
     });
 
     assert.equal(validated.tiers["paperchat-standard"].mode, "auto");
-    assert.equal(validated.tiers["paperchat-standard"].modelId, "m2");
+    assert.equal(validated.tiers["paperchat-standard"].modelId, "m3");
   });
 
   it("classifies unsupported-model errors as hard failures", function () {
@@ -284,8 +313,8 @@ describe("paperchat tier routing", function () {
     const ratios = {
       m1: 0.1,
       m2: 0.2,
-      m3: 0.3,
-      m4: 0.4,
+      m3: 0.6,
+      m4: 1.2,
     };
 
     const resolved = resolveTierModel(
@@ -325,7 +354,7 @@ describe("paperchat tier routing", function () {
         },
       },
       ["m1", "m2", "m3", "m4"],
-      { m1: 1, m2: 2, m3: 3, m4: 4 },
+      { m1: 0.2, m2: 0.6, m3: 1.0, m4: 1.2 },
       (candidates) => candidates[0] ?? null,
     );
 
@@ -467,7 +496,7 @@ describe("paperchat tier routing", function () {
         },
       },
       ["m1", "m2", "m3", "m4"],
-      { m1: 1, m2: 2, m3: 3, m4: 4 },
+      { m1: 0.1, m2: 0.2, m3: 0.6, m4: 1.2 },
       (candidates) => candidates[0] ?? null,
     );
 
@@ -499,7 +528,7 @@ describe("paperchat tier routing", function () {
         },
       },
       ["m1", "m2", "m3", "m4", "m5"],
-      { m1: 1, m2: 2, m3: 3, m4: 4, m5: 5 },
+      { m1: 0.1, m2: 0.2, m3: 0.6, m4: 0.8, m5: 1.2 },
       "m3",
       (candidates) => candidates[0] ?? null,
     );
@@ -541,7 +570,7 @@ describe("paperchat tier routing", function () {
         },
       },
       ["m1", "m2", "m3"],
-      { m1: 1, m2: 2, m3: 3 },
+      { m1: 0.1, m2: 0.6, m3: 1.2 },
       "m2",
       (candidates) => candidates[0] ?? null,
     );

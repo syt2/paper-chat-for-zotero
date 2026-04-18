@@ -47,8 +47,6 @@ import type {
   CreateNoteArgs,
   BatchUpdateTagsArgs,
   AddItemArgs,
-  // 多文档工具类型
-  SearchAcrossPapersArgs,
   // 记忆工具类型
   SaveMemoryArgs,
 } from "../../../types/tool";
@@ -119,30 +117,6 @@ export class PdfToolManager {
    */
   getCurrentItemKey(): string | null {
     return this.currentItemKey;
-  }
-
-  /**
-   * 批量提取多个论文的结构（用于多文档比较）
-   */
-  async extractAndParsePapers(
-    itemKeys: string[],
-    options?: {
-      onProgress?: (
-        completed: number,
-        total: number,
-        itemKey: string,
-      ) => Promise<void> | void;
-    },
-  ): Promise<Map<string, PaperStructureExtended>> {
-    const results = new Map<string, PaperStructureExtended>();
-    for (const [index, key] of itemKeys.entries()) {
-      const structure = await this.extractAndParsePaper(key);
-      if (structure) {
-        results.set(key, structure);
-      }
-      await options?.onProgress?.(index + 1, itemKeys.length, key);
-    }
-    return results;
   }
 
   /**
@@ -948,40 +922,7 @@ export class PdfToolManager {
       return [...libraryTools, ...memoryTools, ...pdfTools];
     }
 
-    // 多文档工具（通过显式 itemKeys 工作）
-    const comparisonTools: ToolDefinition[] = [
-      {
-        type: "function",
-        function: {
-          name: "search_across_papers",
-          description:
-            "Search across multiple papers identified by explicit itemKeys. Use this for batch retrieval over several Zotero papers at once.",
-          parameters: {
-            type: "object",
-            properties: {
-              query: {
-                type: "string",
-                description: "The search query to find across papers.",
-              },
-              itemKeys: {
-                type: "array",
-                items: { type: "string" },
-                description:
-                  "Required Zotero item keys for the papers to search across.",
-              },
-              max_results_per_paper: {
-                type: "number",
-                description: "Maximum results per paper (default: 3, max: 10).",
-              },
-            },
-            required: ["query", "itemKeys"],
-          },
-        },
-      },
-    ];
-
-    // 返回 PDF 工具 + Library 工具 + 比较工具 + 记忆工具
-    return [...pdfTools, ...libraryTools, ...comparisonTools, ...memoryTools];
+    return [...pdfTools, ...libraryTools, ...memoryTools];
   }
 
   // === 类型守卫函数 ===
@@ -1132,19 +1073,6 @@ export class PdfToolManager {
       typeof args === "object" &&
       args !== null &&
       typeof (args as AddItemArgs).identifier === "string"
-    );
-  }
-
-  // === 多文档工具的类型守卫 ===
-
-  private isSearchAcrossPapersArgs(
-    args: unknown,
-  ): args is SearchAcrossPapersArgs {
-    return (
-      typeof args === "object" &&
-      args !== null &&
-      typeof (args as SearchAcrossPapersArgs).query === "string" &&
-      Array.isArray((args as SearchAcrossPapersArgs).itemKeys)
     );
   }
 
@@ -1319,13 +1247,6 @@ export class PdfToolManager {
         return executeAddItem(args);
       }
 
-      case "search_across_papers": {
-        if (!this.isSearchAcrossPapersArgs(args)) {
-          return "Error: Invalid arguments for search_across_papers. Required: query (string)";
-        }
-        return this.executeSearchAcrossPapers(args);
-      }
-
       case "save_memory": {
         if (!this.isSaveMemoryArgs(args)) {
           return "Error: Invalid arguments for save_memory. Required: text (string)";
@@ -1447,131 +1368,5 @@ export class PdfToolManager {
       memoryContext,
       agentContext,
     );
-  }
-
-  /**
-   * 执行 search_across_papers 工具
-   * 在多篇论文中搜索内容（支持语义搜索）
-   */
-  private async executeSearchAcrossPapers(
-    args: SearchAcrossPapersArgs,
-  ): Promise<string> {
-    const query = args.query;
-    const itemKeys = [...new Set(args.itemKeys.filter(Boolean))];
-    const maxResultsPerPaper = Math.min(args.max_results_per_paper || 3, 10);
-
-    if (itemKeys.length === 0) {
-      return "Error: search_across_papers requires a non-empty itemKeys array.";
-    }
-
-    // 提取所有论文的结构
-    const papersMap = await this.extractAndParsePapers(itemKeys);
-
-    if (papersMap.size === 0) {
-      return "Error: Could not extract any paper content.";
-    }
-
-    const results: string[] = [];
-    results.push(
-      `=== Search Results for "${query}" across ${papersMap.size} papers ===\n`,
-    );
-
-    // 尝试使用语义搜索
-    const { getRAGService } = await import("../../embedding");
-    const ragService = getRAGService();
-    const useSemanticSearch = await ragService.isAvailable();
-
-    if (useSemanticSearch) {
-      // 确保所有论文都已索引
-      for (const [key, structure] of papersMap) {
-        if (!(await ragService.isIndexed(key))) {
-          ztoolkit.log(`[searchAcrossPapers] Indexing paper: ${key}`);
-          await ragService.indexPaper(key, structure.fullText);
-        }
-      }
-
-      // 执行跨论文语义搜索
-      const semanticResults = await ragService.searchAcrossPapers(
-        query,
-        Array.from(papersMap.keys()),
-        { topK: maxResultsPerPaper * papersMap.size },
-      );
-
-      if (semanticResults.length > 0) {
-        // 按论文分组结果
-        const resultsByPaper = new Map<string, typeof semanticResults>();
-        for (const result of semanticResults) {
-          const paperResults = resultsByPaper.get(result.itemKey) || [];
-          if (paperResults.length < maxResultsPerPaper) {
-            paperResults.push(result);
-            resultsByPaper.set(result.itemKey, paperResults);
-          }
-        }
-
-        for (const [key, structure] of papersMap) {
-          const title = structure.metadata.title || key;
-          results.push(`\n--- Paper [${key}]: ${title} ---\n`);
-
-          const paperResults = resultsByPaper.get(key);
-          if (paperResults && paperResults.length > 0) {
-            results.push(
-              `Found ${paperResults.length} semantically relevant match(es):\n`,
-            );
-            paperResults.forEach((match, i) => {
-              const truncated =
-                match.text.length > 500
-                  ? match.text.substring(0, 500) + "..."
-                  : match.text;
-              const pageInfo = match.page ? ` (Page ${match.page})` : "";
-              results.push(
-                `${i + 1}. [Score: ${(match.score * 100).toFixed(1)}%${pageInfo}] ${truncated}\n`,
-              );
-            });
-          } else {
-            results.push("No semantic matches found in this paper.\n");
-          }
-        }
-
-        return results.join("\n");
-      }
-    }
-
-    // 降级到关键词搜索
-    const queryLower = query.toLowerCase();
-
-    for (const [key, structure] of papersMap) {
-      const title = structure.metadata.title || key;
-      results.push(`\n--- Paper [${key}]: ${title} ---\n`);
-
-      // 搜索全文
-      const fullText = structure.fullText;
-      const paragraphs = fullText.split(/\n\s*\n/);
-      const matches: string[] = [];
-
-      for (const para of paragraphs) {
-        if (
-          para.toLowerCase().includes(queryLower) &&
-          para.trim().length > 20
-        ) {
-          // 高亮匹配
-          const highlighted = para.trim();
-          matches.push(highlighted);
-          if (matches.length >= maxResultsPerPaper) break;
-        }
-      }
-
-      if (matches.length > 0) {
-        results.push(`Found ${matches.length} match(es):\n`);
-        matches.forEach((match, i) => {
-          const truncated =
-            match.length > 500 ? match.substring(0, 500) + "..." : match;
-          results.push(`${i + 1}. ${truncated}\n`);
-        });
-      } else {
-        results.push("No matches found in this paper.\n");
-      }
-    }
-
-    return results.join("\n");
   }
 }

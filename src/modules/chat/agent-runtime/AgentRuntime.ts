@@ -96,7 +96,9 @@ interface ToolIterationParams {
   logPrefix: string;
 }
 
-const MAX_ITERATIONS = 10;
+// Hard stop for a single assistant turn. Keeps malformed tool loops bounded
+// while still allowing a few replan / retry pivots inside one response.
+const MAX_ITERATIONS = 15;
 const THINKING_SUFFIX = "\n\n···";
 const MAX_ITERATIONS_MESSAGE =
   "\n\nI apologize, but I was unable to complete the request within the allowed number of iterations.";

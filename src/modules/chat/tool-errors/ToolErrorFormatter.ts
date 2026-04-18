@@ -31,6 +31,11 @@ interface FormatToolErrorOptions {
   saferAlternative?: string;
 }
 
+const FIX_HINT_LABEL = "Fix hint: ";
+const LEGACY_FIX_HINT_LABEL = "Suggested fix: ";
+const ALTERNATIVE_LABEL = "Alternative: ";
+const LEGACY_ALTERNATIVE_LABEL = "Safer alternative: ";
+
 function stripErrorPrefix(message: string): string {
   return message.replace(/^Error:\s*/i, "").trim();
 }
@@ -201,10 +206,10 @@ export function formatToolError(options: FormatToolErrorOptions): string {
     lines.push(`Cause: ${options.cause}`);
   }
   if (options.suggestedFix) {
-    lines.push(`Suggested fix: ${options.suggestedFix}`);
+    lines.push(`${FIX_HINT_LABEL}${options.suggestedFix}`);
   }
   if (options.saferAlternative) {
-    lines.push(`Safer alternative: ${options.saferAlternative}`);
+    lines.push(`${ALTERNATIVE_LABEL}${options.saferAlternative}`);
   }
 
   return lines.join("\n");
@@ -243,13 +248,29 @@ export function parseToolError(content: string): ParsedToolError | null {
       result.cause = line.slice("Cause: ".length).trim();
       continue;
     }
-    if (line.startsWith("Suggested fix: ")) {
-      result.suggestedFix = line.slice("Suggested fix: ".length).trim();
+    if (
+      line.startsWith(FIX_HINT_LABEL) ||
+      line.startsWith(LEGACY_FIX_HINT_LABEL)
+    ) {
+      result.suggestedFix = line
+        .slice(
+          line.startsWith(FIX_HINT_LABEL)
+            ? FIX_HINT_LABEL.length
+            : LEGACY_FIX_HINT_LABEL.length,
+        )
+        .trim();
       continue;
     }
-    if (line.startsWith("Safer alternative: ")) {
+    if (
+      line.startsWith(ALTERNATIVE_LABEL) ||
+      line.startsWith(LEGACY_ALTERNATIVE_LABEL)
+    ) {
       result.saferAlternative = line
-        .slice("Safer alternative: ".length)
+        .slice(
+          line.startsWith(ALTERNATIVE_LABEL)
+            ? ALTERNATIVE_LABEL.length
+            : LEGACY_ALTERNATIVE_LABEL.length,
+        )
         .trim();
     }
   }
@@ -276,6 +297,19 @@ export function normalizeToolErrorContent(
     const parsed = parseToolError(rawContent) || {
       summary: stripErrorPrefix(rawContent),
     };
+    if (parsed.category && typeof parsed.retryable === "boolean") {
+      return {
+        content: formatToolError({
+          summary: parsed.summary,
+          category: parsed.category,
+          retryable: parsed.retryable,
+          cause: parsed.cause,
+          suggestedFix: parsed.suggestedFix,
+          saferAlternative: parsed.saferAlternative,
+        }),
+        parsed,
+      };
+    }
     return {
       content: rawContent,
       parsed,
