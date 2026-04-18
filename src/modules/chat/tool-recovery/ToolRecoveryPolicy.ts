@@ -1,0 +1,221 @@
+import type { ChatMessage } from "../../../types/chat";
+import type { ToolExecutionResult } from "../../../types/tool";
+import type { ToolErrorCategory, ParsedToolError } from "../tool-errors/ToolErrorFormatter";
+import { parseToolError } from "../tool-errors/ToolErrorFormatter";
+
+export interface ToolRecoveryDirective {
+  toolName: string;
+  status: ToolExecutionResult["status"];
+  category: ToolErrorCategory | "unspecified";
+  summary: string;
+  immediateAction: string;
+  planningInstruction: string;
+  alternative?: string;
+}
+
+export function getRecoveryDirective(
+  result: ToolExecutionResult,
+): ToolRecoveryDirective {
+  const parsed = parseToolError(result.content);
+  const category = deriveRecoveryCategory(result, parsed);
+  const toolName = result.toolCall.function.name;
+  const summary =
+    parsed?.summary ||
+    result.permissionDecision?.reason ||
+    result.error ||
+    "Tool call did not complete successfully.";
+
+  const fallbackAlternative =
+    parsed?.saferAlternative || getDefaultAlternative(category, toolName);
+
+  const base = getDirectiveTemplate(category, toolName, parsed);
+
+  return {
+    toolName,
+    status: result.status,
+    category,
+    summary,
+    immediateAction: base.immediateAction,
+    planningInstruction: base.planningInstruction,
+    alternative: fallbackAlternative,
+  };
+}
+
+export function summarizeRecoveryDirectives(
+  results: ToolExecutionResult[],
+  limit: number = 3,
+): string[] {
+  return results
+    .filter((result) => result.status === "failed" || result.status === "denied")
+    .slice(-limit)
+    .map((result) => {
+      const directive = getRecoveryDirective(result);
+      return `- [${directive.status}] ${directive.toolName} | category=${directive.category} | next=${directive.immediateAction}`;
+    });
+}
+
+export function formatRecoveryNotice(results: ToolExecutionResult[]): string | null {
+  const affectedResults = results.filter(
+    (result) => result.status === "failed" || result.status === "denied",
+  );
+  if (affectedResults.length === 0) {
+    return null;
+  }
+
+  const directives = affectedResults.map((result) => getRecoveryDirective(result));
+  const groupedInstructions = dedupeStrings(
+    directives.map((directive) => directive.planningInstruction),
+  );
+
+  const lines = [
+    "Tool recovery notice:",
+    "The following tool calls did not complete successfully in this turn.",
+    ...directives.map((directive) => formatDirectiveLine(directive)),
+    "Replanning rules:",
+    ...groupedInstructions.map((instruction) => `- ${instruction}`),
+    "Use successful tool outputs from this turn as ground truth, and state any remaining evidence gaps explicitly.",
+  ];
+
+  return lines.join("\n");
+}
+
+export function createRecoveryGuidanceSystemMessage(
+  results: ToolExecutionResult[],
+  generateId: () => string,
+  timestamp: number = Date.now(),
+): ChatMessage | null {
+  const notice = formatRecoveryNotice(results);
+  if (!notice) {
+    return null;
+  }
+
+  return {
+    id: generateId(),
+    role: "system",
+    content: notice,
+    timestamp,
+  };
+}
+
+export function deriveRecoveryCategory(
+  result: ToolExecutionResult,
+  parsed?: ParsedToolError | null,
+): ToolErrorCategory | "unspecified" {
+  if (
+    result.status === "denied" ||
+    result.permissionDecision?.verdict === "deny"
+  ) {
+    return "permission_denied";
+  }
+
+  return parsed?.category || "unspecified";
+}
+
+function formatDirectiveLine(directive: ToolRecoveryDirective): string {
+  const parts = [
+    `- [${directive.status}] ${directive.toolName}`,
+    `(category: ${directive.category})`,
+    directive.summary,
+    `Next: ${directive.immediateAction}`,
+  ];
+  if (directive.alternative) {
+    parts.push(`Alternative: ${directive.alternative}`);
+  }
+  return parts.join(" ");
+}
+
+function getDirectiveTemplate(
+  category: ToolErrorCategory | "unspecified",
+  toolName: string,
+  parsed?: ParsedToolError | null,
+): {
+  immediateAction: string;
+  planningInstruction: string;
+} {
+  switch (category) {
+    case "invalid_arguments":
+      return {
+        immediateAction:
+          parsed?.suggestedFix ||
+          `Retry ${toolName} with only the required fields and correct value types.`,
+        planningInstruction:
+          "For invalid arguments, inspect the tool schema, simplify the payload, and retry only with corrected arguments.",
+      };
+    case "permission_denied":
+      return {
+        immediateAction:
+          "Do not retry this tool in the current turn. Switch to lower-risk tools or explain the limitation.",
+        planningInstruction:
+          "For denied tools, do not repeat the call unless the user changes approval. Replan around read-only or already-allowed tools.",
+      };
+    case "missing_context":
+      return {
+        immediateAction:
+          parsed?.suggestedFix ||
+          "Acquire the required paper context first by supplying itemKey, opening the relevant PDF, or switching to reader-independent tools.",
+        planningInstruction:
+          "For missing context, first fetch or establish the missing target context before retrying. Prefer metadata, notes, or search tools if they can answer the request without full PDF access.",
+      };
+    case "not_found":
+      return {
+        immediateAction:
+          "Discover valid Zotero keys or identifiers first, then retry with the resolved target.",
+        planningInstruction:
+          "For not-found errors, use discovery tools such as list/search tools to resolve a valid target before retrying.",
+      };
+    case "unavailable":
+      return {
+        immediateAction:
+          "Treat this tool as unavailable for the current settings. Continue without it unless the user explicitly enables it.",
+        planningInstruction:
+          "For unavailable tools, stop retrying in this turn and pivot to tools that are currently enabled.",
+      };
+    case "unknown_tool":
+      return {
+        immediateAction:
+          "Choose a tool from the advertised tool list instead of retrying the unknown name.",
+        planningInstruction:
+          "For unknown tools, select one of the actually available tools and restate the plan using those capabilities.",
+      };
+    case "execution_failed":
+    case "unspecified":
+    default:
+      return {
+        immediateAction:
+          parsed?.suggestedFix ||
+          "If you retry, materially change the arguments or choose a narrower tool.",
+        planningInstruction:
+          "For generic execution failures, avoid repeating the same call unchanged. Retry only with a materially different request or continue with other evidence.",
+      };
+  }
+}
+
+function getDefaultAlternative(
+  category: ToolErrorCategory | "unspecified",
+  toolName: string,
+): string | undefined {
+  switch (category) {
+    case "permission_denied":
+      return "Continue with lower-risk read-only tools.";
+    case "missing_context":
+      return "Use metadata, notes, annotations, or library search first.";
+    case "not_found":
+      return "Resolve the target with list/search tools before acting on it.";
+    case "unavailable":
+      return toolName === "web_search"
+        ? "Use Zotero library tools instead of external web search."
+        : "Use another enabled read-only tool.";
+    case "invalid_arguments":
+      return "Start from a minimal valid payload.";
+    case "unknown_tool":
+      return "Use one of the tools listed in the current prompt.";
+    case "execution_failed":
+    case "unspecified":
+    default:
+      return "Continue with successful tool outputs if they already answer the question.";
+  }
+}
+
+function dedupeStrings(values: string[]): string[] {
+  return [...new Set(values)];
+}

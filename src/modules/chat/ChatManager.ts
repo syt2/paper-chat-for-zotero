@@ -247,7 +247,7 @@ export class ChatManager {
     } = params;
     const pdfToolManager = getPdfToolManager();
     const recentToolResults =
-      sendingSession.toolExecutionState?.results.slice(-3) || [];
+      sendingSession.toolExecutionState?.results.slice(-5) || [];
 
     return pdfToolManager.generatePaperContextPrompt(
       paperStructure || undefined,

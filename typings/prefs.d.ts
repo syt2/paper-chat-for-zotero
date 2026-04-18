@@ -29,8 +29,8 @@ declare namespace _ZoteroTypes {
       "contextSummaryThreshold": number;
       "enableAIWriteOperations": boolean;
       "enableWebSearch": boolean;
-      "webSearchProvider": string;
       "toolPermissionDefaultModes": string;
+      "webSearchProvider": string;
       "enableSemanticSearch": boolean;
     };
   }

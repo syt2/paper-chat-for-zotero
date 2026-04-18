@@ -19,13 +19,17 @@ import { getErrorMessage } from "../../../utils/common";
 import { getContextManager } from "../ContextManager";
 import { SessionRunInvalidatedError } from "../errors";
 import type { SessionStorageService } from "../SessionStorageService";
-import { parseToolError } from "../tool-errors/ToolErrorFormatter";
 import { getToolScheduler } from "../tool-scheduler";
 import { ExecutionPlanManager } from "./ExecutionPlanManager";
+import {
+  planToolExecutionEntries,
+  type ToolExecutionBatchEntry,
+} from "./ToolExecutionEntryPlanner";
 import {
   awaitWhileSessionTracked,
   ensureTrackedSession,
 } from "./sessionTracking";
+import { createRecoveryGuidanceSystemMessage } from "../tool-recovery/ToolRecoveryPolicy";
 
 interface AgentRuntimeCallbacks {
   isSessionActive: (session: ChatSession) => boolean;
@@ -445,57 +449,60 @@ export class AgentRuntime {
       accumulatedDisplay += roundContent;
     }
 
-    const executionBatches = this.toolScheduler.createExecutionBatches(
-      toolCalls.map((toolCall) => ({
-        toolCall,
-        sessionId: sendingSession.id,
-        assistantMessageId: assistantMessage.id,
-        fallbackStructure: paperStructure || undefined,
-      })),
+    const executionEntries = this.createToolExecutionEntries(
+      sendingSession,
+      assistantMessage,
+      toolCalls,
+      paperStructure,
     );
 
-    for (const batch of executionBatches) {
+    for (const entry of executionEntries) {
       let callingDisplay = accumulatedDisplay;
 
-      for (const request of batch) {
-        const toolCall = request.toolCall;
-        const toolName = toolCall.function.name;
-        const toolArgs = toolCall.function.arguments;
-        ztoolkit.log(`[${logPrefix}] Executing: ${toolName}`, toolArgs);
+      if (entry.kind === "execute") {
+        for (const request of entry.requests) {
+          const toolCall = request.toolCall;
+          const toolName = toolCall.function.name;
+          const toolArgs = toolCall.function.arguments;
+          ztoolkit.log(`[${logPrefix}] Executing: ${toolName}`, toolArgs);
 
-        callingDisplay += this.callbacks.formatToolCallCard(
-          toolName,
-          toolArgs,
-          "calling",
-        );
-        this.executionPlanManager.addOrUpdateToolStep(
+          callingDisplay += this.callbacks.formatToolCallCard(
+            toolName,
+            toolArgs,
+            "calling",
+          );
+          this.executionPlanManager.addOrUpdateToolStep(
+            sendingSession,
+            currentMessages,
+            toolCall.id,
+            toolName,
+            "in_progress",
+            truncateToolDetail(toolArgs),
+          );
+        }
+
+        assistantMessage.content = callingDisplay;
+        assistantMessage.streamingState = "in_progress";
+        await this.flushAssistantMessageCheckpoint(
           sendingSession,
-          currentMessages,
-          toolCall.id,
-          toolName,
+          assistantMessage,
           "in_progress",
-          truncateToolDetail(toolArgs),
         );
+        await this.sessionStorage.updateSessionMeta(sendingSession);
+        this.emitPlanUpdate(sendingSession);
+        if (this.callbacks.isSessionActive(sendingSession)) {
+          this.callbacks.onStreamingUpdate?.(callingDisplay);
+        }
       }
 
-      assistantMessage.content = callingDisplay;
-      assistantMessage.streamingState = "in_progress";
-      await this.flushAssistantMessageCheckpoint(
-        sendingSession,
-        assistantMessage,
-        "in_progress",
-      );
-      await this.sessionStorage.updateSessionMeta(sendingSession);
-      this.emitPlanUpdate(sendingSession);
-      if (this.callbacks.isSessionActive(sendingSession)) {
-        this.callbacks.onStreamingUpdate?.(callingDisplay);
-      }
-
-      const batchResults = await awaitWhileSessionTracked(
-        sendingSession,
-        this.callbacks.isSessionTracked,
-        () => this.toolScheduler.executeBatch(batch),
-      );
+      const batchResults =
+        entry.kind === "execute"
+          ? await awaitWhileSessionTracked(
+              sendingSession,
+              this.callbacks.isSessionTracked,
+              () => this.toolScheduler.executeBatch(entry.requests),
+            )
+          : entry.results;
       this.appendToolExecutionResults(sendingSession, batchResults);
       await this.sessionStorage.updateSessionMeta(sendingSession);
       this.emitPlanUpdate(sendingSession);
@@ -552,7 +559,7 @@ export class AgentRuntime {
         // tool_started only fires for calls that were actually allowed to
         // execute. Denied calls go straight to tool_completed with
         // status="denied" so observers never see a started-but-denied pair.
-        if (executionResult.status !== "denied") {
+        if (entry.kind === "execute" && executionResult.status !== "denied") {
           this.emitRuntimeEvent<"tool_started">(sendingSession, assistantMessage, {
             type: "tool_started",
             toolCallId: toolCall.id,
@@ -606,6 +613,23 @@ export class AgentRuntime {
     }
 
     return accumulatedDisplay;
+  }
+
+  private createToolExecutionEntries(
+    session: ChatSession,
+    assistantMessage: ChatMessage,
+    toolCalls: ToolCall[],
+    paperStructure?: PaperStructure | PaperStructureExtended | null,
+  ): ToolExecutionBatchEntry[] {
+    return planToolExecutionEntries({
+      sessionId: session.id,
+      assistantMessage,
+      toolCalls,
+      previousResults: session.toolExecutionState?.results || [],
+      paperStructure,
+      createExecutionBatches: (requests) =>
+        this.toolScheduler.createExecutionBatches(requests),
+    });
   }
 
   private async finalizeCompletedTurn(params: {
@@ -868,47 +892,14 @@ export class AgentRuntime {
     currentMessages: ChatMessage[],
     results: ToolExecutionResult[],
   ): void {
-    const affectedResults = results.filter(
-      (result) => result.status === "denied" || result.status === "failed",
+    const systemMessage = createRecoveryGuidanceSystemMessage(
+      results,
+      this.callbacks.generateId,
     );
-    if (affectedResults.length === 0) {
+    if (!systemMessage) {
       return;
     }
-
-    const lines = affectedResults.map((result) => {
-      const descriptor = result.permissionDecision?.descriptor;
-      const toolName = result.toolCall.function.name;
-      const riskLevel = descriptor?.riskLevel || "unknown";
-      const parsedError = parseToolError(result.content);
-      const reason =
-        parsedError?.summary ||
-        result.permissionDecision?.reason ||
-        result.error ||
-        "No explicit denial reason was returned.";
-      const guidance = [
-        parsedError?.suggestedFix ? `Fix: ${parsedError.suggestedFix}` : "",
-        parsedError?.saferAlternative
-          ? `Alternative: ${parsedError.saferAlternative}`
-          : "",
-      ]
-        .filter(Boolean)
-        .join(" ");
-      return `- [${result.status}] ${toolName} (risk: ${riskLevel}): ${reason}${guidance ? ` ${guidance}` : ""}`;
-    });
-
-    currentMessages.push({
-      id: this.callbacks.generateId(),
-      role: "system",
-      content: [
-        "Tool recovery notice:",
-        "The following tool calls did not complete successfully in this turn.",
-        ...lines,
-        "Do not repeat denied tool calls in this turn unless the user changes approval.",
-        "For failed tool calls, only retry after changing the arguments or following the suggested fix.",
-        "Revise the plan, use the successful tool results as ground truth, and explain any remaining evidence gaps explicitly.",
-      ].join("\n"),
-      timestamp: Date.now(),
-    });
+    currentMessages.push(systemMessage);
   }
 
   private refreshSystemPrompt(

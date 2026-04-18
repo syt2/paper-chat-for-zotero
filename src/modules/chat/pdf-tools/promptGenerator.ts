@@ -8,6 +8,8 @@ import type {
   ToolExecutionResult,
 } from "../../../types/tool";
 import { getPref } from "../../../utils/prefs";
+import { summarizeRecoveryDirectives } from "../tool-recovery/ToolRecoveryPolicy";
+import { summarizeRetryBlockedCalls } from "../tool-retry/ToolRetryPolicy";
 
 export interface AgentPromptContext {
   executionPlan?: ExecutionPlan;
@@ -194,13 +196,33 @@ function formatAgentPromptContext(agentContext?: AgentPromptContext): string {
     section += `Use the current plan state to decide the next tool call. If a step failed or was denied, revise the approach instead of repeating the exact same call.\n`;
   }
 
-  const toolResults = agentContext.recentToolResults?.slice(-3) || [];
+  const toolResults = agentContext.recentToolResults?.slice(-5) || [];
   if (toolResults.length > 0) {
     section += `\n=== RECENT TOOL RESULTS ===\n`;
     for (const result of toolResults) {
       section += `${formatToolResultLine(result)}\n`;
     }
     section += `Treat these tool results as the latest ground truth for the current turn.\n`;
+  }
+
+  const retryBlockedCalls = summarizeRetryBlockedCalls(toolResults);
+  if (retryBlockedCalls.length > 0) {
+    section += `\n=== RETRY POLICY ===\n`;
+    section += `If a tool call failed or was denied, do not repeat the unchanged call in this turn.\n`;
+    section += `Recent blocked calls:\n`;
+    for (const line of retryBlockedCalls) {
+      section += `${line}\n`;
+    }
+    section += `Change the arguments, choose a different tool, or explain the limitation explicitly.\n`;
+  }
+
+  const recoveryDirectives = summarizeRecoveryDirectives(toolResults);
+  if (recoveryDirectives.length > 0) {
+    section += `\n=== FAILURE RECOVERY STRATEGY ===\n`;
+    section += `When replanning after a blocked or failed tool call, follow the category-specific next move instead of retrying blindly.\n`;
+    for (const line of recoveryDirectives) {
+      section += `${line}\n`;
+    }
   }
 
   section += `\n=== FINAL ANSWER REQUIREMENTS ===\n`;

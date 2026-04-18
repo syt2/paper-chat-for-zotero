@@ -142,6 +142,25 @@ describe("agent runtime plan semantics", function () {
             status: "completed",
             content: "Paper A notes mention a stronger ablation study.",
           } satisfies ToolExecutionResult,
+          {
+            toolCall: {
+              id: "tool-2",
+              type: "function",
+              function: {
+                name: "get_full_text",
+                arguments: JSON.stringify({
+                  itemKey: "ITEM-1",
+                }),
+              },
+            },
+            args: { itemKey: "ITEM-1" },
+            status: "failed",
+            content: [
+              "Error: Required paper context is unavailable for get_full_text.",
+              "Category: missing_context",
+              "Retryable: yes",
+            ].join("\n"),
+          } satisfies ToolExecutionResult,
         ],
       },
     );
@@ -154,5 +173,9 @@ describe("agent runtime plan semantics", function () {
     );
     assert.include(prompt, '<source-group label="Paper title or source name"');
     assert.include(prompt, 'type="paper|note|annotation|web|library|memory"');
+    assert.include(prompt, "=== RETRY POLICY ===");
+    assert.include(prompt, "do not repeat the unchanged call");
+    assert.include(prompt, "=== FAILURE RECOVERY STRATEGY ===");
+    assert.include(prompt, "category=missing_context");
   });
 });
