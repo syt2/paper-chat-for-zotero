@@ -1202,6 +1202,7 @@ export class PdfToolManager {
         return `Error: Invalid arguments JSON: ${argsString}`;
       }
     }
+    args = this.normalizeToolArgs(name, args);
 
     // === Zotero Library 工具（不需要 PDF）===
     switch (name) {
@@ -1397,6 +1398,50 @@ export class PdfToolManager {
         return executeGetFullText(args, paperStructure);
       default:
         return `Error: Unknown tool: ${name}`;
+    }
+  }
+
+  private normalizeToolArgs(
+    toolName: string,
+    args: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const normalized = { ...args };
+
+    switch (toolName) {
+      case "get_full_text":
+        this.coerceBooleanArg(normalized, "confirm");
+        break;
+      case "list_all_items":
+        this.coerceBooleanArg(normalized, "hasPdf");
+        break;
+      case "get_annotations":
+        this.coerceBooleanArg(normalized, "selectedOnly");
+        this.coerceBooleanArg(normalized, "includePosition");
+        break;
+      case "web_search":
+        this.coerceBooleanArg(normalized, "include_content");
+        break;
+    }
+
+    return normalized;
+  }
+
+  private coerceBooleanArg(
+    args: Record<string, unknown>,
+    key: string,
+  ): void {
+    const value = args[key];
+    if (typeof value !== "string") {
+      return;
+    }
+
+    const normalizedValue = value.trim().toLowerCase();
+    if (normalizedValue === "true") {
+      args[key] = true;
+      return;
+    }
+    if (normalizedValue === "false") {
+      args[key] = false;
     }
   }
 

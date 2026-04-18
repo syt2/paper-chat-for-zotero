@@ -141,6 +141,130 @@ describe("chat agent safeguards", function () {
     assert.deepEqual(manager.listPendingApprovals(), []);
   });
 
+  it("uses ask-by-default policy for network, write, memory, and high-cost tools", async function () {
+    const { ToolPermissionManager } = await import(
+      "../src/modules/chat/tool-permissions/ToolPermissionManager"
+    );
+    const manager = new ToolPermissionManager();
+
+    assert.equal(manager.getDescriptor("list_all_items")?.mode, "auto_allow");
+    assert.equal(manager.getDescriptor("web_search")?.mode, "ask");
+    assert.equal(manager.getDescriptor("create_note")?.mode, "ask");
+    assert.equal(manager.getDescriptor("save_memory")?.mode, "ask");
+    assert.equal(manager.getDescriptor("get_full_text")?.mode, "ask");
+  });
+
+  it("denies ask-mode write tools when no approval channel is available", async function () {
+    const { ToolPermissionManager } = await import(
+      "../src/modules/chat/tool-permissions/ToolPermissionManager"
+    );
+    const manager = new ToolPermissionManager();
+    const decision = await manager.decide({
+      toolCall: {
+        id: "call-note",
+        type: "function",
+        function: {
+          name: "create_note",
+          arguments: JSON.stringify({ itemKey: "ITEM-1", content: "summary" }),
+        },
+      },
+      args: { itemKey: "ITEM-1", content: "summary" },
+      sessionId: "session-1",
+      assistantMessageId: "assistant-1",
+    });
+
+    assert.equal(decision.verdict, "deny");
+    assert.equal(decision.mode, "ask");
+    assert.equal(decision.scope, "once");
+    assert.equal(decision.descriptor.riskLevel, "write");
+    assert.include(decision.reason || "", "requires approval");
+    assert.deepEqual(manager.listPendingApprovals(), []);
+  });
+
+  it("does not let a deny-once decision poison the next approval", async function () {
+    const { ToolPermissionManager } = await import(
+      "../src/modules/chat/tool-permissions/ToolPermissionManager"
+    );
+    const manager = new ToolPermissionManager();
+    manager.setApprovalHandler(async () => undefined);
+
+    const firstDecisionPromise = manager.decide({
+      toolCall: {
+        id: "call-note-1",
+        type: "function",
+        function: {
+          name: "create_note",
+          arguments: JSON.stringify({ itemKey: "ITEM-1", content: "first" }),
+        },
+      },
+      args: { itemKey: "ITEM-1", content: "first" },
+      sessionId: "session-1",
+      assistantMessageId: "assistant-1",
+    });
+    const firstPending = manager.listPendingApprovals()[0];
+    assert.isDefined(firstPending);
+    manager.resolveApprovalRequest(firstPending.id, {
+      verdict: "deny",
+      scope: "once",
+    });
+    const firstDecision = await firstDecisionPromise;
+    assert.equal(firstDecision.verdict, "deny");
+
+    const secondDecisionPromise = manager.decide({
+      toolCall: {
+        id: "call-note-2",
+        type: "function",
+        function: {
+          name: "create_note",
+          arguments: JSON.stringify({ itemKey: "ITEM-1", content: "second" }),
+        },
+      },
+      args: { itemKey: "ITEM-1", content: "second" },
+      sessionId: "session-1",
+      assistantMessageId: "assistant-1",
+    });
+    const secondPending = manager.listPendingApprovals()[0];
+    assert.isDefined(secondPending);
+    manager.resolveApprovalRequest(secondPending.id, {
+      verdict: "allow",
+      scope: "once",
+    });
+    const secondDecision = await secondDecisionPromise;
+    assert.equal(secondDecision.verdict, "allow");
+    assert.equal(secondDecision.scope, "once");
+  });
+
+  it("coerces string boolean tool args for get_full_text", async function () {
+    const { PdfToolManager } = await import(
+      "../src/modules/chat/pdf-tools/PdfToolManager"
+    );
+    const manager = new PdfToolManager();
+
+    const result = await manager.executeToolCall(
+      {
+        id: "tool-fulltext",
+        type: "function",
+        function: {
+          name: "get_full_text",
+          arguments: JSON.stringify({
+            itemKey: "ITEM-1",
+            confirm: "true",
+          }),
+        },
+      },
+      {
+        metadata: {},
+        sections: [],
+        fullText: "Hello full text",
+        pages: [],
+        pageCount: 1,
+      } as any,
+    );
+
+    assert.include(result, "Hello full text");
+    assert.notInclude(result, "Invalid arguments for get_full_text");
+  });
+
   it("clears persisted plan and tool state when recovering interrupted messages", async function () {
     const { SessionStorageService } = await import(
       "../src/modules/chat/SessionStorageService"

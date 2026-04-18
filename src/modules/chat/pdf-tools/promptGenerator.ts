@@ -38,7 +38,7 @@ export function generatePaperContextPrompt(
   // 如果没有当前 item，显示提示
   if (!hasCurrentItem) {
     prompt += `=== NO PAPER SELECTED ===
-Currently, no paper is selected in the reader. You can only access Zotero library tools:
+Currently, no paper is selected in the reader. You can always access Zotero library tools, and you can also use PDF content tools when you provide an explicit itemKey for an item that has a PDF attachment:
 ${webSearchLine}
 - list_all_items: List all items in the Zotero library (with pagination)
 - get_item_metadata: Get bibliographic metadata of any Zotero item (no PDF needed)
@@ -57,8 +57,9 @@ ${webSearchLine}
 - add_item: Add a new Zotero item when write operations are allowed
 - search_across_papers: Search across multiple papers when you have explicit itemKeys
 
-To access PDF content tools, the user needs to open a paper in the PDF reader.
-You can help the user by listing available papers with list_all_items or answering questions about their Zotero library.
+PDF content tools such as get_paper_section, search_paper_content, get_pages, get_paper_metadata, and get_full_text can still work without an open reader tab if you pass itemKey explicitly.
+Only reader-dependent actions such as using the CURRENT paper implicitly or reading the live PDF selection require the paper to be open in the Zotero PDF reader.
+You can help the user by listing available papers with list_all_items, then using itemKey to inspect the right paper.
 
 === MENTION FORMAT ===
 Users may reference Zotero items using @[title](key:XXX) format in their messages.
@@ -144,8 +145,9 @@ The "key" is the Zotero item key - use it directly with tools (e.g., itemKey, no
 2. If itemKey is not specified, PDF tools operate on the CURRENT paper.
 3. Use list_all_items to discover available papers and their itemKeys.
 4. search_across_papers requires explicit itemKeys; never assume an implicit selected-paper set.
-5. Use get_item_metadata to get bibliographic info even without a PDF.
-6. Always prefer targeted tools over get_full_text to minimize token usage.
+5. Even without a paper open in the reader, PDF content tools can still work when you provide itemKey for an item with a PDF attachment.
+6. Use get_item_metadata to get bibliographic info even without a PDF.
+7. Always prefer targeted tools over get_full_text to minimize token usage.
 ${importantNotesTail}`;
 
   return prompt;

@@ -739,20 +739,22 @@ export async function executeCreateNote(
     }
   }
 
-  // 保存笔记
-  await note.saveTx();
+  // Reuse Zotero's transaction helper so create_note does not collide with
+  // other addon writes that may already hold a DB transaction.
+  await Zotero.DB.executeTransaction(async () => {
+    await note.save();
 
-  // 添加标签（如果指定）
-  if (tags) {
-    const tagList = tags
-      .split(",")
-      .map((t) => t.trim())
-      .filter((t) => t);
-    for (const tag of tagList) {
-      note.addTag(tag);
+    if (tags) {
+      const tagList = tags
+        .split(",")
+        .map((t) => t.trim())
+        .filter((t) => t);
+      for (const tag of tagList) {
+        note.addTag(tag);
+      }
+      await note.save();
     }
-    await note.saveTx();
-  }
+  });
 
   const parentInfo = targetItemKey ? ` under item "${targetItemKey}"` : "";
   return `Note created successfully!\nNote key: ${note.key}${parentInfo}${tags ? `\nTags: ${tags}` : ""}`;

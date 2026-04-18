@@ -5,6 +5,7 @@ import type {
   ToolPermissionDecision,
   ToolPermissionDescriptor,
   ToolPermissionMode,
+  ToolPermissionRiskLevel,
   ToolPermissionPolicyEntry,
   ToolPermissionRequest,
 } from "../../../types/tool";
@@ -33,178 +34,65 @@ export interface ToolApprovalObserver {
   ) => void;
 }
 
+const DEFAULT_MODE_BY_RISK_LEVEL: Record<
+  ToolPermissionRiskLevel,
+  ToolPermissionMode
+> = {
+  read: "auto_allow",
+  network: "ask",
+  write: "ask",
+  memory: "ask",
+  high_cost: "ask",
+};
+
+function createDescriptor(
+  name: PaperToolName,
+  riskLevel: ToolPermissionRiskLevel,
+  description: string,
+  mode?: ToolPermissionMode,
+): ToolPermissionDescriptor {
+  return {
+    name,
+    riskLevel,
+    mode: mode || DEFAULT_MODE_BY_RISK_LEVEL[riskLevel],
+    description,
+  };
+}
+
 const TOOL_PERMISSION_DESCRIPTORS: Record<
   PaperToolName,
   ToolPermissionDescriptor
 > = {
   web_search: {
-    name: "web_search",
-    riskLevel: "network",
-    mode: "ask",
-    description: "Search external web content.",
+    ...createDescriptor("web_search", "network", "Search external web content."),
   },
-  get_paper_section: {
-    name: "get_paper_section",
-    riskLevel: "read",
-    mode: "auto_allow",
-    description: "Read a specific section from a paper.",
-  },
-  search_paper_content: {
-    name: "search_paper_content",
-    riskLevel: "read",
-    mode: "auto_allow",
-    description: "Search within paper content.",
-  },
-  get_paper_metadata: {
-    name: "get_paper_metadata",
-    riskLevel: "read",
-    mode: "auto_allow",
-    description: "Read metadata extracted from a paper.",
-  },
-  get_pages: {
-    name: "get_pages",
-    riskLevel: "read",
-    mode: "auto_allow",
-    description: "Read selected page ranges from a paper.",
-  },
-  get_page_count: {
-    name: "get_page_count",
-    riskLevel: "read",
-    mode: "auto_allow",
-    description: "Read page count and paper statistics.",
-  },
-  search_with_regex: {
-    name: "search_with_regex",
-    riskLevel: "read",
-    mode: "auto_allow",
-    description: "Run a regex search over paper content.",
-  },
-  get_outline: {
-    name: "get_outline",
-    riskLevel: "read",
-    mode: "auto_allow",
-    description: "Read the paper outline.",
-  },
-  list_sections: {
-    name: "list_sections",
-    riskLevel: "read",
-    mode: "auto_allow",
-    description: "List available sections in a paper.",
-  },
-  get_full_text: {
-    name: "get_full_text",
-    riskLevel: "high_cost",
-    mode: "auto_allow",
-    description: "Read the full paper text with higher token cost.",
-  },
-  list_all_items: {
-    name: "list_all_items",
-    riskLevel: "read",
-    mode: "auto_allow",
-    description: "List Zotero library items.",
-  },
-  get_item_notes: {
-    name: "get_item_notes",
-    riskLevel: "read",
-    mode: "auto_allow",
-    description: "Read notes attached to a Zotero item.",
-  },
-  get_note_content: {
-    name: "get_note_content",
-    riskLevel: "read",
-    mode: "auto_allow",
-    description: "Read the full content of a Zotero note.",
-  },
-  get_item_metadata: {
-    name: "get_item_metadata",
-    riskLevel: "read",
-    mode: "auto_allow",
-    description: "Read metadata of a Zotero item.",
-  },
-  get_annotations: {
-    name: "get_annotations",
-    riskLevel: "read",
-    mode: "auto_allow",
-    description: "Read PDF annotations from Zotero.",
-  },
-  get_pdf_selection: {
-    name: "get_pdf_selection",
-    riskLevel: "read",
-    mode: "auto_allow",
-    description: "Read the user's current PDF selection.",
-  },
-  search_items: {
-    name: "search_items",
-    riskLevel: "read",
-    mode: "auto_allow",
-    description: "Search the Zotero library.",
-  },
-  get_collections: {
-    name: "get_collections",
-    riskLevel: "read",
-    mode: "auto_allow",
-    description: "Read Zotero collections.",
-  },
-  get_collection_items: {
-    name: "get_collection_items",
-    riskLevel: "read",
-    mode: "auto_allow",
-    description: "Read items from a Zotero collection.",
-  },
-  get_tags: {
-    name: "get_tags",
-    riskLevel: "read",
-    mode: "auto_allow",
-    description: "Read Zotero tags.",
-  },
-  search_by_tag: {
-    name: "search_by_tag",
-    riskLevel: "read",
-    mode: "auto_allow",
-    description: "Search Zotero items by tag.",
-  },
-  get_recent: {
-    name: "get_recent",
-    riskLevel: "read",
-    mode: "auto_allow",
-    description: "Read recently added Zotero items.",
-  },
-  search_notes: {
-    name: "search_notes",
-    riskLevel: "read",
-    mode: "auto_allow",
-    description: "Search note content in Zotero.",
-  },
-  create_note: {
-    name: "create_note",
-    riskLevel: "write",
-    mode: "auto_allow",
-    description: "Create a new Zotero note.",
-  },
-  batch_update_tags: {
-    name: "batch_update_tags",
-    riskLevel: "write",
-    mode: "auto_allow",
-    description: "Modify tags on multiple Zotero items.",
-  },
-  add_item: {
-    name: "add_item",
-    riskLevel: "write",
-    mode: "auto_allow",
-    description: "Add a new Zotero item.",
-  },
-  search_across_papers: {
-    name: "search_across_papers",
-    riskLevel: "read",
-    mode: "auto_allow",
-    description: "Search across multiple selected papers.",
-  },
-  save_memory: {
-    name: "save_memory",
-    riskLevel: "memory",
-    mode: "auto_allow",
-    description: "Write a long-term memory entry.",
-  },
+  get_paper_section: createDescriptor("get_paper_section", "read", "Read a specific section from a paper."),
+  search_paper_content: createDescriptor("search_paper_content", "read", "Search within paper content."),
+  get_paper_metadata: createDescriptor("get_paper_metadata", "read", "Read metadata extracted from a paper."),
+  get_pages: createDescriptor("get_pages", "read", "Read selected page ranges from a paper."),
+  get_page_count: createDescriptor("get_page_count", "read", "Read page count and paper statistics."),
+  search_with_regex: createDescriptor("search_with_regex", "read", "Run a regex search over paper content."),
+  get_outline: createDescriptor("get_outline", "read", "Read the paper outline."),
+  list_sections: createDescriptor("list_sections", "read", "List available sections in a paper."),
+  get_full_text: createDescriptor("get_full_text", "high_cost", "Read the full paper text with higher token cost."),
+  list_all_items: createDescriptor("list_all_items", "read", "List Zotero library items."),
+  get_item_notes: createDescriptor("get_item_notes", "read", "Read notes attached to a Zotero item."),
+  get_note_content: createDescriptor("get_note_content", "read", "Read the full content of a Zotero note."),
+  get_item_metadata: createDescriptor("get_item_metadata", "read", "Read metadata of a Zotero item."),
+  get_annotations: createDescriptor("get_annotations", "read", "Read PDF annotations from Zotero."),
+  get_pdf_selection: createDescriptor("get_pdf_selection", "read", "Read the user's current PDF selection."),
+  search_items: createDescriptor("search_items", "read", "Search the Zotero library."),
+  get_collections: createDescriptor("get_collections", "read", "Read Zotero collections."),
+  get_collection_items: createDescriptor("get_collection_items", "read", "Read items from a Zotero collection."),
+  get_tags: createDescriptor("get_tags", "read", "Read Zotero tags."),
+  search_by_tag: createDescriptor("search_by_tag", "read", "Search Zotero items by tag."),
+  get_recent: createDescriptor("get_recent", "read", "Read recently added Zotero items."),
+  search_notes: createDescriptor("search_notes", "read", "Search note content in Zotero."),
+  create_note: createDescriptor("create_note", "write", "Create a new Zotero note."),
+  batch_update_tags: createDescriptor("batch_update_tags", "write", "Modify tags on multiple Zotero items."),
+  add_item: createDescriptor("add_item", "write", "Add a new Zotero item."),
+  search_across_papers: createDescriptor("search_across_papers", "read", "Search across multiple selected papers."),
+  save_memory: createDescriptor("save_memory", "memory", "Write a long-term memory entry."),
 };
 
 class AutoAllowToolPermissionDecider implements ToolPermissionDecider {

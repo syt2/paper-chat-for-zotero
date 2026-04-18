@@ -464,6 +464,45 @@ export class SessionStorageService {
   }
 
   /**
+   * Persist approval state without opening an explicit transaction. Approval
+   * resolution can immediately resume a tool call, and some tools perform
+   * their own Zotero DB writes. Using a lightweight update here avoids
+   * colliding with those writes while still keeping approval UI state durable.
+   */
+  async updateSessionApprovalState(session: ChatSession): Promise<void> {
+    await this.init();
+
+    try {
+      const db = await getStorageDatabase().ensureInit();
+      const nextUpdatedAt = Date.now();
+      await db.queryAsync(
+        `UPDATE sessions SET
+          updated_at = ?,
+          tool_approval_state = ?
+        WHERE id = ?`,
+        [
+          nextUpdatedAt,
+          session.toolApprovalState
+            ? JSON.stringify(session.toolApprovalState)
+            : null,
+          session.id,
+        ],
+      );
+      await db.queryAsync("UPDATE session_meta SET updated_at = ? WHERE id = ?", [
+        nextUpdatedAt,
+        session.id,
+      ]);
+      session.updatedAt = nextUpdatedAt;
+    } catch (error) {
+      ztoolkit.log(
+        "[SessionStorageService] Update session approval state error:",
+        error,
+      );
+      throw error;
+    }
+  }
+
+  /**
    * Persist memory extraction state for a session (called after successful extraction).
    */
   async updateMemoryExtractionState(

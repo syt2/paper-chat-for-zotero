@@ -2070,7 +2070,7 @@ export class ChatManager {
   }
 
   private persistApprovalState(session: ChatSession): void {
-    this.sessionStorage.updateSessionMeta(session).catch((error) => {
+    this.sessionStorage.updateSessionApprovalState(session).catch((error) => {
       ztoolkit.log(
         "[ChatManager] Failed to persist tool approval state:",
         error,
