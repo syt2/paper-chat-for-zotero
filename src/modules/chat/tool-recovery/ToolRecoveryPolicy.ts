@@ -11,6 +11,7 @@ export interface ToolRecoveryDirective {
   immediateAction: string;
   planningInstruction: string;
   alternative?: string;
+  recommendedTools: string[];
 }
 
 export function getRecoveryDirective(
@@ -38,6 +39,7 @@ export function getRecoveryDirective(
     immediateAction: base.immediateAction,
     planningInstruction: base.planningInstruction,
     alternative: fallbackAlternative,
+    recommendedTools: getRecommendedTools(category, toolName),
   };
 }
 
@@ -50,7 +52,11 @@ export function summarizeRecoveryDirectives(
     .slice(-limit)
     .map((result) => {
       const directive = getRecoveryDirective(result);
-      return `- [${directive.status}] ${directive.toolName} | category=${directive.category} | next=${directive.immediateAction}`;
+      const suggestedTools =
+        directive.recommendedTools.length > 0
+          ? ` | tools=${directive.recommendedTools.join(", ")}`
+          : "";
+      return `- [${directive.status}] ${directive.toolName} | category=${directive.category} | next=${directive.immediateAction}${suggestedTools}`;
     });
 }
 
@@ -120,6 +126,9 @@ function formatDirectiveLine(directive: ToolRecoveryDirective): string {
   ];
   if (directive.alternative) {
     parts.push(`Alternative: ${directive.alternative}`);
+  }
+  if (directive.recommendedTools.length > 0) {
+    parts.push(`Suggested tools: ${directive.recommendedTools.join(", ")}`);
   }
   return parts.join(" ");
 }
@@ -213,6 +222,85 @@ function getDefaultAlternative(
     case "unspecified":
     default:
       return "Continue with successful tool outputs if they already answer the question.";
+  }
+}
+
+function getRecommendedTools(
+  category: ToolErrorCategory | "unspecified",
+  toolName: string,
+): string[] {
+  switch (category) {
+    case "missing_context":
+      return dedupeStrings([
+        ...getReaderIndependentFallbacks(toolName),
+        "get_item_metadata",
+        "get_item_notes",
+        "search_items",
+        "list_all_items",
+      ]);
+    case "not_found":
+      return dedupeStrings([
+        "search_items",
+        "list_all_items",
+        "get_collections",
+        "get_collection_items",
+        "search_notes",
+      ]);
+    case "permission_denied":
+      return dedupeStrings([
+        ...getReadOnlyNeighborTools(toolName),
+        "get_item_metadata",
+        "get_item_notes",
+      ]);
+    case "unavailable":
+      return toolName === "web_search"
+        ? ["search_items", "search_notes", "list_all_items"]
+        : dedupeStrings([...getReadOnlyNeighborTools(toolName), "list_all_items"]);
+    case "unknown_tool":
+      return ["search_items", "get_item_metadata", "list_all_items"];
+    case "execution_failed":
+    case "unspecified":
+      return getReadOnlyNeighborTools(toolName);
+    case "invalid_arguments":
+    default:
+      return [];
+  }
+}
+
+function getReaderIndependentFallbacks(toolName: string): string[] {
+  switch (toolName) {
+    case "get_full_text":
+    case "get_paper_section":
+    case "search_paper_content":
+    case "get_pages":
+    case "get_outline":
+    case "list_sections":
+    case "search_with_regex":
+    case "get_page_count":
+      return ["get_item_metadata", "get_item_notes", "get_annotations"];
+    case "get_pdf_selection":
+      return ["get_item_metadata", "get_item_notes", "get_annotations"];
+    default:
+      return [];
+  }
+}
+
+function getReadOnlyNeighborTools(toolName: string): string[] {
+  switch (toolName) {
+    case "create_note":
+      return ["get_item_metadata", "get_item_notes", "get_note_content"];
+    case "batch_update_tags":
+      return ["get_tags", "search_by_tag", "search_items"];
+    case "add_item":
+      return ["search_items", "list_all_items", "get_collections"];
+    case "save_memory":
+      return ["get_item_metadata", "get_item_notes", "search_notes"];
+    case "web_search":
+      return ["search_items", "search_notes", "list_all_items"];
+    case "search_across_papers":
+      return ["search_items", "list_all_items", "get_item_metadata"];
+    default:
+      return [];
   }
 }
 

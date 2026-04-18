@@ -177,5 +177,6 @@ describe("agent runtime plan semantics", function () {
     assert.include(prompt, "do not repeat the unchanged call");
     assert.include(prompt, "=== FAILURE RECOVERY STRATEGY ===");
     assert.include(prompt, "category=missing_context");
+    assert.include(prompt, "tools=get_item_metadata, get_item_notes");
   });
 });

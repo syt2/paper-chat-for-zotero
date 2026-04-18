@@ -33,6 +33,11 @@ describe("tool recovery policy", function () {
     assert.include(directive.immediateAction, "itemKey");
     assert.include(directive.planningInstruction, "missing target context");
     assert.include(directive.alternative || "", "metadata");
+    assert.includeMembers(directive.recommendedTools, [
+      "get_item_metadata",
+      "get_item_notes",
+      "list_all_items",
+    ]);
   });
 
   it("maps denied calls to no-retry replanning guidance", async function () {
@@ -81,6 +86,7 @@ describe("tool recovery policy", function () {
     assert.include(notice || "", "Do not retry this tool in the current turn");
     assert.include(notice || "", "Replanning rules:");
     assert.include(notice || "", "do not repeat the call");
+    assert.include(notice || "", "Suggested tools: get_item_metadata, get_item_notes, get_note_content");
     assert.deepEqual(systemMessage, {
       id: "system-1",
       role: "system",
@@ -117,5 +123,6 @@ describe("tool recovery policy", function () {
 
     assert.include(lines[0] || "", "category=not_found");
     assert.include(lines[0] || "", "Discover valid Zotero keys");
+    assert.include(lines[0] || "", "tools=search_items, list_all_items");
   });
 });
