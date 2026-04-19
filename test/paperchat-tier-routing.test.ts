@@ -110,7 +110,7 @@ describe("paperchat tier routing", function () {
       m2: 0.4,
       m3: 0.6,
       m4: 0.8,
-      m5: 1.0,
+      m5: 1.01,
       m6: 1.2,
     };
 
@@ -121,12 +121,12 @@ describe("paperchat tier routing", function () {
     assert.deepEqual(pools["paperchat-pro"], ["m6"]);
   });
 
-  it("treats 0.5x and 1.0x as standard boundaries", function () {
+  it("treats 0.51x and 1.01x as standard boundaries", function () {
     const pools = deriveTierPools(["m4", "m1", "m3", "m2"], {
-      m1: 0.49,
-      m2: 0.5,
-      m3: 1.0,
-      m4: 1.01,
+      m1: 0.5,
+      m2: 0.51,
+      m3: 1.01,
+      m4: 1.02,
     });
 
     assert.deepEqual(pools, {
@@ -206,7 +206,7 @@ describe("paperchat tier routing", function () {
 
     assert.equal(resolved.state.tiers["paperchat-standard"].mode, "auto");
     assert.equal(resolved.state.tiers["paperchat-standard"].modelId, "m3");
-    assert.deepEqual(resolved.pools["paperchat-standard"], ["m6", "m3"]);
+    assert.deepEqual(resolved.pools["paperchat-standard"], ["m3"]);
   });
 
   it("uses a shared deterministic pool when ratio coverage is incomplete", function () {

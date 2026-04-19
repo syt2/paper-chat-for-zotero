@@ -22,8 +22,8 @@ export type PaperChatTierPools = Record<PaperChatTier, string[]>;
 export type PickRandom = (candidates: string[]) => string | null | undefined;
 
 const DEFAULT_SELECTED_TIER: PaperChatTier = "paperchat-standard";
-const STANDARD_MIN_RATIO = 0.5;
-const PRO_MIN_RATIO = 1.0;
+const STANDARD_MIN_RATIO = 0.51;
+const PRO_MIN_RATIO = 1.01;
 
 function isPaperChatTier(value: unknown): value is PaperChatTier {
   return (
