@@ -119,6 +119,14 @@ export function applyThemeToContainer(container: HTMLElement): void {
     executionPlanPanel.style.borderBottomColor = theme.borderColor;
   }
 
+  const executionApprovalPanel = container.querySelector(
+    "#chat-execution-approval-panel",
+  ) as HTMLElement;
+  if (executionApprovalPanel) {
+    executionApprovalPanel.style.background = theme.chatHistoryBg;
+    executionApprovalPanel.style.borderTopColor = theme.borderColor;
+  }
+
   // Empty state
   const emptyState = container.querySelector(
     "#chat-empty-state",
@@ -231,26 +239,34 @@ export function applyThemeToContainer(container: HTMLElement): void {
   const btnBg = isDark ? "rgba(255, 255, 255, 0.2)" : "rgba(0, 0, 0, 0.06)";
   const btnBorder = isDark ? "rgba(255, 255, 255, 0.3)" : "rgba(0, 0, 0, 0.1)";
 
-  const userActionBtn = container.querySelector("#chat-user-action-btn") as HTMLElement;
+  const userActionBtn = container.querySelector(
+    "#chat-user-action-btn",
+  ) as HTMLElement;
   if (userActionBtn) {
     userActionBtn.style.background = btnBg;
     userActionBtn.style.borderColor = btnBorder;
     userActionBtn.style.color = theme.userBubbleText;
   }
 
-  const userBarSettingsBtn = container.querySelector("#chat-user-bar-settings-btn") as HTMLElement;
+  const userBarSettingsBtn = container.querySelector(
+    "#chat-user-bar-settings-btn",
+  ) as HTMLElement;
   if (userBarSettingsBtn) {
     userBarSettingsBtn.style.background = btnBg;
     userBarSettingsBtn.style.borderColor = btnBorder;
     // Update icon filter
     const icon = userBarSettingsBtn.querySelector("img") as HTMLElement;
     if (icon) {
-      icon.style.filter = isDark ? "brightness(0) invert(1)" : "brightness(0) invert(0.3)";
+      icon.style.filter = isDark
+        ? "brightness(0) invert(1)"
+        : "brightness(0) invert(0.3)";
     }
   }
 
   // Send button
-  const sendButton = container.querySelector("#chat-send-button") as HTMLElement;
+  const sendButton = container.querySelector(
+    "#chat-send-button",
+  ) as HTMLElement;
   if (sendButton) {
     sendButton.style.background = theme.userBubbleBg;
     sendButton.style.color = theme.userBubbleText;
@@ -313,13 +329,17 @@ export function setupThemeListener(onThemeChange: () => void): () => void {
     const mediaQuery = win.matchMedia("(prefers-color-scheme: dark)");
     if (mediaQuery) {
       mediaQuery.addEventListener("change", handleThemeChange);
-      cleanups.push(() => mediaQuery.removeEventListener("change", handleThemeChange));
+      cleanups.push(() =>
+        mediaQuery.removeEventListener("change", handleThemeChange),
+      );
     }
   }
 
   // 2. 使用 MutationObserver 监听 documentElement 的类名/属性变化
   // Zotero/Firefox 可能通过修改 document 的 class 或 data 属性来切换主题
-  const MutationObserverClass = (win as unknown as { MutationObserver?: typeof MutationObserver }).MutationObserver;
+  const MutationObserverClass = (
+    win as unknown as { MutationObserver?: typeof MutationObserver }
+  ).MutationObserver;
   if (MutationObserverClass) {
     const observer = new MutationObserverClass(handleThemeChange);
 

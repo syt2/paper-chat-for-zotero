@@ -267,6 +267,28 @@ export function createChatContainer(
     { id: "chat-execution-plan-panel" },
   );
 
+  const executionApprovalPanel = createElement(
+    doc,
+    "div",
+    {
+      display: "block",
+      position: "absolute",
+      bottom: "0",
+      left: "0",
+      right: "0",
+      height: "0",
+      opacity: "0",
+      transform: "translateY(6px)",
+      overflow: "hidden",
+      padding: "0 14px",
+      background: theme.chatHistoryBg,
+      pointerEvents: "none",
+      zIndex: "2",
+      transition: "height 180ms ease, opacity 180ms ease, transform 180ms ease",
+    },
+    { id: "chat-execution-approval-panel" },
+  );
+
   // Chat History
   const chatHistory = createElement(
     doc,
@@ -711,6 +733,7 @@ export function createChatContainer(
   root.appendChild(userBar);
   chatViewport.appendChild(chatHistory);
   chatViewport.appendChild(executionPlanPanel);
+  chatViewport.appendChild(executionApprovalPanel);
   root.appendChild(chatViewport);
   root.appendChild(toolbar);
   root.appendChild(attachmentsPreview);

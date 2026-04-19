@@ -36,8 +36,8 @@ interface ExecutionBannerState {
   approvalRequest?: ToolApprovalState["pendingRequests"][number];
 }
 
-type ExecutionPlanPanelElement = HTMLElement & {
-  __executionPlanResizeObserver?: ResizeObserver;
+type ExecutionInsetPanelElement = HTMLElement & {
+  __executionInsetResizeObserver?: ResizeObserver;
 };
 
 /**
@@ -565,6 +565,19 @@ export function updateExecutionPlanView(
   panel: HTMLElement,
   theme: ThemeColors,
   executionPlan?: ExecutionPlan,
+  _toolApprovalState?: ToolApprovalState,
+): void {
+  const banner = deriveExecutionBannerState(executionPlan);
+  updateExecutionInsetPanel(panel, theme, banner, {
+    placement: "top",
+    showApprovalActions: false,
+  });
+}
+
+export function updateApprovalView(
+  panel: HTMLElement,
+  theme: ThemeColors,
+  executionPlan?: ExecutionPlan,
   toolApprovalState?: ToolApprovalState,
   approvalActions?: {
     onResolveApproval: (
@@ -573,39 +586,69 @@ export function updateExecutionPlanView(
     ) => void | Promise<void>;
   },
 ): void {
+  const banner = deriveApprovalBannerState(executionPlan, toolApprovalState);
+  updateExecutionInsetPanel(panel, theme, banner, {
+    placement: "bottom",
+    showApprovalActions: true,
+    approvalActions,
+  });
+}
+
+function updateExecutionInsetPanel(
+  panel: HTMLElement,
+  theme: ThemeColors,
+  banner: ExecutionBannerState,
+  options: {
+    placement: "top" | "bottom";
+    showApprovalActions: boolean;
+    approvalActions?: {
+      onResolveApproval: (
+        requestId: string,
+        resolution: ToolApprovalResolution,
+      ) => void | Promise<void>;
+    };
+  },
+): void {
   const doc = panel.ownerDocument;
   if (!doc) return;
-
-  const banner = deriveExecutionBannerState(executionPlan, toolApprovalState);
   const existing = panel.querySelector(
-    "#chat-execution-plan",
+    ".chat-execution-banner",
   ) as HTMLElement | null;
 
   if (banner.kind === "idle") {
     existing?.remove();
-    detachExecutionBannerResizeObserver(panel);
+    detachExecutionInsetResizeObserver(panel);
     panel.dataset.visibleHeight = "0";
     panel.style.height = "0px";
     panel.style.opacity = "0";
-    panel.style.transform = "translateY(-6px)";
-    syncExecutionPlanInset(panel);
+    panel.style.transform =
+      options.placement === "top" ? "translateY(-6px)" : "translateY(6px)";
+    syncExecutionInsets(panel);
     return;
   }
 
-  const wrapper = existing || createExecutionBannerElement(doc);
-  populateExecutionBannerElement(wrapper, doc, banner, theme, approvalActions);
+  const wrapper =
+    existing ||
+    createExecutionBannerElement(doc, {
+      className: "chat-execution-banner",
+      placement: options.placement,
+    });
+  populateExecutionBannerElement(wrapper, doc, banner, theme, {
+    showApprovalActions: options.showApprovalActions,
+    approvalActions: options.approvalActions,
+  });
   if (!existing) {
     panel.appendChild(wrapper);
   }
 
-  syncExecutionBannerHeight(panel, wrapper);
-  attachExecutionBannerResizeObserver(panel, wrapper);
+  syncExecutionInsetHeight(panel, wrapper);
+  attachExecutionInsetResizeObserver(panel, wrapper);
   panel.style.opacity = "1";
   panel.style.transform = "translateY(0)";
-  syncExecutionPlanInset(panel);
+  syncExecutionInsets(panel);
 }
 
-function syncExecutionBannerHeight(
+function syncExecutionInsetHeight(
   panel: HTMLElement,
   wrapper: HTMLElement,
 ): void {
@@ -614,13 +657,13 @@ function syncExecutionBannerHeight(
   panel.style.height = `${measuredHeight}px`;
 }
 
-function attachExecutionBannerResizeObserver(
+function attachExecutionInsetResizeObserver(
   panel: HTMLElement,
   wrapper: HTMLElement,
 ): void {
-  const panelWithObserver = panel as ExecutionPlanPanelElement;
-  if (panelWithObserver.__executionPlanResizeObserver) {
-    panelWithObserver.__executionPlanResizeObserver.disconnect();
+  const panelWithObserver = panel as ExecutionInsetPanelElement;
+  if (panelWithObserver.__executionInsetResizeObserver) {
+    panelWithObserver.__executionInsetResizeObserver.disconnect();
   }
 
   const ResizeObserverCtor = panel.ownerDocument?.defaultView?.ResizeObserver;
@@ -629,20 +672,20 @@ function attachExecutionBannerResizeObserver(
   }
 
   const observer = new ResizeObserverCtor(() => {
-    syncExecutionBannerHeight(panel, wrapper);
-    syncExecutionPlanInset(panel);
+    syncExecutionInsetHeight(panel, wrapper);
+    syncExecutionInsets(panel);
   });
   observer.observe(wrapper);
-  panelWithObserver.__executionPlanResizeObserver = observer;
+  panelWithObserver.__executionInsetResizeObserver = observer;
 }
 
-function detachExecutionBannerResizeObserver(panel: HTMLElement): void {
-  const panelWithObserver = panel as ExecutionPlanPanelElement;
-  panelWithObserver.__executionPlanResizeObserver?.disconnect();
-  delete panelWithObserver.__executionPlanResizeObserver;
+function detachExecutionInsetResizeObserver(panel: HTMLElement): void {
+  const panelWithObserver = panel as ExecutionInsetPanelElement;
+  panelWithObserver.__executionInsetResizeObserver?.disconnect();
+  delete panelWithObserver.__executionInsetResizeObserver;
 }
 
-function syncExecutionPlanInset(panel: HTMLElement): void {
+function syncExecutionInsets(panel: HTMLElement): void {
   const viewport = panel.parentElement;
   if (!viewport) {
     return;
@@ -656,46 +699,89 @@ function syncExecutionPlanInset(panel: HTMLElement): void {
   }
 
   const inlinePaddingTop = parseFloat(chatHistory.style.paddingTop || "14");
+  const inlinePaddingBottom = parseFloat(
+    chatHistory.style.paddingBottom || "14",
+  );
   const computedPaddingTop = Number.isFinite(inlinePaddingTop)
     ? inlinePaddingTop
+    : 14;
+  const computedPaddingBottom = Number.isFinite(inlinePaddingBottom)
+    ? inlinePaddingBottom
     : 14;
   const basePaddingTop = Number(
     chatHistory.dataset.basePaddingTop || computedPaddingTop || 14,
   );
+  const basePaddingBottom = Number(
+    chatHistory.dataset.basePaddingBottom || computedPaddingBottom || 14,
+  );
   chatHistory.dataset.basePaddingTop = String(basePaddingTop);
+  chatHistory.dataset.basePaddingBottom = String(basePaddingBottom);
 
   const currentPaddingTop = Number.isFinite(inlinePaddingTop)
     ? inlinePaddingTop
     : basePaddingTop;
-  const bannerHeight = Number(
-    panel.dataset.visibleHeight || panel.offsetHeight || 0,
+  const currentPaddingBottom = Number.isFinite(inlinePaddingBottom)
+    ? inlinePaddingBottom
+    : basePaddingBottom;
+  const topPanel = viewport.querySelector(
+    "#chat-execution-plan-panel",
+  ) as HTMLElement | null;
+  const bottomPanel = viewport.querySelector(
+    "#chat-execution-approval-panel",
+  ) as HTMLElement | null;
+  const topPanelHeight = Number(
+    topPanel?.dataset.visibleHeight || topPanel?.offsetHeight || 0,
+  );
+  const bottomPanelHeight = Number(
+    bottomPanel?.dataset.visibleHeight || bottomPanel?.offsetHeight || 0,
   );
   const nextPaddingTop =
-    bannerHeight > 0 ? basePaddingTop + bannerHeight : basePaddingTop;
+    topPanelHeight > 0 ? basePaddingTop + topPanelHeight : basePaddingTop;
+  const nextPaddingBottom =
+    bottomPanelHeight > 0
+      ? basePaddingBottom + bottomPanelHeight
+      : basePaddingBottom;
 
-  if (Math.abs(nextPaddingTop - currentPaddingTop) < 1) {
+  if (
+    Math.abs(nextPaddingTop - currentPaddingTop) < 1 &&
+    Math.abs(nextPaddingBottom - currentPaddingBottom) < 1
+  ) {
     chatHistory.style.paddingTop = `${nextPaddingTop}px`;
+    chatHistory.style.paddingBottom = `${nextPaddingBottom}px`;
     chatHistory.style.scrollPaddingTop = `${nextPaddingTop}px`;
+    chatHistory.style.scrollPaddingBottom = `${nextPaddingBottom}px`;
     return;
   }
 
   const previousScrollTop = chatHistory.scrollTop;
+  const previousScrollHeight = chatHistory.scrollHeight;
+  const previousBottomOffset =
+    previousScrollHeight - chatHistory.clientHeight - previousScrollTop;
+  const wasNearBottom = previousBottomOffset <= 48;
   const shouldPreserveViewport = previousScrollTop > 0;
 
   chatHistory.style.paddingTop = `${nextPaddingTop}px`;
+  chatHistory.style.paddingBottom = `${nextPaddingBottom}px`;
   chatHistory.style.scrollPaddingTop = `${nextPaddingTop}px`;
+  chatHistory.style.scrollPaddingBottom = `${nextPaddingBottom}px`;
+
+  if (wasNearBottom) {
+    chatHistory.scrollTop = chatHistory.scrollHeight;
+    return;
+  }
 
   if (shouldPreserveViewport) {
     chatHistory.scrollTop = Math.max(
       0,
-      previousScrollTop + (nextPaddingTop - currentPaddingTop),
+      previousScrollTop +
+        (nextPaddingTop - currentPaddingTop) +
+        (nextPaddingBottom - currentPaddingBottom),
     );
   }
 }
 
 function deriveExecutionBannerState(
   executionPlan?: ExecutionPlan,
-  toolApprovalState?: ToolApprovalState,
 ): ExecutionBannerState {
   const activeStep = executionPlan
     ? getActiveExecutionStep(executionPlan)
@@ -703,38 +789,6 @@ function deriveExecutionBannerState(
   const progressLabel = executionPlan
     ? formatExecutionPlanProgress(executionPlan)
     : undefined;
-
-  if (toolApprovalState?.pendingRequests.length) {
-    const activeRequest = toolApprovalState.pendingRequests[0];
-    const extraApprovalCount = Math.max(
-      toolApprovalState.pendingRequests.length - 1,
-      0,
-    );
-
-    return {
-      kind: "waiting_approval",
-      icon: "!",
-      title: getString("chat-banner-waiting-approval"),
-      detail: formatApprovalSummary(activeRequest, extraApprovalCount),
-      subdetail: activeStep
-        ? getString("chat-banner-paused-at", {
-            args: {
-              step:
-                activeStep.title ||
-                activeStep.toolName ||
-                executionPlan?.summary ||
-                getString("unknown"),
-            },
-          })
-        : undefined,
-      statusLabel: formatPendingApprovalLabel(
-        toolApprovalState.pendingRequests.length,
-      ),
-      accentColor: "#b45309",
-      accentBackground: "rgba(245, 158, 11, 0.16)",
-      approvalRequest: activeRequest,
-    };
-  }
 
   if (!executionPlan || executionPlan.status !== "in_progress") {
     return {
@@ -770,17 +824,56 @@ function deriveExecutionBannerState(
   };
 }
 
-function createExecutionBannerElement(doc: Document): HTMLElement {
+function deriveApprovalBannerState(
+  _executionPlan?: ExecutionPlan,
+  toolApprovalState?: ToolApprovalState,
+): ExecutionBannerState {
+  if (!toolApprovalState?.pendingRequests.length) {
+    return {
+      kind: "idle",
+      icon: "",
+      title: "",
+      detail: "",
+    };
+  }
+
+  const activeRequest = toolApprovalState.pendingRequests[0];
+  const extraApprovalCount = Math.max(
+    toolApprovalState.pendingRequests.length - 1,
+    0,
+  );
+
+  return {
+    kind: "waiting_approval",
+    icon: "!",
+    title: getString("chat-banner-waiting-approval"),
+    detail: formatApprovalSummary(activeRequest, extraApprovalCount),
+    statusLabel: formatPendingApprovalLabel(
+      toolApprovalState.pendingRequests.length,
+    ),
+    accentColor: "#b45309",
+    accentBackground: "rgba(245, 158, 11, 0.16)",
+    approvalRequest: activeRequest,
+  };
+}
+
+function createExecutionBannerElement(
+  doc: Document,
+  options: {
+    className: string;
+    placement: "top" | "bottom";
+  },
+): HTMLElement {
   const wrapper = createElement(
     doc,
     "div",
     {
       display: "block",
-      paddingTop: "8px",
-      paddingBottom: "8px",
+      paddingTop: options.placement === "top" ? "6px" : "8px",
+      paddingBottom: options.placement === "bottom" ? "8px" : "0",
       pointerEvents: "auto",
     },
-    { id: "chat-execution-plan", class: "chat-execution-plan" },
+    { class: options.className },
   );
 
   return wrapper;
@@ -791,48 +884,65 @@ function populateExecutionBannerElement(
   doc: Document,
   banner: ExecutionBannerState,
   theme: ThemeColors,
-  approvalActions?: {
-    onResolveApproval: (
-      requestId: string,
-      resolution: ToolApprovalResolution,
-    ) => void | Promise<void>;
+  options: {
+    showApprovalActions: boolean;
+    approvalActions?: {
+      onResolveApproval: (
+        requestId: string,
+        resolution: ToolApprovalResolution,
+      ) => void | Promise<void>;
+    };
   },
 ): void {
   wrapper.replaceChildren();
+  const isApprovalDock =
+    options.showApprovalActions && banner.kind === "waiting_approval";
+  const isApprovalSummary =
+    !options.showApprovalActions && banner.kind === "waiting_approval";
 
   const bar = createElement(doc, "div", {
-    border: `1px solid ${theme.borderColor}`,
+    border: `1px solid ${
+      isApprovalDock
+        ? banner.accentBackground || theme.borderColor
+        : theme.borderColor
+    }`,
     background: theme.assistantBubbleBg,
-    borderRadius: "16px",
-    padding: "10px 12px",
-    boxShadow: "0 6px 18px rgba(0, 0, 0, 0.08)",
+    borderRadius: isApprovalDock ? "16px" : "12px",
+    padding: isApprovalDock
+      ? "8px 10px"
+      : isApprovalSummary
+        ? "7px 9px"
+        : "8px 10px",
+    boxShadow: isApprovalDock
+      ? "0 8px 22px rgba(0, 0, 0, 0.1)"
+      : "0 3px 10px rgba(0, 0, 0, 0.06)",
     display: "flex",
     flexDirection: "column",
-    gap: "8px",
+    gap: isApprovalDock ? "6px" : "5px",
     minWidth: "0",
     boxSizing: "border-box",
   });
 
   const header = createElement(doc, "div", {
     display: "flex",
-    alignItems: "flex-start",
-    gap: "10px",
+    alignItems: "center",
+    gap: isApprovalDock ? "6px" : "5px",
     minWidth: "0",
     width: "100%",
-    flexWrap: "wrap",
+    flexWrap: "nowrap",
   });
 
   const badge = createElement(doc, "span", {
-    width: "24px",
-    height: "24px",
-    minWidth: "24px",
+    width: isApprovalDock ? "20px" : "16px",
+    height: isApprovalDock ? "20px" : "16px",
+    minWidth: isApprovalDock ? "20px" : "16px",
     borderRadius: "999px",
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
     background: banner.accentBackground || "rgba(100, 116, 139, 0.14)",
     color: banner.accentColor || theme.textPrimary,
-    fontSize: "12px",
+    fontSize: isApprovalDock ? "10px" : "9px",
     fontWeight: "700",
     flexShrink: "0",
   });
@@ -841,74 +951,92 @@ function populateExecutionBannerElement(
   const textGroup = createElement(doc, "div", {
     display: "flex",
     flexDirection: "column",
-    gap: "4px",
+    gap: "2px",
     minWidth: "0",
     flex: "1 1 220px",
   });
 
+  const titleRow = createElement(doc, "div", {
+    display: "flex",
+    alignItems: "center",
+    gap: "5px",
+    minWidth: "0",
+  });
+
   const title = createElement(doc, "span", {
-    fontSize: "12px",
+    fontSize: isApprovalDock ? "12px" : "11px",
     fontWeight: "700",
     color: theme.textPrimary,
     lineHeight: "1.2",
+    minWidth: "0",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
   });
   title.textContent = banner.title;
 
   const detail = createElement(doc, "div", {
-    fontSize: "11px",
+    fontSize: isApprovalDock ? "10px" : "10px",
     color: theme.textSecondary,
     minWidth: "0",
-    whiteSpace: "normal",
-    wordBreak: "break-word",
-    lineHeight: "1.35",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    lineHeight: "1.25",
   });
   detail.textContent = banner.detail;
 
-  textGroup.appendChild(title);
+  titleRow.appendChild(badge);
+  titleRow.appendChild(title);
+  textGroup.appendChild(titleRow);
   textGroup.appendChild(detail);
   if (banner.subdetail) {
     const subdetail = createElement(doc, "div", {
-      fontSize: "10px",
+      fontSize: "9px",
       color: theme.textMuted,
       minWidth: "0",
-      whiteSpace: "normal",
-      wordBreak: "break-word",
-      lineHeight: "1.35",
+      whiteSpace: "nowrap",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      lineHeight: "1.25",
     });
     subdetail.textContent = banner.subdetail;
     textGroup.appendChild(subdetail);
   }
 
-  header.appendChild(badge);
   header.appendChild(textGroup);
   if (banner.statusLabel) {
     const statusPill = createElement(doc, "span", {
       display: "inline-flex",
       alignItems: "center",
       justifyContent: "center",
-      minHeight: "24px",
-      padding: "0 10px",
+      minHeight: isApprovalDock ? "22px" : "20px",
+      padding: isApprovalDock ? "0 8px" : "0 7px",
       borderRadius: "999px",
-      fontSize: "10px",
+      fontSize: "9px",
       fontWeight: "700",
       color: banner.accentColor || theme.textPrimary,
       background: banner.accentBackground || theme.buttonBg,
       whiteSpace: "nowrap",
       flexShrink: "0",
-      marginLeft: "auto",
+      marginLeft: isApprovalDock ? "6px" : "5px",
     });
     statusPill.textContent = banner.statusLabel;
     header.appendChild(statusPill);
   }
   bar.appendChild(header);
 
-  if (banner.kind === "waiting_approval" && banner.approvalRequest) {
+  if (
+    options.showApprovalActions &&
+    banner.kind === "waiting_approval" &&
+    banner.approvalRequest
+  ) {
     bar.appendChild(
       createApprovalActionsRow(
         doc,
         theme,
         banner.approvalRequest,
-        approvalActions,
+        options.approvalActions,
       ),
     );
   }
@@ -930,9 +1058,9 @@ function createApprovalActionsRow(
   const actions = createElement(doc, "div", {
     display: "flex",
     alignItems: "center",
-    gap: "6px",
+    gap: "4px",
     width: "100%",
-    flexWrap: "wrap",
+    flexWrap: "nowrap",
   });
 
   const buttonSpecs: Array<{
@@ -966,12 +1094,19 @@ function createApprovalActionsRow(
         spec.resolution.verdict === "deny"
           ? theme.textSecondary
           : theme.textPrimary,
-      borderRadius: "999px",
-      padding: "4px 10px",
-      fontSize: "10px",
+      borderRadius: "9px",
+      padding: "4px 6px",
+      fontSize: "9px",
       fontWeight: "600",
+      lineHeight: "1",
+      whiteSpace: "nowrap",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
       cursor: approvalActions ? "pointer" : "default",
       opacity: approvalActions ? "1" : "0.6",
+      flex: "1 1 0",
+      minWidth: "0",
+      minHeight: "26px",
       boxShadow:
         spec.resolution.scope === "always"
           ? "inset 0 0 0 1px rgba(59, 130, 246, 0.15)"

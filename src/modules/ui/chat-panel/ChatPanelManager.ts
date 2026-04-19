@@ -27,6 +27,7 @@ import { createChatContainer } from "./ChatPanelBuilder";
 import {
   renderMessages as renderMessageElements,
   updateExecutionPlanView,
+  updateApprovalView,
 } from "./MessageRenderer";
 import { renderMarkdownToElement } from "./MarkdownRenderer";
 import {
@@ -58,6 +59,35 @@ function buildApprovalActions(manager: ChatManager): {
       manager.resolveToolApprovalRequest(requestId, resolution);
     },
   };
+}
+
+function updateExecutionInsetsForContainer(
+  container: HTMLElement,
+  manager: ChatManager,
+  executionPlan?: ExecutionPlan,
+): void {
+  const theme = getCurrentTheme();
+  const toolApprovalState = manager.getActiveSession()?.toolApprovalState;
+  const approvalActions = buildApprovalActions(manager);
+  const planPanel = container.querySelector(
+    "#chat-execution-plan-panel",
+  ) as HTMLElement | null;
+  const approvalPanel = container.querySelector(
+    "#chat-execution-approval-panel",
+  ) as HTMLElement | null;
+
+  if (planPanel) {
+    updateExecutionPlanView(planPanel, theme, executionPlan, toolApprovalState);
+  }
+  if (approvalPanel) {
+    updateApprovalView(
+      approvalPanel,
+      theme,
+      executionPlan,
+      toolApprovalState,
+      approvalActions,
+    );
+  }
 }
 
 // Floating window default size
@@ -521,18 +551,11 @@ async function refreshChatForContainer(container: HTMLElement): Promise<void> {
       session.messages,
       getCurrentTheme(),
     );
-    const planPanel = container.querySelector(
-      "#chat-execution-plan-panel",
-    ) as HTMLElement;
-    if (planPanel) {
-      updateExecutionPlanView(
-        planPanel,
-        getCurrentTheme(),
-        session.executionPlan,
-        session.toolApprovalState,
-        buildApprovalActions(manager),
-      );
-    }
+    updateExecutionInsetsForContainer(
+      container,
+      manager,
+      session.executionPlan,
+    );
   }
 
   focusInput(container);
@@ -616,7 +639,9 @@ function showSidebarPanel(): void {
         applyThemeToContainer(chatContainer);
         const session = manager.getActiveSession();
         if (session) {
-          createContext(chatContainer).renderExecutionPlan(session.executionPlan);
+          createContext(chatContainer).renderExecutionPlan(
+            session.executionPlan,
+          );
         }
       }
       if (floatingContainer) {
@@ -639,7 +664,9 @@ function showSidebarPanel(): void {
         applyThemeToContainer(chatContainer);
         const session = manager.getActiveSession();
         if (session) {
-          createContext(chatContainer).renderExecutionPlan(session.executionPlan);
+          createContext(chatContainer).renderExecutionPlan(
+            session.executionPlan,
+          );
         }
       }
       if (floatingContainer) {
@@ -1148,33 +1175,17 @@ function createContext(container: HTMLElement): ChatPanelContext {
           );
         }
         if (planPanel) {
-          const executionPlan = manager.getActiveSession()?.executionPlan;
-          const toolApprovalState =
-            manager.getActiveSession()?.toolApprovalState;
-          updateExecutionPlanView(
-            planPanel,
-            getCurrentTheme(),
-            executionPlan,
-            toolApprovalState,
-            buildApprovalActions(manager),
+          updateExecutionInsetsForContainer(
+            container,
+            manager,
+            manager.getActiveSession()?.executionPlan,
           );
         }
       }
     },
     renderExecutionPlan: (plan?: ExecutionPlan) => {
       if (!container) return;
-      const planPanel = container.querySelector(
-        "#chat-execution-plan-panel",
-      ) as HTMLElement;
-      if (planPanel) {
-        updateExecutionPlanView(
-          planPanel,
-          getCurrentTheme(),
-          plan,
-          manager.getActiveSession()?.toolApprovalState,
-          buildApprovalActions(manager),
-        );
-      }
+      updateExecutionInsetsForContainer(container, manager, plan);
     },
     appendError: (errorMessage: string) => {
       ztoolkit.log(
