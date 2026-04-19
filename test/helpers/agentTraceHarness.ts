@@ -41,6 +41,11 @@ export interface AgentTraceRunOptions {
     toolCall: ToolCall,
     args: Record<string, unknown>,
   ) => Promise<string> | string;
+  afterToolStarted?: (
+    toolCall: ToolCall,
+    args: Record<string, unknown>,
+  ) => void;
+  isSessionTracked?: () => boolean;
   paperStructure?: PaperStructure | PaperStructureExtended | null;
   tools?: ToolDefinition[];
 }
@@ -156,6 +161,13 @@ export async function runAgentTraceScenario(
         sessionId?: string;
         assistantMessageId?: string;
       }>,
+      hooks?: {
+        onExecutionReady?: (request: {
+          toolCall: ToolCall;
+          sessionId?: string;
+          assistantMessageId?: string;
+        }) => void;
+      },
     ): Promise<ToolExecutionResult[]> {
       const results: ToolExecutionResult[] = [];
       for (const request of requests) {
@@ -171,6 +183,21 @@ export async function runAgentTraceScenario(
             toolCall: request.toolCall,
             args,
             permissionDecision: decision,
+            policyTrace: [
+              {
+                stage: "scheduler",
+                policy: "permission_decision",
+                outcome: "blocked",
+                summary: `Blocked ${request.toolCall.function.name} by the test harness permission policy.`,
+                detail: decision.reason || "Blocked by test harness policy.",
+                data: {
+                  verdict: decision.verdict,
+                  mode: decision.mode,
+                  scope: decision.scope,
+                  riskLevel: decision.descriptor.riskLevel,
+                },
+              },
+            ],
             status: "denied",
             content: [
               `Error: Permission denied for ${request.toolCall.function.name}.`,
@@ -183,6 +210,8 @@ export async function runAgentTraceScenario(
           continue;
         }
 
+        hooks?.onExecutionReady?.(request);
+        options.afterToolStarted?.(request.toolCall, args);
         executedToolCalls.push({
           toolCallId: request.toolCall.id,
           toolName: request.toolCall.function.name,
@@ -244,7 +273,7 @@ export async function runAgentTraceScenario(
     } as any,
     {
       isSessionActive: () => true,
-      isSessionTracked: () => true,
+      isSessionTracked: () => options.isSessionTracked?.() ?? true,
       onRuntimeEvent: (event) => {
         runtimeEvents.push(clone(event));
       },
@@ -325,6 +354,17 @@ export function getToolCompletionStatuses(
   return result.runtimeEvents
     .filter((event) => event.type === "tool_completed")
     .map((event) => `${event.toolName}:${event.status}`);
+}
+
+export function getToolCompletionPolicies(
+  result: AgentTraceRunResult,
+): string[] {
+  return result.runtimeEvents
+    .filter((event) => event.type === "tool_completed")
+    .map(
+      (event) =>
+        `${event.toolName}:${event.status}:${event.origin}:${event.policyName || "none"}`,
+    );
 }
 
 export function getLatestExecutionPlan(

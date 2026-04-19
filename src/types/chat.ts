@@ -21,6 +21,10 @@ import type {
   ToolApprovalRequest,
   ToolCall,
   ToolExecutionResult,
+  ToolPolicyName,
+  ToolPolicyOutcome,
+  ToolPolicyStage,
+  ToolPolicyTrace,
   ToolPermissionRiskLevel,
   ToolPermissionScope,
 } from "./tool";
@@ -220,6 +224,21 @@ export interface AgentRuntimeToolCompletedEvent extends AgentRuntimeEventBase {
   args: string;
   resultPreview: string;
   status: "completed" | "failed" | "denied";
+  origin: ToolPolicyStage;
+  policyName?: ToolPolicyName;
+  policyOutcome?: ToolPolicyOutcome;
+  policySummary?: string;
+  policyTrace?: ToolPolicyTrace[];
+  errorCategory?:
+    | "invalid_arguments"
+    | "permission_denied"
+    | "budget_exhausted"
+    | "missing_context"
+    | "not_found"
+    | "unavailable"
+    | "unknown_tool"
+    | "execution_failed"
+    | "unspecified";
 }
 
 export interface AgentRuntimeApprovalRequestedEvent extends AgentRuntimeEventBase {

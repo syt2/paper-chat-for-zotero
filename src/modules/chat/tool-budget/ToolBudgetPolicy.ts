@@ -76,25 +76,39 @@ export function applyToolBudgetPolicy(
   }
 
   if (toolName === "get_full_text") {
+    const targetKey = getPaperTargetKey(args);
     if (state.getFullTextCalls >= MAX_FULL_TEXT_CALLS_PER_TURN) {
       return createBudgetBlockedResult(toolCall, args, {
+        summary: "Blocked get_full_text because the turn budget is exhausted.",
         cause:
           `High-cost tool limit reached: get_full_text may only run ${MAX_FULL_TEXT_CALLS_PER_TURN} times per user turn.`,
         suggestedFix:
           "Use the full-text result already gathered in this turn, or wait for a new user turn before requesting full text again.",
         saferAlternative:
           "Continue with section/page tools or synthesize from evidence already collected.",
+        data: {
+          tool: toolName,
+          targetKey,
+          getFullTextCalls: state.getFullTextCalls,
+          limit: MAX_FULL_TEXT_CALLS_PER_TURN,
+        },
       });
     }
-    const targetKey = getPaperTargetKey(args);
     if (!state.narrowPaperTargets.has(targetKey)) {
       return createBudgetBlockedResult(toolCall, args, {
+        summary:
+          "Blocked get_full_text until a narrower paper tool has been used for the same target.",
         cause:
           "Use narrower tools first before calling get_full_text in the current turn.",
         suggestedFix:
           "Call get_paper_section, search_paper_content, get_pages, or another narrower paper tool first, then request full text only if it is still necessary.",
         saferAlternative:
           "Use targeted paper tools, metadata, notes, or annotations instead of full text.",
+        data: {
+          tool: toolName,
+          targetKey,
+          narrowPaperTargets: [...state.narrowPaperTargets],
+        },
       });
     }
 
@@ -106,22 +120,35 @@ export function applyToolBudgetPolicy(
     const query = normalizeWebSearchQuery(args?.query);
     if (query && hasObviouslyRepeatedWebSearch(query, state.webSearchQueries)) {
       return createBudgetBlockedResult(toolCall, args, {
+        summary: "Blocked web_search because this turn already used a similar query.",
         cause:
           "A similar web_search query already used this turn would likely return redundant results.",
         suggestedFix:
           "Use the search results already gathered, or materially narrow the question before searching again.",
         saferAlternative:
           "Use Zotero library tools or synthesize from current-turn evidence instead of repeating web search.",
+        data: {
+          tool: toolName,
+          query,
+          previousQueries: [...state.webSearchQueries],
+        },
       });
     }
     if (state.webSearchCalls >= MAX_WEB_SEARCH_CALLS_PER_TURN) {
       return createBudgetBlockedResult(toolCall, args, {
+        summary: "Blocked web_search because the turn budget is exhausted.",
         cause:
           `High-cost tool limit reached: web_search may only run ${MAX_WEB_SEARCH_CALLS_PER_TURN} times per user turn.`,
         suggestedFix:
           "Use the web results already gathered in this turn, or wait for a new user turn before searching again.",
         saferAlternative:
           "Prefer Zotero library tools or narrower local evidence before adding another web search.",
+        data: {
+          tool: toolName,
+          query,
+          webSearchCalls: state.webSearchCalls,
+          limit: MAX_WEB_SEARCH_CALLS_PER_TURN,
+        },
       });
     }
 
@@ -139,15 +166,27 @@ function createBudgetBlockedResult(
   toolCall: ToolCall,
   args: Record<string, unknown> | null,
   options: {
+    summary: string;
     cause: string;
     suggestedFix: string;
     saferAlternative: string;
+    data?: Record<string, unknown>;
   },
 ): ToolExecutionResult {
   return {
     toolCall,
     args: args || undefined,
     metadata: getToolRuntimeMetadata(toolCall.function.name) || undefined,
+    policyTrace: [
+      {
+        stage: "planner",
+        policy: "budget_block",
+        outcome: "blocked",
+        summary: options.summary,
+        detail: options.cause,
+        data: options.data,
+      },
+    ],
     status: "failed",
     content: formatToolError({
       summary: `Tool budget exhausted for ${toolCall.function.name}.`,

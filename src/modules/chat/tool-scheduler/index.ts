@@ -3,4 +3,8 @@ export {
   getToolRuntimeMetadata,
   listToolRuntimeMetadata,
 } from "./ToolMetadataRegistry";
-export type { ToolExecutor, ToolSchedulerRequest } from "./ToolScheduler";
+export type {
+  ToolExecutor,
+  ToolSchedulerExecutionHooks,
+  ToolSchedulerRequest,
+} from "./ToolScheduler";

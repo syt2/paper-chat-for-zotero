@@ -79,6 +79,11 @@ describe("tool retry policy", function () {
     assert.include(blocked.content, "Repeated unchanged tool call blocked");
     assert.include(blocked.content, "Retryable: no");
     assert.include(blocked.content, "Do not retry unchanged");
+    assert.deepInclude(blocked.policyTrace?.[0], {
+      stage: "planner",
+      policy: "retry_block",
+      outcome: "blocked",
+    });
   });
 
   it("does not block a retry when the arguments change", async function () {

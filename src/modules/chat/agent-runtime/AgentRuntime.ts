@@ -12,13 +12,17 @@ import type {
   PaperStructureExtended,
   ToolCall,
   ToolDefinition,
+  ToolPolicyTrace,
   ToolExecutionResult,
 } from "../../../types/tool";
 import type { ToolCallingProvider } from "../../../types/provider";
 import { getErrorMessage } from "../../../utils/common";
 import { SessionRunInvalidatedError } from "../errors";
 import type { SessionStorageService } from "../SessionStorageService";
-import type { ToolSchedulerRequest } from "../tool-scheduler";
+import type {
+  ToolSchedulerExecutionHooks,
+  ToolSchedulerRequest,
+} from "../tool-scheduler";
 import { ExecutionPlanManager } from "./ExecutionPlanManager";
 import {
   planToolExecutionEntries,
@@ -29,6 +33,7 @@ import {
   ensureTrackedSession,
 } from "./sessionTracking";
 import { createRecoveryGuidanceSystemMessage } from "../tool-recovery/ToolRecoveryPolicy";
+import { parseToolError } from "../tool-errors/ToolErrorFormatter";
 
 interface AgentRuntimeCallbacks {
   isSessionActive: (session: ChatSession) => boolean;
@@ -53,7 +58,10 @@ interface RuntimeToolScheduler {
   createExecutionBatches(
     requests: ToolSchedulerRequest[],
   ): ToolSchedulerRequest[][];
-  executeBatch(requests: ToolSchedulerRequest[]): Promise<ToolExecutionResult[]>;
+  executeBatch(
+    requests: ToolSchedulerRequest[],
+    hooks?: ToolSchedulerExecutionHooks,
+  ): Promise<ToolExecutionResult[]>;
 }
 
 interface RuntimeExecutionOptions {
@@ -103,6 +111,8 @@ const THINKING_SUFFIX = "\n\n···";
 const MAX_ITERATIONS_MESSAGE =
   "\n\nI apologize, but I was unable to complete the request within the allowed number of iterations.";
 const MAX_ITERATIONS_ERROR = "Maximum tool-calling iterations reached.";
+const AGENT_TRACE_LOG_PREF =
+  "extensions.zotero.paperchat.devEnableAgentTraceLogs";
 
 export class AgentRuntime {
   private executionPlanManager = new ExecutionPlanManager();
@@ -505,10 +515,11 @@ export class AgentRuntime {
 
       const batchResults =
         entry.kind === "execute"
-          ? await awaitWhileSessionTracked(
+          ? await this.executeBatchWithRuntimeEvents(
               sendingSession,
-              this.callbacks.isSessionTracked,
-              () => this.toolScheduler.executeBatch(entry.requests),
+              assistantMessage,
+              entry.requests,
+              iteration,
             )
           : entry.results;
       this.appendToolExecutionResults(sendingSession, batchResults);
@@ -538,6 +549,11 @@ export class AgentRuntime {
         const toolSucceeded = executionResult.status === "completed";
         const toolDisplayStatus = toolSucceeded ? "completed" : "error";
         const planStepStatus = toPlanStepStatus(executionResult.status);
+        const primaryPolicyTrace = getPrimaryPolicyTrace(executionResult);
+        const parsedToolError =
+          executionResult.status === "completed"
+            ? null
+            : parseToolError(executionResult.content);
 
         accumulatedDisplay += this.callbacks.formatToolCallCard(
           toolName,
@@ -564,18 +580,6 @@ export class AgentRuntime {
         await this.sessionStorage.updateSessionMeta(sendingSession);
         this.emitPlanUpdate(sendingSession);
 
-        // tool_started only fires for calls that were actually allowed to
-        // execute. Denied calls go straight to tool_completed with
-        // status="denied" so observers never see a started-but-denied pair.
-        if (entry.kind === "execute" && executionResult.status !== "denied") {
-          this.emitRuntimeEvent<"tool_started">(sendingSession, assistantMessage, {
-            type: "tool_started",
-            toolCallId: toolCall.id,
-            toolName,
-            args: toolArgs,
-            iteration,
-          });
-        }
         this.emitRuntimeEvent<"tool_completed">(sendingSession, assistantMessage, {
           type: "tool_completed",
           toolCallId: toolCall.id,
@@ -583,6 +587,15 @@ export class AgentRuntime {
           args: toolArgs,
           resultPreview: truncateToolDetail(toolResult),
           status: executionResult.status,
+          origin: primaryPolicyTrace?.stage || "executor",
+          policyName: primaryPolicyTrace?.policy,
+          policyOutcome: primaryPolicyTrace?.outcome,
+          policySummary: primaryPolicyTrace?.summary,
+          policyTrace: executionResult.policyTrace,
+          errorCategory:
+            executionResult.status === "completed"
+              ? undefined
+              : parsedToolError?.category || "unspecified",
           iteration,
         });
         if (this.callbacks.isSessionActive(sendingSession)) {
@@ -638,6 +651,73 @@ export class AgentRuntime {
       createExecutionBatches: (requests) =>
         this.toolScheduler.createExecutionBatches(requests),
     });
+  }
+
+  private async executeBatchWithRuntimeEvents(
+    session: ChatSession,
+    assistantMessage: ChatMessage,
+    requests: ToolSchedulerRequest[],
+    iteration: number,
+  ): Promise<ToolExecutionResult[]> {
+    const startedRequests: ToolSchedulerRequest[] = [];
+
+    try {
+      return await awaitWhileSessionTracked(
+        session,
+        this.callbacks.isSessionTracked,
+        () =>
+          this.toolScheduler.executeBatch(requests, {
+            onExecutionReady: (request) => {
+              this.ensureSessionTracked(session);
+              startedRequests.push(request);
+              this.emitRuntimeEvent<"tool_started">(session, assistantMessage, {
+                type: "tool_started",
+                toolCallId: request.toolCall.id,
+                toolName: request.toolCall.function.name,
+                args: request.toolCall.function.arguments,
+                iteration,
+              });
+            },
+          }),
+      );
+    } catch (error) {
+      if (error instanceof SessionRunInvalidatedError) {
+        this.emitInterruptedToolCompletions(
+          session,
+          assistantMessage,
+          startedRequests,
+          iteration,
+        );
+      }
+      throw error;
+    }
+  }
+
+  private emitInterruptedToolCompletions(
+    session: ChatSession,
+    assistantMessage: ChatMessage,
+    requests: ToolSchedulerRequest[],
+    iteration: number,
+  ): void {
+    const emittedToolCallIds = new Set<string>();
+    for (const request of requests) {
+      const toolCall = request.toolCall;
+      if (emittedToolCallIds.has(toolCall.id)) {
+        continue;
+      }
+      emittedToolCallIds.add(toolCall.id);
+      this.emitRuntimeEvent<"tool_completed">(session, assistantMessage, {
+        type: "tool_completed",
+        toolCallId: toolCall.id,
+        toolName: toolCall.function.name,
+        args: toolCall.function.arguments,
+        resultPreview: "Tool execution interrupted because the session is no longer active.",
+        status: "failed",
+        origin: "executor",
+        errorCategory: "unavailable",
+        iteration,
+      });
+    }
   }
 
   private async finalizeCompletedTurn(params: {
@@ -948,7 +1028,27 @@ export class AgentRuntime {
       planId: session.executionPlan?.id,
     } as Extract<AgentRuntimeEvent, { type: T }>;
 
+    this.logRuntimeEvent(fullEvent);
     this.callbacks.onRuntimeEvent?.(fullEvent);
+  }
+
+  private logRuntimeEvent(event: AgentRuntimeEvent): void {
+    if (!this.shouldLogRuntimeEvents()) {
+      return;
+    }
+
+    ztoolkit.log(
+      "[AgentRuntime][trace]",
+      JSON.stringify(summarizeRuntimeEventForLog(event)),
+    );
+  }
+
+  private shouldLogRuntimeEvents(): boolean {
+    try {
+      return Zotero.Prefs.get(AGENT_TRACE_LOG_PREF, true) === true;
+    } catch {
+      return false;
+    }
   }
 
   private ensureSessionTracked(session: ChatSession): void {
@@ -961,6 +1061,119 @@ function truncateToolDetail(text: string): string {
     return text;
   }
   return text.slice(0, 157) + "...";
+}
+
+function getPrimaryPolicyTrace(
+  result: ToolExecutionResult,
+): ToolPolicyTrace | undefined {
+  return result.policyTrace?.[0];
+}
+
+function summarizeRuntimeEventForLog(
+  event: AgentRuntimeEvent,
+): Record<string, unknown> {
+  switch (event.type) {
+    case "tool_started":
+      return {
+        type: event.type,
+        sessionId: event.sessionId,
+        planId: event.planId,
+        assistantMessageId: event.assistantMessageId,
+        iteration: event.iteration,
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+      };
+    case "tool_completed":
+      return {
+        type: event.type,
+        sessionId: event.sessionId,
+        planId: event.planId,
+        assistantMessageId: event.assistantMessageId,
+        iteration: event.iteration,
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        status: event.status,
+        origin: event.origin,
+        policyName: event.policyName,
+        policyOutcome: event.policyOutcome,
+        policySummary: event.policySummary,
+        errorCategory: event.errorCategory,
+        resultPreview: event.resultPreview,
+      };
+    case "approval_requested":
+      return {
+        type: event.type,
+        sessionId: event.sessionId,
+        planId: event.planId,
+        assistantMessageId: event.assistantMessageId,
+        requestId: event.requestId,
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        riskLevel: event.riskLevel,
+        pendingCount: event.pendingCount,
+      };
+    case "approval_resolved":
+      return {
+        type: event.type,
+        sessionId: event.sessionId,
+        planId: event.planId,
+        assistantMessageId: event.assistantMessageId,
+        requestId: event.requestId,
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        verdict: event.verdict,
+        scope: event.scope,
+        pendingCount: event.pendingCount,
+      };
+    case "turn_started":
+      return {
+        type: event.type,
+        sessionId: event.sessionId,
+        planId: event.planId,
+        assistantMessageId: event.assistantMessageId,
+        streaming: event.streaming,
+        summary: event.summary,
+      };
+    case "turn_completed":
+      return {
+        type: event.type,
+        sessionId: event.sessionId,
+        planId: event.planId,
+        assistantMessageId: event.assistantMessageId,
+        iteration: event.iteration,
+        contentPreview: truncateToolDetail(event.content),
+      };
+    case "turn_failed":
+      return {
+        type: event.type,
+        sessionId: event.sessionId,
+        planId: event.planId,
+        assistantMessageId: event.assistantMessageId,
+        iteration: event.iteration,
+        error: event.error,
+      };
+    case "text_delta":
+      return {
+        type: event.type,
+        sessionId: event.sessionId,
+        planId: event.planId,
+        assistantMessageId: event.assistantMessageId,
+        deltaPreview: truncateToolDetail(event.delta),
+        contentLength: event.content.length,
+      };
+    case "reasoning_delta":
+      return {
+        type: event.type,
+        sessionId: event.sessionId,
+        planId: event.planId,
+        assistantMessageId: event.assistantMessageId,
+        deltaPreview: truncateToolDetail(event.delta),
+        reasoningLength: event.reasoning.length,
+      };
+  }
+
+  const exhaustiveEvent: never = event;
+  return exhaustiveEvent;
 }
 
 function toPlanStepStatus(

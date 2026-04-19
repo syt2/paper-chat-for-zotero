@@ -7,6 +7,7 @@ import {
   assertToolResultContains,
   assertTraceContainsSequence,
   createToolCall,
+  getToolCompletionPolicies,
   getToolCompletionStatuses,
   runAgentTraceScenario,
 } from "./helpers/agentTraceHarness.ts";
@@ -71,6 +72,10 @@ describe("agent trace eval harness", function () {
       "Do not retry this tool",
       "permission_denied",
     ]);
+    assert.includeMembers(getToolCompletionPolicies(result), [
+      "web_search:denied:scheduler:permission_decision",
+      "get_item_metadata:completed:executor:none",
+    ]);
     assertAssistantContentMatches(result, "answer without web search");
     assertToolResultContains(result, "web_search", "permission_denied");
   });
@@ -133,6 +138,10 @@ describe("agent trace eval harness", function () {
     assert.deepEqual(getToolCompletionStatuses(result), [
       "get_full_text:failed",
       "search_paper_content:completed",
+    ]);
+    assert.includeMembers(getToolCompletionPolicies(result), [
+      "get_full_text:failed:planner:budget_block",
+      "search_paper_content:completed:executor:none",
     ]);
     assertExecutedTools(result, ["search_paper_content"]);
     assertExecutionPlanTerminalState(result, "completed", "Compose final answer");
@@ -228,5 +237,37 @@ describe("agent trace eval harness", function () {
       "avoid repeating the same call unchanged",
     ]);
     assertAssistantContentMatches(result, "explain the limitation instead");
+  });
+
+  it("emits a matching completion event when a started tool is interrupted by session invalidation", async function () {
+    let tracked = true;
+    const result = await runAgentTraceScenario({
+      userContent: "Search the paper once.",
+      rounds: [
+        {
+          content: "I will search the paper.",
+          toolCalls: [
+            createToolCall("tool-search-interrupted", "search_paper_content", {
+              itemKey: "ITEM-1",
+              query: "method",
+            }),
+          ],
+        },
+      ],
+      afterToolStarted: () => {
+        tracked = false;
+      },
+      isSessionTracked: () => tracked,
+      executeTool: () => "Method section: interrupted after start.",
+    });
+
+    assertTraceContainsSequence(result, [
+      "turn_started:Search the paper once.",
+      "tool_started:search_paper_content",
+      "tool_completed:search_paper_content:failed",
+    ]);
+    assert.includeMembers(getToolCompletionPolicies(result), [
+      "search_paper_content:failed:executor:none",
+    ]);
   });
 });

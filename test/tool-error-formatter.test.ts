@@ -47,6 +47,11 @@ describe("tool error formatting", function () {
     assert.include(result.content, "Category: invalid_arguments");
     assert.include(result.content, "Retryable: yes");
     assert.include(result.content, "Fix hint:");
+    assert.deepInclude(result.policyTrace?.[0], {
+      stage: "scheduler",
+      policy: "argument_parse",
+      outcome: "blocked",
+    });
   });
 
   it("formats denied tool calls with stable recovery guidance", async function () {
@@ -73,6 +78,11 @@ describe("tool error formatting", function () {
     assert.include(result.content, "Category: permission_denied");
     assert.include(result.content, "Retryable: no");
     assert.include(result.content, "Do not retry this tool");
+    assert.deepInclude(result.policyTrace?.[0], {
+      stage: "scheduler",
+      policy: "permission_decision",
+      outcome: "blocked",
+    });
   });
 
   it("normalizes raw executor errors into structured missing-context hints", async function () {

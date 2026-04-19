@@ -26,6 +26,10 @@ export interface ToolSchedulerRequest {
   fallbackStructure?: PaperStructure | PaperStructureExtended;
 }
 
+export interface ToolSchedulerExecutionHooks {
+  onExecutionReady?: (request: ToolSchedulerRequest) => void;
+}
+
 /**
  * Callable that actually runs a tool once permissions are resolved. Keeping
  * this as an injectable keeps ToolScheduler free of a hard PdfToolManager
@@ -105,6 +109,7 @@ export class ToolScheduler {
 
   async executeBatch(
     requests: ToolSchedulerRequest[],
+    hooks?: ToolSchedulerExecutionHooks,
   ): Promise<ToolExecutionResult[]> {
     const prepared: Array<{
       index: number;
@@ -137,6 +142,9 @@ export class ToolScheduler {
       runnable.every((item) => this.isParallelSafe(item.prepared.metadata));
 
     if (runInParallel) {
+      for (const item of runnable) {
+        hooks?.onExecutionReady?.(item.prepared.request);
+      }
       const executed = await Promise.all(
         runnable.map(async (item) => ({
           index: item.index,
@@ -148,6 +156,7 @@ export class ToolScheduler {
       }
     } else {
       for (const item of runnable) {
+        hooks?.onExecutionReady?.(item.prepared.request);
         results[item.index] = await this.executePrepared(item.prepared);
       }
     }
@@ -164,14 +173,23 @@ export class ToolScheduler {
         Array.isArray(parsed)
       ) {
         const cause = `Invalid arguments JSON: ${toolCall.function.arguments}`;
-        return {
-          ok: false,
-          result: {
+      return {
+        ok: false,
+        result: {
+          toolCall,
+          status: "failed",
+          policyTrace: [
+            {
+              stage: "scheduler",
+              policy: "argument_parse",
+              outcome: "blocked",
+              summary: `Blocked ${toolCall.function.name} because tool arguments did not decode to an object.`,
+              detail: cause,
+            },
+          ],
+          content: formatToolArgumentParseError(
             toolCall,
-            status: "failed",
-            content: formatToolArgumentParseError(
-              toolCall,
-              `${cause}. Tool arguments must decode to an object.`,
+            `${cause}. Tool arguments must decode to an object.`,
             ),
             error: "Tool arguments must decode to an object.",
           },
@@ -191,6 +209,15 @@ export class ToolScheduler {
         result: {
           toolCall,
           status: "failed",
+          policyTrace: [
+            {
+              stage: "scheduler",
+              policy: "argument_parse",
+              outcome: "blocked",
+              summary: `Blocked ${toolCall.function.name} because tool arguments were not valid JSON.`,
+              detail: cause,
+            },
+          ],
           content: formatToolArgumentParseError(
             toolCall,
             `${cause}. Tool arguments are not valid JSON.`,
@@ -238,6 +265,18 @@ export class ToolScheduler {
         args,
         metadata,
         permissionDecision: deniedDecision,
+        policyTrace: [
+          {
+            stage: "scheduler",
+            policy: "fault_injection",
+            outcome: "blocked",
+            summary: `Blocked ${toolName} via development fault injection.`,
+            detail: deniedDecision.reason,
+            data: {
+              mode: cfg.mode || "denied",
+            },
+          },
+        ],
         status: "denied",
         content: formatDeniedToolResult(deniedDecision),
         error: deniedDecision.reason,
@@ -253,6 +292,18 @@ export class ToolScheduler {
       args,
       metadata,
       permissionDecision,
+      policyTrace: [
+        {
+          stage: "scheduler",
+          policy: "fault_injection",
+          outcome: "blocked",
+          summary: `Failed ${toolName} via development fault injection.`,
+          detail: normalizedError.parsed.cause || normalizedError.parsed.summary,
+          data: {
+            mode: cfg.mode || "failed",
+          },
+        },
+      ],
       status: "failed",
       content: normalizedError.content,
       error: normalizedError.parsed.cause || normalizedError.parsed.summary,
@@ -322,6 +373,21 @@ export class ToolScheduler {
         args: argsResult.args,
         metadata: metadata || undefined,
         permissionDecision,
+        policyTrace: [
+          {
+            stage: "scheduler",
+            policy: "permission_decision",
+            outcome: "blocked",
+            summary: `Blocked ${request.toolCall.function.name} by the active permission policy.`,
+            detail: permissionDecision.reason,
+            data: {
+              verdict: permissionDecision.verdict,
+              mode: permissionDecision.mode,
+              scope: permissionDecision.scope,
+              riskLevel: permissionDecision.descriptor.riskLevel,
+            },
+          },
+        ],
         status: "denied",
         content: formatDeniedToolResult(permissionDecision),
         error: permissionDecision.reason,

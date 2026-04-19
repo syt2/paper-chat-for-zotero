@@ -70,6 +70,20 @@ export function createBlockedRetryResult(
     args: args || undefined,
     metadata: previousResult.metadata,
     permissionDecision: previousResult.permissionDecision,
+    policyTrace: [
+      {
+        stage: "planner",
+        policy: "retry_block",
+        outcome: "blocked",
+        summary: `Blocked repeated unchanged ${toolName} call in the current turn.`,
+        detail: repeatedCallReason,
+        data: {
+          fingerprint: fingerprintToolCall(toolCall),
+          previousToolCallId: previousResult.toolCall.id,
+          previousStatus: previousResult.status,
+        },
+      },
+    ],
     status: previousResult.status,
     content: formatToolError({
       summary: `Repeated unchanged tool call blocked for ${toolName}.`,

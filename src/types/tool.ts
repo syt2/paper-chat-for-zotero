@@ -123,11 +123,32 @@ export interface ToolExecutionRequest {
   assistantMessageId?: string;
 }
 
+export type ToolPolicyStage = "planner" | "scheduler" | "executor";
+
+export type ToolPolicyName =
+  | "retry_block"
+  | "budget_block"
+  | "permission_decision"
+  | "argument_parse"
+  | "fault_injection";
+
+export type ToolPolicyOutcome = "allowed" | "blocked" | "rewritten";
+
+export interface ToolPolicyTrace {
+  stage: ToolPolicyStage;
+  policy: ToolPolicyName;
+  outcome: ToolPolicyOutcome;
+  summary: string;
+  detail?: string;
+  data?: Record<string, unknown>;
+}
+
 export interface ToolExecutionResult {
   toolCall: ToolCall;
   args?: Record<string, unknown>;
   metadata?: ToolRuntimeMetadata;
   permissionDecision?: ToolPermissionDecision;
+  policyTrace?: ToolPolicyTrace[];
   status: ToolExecutionStatus;
   content: string;
   error?: string;

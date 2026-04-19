@@ -68,6 +68,11 @@ describe("tool execution entry planner", function () {
     if (entries[0].kind === "synthetic") {
       assert.equal(entries[0].results[0].status, "failed");
       assert.include(entries[0].results[0].content, "Repeated unchanged tool call blocked");
+      assert.deepInclude(entries[0].results[0].policyTrace?.[0], {
+        stage: "planner",
+        policy: "retry_block",
+        outcome: "blocked",
+      });
     }
   });
 
@@ -124,6 +129,11 @@ describe("tool execution entry planner", function () {
     if (entries[0].kind === "synthetic") {
       assert.include(entries[0].results[0].content, "Category: budget_exhausted");
       assert.include(entries[0].results[0].content, "Use narrower tools first");
+      assert.deepInclude(entries[0].results[0].policyTrace?.[0], {
+        stage: "planner",
+        policy: "budget_block",
+        outcome: "blocked",
+      });
     }
   });
 
