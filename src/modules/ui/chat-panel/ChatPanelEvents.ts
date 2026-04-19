@@ -24,7 +24,11 @@ import {
   type PaperChatTier,
 } from "../../providers/paperchat-tier-routing";
 import { getChatManager, type PanelMode } from "./ChatPanelManager";
-import { MentionSelector, type MentionResource, findMentionAtCursor } from "./MentionSelector";
+import {
+  MentionSelector,
+  type MentionResource,
+  findMentionAtCursor,
+} from "./MentionSelector";
 
 // Import getActiveReaderItem from the manager module to avoid circular dependency
 // This is set by ChatPanelManager during initialization
@@ -75,7 +79,9 @@ function resizeMessageInput(
   const previousChatHistoryHeight = chatHistory?.clientHeight ?? 0;
   const previousChatHistoryScrollTop = chatHistory?.scrollTop ?? 0;
   const previousBottomOffset = chatHistory
-    ? chatHistory.scrollHeight - chatHistory.scrollTop - chatHistory.clientHeight
+    ? chatHistory.scrollHeight -
+      chatHistory.scrollTop -
+      chatHistory.clientHeight
     : 0;
 
   messageInput.style.height = `${MESSAGE_INPUT_MIN_HEIGHT}px`;
@@ -168,7 +174,14 @@ function getActiveReaderItem(): Zotero.Item | null {
  */
 export async function refreshCheckinDisplay(
   container: HTMLElement,
-  authManager: { fetchCheckinStatus(): Promise<{ success: boolean; enabled: boolean; checkedInToday: boolean; checkinCount: number }> },
+  authManager: {
+    fetchCheckinStatus(): Promise<{
+      success: boolean;
+      enabled: boolean;
+      checkedInToday: boolean;
+      checkinCount: number;
+    }>;
+  },
 ): Promise<void> {
   const checkinBtn = container.querySelector(
     "#chat-checkin-btn",
@@ -282,6 +295,17 @@ export function setupEventHandlers(context: ChatPanelContext): void {
   // Send button
   sendButton?.addEventListener("click", async () => {
     ztoolkit.log("Send button clicked");
+    const activeSession = chatManager.getActiveSession();
+    const activeSessionId = activeSession?.id ?? "__no_session__";
+    if (sessionSendLocks.has(activeSessionId)) {
+      const didCancel = await chatManager.cancelCurrentTurn();
+      if (didCancel) {
+        releaseSendLock(activeSessionId);
+        syncSendButtonState(sendButton, chatManager);
+        focusTextarea(messageInput);
+      }
+      return;
+    }
     await sendMessage(context, messageInput, sendButton, attachmentsPreview);
   });
 
@@ -727,6 +751,30 @@ function releaseSendLock(sessionId: string): void {
   sessionSendLocks.delete(sessionId);
 }
 
+function updateSendButtonPresentation(
+  sendButton: HTMLButtonElement,
+  isRunning: boolean,
+): void {
+  const icon = sendButton.querySelector(
+    "#chat-send-icon",
+  ) as HTMLElement | null;
+  sendButton.disabled = false;
+  sendButton.style.opacity = "1";
+  sendButton.style.cursor = "pointer";
+  sendButton.title = isRunning
+    ? getString("chat-stop-generating")
+    : getString("chat-send");
+  sendButton.setAttribute("aria-label", sendButton.title);
+
+  if (!icon) {
+    return;
+  }
+
+  icon.textContent = isRunning ? "■" : "↑";
+  icon.style.fontSize = isRunning ? "12px" : "16px";
+  icon.style.fontWeight = "700";
+}
+
 /**
  * 根据当前 session 的锁状态，同步 sendButton 的 disabled 样式
  * 抽取为独立函数，避免在多处重复 button 样式逻辑
@@ -739,9 +787,7 @@ function syncSendButtonState(
   const activeSession = chatManager.getActiveSession();
   const activeSessionId = activeSession?.id ?? "__no_session__";
   const isLocked = sessionSendLocks.has(activeSessionId);
-  sendButton.disabled = isLocked;
-  sendButton.style.opacity = isLocked ? "0.5" : "1";
-  sendButton.style.cursor = isLocked ? "not-allowed" : "pointer";
+  updateSendButtonPresentation(sendButton, isLocked);
 }
 
 /**
@@ -765,11 +811,16 @@ async function sendMessage(
 
   // 使用锁机制防止同一 session 内重复发送
   if (!acquireSendLock(sessionId)) {
-    ztoolkit.log("[sendMessage] Already sending in session", sessionId, ", skipping");
+    ztoolkit.log(
+      "[sendMessage] Already sending in session",
+      sessionId,
+      ", skipping",
+    );
     return;
   }
 
-  let draftState: { content: string; attachmentState: AttachmentState } | null = null;
+  let draftState: { content: string; attachmentState: AttachmentState } | null =
+    null;
 
   // acquire 后立即进 try/finally，确保所有路径都能释放锁并同步按钮状态
   try {
@@ -817,7 +868,9 @@ async function sendMessage(
           context.updateUserBar();
           // Show error in chat
           try {
-            await chatManager.showErrorMessage(getString("chat-error-session-expired"));
+            await chatManager.showErrorMessage(
+              getString("chat-error-session-expired"),
+            );
           } catch (error) {
             context.appendError(
               error instanceof Error ? error.message : String(error),
@@ -832,7 +885,9 @@ async function sendMessage(
           // Check again after re-login
           if (!activeProvider?.isReady()) {
             try {
-              await chatManager.showErrorMessage(getString("chat-error-no-provider"));
+              await chatManager.showErrorMessage(
+                getString("chat-error-no-provider"),
+              );
             } catch (error) {
               context.appendError(
                 error instanceof Error ? error.message : String(error),
@@ -929,9 +984,7 @@ async function sendMessage(
       context.setAttachmentState(draftState.attachmentState);
       context.updateAttachmentsPreview();
     }
-    context.appendError(
-      error instanceof Error ? error.message : String(error),
-    );
+    context.appendError(error instanceof Error ? error.message : String(error));
   } finally {
     releaseSendLock(sessionId);
     // 根据当前活跃 session 的锁状态同步按钮（而非无条件恢复，避免覆盖其他 session 的 disabled 状态）
@@ -1051,8 +1104,10 @@ export function updateModelSelectorDisplay(container: HTMLElement): void {
   if (providerManager.getActiveProviderId() !== "paperchat") {
     const currentModel = getPref("model") as string;
     if (currentModel) {
-      const modelShort =
-        formatModelLabel(currentModel, providerManager.getActiveProviderId() || undefined);
+      const modelShort = formatModelLabel(
+        currentModel,
+        providerManager.getActiveProviderId() || undefined,
+      );
       modelSelectorText.textContent = `${activeProvider.getName()}: ${modelShort}`;
     } else {
       modelSelectorText.textContent = activeProvider.getName();
@@ -1060,7 +1115,9 @@ export function updateModelSelectorDisplay(container: HTMLElement): void {
     return;
   }
 
-  const tierState = parseTierState(getPref("paperchatTierState") as string | undefined);
+  const tierState = parseTierState(
+    getPref("paperchatTierState") as string | undefined,
+  );
   const session = getChatManager().getActiveSession();
   const tier = session?.selectedTier || tierState.selectedTier;
   const resolved = session?.resolvedModelId;
@@ -1173,7 +1230,8 @@ function populateModelDropdown(
           const previousTierState = parseTierState(
             getPref("paperchatTierState") as string | undefined,
           );
-          const previousActiveProviderId = providerManager.getActiveProviderId();
+          const previousActiveProviderId =
+            providerManager.getActiveProviderId();
 
           try {
             if (!isActiveProvider) {
@@ -1186,7 +1244,9 @@ function populateModelDropdown(
             };
             setPref("paperchatTierState", JSON.stringify(nextTierState));
 
-            await context.chatManager.switchCurrentSessionPaperChatTier(opt.value);
+            await context.chatManager.switchCurrentSessionPaperChatTier(
+              opt.value,
+            );
             const activeSession = context.chatManager.getActiveSession();
             if (activeSession) {
               context.renderMessages(activeSession.messages);
@@ -1197,7 +1257,10 @@ function populateModelDropdown(
             context.updateUserBar();
           } catch (error) {
             setPref("paperchatTierState", JSON.stringify(previousTierState));
-            if (previousActiveProviderId && previousActiveProviderId !== config.id) {
+            if (
+              previousActiveProviderId &&
+              previousActiveProviderId !== config.id
+            ) {
               providerManager.setActiveProvider(previousActiveProviderId);
             }
             updateModelSelectorDisplay(container);
@@ -1231,7 +1294,9 @@ function populateModelDropdown(
         const modelItem = createElement(doc, "div", {
           padding: "8px 12px",
           fontSize: "12px",
-          color: isCurrentModel ? theme.inputFocusBorderColor : theme.textPrimary,
+          color: isCurrentModel
+            ? theme.inputFocusBorderColor
+            : theme.textPrimary,
           cursor: "pointer",
           background: isCurrentModel
             ? theme.dropdownItemHoverBg
@@ -1273,13 +1338,15 @@ function populateModelDropdown(
 
         // Click to select model
         modelItem.addEventListener("click", async () => {
-          const leavingPaperChat = providerManager.getActiveProviderId() === "paperchat"
-            && config.id !== "paperchat";
+          const leavingPaperChat =
+            providerManager.getActiveProviderId() === "paperchat" &&
+            config.id !== "paperchat";
 
           try {
             if (leavingPaperChat) {
               await context.chatManager.clearCurrentSessionPaperChatRetryableState();
-              const paperchatProvider = providerManager.getProvider("paperchat");
+              const paperchatProvider =
+                providerManager.getProvider("paperchat");
               paperchatProvider?.updateConfig({
                 resolvedModelOverride: undefined,
               });
@@ -1621,7 +1688,16 @@ function setupMentionSelector(context: ChatPanelContext): void {
   // Detect cursor movement into existing mentions (via arrow keys)
   messageInput.addEventListener("keyup", (e: KeyboardEvent) => {
     if (mentionSelector.isVisible()) return;
-    if (["ArrowLeft", "ArrowRight", "Home", "End", "Backspace", "Delete"].includes(e.key)) {
+    if (
+      [
+        "ArrowLeft",
+        "ArrowRight",
+        "Home",
+        "End",
+        "Backspace",
+        "Delete",
+      ].includes(e.key)
+    ) {
       checkCursorInMention();
     }
   });

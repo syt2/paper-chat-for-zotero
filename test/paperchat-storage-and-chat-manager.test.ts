@@ -41,6 +41,20 @@ function createPrefEnvironment() {
     log: () => undefined,
   };
 
+  (globalThis as any).Services = {
+    obs: {
+      addObserver: () => undefined,
+      removeObserver: () => undefined,
+    },
+    cookies: {
+      remove: () => undefined,
+      getCookiesFromHost: () => [],
+    },
+  };
+  (globalThis as any).Ci = {
+    nsIHttpChannel: Symbol("nsIHttpChannel"),
+  };
+
   (globalThis as any).Zotero = {
     Prefs: {
       get: (key: string) => prefStore.get(key),
@@ -64,11 +78,15 @@ function createPrefEnvironment() {
 describe("paperchat storage and chat manager", function () {
   let originalZotero: unknown;
   let originalZtoolkit: unknown;
+  let originalServices: unknown;
+  let originalCi: unknown;
   let prefStore: Map<string, unknown>;
 
   beforeEach(function () {
     originalZotero = (globalThis as any).Zotero;
     originalZtoolkit = (globalThis as any).ztoolkit;
+    originalServices = (globalThis as any).Services;
+    originalCi = (globalThis as any).Ci;
     prefStore = createPrefEnvironment();
     destroyStorageDatabase();
     destroyAuthManager();
@@ -85,6 +103,8 @@ describe("paperchat storage and chat manager", function () {
     destroyProviderManager();
     (globalThis as any).Zotero = originalZotero;
     (globalThis as any).ztoolkit = originalZtoolkit;
+    (globalThis as any).Services = originalServices;
+    (globalThis as any).Ci = originalCi;
   });
 
   it("backfills companion session state during schema v5 migration", async function () {
@@ -876,6 +896,7 @@ describe("paperchat storage and chat manager", function () {
 
     const manager = Object.create(ChatManager.prototype) as ChatManager & {
       currentSession: ChatSession;
+      activeSessionRunIds: Map<string, number>;
       sessionStorage: {
         deleteAllMessages: (sessionId: string) => Promise<void>;
         updateSessionMeta: (session: ChatSession) => Promise<void>;
@@ -938,6 +959,7 @@ describe("paperchat storage and chat manager", function () {
         persistedSessions.push(persisted);
       },
     };
+    manager.activeSessionRunIds = new Map();
     manager.streamingSessions = new Map([[session.id, session]]);
     manager.applySessionItemContext = (appliedSession) => {
       appliedContexts.push(appliedSession);
@@ -969,6 +991,129 @@ describe("paperchat storage and chat manager", function () {
     assert.deepEqual(appliedContexts, [clearedSession]);
     assert.deepEqual(renderedMessages, [[]]);
     assert.isFalse(manager.streamingSessions.has("session-clear-1"));
+  });
+
+  it("cancels the current turn and marks the streaming assistant message as interrupted", async function () {
+    const messageUpdates: Array<{
+      sessionId: string;
+      messageId: string;
+      content: string;
+      streamingState: string | null | undefined;
+    }> = [];
+    const persistedSessions: ChatSession[] = [];
+    const renderedMessages: ChatMessage[][] = [];
+    const renderedPlans: unknown[] = [];
+
+    const manager = Object.create(ChatManager.prototype) as ChatManager & {
+      currentSession: ChatSession;
+      activeSessionRunIds: Map<string, number>;
+      streamingSessions: Map<string, ChatSession>;
+      sessionStorage: {
+        updateMessageContent: (
+          sessionId: string,
+          messageId: string,
+          content: string,
+          reasoning?: string,
+          options?: { streamingState?: string | null },
+        ) => Promise<void>;
+        updateSessionMeta: (session: ChatSession) => Promise<void>;
+      };
+      init: () => Promise<void>;
+      isSessionActive: (session: ChatSession) => boolean;
+      onExecutionPlanUpdate?: (plan?: unknown) => void;
+      onMessageUpdate?: (messages: ChatMessage[]) => void;
+    };
+
+    const session: ChatSession = {
+      id: "session-cancel-1",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: "ITEM-1",
+      messages: [
+        {
+          id: "user-1",
+          role: "user",
+          content: "hello",
+          timestamp: 1,
+        },
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: "working",
+          streamingState: "in_progress",
+          timestamp: 2,
+        },
+      ],
+      executionPlan: {
+        id: "plan-1",
+        summary: "Working",
+        status: "in_progress",
+        steps: [],
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      toolExecutionState: {
+        planId: "plan-1",
+        turnStartedAt: 1,
+        updatedAt: 2,
+        results: [],
+      },
+      toolApprovalState: undefined,
+    };
+
+    manager.currentSession = session;
+    manager.activeSessionRunIds = new Map([[session.id, 1]]);
+    manager.streamingSessions = new Map([[session.id, session]]);
+    manager.sessionStorage = {
+      updateMessageContent: async (
+        sessionId,
+        messageId,
+        content,
+        _reasoning,
+        options,
+      ) => {
+        messageUpdates.push({
+          sessionId,
+          messageId,
+          content,
+          streamingState: options?.streamingState,
+        });
+      },
+      updateSessionMeta: async (persisted) => {
+        persistedSessions.push(persisted);
+      },
+    };
+    manager.init = async () => undefined;
+    manager.isSessionActive = () => true;
+    manager.onExecutionPlanUpdate = (plan) => {
+      renderedPlans.push(plan);
+    };
+    manager.onMessageUpdate = (messages) => {
+      renderedMessages.push(messages.map((message) => ({ ...message })));
+    };
+
+    const cancelled = await manager.cancelCurrentTurn();
+
+    assert.isTrue(cancelled);
+    assert.equal(session.messages[1].streamingState, "interrupted");
+    assert.equal(session.messages[1].content, "working");
+    assert.isUndefined(session.executionPlan);
+    assert.isUndefined(session.toolExecutionState);
+    assert.isUndefined(session.toolApprovalState);
+    assert.isFalse(manager.activeSessionRunIds.has(session.id));
+    assert.isFalse(manager.streamingSessions.has(session.id));
+    assert.deepEqual(messageUpdates, [
+      {
+        sessionId: "session-cancel-1",
+        messageId: "assistant-1",
+        content: "working",
+        streamingState: "interrupted",
+      },
+    ]);
+    assert.deepEqual(persistedSessions, [session]);
+    assert.deepEqual(renderedPlans, [undefined]);
+    assert.lengthOf(renderedMessages, 1);
+    assert.equal(renderedMessages[0][1].streamingState, "interrupted");
   });
 
   it("treats session invalidation after message persistence as an accepted send", async function () {
@@ -1006,6 +1151,7 @@ describe("paperchat storage and chat manager", function () {
     try {
       const manager = Object.create(ChatManager.prototype) as ChatManager & {
         currentSession: ChatSession;
+        activeSessionRunIds: Map<string, number>;
         sessionStorage: {
           insertMessage: (
             sessionId: string,
@@ -1021,6 +1167,7 @@ describe("paperchat storage and chat manager", function () {
       };
 
       manager.currentSession = session;
+      manager.activeSessionRunIds = new Map();
       manager.sessionStorage = {
         insertMessage: async (_sessionId: string, message: ChatMessage) => {
           insertedMessages.push(message);

@@ -83,6 +83,7 @@ paperchat-chat-upload-file = 上传文件
 paperchat-chat-history = 聊天记录
 paperchat-chat-input-placeholder = 询问关于PDF的问题...
 paperchat-chat-send = 发送
+paperchat-chat-stop-generating = 停止本轮
 paperchat-chat-no-messages = (无消息)
 paperchat-chat-message-count = { $count } 条消息
 paperchat-chat-show-more = 显示更多 (剩余 { $count } 条)
@@ -104,6 +105,7 @@ paperchat-chat-configure-provider = 请先在设置中配置服务商
 paperchat-chat-delete = 删除
 paperchat-chat-copy = 复制
 paperchat-chat-interrupted = 已中断
+paperchat-chat-turn-cancelled = 已取消本次请求。
 
 # Guide
 paperchat-guide-toolbar-title = 开始与 AI 对话

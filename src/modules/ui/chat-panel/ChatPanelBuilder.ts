@@ -666,17 +666,22 @@ export function createChatContainer(
       flexShrink: "0",
       padding: "0",
     },
-    { id: "chat-send-button" },
+    { id: "chat-send-button", title: getString("chat-send") },
   );
 
   // Arrow up icon
-  const sendIcon = createElement(doc, "span", {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: "16px",
-    fontWeight: "bold",
-  });
+  const sendIcon = createElement(
+    doc,
+    "span",
+    {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      fontSize: "16px",
+      fontWeight: "bold",
+    },
+    { id: "chat-send-icon" },
+  );
   sendIcon.textContent = "↑";
   sendButton.appendChild(sendIcon);
 

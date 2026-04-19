@@ -37,7 +37,7 @@ import { parseToolError } from "../tool-errors/ToolErrorFormatter";
 
 interface AgentRuntimeCallbacks {
   isSessionActive: (session: ChatSession) => boolean;
-  isSessionTracked: (session: ChatSession) => boolean;
+  isSessionTracked: (session: ChatSession, runId?: number) => boolean;
   onRuntimeEvent?: (event: AgentRuntimeEvent) => void;
   onStreamingUpdate?: (content: string) => void;
   onReasoningUpdate?: (reasoning: string) => void;
@@ -73,6 +73,7 @@ interface RuntimeExecutionOptions {
   tools: ToolDefinition[];
   paperStructure?: PaperStructure | PaperStructureExtended | null;
   sendingSession: ChatSession;
+  sessionRunId?: number;
   refreshSystemPrompt?: (
     currentMessages: ChatMessage[],
     session: ChatSession,
@@ -94,6 +95,7 @@ type RuntimeEventPayload<T extends AgentRuntimeEventType> = Omit<
 
 interface ToolIterationParams {
   sendingSession: ChatSession;
+  sessionRunId?: number;
   currentMessages: ChatMessage[];
   assistantMessage: ChatMessage;
   paperStructure?: PaperStructure | PaperStructureExtended | null;
@@ -116,7 +118,10 @@ const AGENT_TRACE_LOG_PREF =
 
 export class AgentRuntime {
   private executionPlanManager = new ExecutionPlanManager();
-  private messageCheckpointTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private messageCheckpointTimers = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
   private messageCheckpointQueues = new Map<string, Promise<void>>();
 
   constructor(
@@ -137,17 +142,28 @@ export class AgentRuntime {
       tools,
       paperStructure,
       sendingSession,
+      sessionRunId,
       refreshSystemPrompt,
     } = options;
     const logPrefix = "Streaming Tool Calling";
     let iteration = 0;
     let accumulatedDisplay = "";
-    await this.startTurn(sendingSession, assistantMessage, currentMessages, true);
+    await this.startTurn(
+      sendingSession,
+      sessionRunId,
+      assistantMessage,
+      currentMessages,
+      true,
+    );
 
     try {
       while (iteration < MAX_ITERATIONS) {
         iteration++;
-        this.refreshSystemPrompt(currentMessages, sendingSession, refreshSystemPrompt);
+        this.refreshSystemPrompt(
+          currentMessages,
+          sendingSession,
+          refreshSystemPrompt,
+        );
         ztoolkit.log(
           `[${logPrefix}] Iteration ${iteration}, messages: ${currentMessages.length}`,
         );
@@ -158,12 +174,13 @@ export class AgentRuntime {
           currentMessages,
           tools,
           sendingSession,
+          sessionRunId,
           assistantMessage,
           displayBeforeThisRound,
           iteration,
         );
 
-        this.ensureSessionTracked(sendingSession);
+        this.ensureSessionTracked(sendingSession, sessionRunId);
 
         ztoolkit.log(
           `[${logPrefix}] Response:`,
@@ -177,6 +194,7 @@ export class AgentRuntime {
         if (result.toolCalls && result.toolCalls.length > 0) {
           accumulatedDisplay = await this.runToolIteration({
             sendingSession,
+            sessionRunId,
             currentMessages,
             assistantMessage,
             paperStructure,
@@ -191,6 +209,7 @@ export class AgentRuntime {
 
         await this.finalizeCompletedTurn({
           sendingSession,
+          sessionRunId,
           currentMessages,
           assistantMessage,
           pdfWasAttached,
@@ -204,6 +223,7 @@ export class AgentRuntime {
       ztoolkit.log(`[${logPrefix}] Max iterations reached`);
       await this.finalizeMaxIterationsTurn(
         sendingSession,
+        sessionRunId,
         currentMessages,
         assistantMessage,
         accumulatedDisplay + MAX_ITERATIONS_MESSAGE,
@@ -215,6 +235,7 @@ export class AgentRuntime {
       }
       await this.finalizeErroredTurn(
         sendingSession,
+        sessionRunId,
         currentMessages,
         assistantMessage,
         error,
@@ -237,17 +258,28 @@ export class AgentRuntime {
       tools,
       paperStructure,
       sendingSession,
+      sessionRunId,
       refreshSystemPrompt,
     } = options;
     const logPrefix = "Tool Calling";
     let iteration = 0;
     let accumulatedDisplay = "";
-    await this.startTurn(sendingSession, assistantMessage, currentMessages, false);
+    await this.startTurn(
+      sendingSession,
+      sessionRunId,
+      assistantMessage,
+      currentMessages,
+      false,
+    );
 
     try {
       while (iteration < MAX_ITERATIONS) {
         iteration++;
-        this.refreshSystemPrompt(currentMessages, sendingSession, refreshSystemPrompt);
+        this.refreshSystemPrompt(
+          currentMessages,
+          sendingSession,
+          refreshSystemPrompt,
+        );
         ztoolkit.log(
           `[${logPrefix}] Iteration ${iteration}, messages: ${currentMessages.length}`,
         );
@@ -257,7 +289,7 @@ export class AgentRuntime {
           tools,
         );
 
-        this.ensureSessionTracked(sendingSession);
+        this.ensureSessionTracked(sendingSession, sessionRunId);
 
         ztoolkit.log(
           `[${logPrefix}] Response:`,
@@ -269,6 +301,7 @@ export class AgentRuntime {
         if (result.toolCalls && result.toolCalls.length > 0) {
           accumulatedDisplay = await this.runToolIteration({
             sendingSession,
+            sessionRunId,
             currentMessages,
             assistantMessage,
             paperStructure,
@@ -283,6 +316,7 @@ export class AgentRuntime {
 
         await this.finalizeCompletedTurn({
           sendingSession,
+          sessionRunId,
           currentMessages,
           assistantMessage,
           pdfWasAttached,
@@ -296,6 +330,7 @@ export class AgentRuntime {
       ztoolkit.log(`[${logPrefix}] Max iterations reached`);
       await this.finalizeMaxIterationsTurn(
         sendingSession,
+        sessionRunId,
         currentMessages,
         assistantMessage,
         accumulatedDisplay + MAX_ITERATIONS_MESSAGE,
@@ -307,6 +342,7 @@ export class AgentRuntime {
       }
       await this.finalizeErroredTurn(
         sendingSession,
+        sessionRunId,
         currentMessages,
         assistantMessage,
         error,
@@ -319,6 +355,7 @@ export class AgentRuntime {
 
   private async startTurn(
     session: ChatSession,
+    sessionRunId: number | undefined,
     assistantMessage: ChatMessage,
     currentMessages: ChatMessage[],
     streaming: boolean,
@@ -326,12 +363,17 @@ export class AgentRuntime {
     const plan = this.executionPlanManager.startPlan(session, currentMessages);
     this.initializeToolExecutionState(session);
     await this.sessionStorage.updateSessionMeta(session);
-    this.emitPlanUpdate(session);
-    this.emitRuntimeEvent<"turn_started">(session, assistantMessage, {
-      type: "turn_started",
-      summary: plan.summary,
-      streaming,
-    });
+    this.emitPlanUpdate(session, sessionRunId);
+    this.emitRuntimeEvent<"turn_started">(
+      session,
+      sessionRunId,
+      assistantMessage,
+      {
+        type: "turn_started",
+        summary: plan.summary,
+        streaming,
+      },
+    );
   }
 
   private async runStreamingRound(
@@ -339,6 +381,7 @@ export class AgentRuntime {
     currentMessages: ChatMessage[],
     tools: ToolDefinition[],
     sendingSession: ChatSession,
+    sessionRunId: number | undefined,
     assistantMessage: ChatMessage,
     displayBeforeThisRound: string,
     iteration: number,
@@ -354,37 +397,55 @@ export class AgentRuntime {
 
       const callbacks: StreamToolCallingCallbacks = {
         onTextDelta: (text) => {
-          if (!this.callbacks.isSessionTracked(sendingSession)) {
+          if (!this.callbacks.isSessionTracked(sendingSession, sessionRunId)) {
             return;
           }
           roundContent += text;
           assistantMessage.content = displayBeforeThisRound + roundContent;
           assistantMessage.streamingState = "in_progress";
-          this.scheduleAssistantMessageCheckpoint(sendingSession, assistantMessage);
-          this.emitRuntimeEvent<"text_delta">(sendingSession, assistantMessage, {
-            type: "text_delta",
-            delta: text,
-            content: assistantMessage.content,
-            iteration,
-          });
+          this.scheduleAssistantMessageCheckpoint(
+            sendingSession,
+            sessionRunId,
+            assistantMessage,
+          );
+          this.emitRuntimeEvent<"text_delta">(
+            sendingSession,
+            sessionRunId,
+            assistantMessage,
+            {
+              type: "text_delta",
+              delta: text,
+              content: assistantMessage.content,
+              iteration,
+            },
+          );
           if (this.callbacks.isSessionActive(sendingSession)) {
             this.callbacks.onStreamingUpdate?.(assistantMessage.content);
           }
         },
         onReasoningDelta: (text) => {
-          if (!this.callbacks.isSessionTracked(sendingSession)) {
+          if (!this.callbacks.isSessionTracked(sendingSession, sessionRunId)) {
             return;
           }
           assistantMessage.reasoning =
             (assistantMessage.reasoning || "") + text;
           assistantMessage.streamingState = "in_progress";
-          this.scheduleAssistantMessageCheckpoint(sendingSession, assistantMessage);
-          this.emitRuntimeEvent<"reasoning_delta">(sendingSession, assistantMessage, {
-            type: "reasoning_delta",
-            delta: text,
-            reasoning: assistantMessage.reasoning,
-            iteration,
-          });
+          this.scheduleAssistantMessageCheckpoint(
+            sendingSession,
+            sessionRunId,
+            assistantMessage,
+          );
+          this.emitRuntimeEvent<"reasoning_delta">(
+            sendingSession,
+            sessionRunId,
+            assistantMessage,
+            {
+              type: "reasoning_delta",
+              delta: text,
+              reasoning: assistantMessage.reasoning,
+              iteration,
+            },
+          );
           if (this.callbacks.isSessionActive(sendingSession)) {
             this.callbacks.onReasoningUpdate?.(assistantMessage.reasoning);
           }
@@ -439,11 +500,10 @@ export class AgentRuntime {
    * calls to run). Returns the updated accumulated display so the caller can
    * feed it into the next iteration.
    */
-  private async runToolIteration(
-    params: ToolIterationParams,
-  ): Promise<string> {
+  private async runToolIteration(params: ToolIterationParams): Promise<string> {
     const {
       sendingSession,
+      sessionRunId,
       currentMessages,
       assistantMessage,
       paperStructure,
@@ -503,11 +563,12 @@ export class AgentRuntime {
         assistantMessage.streamingState = "in_progress";
         await this.flushAssistantMessageCheckpoint(
           sendingSession,
+          sessionRunId,
           assistantMessage,
           "in_progress",
         );
         await this.sessionStorage.updateSessionMeta(sendingSession);
-        this.emitPlanUpdate(sendingSession);
+        this.emitPlanUpdate(sendingSession, sessionRunId);
         if (this.callbacks.isSessionActive(sendingSession)) {
           this.callbacks.onStreamingUpdate?.(callingDisplay);
         }
@@ -517,6 +578,7 @@ export class AgentRuntime {
         entry.kind === "execute"
           ? await this.executeBatchWithRuntimeEvents(
               sendingSession,
+              sessionRunId,
               assistantMessage,
               entry.requests,
               iteration,
@@ -524,10 +586,10 @@ export class AgentRuntime {
           : entry.results;
       this.appendToolExecutionResults(sendingSession, batchResults);
       await this.sessionStorage.updateSessionMeta(sendingSession);
-      this.emitPlanUpdate(sendingSession);
+      this.emitPlanUpdate(sendingSession, sessionRunId);
 
       for (const executionResult of batchResults) {
-        this.ensureSessionTracked(sendingSession);
+        this.ensureSessionTracked(sendingSession, sessionRunId);
         const toolCall = executionResult.toolCall;
         const toolName = toolCall.function.name;
         const toolArgs = toolCall.function.arguments;
@@ -565,10 +627,11 @@ export class AgentRuntime {
         assistantMessage.streamingState = "in_progress";
         await this.flushAssistantMessageCheckpoint(
           sendingSession,
+          sessionRunId,
           assistantMessage,
           "in_progress",
         );
-        this.ensureSessionTracked(sendingSession);
+        this.ensureSessionTracked(sendingSession, sessionRunId);
         this.executionPlanManager.addOrUpdateToolStep(
           sendingSession,
           currentMessages,
@@ -578,26 +641,31 @@ export class AgentRuntime {
           truncateToolDetail(toolResult),
         );
         await this.sessionStorage.updateSessionMeta(sendingSession);
-        this.emitPlanUpdate(sendingSession);
+        this.emitPlanUpdate(sendingSession, sessionRunId);
 
-        this.emitRuntimeEvent<"tool_completed">(sendingSession, assistantMessage, {
-          type: "tool_completed",
-          toolCallId: toolCall.id,
-          toolName,
-          args: toolArgs,
-          resultPreview: truncateToolDetail(toolResult),
-          status: executionResult.status,
-          origin: primaryPolicyTrace?.stage || "executor",
-          policyName: primaryPolicyTrace?.policy,
-          policyOutcome: primaryPolicyTrace?.outcome,
-          policySummary: primaryPolicyTrace?.summary,
-          policyTrace: executionResult.policyTrace,
-          errorCategory:
-            executionResult.status === "completed"
-              ? undefined
-              : parsedToolError?.category || "unspecified",
-          iteration,
-        });
+        this.emitRuntimeEvent<"tool_completed">(
+          sendingSession,
+          sessionRunId,
+          assistantMessage,
+          {
+            type: "tool_completed",
+            toolCallId: toolCall.id,
+            toolName,
+            args: toolArgs,
+            resultPreview: truncateToolDetail(toolResult),
+            status: executionResult.status,
+            origin: primaryPolicyTrace?.stage || "executor",
+            policyName: primaryPolicyTrace?.policy,
+            policyOutcome: primaryPolicyTrace?.outcome,
+            policySummary: primaryPolicyTrace?.summary,
+            policyTrace: executionResult.policyTrace,
+            errorCategory:
+              executionResult.status === "completed"
+                ? undefined
+                : parsedToolError?.category || "unspecified",
+            iteration,
+          },
+        );
         if (this.callbacks.isSessionActive(sendingSession)) {
           this.callbacks.onStreamingUpdate?.(accumulatedDisplay);
         }
@@ -613,22 +681,23 @@ export class AgentRuntime {
           batchResults,
         );
         await this.sessionStorage.updateSessionMeta(sendingSession);
-        this.emitPlanUpdate(sendingSession);
+        this.emitPlanUpdate(sendingSession, sessionRunId);
       }
 
       this.appendRecoveryGuidanceMessage(currentMessages, batchResults);
     }
 
-    this.ensureSessionTracked(sendingSession);
+    this.ensureSessionTracked(sendingSession, sessionRunId);
     const thinkingDisplay = accumulatedDisplay + THINKING_SUFFIX;
     assistantMessage.content = thinkingDisplay;
     assistantMessage.streamingState = "in_progress";
     await this.flushAssistantMessageCheckpoint(
       sendingSession,
+      sessionRunId,
       assistantMessage,
       "in_progress",
     );
-    this.ensureSessionTracked(sendingSession);
+    this.ensureSessionTracked(sendingSession, sessionRunId);
     if (this.callbacks.isSessionActive(sendingSession)) {
       this.callbacks.onStreamingUpdate?.(thinkingDisplay);
     }
@@ -655,6 +724,7 @@ export class AgentRuntime {
 
   private async executeBatchWithRuntimeEvents(
     session: ChatSession,
+    sessionRunId: number | undefined,
     assistantMessage: ChatMessage,
     requests: ToolSchedulerRequest[],
     iteration: number,
@@ -665,18 +735,24 @@ export class AgentRuntime {
       return await awaitWhileSessionTracked(
         session,
         this.callbacks.isSessionTracked,
+        sessionRunId,
         () =>
           this.toolScheduler.executeBatch(requests, {
             onExecutionReady: (request) => {
-              this.ensureSessionTracked(session);
+              this.ensureSessionTracked(session, sessionRunId);
               startedRequests.push(request);
-              this.emitRuntimeEvent<"tool_started">(session, assistantMessage, {
-                type: "tool_started",
-                toolCallId: request.toolCall.id,
-                toolName: request.toolCall.function.name,
-                args: request.toolCall.function.arguments,
-                iteration,
-              });
+              this.emitRuntimeEvent<"tool_started">(
+                session,
+                sessionRunId,
+                assistantMessage,
+                {
+                  type: "tool_started",
+                  toolCallId: request.toolCall.id,
+                  toolName: request.toolCall.function.name,
+                  args: request.toolCall.function.arguments,
+                  iteration,
+                },
+              );
             },
           }),
       );
@@ -684,6 +760,7 @@ export class AgentRuntime {
       if (error instanceof SessionRunInvalidatedError) {
         this.emitInterruptedToolCompletions(
           session,
+          sessionRunId,
           assistantMessage,
           startedRequests,
           iteration,
@@ -695,6 +772,7 @@ export class AgentRuntime {
 
   private emitInterruptedToolCompletions(
     session: ChatSession,
+    sessionRunId: number | undefined,
     assistantMessage: ChatMessage,
     requests: ToolSchedulerRequest[],
     iteration: number,
@@ -706,22 +784,30 @@ export class AgentRuntime {
         continue;
       }
       emittedToolCallIds.add(toolCall.id);
-      this.emitRuntimeEvent<"tool_completed">(session, assistantMessage, {
-        type: "tool_completed",
-        toolCallId: toolCall.id,
-        toolName: toolCall.function.name,
-        args: toolCall.function.arguments,
-        resultPreview: "Tool execution interrupted because the session is no longer active.",
-        status: "failed",
-        origin: "executor",
-        errorCategory: "unavailable",
-        iteration,
-      });
+      this.emitRuntimeEvent<"tool_completed">(
+        session,
+        sessionRunId,
+        assistantMessage,
+        {
+          type: "tool_completed",
+          toolCallId: toolCall.id,
+          toolName: toolCall.function.name,
+          args: toolCall.function.arguments,
+          resultPreview:
+            "Tool execution interrupted because the session is no longer active.",
+          status: "failed",
+          origin: "executor",
+          errorCategory: "unavailable",
+          iteration,
+        },
+        { allowWhenInvalidated: true },
+      );
     }
   }
 
   private async finalizeCompletedTurn(params: {
     sendingSession: ChatSession;
+    sessionRunId?: number;
     currentMessages: ChatMessage[];
     assistantMessage: ChatMessage;
     pdfWasAttached: boolean;
@@ -731,6 +817,7 @@ export class AgentRuntime {
   }): Promise<void> {
     const {
       sendingSession,
+      sessionRunId,
       currentMessages,
       assistantMessage,
       pdfWasAttached,
@@ -756,18 +843,24 @@ export class AgentRuntime {
 
     await this.flushAssistantMessageCheckpoint(
       sendingSession,
+      sessionRunId,
       assistantMessage,
       null,
     );
-    this.ensureSessionTracked(sendingSession);
+    this.ensureSessionTracked(sendingSession, sessionRunId);
     this.touchToolExecutionState(sendingSession);
     await this.sessionStorage.updateSessionMeta(sendingSession);
-    this.emitPlanUpdate(sendingSession);
-    this.emitRuntimeEvent<"turn_completed">(sendingSession, assistantMessage, {
-      type: "turn_completed",
-      content: accumulatedDisplay,
-      iteration,
-    });
+    this.emitPlanUpdate(sendingSession, sessionRunId);
+    this.emitRuntimeEvent<"turn_completed">(
+      sendingSession,
+      sessionRunId,
+      assistantMessage,
+      {
+        type: "turn_completed",
+        content: accumulatedDisplay,
+        iteration,
+      },
+    );
     if (this.callbacks.isSessionActive(sendingSession)) {
       this.callbacks.onMessageUpdate?.(sendingSession.messages);
 
@@ -781,7 +874,7 @@ export class AgentRuntime {
       void import("../ContextManager")
         .then(({ getContextManager }) =>
           getContextManager().generateSummaryAsync(sendingSession, async () => {
-            this.ensureSessionTracked(sendingSession);
+            this.ensureSessionTracked(sendingSession, sessionRunId);
             await this.sessionStorage.updateSessionMeta(sendingSession);
           }),
         )
@@ -793,6 +886,7 @@ export class AgentRuntime {
 
   private async finalizeMaxIterationsTurn(
     sendingSession: ChatSession,
+    sessionRunId: number | undefined,
     currentMessages: ChatMessage[],
     assistantMessage: ChatMessage,
     accumulatedDisplay: string,
@@ -812,18 +906,24 @@ export class AgentRuntime {
     assistantMessage.streamingState = undefined;
     await this.flushAssistantMessageCheckpoint(
       sendingSession,
+      sessionRunId,
       assistantMessage,
       null,
     );
-    this.ensureSessionTracked(sendingSession);
+    this.ensureSessionTracked(sendingSession, sessionRunId);
     this.touchToolExecutionState(sendingSession);
     await this.sessionStorage.updateSessionMeta(sendingSession);
-    this.emitPlanUpdate(sendingSession);
-    this.emitRuntimeEvent<"turn_failed">(sendingSession, assistantMessage, {
-      type: "turn_failed",
-      error: MAX_ITERATIONS_ERROR,
-      iteration,
-    });
+    this.emitPlanUpdate(sendingSession, sessionRunId);
+    this.emitRuntimeEvent<"turn_failed">(
+      sendingSession,
+      sessionRunId,
+      assistantMessage,
+      {
+        type: "turn_failed",
+        error: MAX_ITERATIONS_ERROR,
+        iteration,
+      },
+    );
     if (this.callbacks.isSessionActive(sendingSession)) {
       this.callbacks.onMessageUpdate?.(sendingSession.messages);
       this.callbacks.onMessageComplete?.();
@@ -832,6 +932,7 @@ export class AgentRuntime {
 
   private async finalizeErroredTurn(
     sendingSession: ChatSession,
+    sessionRunId: number | undefined,
     currentMessages: ChatMessage[],
     assistantMessage: ChatMessage,
     error: unknown,
@@ -849,23 +950,32 @@ export class AgentRuntime {
     // the user re-opens this exact session we want an accurate state.
     await this.flushAssistantMessageCheckpoint(
       sendingSession,
+      sessionRunId,
       assistantMessage,
       "interrupted",
     );
-    this.ensureSessionTracked(sendingSession);
+    this.ensureSessionTracked(sendingSession, sessionRunId);
     this.touchToolExecutionState(sendingSession);
     await this.sessionStorage.updateSessionMeta(sendingSession);
-    this.emitPlanUpdate(sendingSession);
-    this.emitRuntimeEvent<"turn_failed">(sendingSession, assistantMessage, {
-      type: "turn_failed",
-      error: getErrorMessage(error),
-      iteration,
-    });
+    this.emitPlanUpdate(sendingSession, sessionRunId);
+    this.emitRuntimeEvent<"turn_failed">(
+      sendingSession,
+      sessionRunId,
+      assistantMessage,
+      {
+        type: "turn_failed",
+        error: getErrorMessage(error),
+        iteration,
+      },
+    );
     ztoolkit.log(`[${logPrefix}] Error:`, error);
   }
 
-  private emitPlanUpdate(session: ChatSession): void {
-    if (this.callbacks.isSessionActive(session)) {
+  private emitPlanUpdate(session: ChatSession, sessionRunId?: number): void {
+    if (
+      this.callbacks.isSessionActive(session) &&
+      this.callbacks.isSessionTracked(session, sessionRunId)
+    ) {
       this.callbacks.onExecutionPlanUpdate?.(session.executionPlan);
     }
   }
@@ -903,9 +1013,10 @@ export class AgentRuntime {
 
   private scheduleAssistantMessageCheckpoint(
     session: ChatSession,
+    sessionRunId: number | undefined,
     message: ChatMessage,
   ): void {
-    if (!this.callbacks.isSessionTracked(session)) {
+    if (!this.callbacks.isSessionTracked(session, sessionRunId)) {
       return;
     }
     if (this.messageCheckpointTimers.has(message.id)) {
@@ -914,11 +1025,12 @@ export class AgentRuntime {
 
     const timer = setTimeout(() => {
       this.messageCheckpointTimers.delete(message.id);
-      if (!this.callbacks.isSessionTracked(session)) {
+      if (!this.callbacks.isSessionTracked(session, sessionRunId)) {
         return;
       }
       void this.enqueueAssistantMessageCheckpoint(
         session,
+        sessionRunId,
         message,
         "in_progress",
       );
@@ -928,10 +1040,11 @@ export class AgentRuntime {
 
   private async flushAssistantMessageCheckpoint(
     session: ChatSession,
+    sessionRunId: number | undefined,
     message: ChatMessage,
     streamingState: ChatMessageStreamingState | null,
   ): Promise<void> {
-    if (!this.callbacks.isSessionTracked(session)) {
+    if (!this.callbacks.isSessionTracked(session, sessionRunId)) {
       return;
     }
     const timer = this.messageCheckpointTimers.get(message.id);
@@ -942,6 +1055,7 @@ export class AgentRuntime {
 
     await this.enqueueAssistantMessageCheckpoint(
       session,
+      sessionRunId,
       message,
       streamingState,
     );
@@ -949,13 +1063,15 @@ export class AgentRuntime {
 
   private async enqueueAssistantMessageCheckpoint(
     session: ChatSession,
+    sessionRunId: number | undefined,
     message: ChatMessage,
     streamingState: ChatMessageStreamingState | null,
   ): Promise<void> {
-    if (!this.callbacks.isSessionTracked(session)) {
+    if (!this.callbacks.isSessionTracked(session, sessionRunId)) {
       return;
     }
-    const previous = this.messageCheckpointQueues.get(message.id) || Promise.resolve();
+    const previous =
+      this.messageCheckpointQueues.get(message.id) || Promise.resolve();
     const next = previous
       .catch(() => undefined)
       .then(async () => {
@@ -995,12 +1111,17 @@ export class AgentRuntime {
   private refreshSystemPrompt(
     currentMessages: ChatMessage[],
     session: ChatSession,
-    promptBuilder?: (currentMessages: ChatMessage[], session: ChatSession) => string,
+    promptBuilder?: (
+      currentMessages: ChatMessage[],
+      session: ChatSession,
+    ) => string,
   ): void {
     if (!promptBuilder) return;
 
     const content = promptBuilder(currentMessages, session);
-    const existing = currentMessages.find((message) => message.id === "paper-context");
+    const existing = currentMessages.find(
+      (message) => message.id === "paper-context",
+    );
     if (existing) {
       existing.content = content;
       existing.timestamp = Date.now();
@@ -1017,9 +1138,17 @@ export class AgentRuntime {
 
   private emitRuntimeEvent<T extends AgentRuntimeEventType>(
     session: ChatSession,
+    sessionRunId: number | undefined,
     assistantMessage: ChatMessage,
     event: RuntimeEventPayload<T>,
+    options?: { allowWhenInvalidated?: boolean },
   ): void {
+    if (
+      !options?.allowWhenInvalidated &&
+      !this.callbacks.isSessionTracked(session, sessionRunId)
+    ) {
+      return;
+    }
     const fullEvent = {
       ...event,
       sessionId: session.id,
@@ -1051,8 +1180,15 @@ export class AgentRuntime {
     }
   }
 
-  private ensureSessionTracked(session: ChatSession): void {
-    ensureTrackedSession(session, this.callbacks.isSessionTracked);
+  private ensureSessionTracked(
+    session: ChatSession,
+    sessionRunId?: number,
+  ): void {
+    ensureTrackedSession(
+      session,
+      this.callbacks.isSessionTracked,
+      sessionRunId,
+    );
   }
 }
 

@@ -143,6 +143,7 @@ export class ChatManager {
   // so that isSessionActive() returns true and UI updates resume
   // when the user switches back to a session that is still streaming.
   private streamingSessions = new Map<string, ChatSession>();
+  private activeSessionRunIds = new Map<string, number>();
 
   private memoryManager: MemoryManager;
   private agentRuntime: AgentRuntime;
@@ -167,7 +168,8 @@ export class ChatManager {
       this.sessionStorage,
       {
         isSessionActive: (session) => this.isSessionActive(session),
-        isSessionTracked: (session) => this.isSessionTracked(session),
+        isSessionTracked: (session, runId) =>
+          this.isSessionTracked(session, runId),
         onStreamingUpdate: (content) => this.onStreamingUpdate?.(content),
         onReasoningUpdate: (reasoning) => this.onReasoningUpdate?.(reasoning),
         onMessageUpdate: (messages) => this.onMessageUpdate?.(messages),
@@ -480,11 +482,38 @@ export class ChatManager {
    * instance for its session id. Clearing/deleting a session replaces or
    * detaches the old object so late async callbacks can be ignored.
    */
-  private isSessionTracked(session: ChatSession): boolean {
-    return (
+  private isSessionTracked(session: ChatSession, runId?: number): boolean {
+    const hasSessionRef =
       this.currentSession === session ||
-      this.streamingSessions.get(session.id) === session
-    );
+      this.streamingSessions.get(session.id) === session;
+    if (!hasSessionRef) {
+      return false;
+    }
+    if (runId === undefined) {
+      return true;
+    }
+    return this.activeSessionRunIds.get(session.id) === runId;
+  }
+
+  private beginSessionRun(session: ChatSession): number {
+    const nextRunId = (this.activeSessionRunIds.get(session.id) || 0) + 1;
+    this.activeSessionRunIds.set(session.id, nextRunId);
+    this.streamingSessions.set(session.id, session);
+    return nextRunId;
+  }
+
+  private completeSessionRun(session: ChatSession, runId: number): void {
+    if (this.activeSessionRunIds.get(session.id) !== runId) {
+      return;
+    }
+    this.activeSessionRunIds.delete(session.id);
+    this.streamingSessions.delete(session.id);
+  }
+
+  private ensureTrackedRun(session: ChatSession, runId: number): void {
+    if (!this.isSessionTracked(session, runId)) {
+      throw new SessionRunInvalidatedError();
+    }
   }
 
   /**
@@ -625,6 +654,7 @@ export class ChatManager {
     });
     getToolPermissionManager().clearSessionPolicies(sessionId);
 
+    this.activeSessionRunIds.delete(sessionId);
     this.streamingSessions.delete(sessionId);
     if (deletingCurrentSession) {
       this.currentSession = null;
@@ -1046,209 +1076,227 @@ export class ChatManager {
     // This ensures DB writes and in-memory mutations target the correct
     // session even if the user switches sessions mid-stream.
     const sendingSession = this.currentSession;
+    const sessionRunId = this.beginSessionRun(sendingSession);
+    const ensureSendingSessionTracked = () => {
+      this.ensureTrackedRun(sendingSession, sessionRunId);
+    };
 
-    // 检查是否需要插入 item 切换通知
-    if (itemKey !== sendingSession.lastActiveItemKey) {
-      if (hasCurrentItem) {
-        // 切换到新 item
-        await this.insertItemSwitchNotice(itemKey!, itemTitle!, sendingSession);
-      } else if (sendingSession.lastActiveItemKey !== null) {
-        // 从有 item 切换到无 item
-        const notice: ChatMessage = {
+    try {
+      // 检查是否需要插入 item 切换通知
+      if (itemKey !== sendingSession.lastActiveItemKey) {
+        if (hasCurrentItem) {
+          // 切换到新 item
+          await this.insertItemSwitchNotice(
+            itemKey!,
+            itemTitle!,
+            sendingSession,
+          );
+        } else if (sendingSession.lastActiveItemKey !== null) {
+          // 从有 item 切换到无 item
+          const notice: ChatMessage = {
+            id: this.generateId(),
+            role: "system",
+            content: `--- No paper selected ---`,
+            timestamp: Date.now(),
+            isSystemNotice: true,
+          };
+          sendingSession.messages.push(notice);
+          await this.sessionStorage.insertMessage(sendingSession.id, notice);
+          sendingSession.lastActiveItemKey = null;
+        }
+        // 更新当前 itemKey
+        this.currentItemKey = itemKey;
+        getPdfToolManager().setCurrentItemKey(itemKey);
+      }
+
+      // 获取活动的 AI 提供商
+      const providerManager = getProviderManager();
+      const provider = this.getActiveProvider();
+      ztoolkit.log(
+        "[ChatManager] provider:",
+        provider?.getName(),
+        "isReady:",
+        provider?.isReady(),
+      );
+
+      if (providerManager.getActiveProviderId() === "paperchat") {
+        await this.ensurePaperChatModelResolved(sendingSession);
+      }
+
+      if (!provider || !provider.isReady()) {
+        ztoolkit.log("[ChatManager] Provider not ready, showing error in chat");
+        const errorMessage: ChatMessage = {
           id: this.generateId(),
-          role: "system",
-          content: `--- No paper selected ---`,
+          role: "assistant",
+          content: getString(
+            "chat-error-no-provider" as Parameters<typeof getString>[0],
+          ),
           timestamp: Date.now(),
-          isSystemNotice: true,
         };
-        sendingSession.messages.push(notice);
-        await this.sessionStorage.insertMessage(sendingSession.id, notice);
-        sendingSession.lastActiveItemKey = null;
+        sendingSession.messages.push(errorMessage);
+        await this.sessionStorage.insertMessage(
+          sendingSession.id,
+          errorMessage,
+        );
+        if (this.isSessionActive(sendingSession)) {
+          this.onMessageUpdate?.(sendingSession.messages);
+        }
+        return false;
       }
-      // 更新当前 itemKey
-      this.currentItemKey = itemKey;
-      getPdfToolManager().setCurrentItemKey(itemKey);
-    }
 
-    // 获取活动的 AI 提供商
-    const providerManager = getProviderManager();
-    const provider = this.getActiveProvider();
-    ztoolkit.log(
-      "[ChatManager] provider:",
-      provider?.getName(),
-      "isReady:",
-      provider?.isReady(),
-    );
+      // 构建最终消息内容
+      let finalContent = content;
 
-    if (providerManager.getActiveProviderId() === "paperchat") {
-      await this.ensurePaperChatModelResolved(sendingSession);
-    }
-
-    if (!provider || !provider.isReady()) {
-      ztoolkit.log("[ChatManager] Provider not ready, showing error in chat");
-      const errorMessage: ChatMessage = {
-        id: this.generateId(),
-        role: "assistant",
-        content: getString(
-          "chat-error-no-provider" as Parameters<typeof getString>[0],
-        ),
-        timestamp: Date.now(),
-      };
-      sendingSession.messages.push(errorMessage);
-      await this.sessionStorage.insertMessage(sendingSession.id, errorMessage);
-      if (this.isSessionActive(sendingSession)) {
-        this.onMessageUpdate?.(sendingSession.messages);
+      // 处理选中文本
+      if (options.selectedText) {
+        const prefix = hasCurrentItem
+          ? "[Selected text from PDF]"
+          : "[Selected text]";
+        finalContent = `${prefix}:\n"${options.selectedText}"\n\n[Question]:\n${content}`;
       }
-      return false;
-    }
 
-    // 构建最终消息内容
-    let finalContent = content;
+      // PDF 附件相关
+      let pdfAttachment:
+        | { data: string; mimeType: string; name: string }
+        | undefined;
+      let pdfWasAttached = false;
 
-    // 处理选中文本
-    if (options.selectedText) {
-      const prefix = hasCurrentItem
-        ? "[Selected text from PDF]"
-        : "[Selected text]";
-      finalContent = `${prefix}:\n"${options.selectedText}"\n\n[Question]:\n${content}`;
-    }
+      ztoolkit.log(
+        "[Tool Calling] provider type:",
+        provider?.constructor?.name,
+      );
+      ztoolkit.log(
+        "[Tool Calling] providerSupportsToolCalling:",
+        providerSupportsToolCalling(provider),
+      );
 
-    // PDF 附件相关
-    let pdfAttachment:
-      | { data: string; mimeType: string; name: string }
-      | undefined;
-    let pdfWasAttached = false;
+      // 如果 provider 支持 tool calling，启用 tool calling 模式
+      // 即使没有 PDF，也可以使用 library 工具（搜索、笔记等）
+      const useToolCalling = providerSupportsToolCalling(provider);
 
-    ztoolkit.log("[Tool Calling] provider type:", provider?.constructor?.name);
-    ztoolkit.log(
-      "[Tool Calling] providerSupportsToolCalling:",
-      providerSupportsToolCalling(provider),
-    );
+      if (useToolCalling) {
+        // 如果有当前 item，尝试提取 PDF（用于 PDF 相关工具）
+        if (hasCurrentItem && item) {
+          const hasPdf = await this.pdfExtractor.hasPdfAttachment(item);
+          ztoolkit.log("[PDF Auto-detect] Item has PDF:", hasPdf);
 
-    // 如果 provider 支持 tool calling，启用 tool calling 模式
-    // 即使没有 PDF，也可以使用 library 工具（搜索、笔记等）
-    const useToolCalling = providerSupportsToolCalling(provider);
-
-    if (useToolCalling) {
-      // 如果有当前 item，尝试提取 PDF（用于 PDF 相关工具）
-      if (hasCurrentItem && item) {
-        const hasPdf = await this.pdfExtractor.hasPdfAttachment(item);
-        ztoolkit.log("[PDF Auto-detect] Item has PDF:", hasPdf);
-
-        if (hasPdf) {
-          const pdfText = await this.pdfExtractor.extractPdfText(item);
-          if (pdfText) {
-            pdfWasAttached = true;
-            ztoolkit.log("[PDF Auto-detect] PDF extracted for tool calling");
-          } else {
-            ztoolkit.log("[PDF Auto-detect] PDF text extraction failed");
-            // 尝试原始 PDF 上传
-            if (
-              provider.supportsPdfUpload() &&
-              getPref("uploadRawPdfOnFailure")
-            ) {
-              const pdfBase64 = await this.pdfExtractor.getPdfBase64(item);
-              if (pdfBase64) {
-                pdfAttachment = pdfBase64;
-                pdfWasAttached = true;
-                ztoolkit.log(
-                  "[PDF Auto-detect] Using raw PDF upload as fallback",
-                );
+          if (hasPdf) {
+            const pdfText = await this.pdfExtractor.extractPdfText(item);
+            if (pdfText) {
+              pdfWasAttached = true;
+              ztoolkit.log("[PDF Auto-detect] PDF extracted for tool calling");
+            } else {
+              ztoolkit.log("[PDF Auto-detect] PDF text extraction failed");
+              // 尝试原始 PDF 上传
+              if (
+                provider.supportsPdfUpload() &&
+                getPref("uploadRawPdfOnFailure")
+              ) {
+                const pdfBase64 = await this.pdfExtractor.getPdfBase64(item);
+                if (pdfBase64) {
+                  pdfAttachment = pdfBase64;
+                  pdfWasAttached = true;
+                  ztoolkit.log(
+                    "[PDF Auto-detect] Using raw PDF upload as fallback",
+                  );
+                }
               }
             }
           }
         }
-      }
-    } else if (hasCurrentItem && item) {
-      // Provider 不支持 tool calling，使用传统模式
-      const hasPdf = await this.pdfExtractor.hasPdfAttachment(item);
-      if (hasPdf) {
-        const pdfText = await this.pdfExtractor.extractPdfText(item);
-        if (pdfText) {
-          pdfWasAttached = true;
-          finalContent = `[PDF Content]:\n${pdfText.substring(0, 50000)}\n\n[Question]:\n${content}`;
-          ztoolkit.log("[PDF Legacy] Embedded PDF content in message");
+      } else if (hasCurrentItem && item) {
+        // Provider 不支持 tool calling，使用传统模式
+        const hasPdf = await this.pdfExtractor.hasPdfAttachment(item);
+        if (hasPdf) {
+          const pdfText = await this.pdfExtractor.extractPdfText(item);
+          if (pdfText) {
+            pdfWasAttached = true;
+            finalContent = `[PDF Content]:\n${pdfText.substring(0, 50000)}\n\n[Question]:\n${content}`;
+            ztoolkit.log("[PDF Legacy] Embedded PDF content in message");
+          }
         }
       }
-    }
 
-    // 处理文件附件
-    if (options.files && options.files.length > 0) {
-      ztoolkit.log("[File Attach] Processing", options.files.length, "file(s)");
-      const filesContent = options.files
-        .map((f) => `[File: ${f.name}]\n${f.content}`)
-        .join("\n\n");
-      finalContent = `${filesContent}\n\n[Question]:\n${content}`;
-    }
+      // 处理文件附件
+      if (options.files && options.files.length > 0) {
+        ztoolkit.log(
+          "[File Attach] Processing",
+          options.files.length,
+          "file(s)",
+        );
+        const filesContent = options.files
+          .map((f) => `[File: ${f.name}]\n${f.content}`)
+          .join("\n\n");
+        finalContent = `${filesContent}\n\n[Question]:\n${content}`;
+      }
 
-    // 创建用户消息
-    const userMessage: ChatMessage = {
-      id: this.generateId(),
-      role: "user",
-      content: finalContent,
-      images: options.images,
-      files: options.files,
-      timestamp: Date.now(),
-      pdfContext: pdfWasAttached,
-      selectedText: options.selectedText,
-    };
+      // 创建用户消息
+      const userMessage: ChatMessage = {
+        id: this.generateId(),
+        role: "user",
+        content: finalContent,
+        images: options.images,
+        files: options.files,
+        timestamp: Date.now(),
+        pdfContext: pdfWasAttached,
+        selectedText: options.selectedText,
+      };
 
-    sendingSession.messages.push(userMessage);
-    await this.sessionStorage.insertMessage(sendingSession.id, userMessage);
-    sendingSession.updatedAt = Date.now();
-    if (this.isSessionActive(sendingSession)) {
-      this.onMessageUpdate?.(sendingSession.messages);
-    }
+      sendingSession.messages.push(userMessage);
+      await this.sessionStorage.insertMessage(sendingSession.id, userMessage);
+      sendingSession.updatedAt = Date.now();
+      if (this.isSessionActive(sendingSession)) {
+        this.onMessageUpdate?.(sendingSession.messages);
+      }
 
-    // 创建 AI 消息占位
-    const assistantMessage: ChatMessage = {
-      id: this.generateId(),
-      role: "assistant",
-      content: "",
-      streamingState: "in_progress",
-      timestamp: Date.now(),
-    };
+      // 创建 AI 消息占位
+      const assistantMessage: ChatMessage = {
+        id: this.generateId(),
+        role: "assistant",
+        content: "",
+        streamingState: "in_progress",
+        timestamp: Date.now(),
+      };
 
-    sendingSession.messages.push(assistantMessage);
-    await this.sessionStorage.insertMessage(
-      sendingSession.id,
-      assistantMessage,
-    );
-    sendingSession.executionPlan = undefined;
-    sendingSession.toolExecutionState = undefined;
-    sendingSession.toolApprovalState = undefined;
-    await this.sessionStorage.updateSessionMeta(sendingSession);
-    if (this.isSessionActive(sendingSession)) {
-      this.onExecutionPlanUpdate?.(sendingSession.executionPlan);
-    }
-    if (this.isSessionActive(sendingSession)) {
-      this.onMessageUpdate?.(sendingSession.messages);
-    }
+      sendingSession.messages.push(assistantMessage);
+      await this.sessionStorage.insertMessage(
+        sendingSession.id,
+        assistantMessage,
+      );
+      sendingSession.executionPlan = undefined;
+      sendingSession.toolExecutionState = undefined;
+      sendingSession.toolApprovalState = undefined;
+      await this.sessionStorage.updateSessionMeta(sendingSession);
+      if (this.isSessionActive(sendingSession)) {
+        this.onExecutionPlanUpdate?.(sendingSession.executionPlan);
+      }
+      if (this.isSessionActive(sendingSession)) {
+        this.onMessageUpdate?.(sendingSession.messages);
+      }
+      if (!this.isSessionTracked(sendingSession, sessionRunId)) {
+        return true;
+      }
 
-    // 获取上下文管理器并过滤消息
-    const contextManager = getContextManager();
-    const { messages: filteredMessages, summaryTriggered } =
-      contextManager.filterMessages(sendingSession);
+      // 获取上下文管理器并过滤消息
+      const contextManager = getContextManager();
+      const { messages: filteredMessages, summaryTriggered } =
+        contextManager.filterMessages(sendingSession);
 
-    // 从过滤后的消息中排除最后一条 (assistant 占位)
-    const messagesForApi = filteredMessages.filter(
-      (m: ChatMessage) => m.id !== assistantMessage.id,
-    );
+      // 从过滤后的消息中排除最后一条 (assistant 占位)
+      const messagesForApi = filteredMessages.filter(
+        (m: ChatMessage) => m.id !== assistantMessage.id,
+      );
 
-    ztoolkit.log(
-      "[API Request] Original message count:",
-      sendingSession.messages.length,
-    );
-    ztoolkit.log(
-      "[API Request] Filtered message count:",
-      messagesForApi.length,
-    );
-    ztoolkit.log("[API Request] Use tool calling:", useToolCalling);
+      ztoolkit.log(
+        "[API Request] Original message count:",
+        sendingSession.messages.length,
+      );
+      ztoolkit.log(
+        "[API Request] Filtered message count:",
+        messagesForApi.length,
+      );
+      ztoolkit.log("[API Request] Use tool calling:", useToolCalling);
 
-    // Register the session as actively streaming so that switchSession()
-    // can reuse this in-memory object and resume UI updates.
-    this.streamingSessions.set(sendingSession.id, sendingSession);
-    try {
       // 如果启用 tool calling
       if (useToolCalling && providerSupportsToolCalling(provider)) {
         ztoolkit.log("[Tool Calling] Using tool calling mode");
@@ -1261,6 +1309,7 @@ export class ChatManager {
           hasCurrentItem,
           item!,
           sendingSession,
+          sessionRunId,
         );
         return true;
       }
@@ -1275,6 +1324,7 @@ export class ChatManager {
         if (!fallbackFromProviderName || !fallbackToProviderName) {
           return;
         }
+        ensureSendingSessionTracked();
         try {
           await this.insertFallbackNotice(
             sendingSession,
@@ -1317,9 +1367,7 @@ export class ChatManager {
             failedPaperChatModelId = null;
           }
 
-          if (!this.isSessionTracked(sendingSession)) {
-            throw new SessionRunInvalidatedError();
-          }
+          ensureSendingSessionTracked();
 
           // 重置 assistant 消息内容（降级时需要清空之前的部分内容）
           assistantMessage.content = "";
@@ -1332,13 +1380,13 @@ export class ChatManager {
           const enqueueCheckpoint = (
             streamingState: ChatMessageStreamingState | null,
           ): Promise<void> => {
-            if (!this.isSessionTracked(sendingSession)) {
+            if (!this.isSessionTracked(sendingSession, sessionRunId)) {
               return checkpointQueue;
             }
             checkpointQueue = checkpointQueue
               .catch(() => undefined)
               .then(async () => {
-                if (!this.isSessionTracked(sendingSession)) {
+                if (!this.isSessionTracked(sendingSession, sessionRunId)) {
                   return;
                 }
                 await this.sessionStorage.updateMessageContent(
@@ -1353,7 +1401,7 @@ export class ChatManager {
           };
 
           const scheduleCheckpoint = (): void => {
-            if (!this.isSessionTracked(sendingSession)) {
+            if (!this.isSessionTracked(sendingSession, sessionRunId)) {
               return;
             }
             if (checkpointTimer) {
@@ -1361,7 +1409,7 @@ export class ChatManager {
             }
             checkpointTimer = setTimeout(() => {
               checkpointTimer = null;
-              if (!this.isSessionTracked(sendingSession)) {
+              if (!this.isSessionTracked(sendingSession, sessionRunId)) {
                 return;
               }
               void enqueueCheckpoint("in_progress");
@@ -1375,7 +1423,7 @@ export class ChatManager {
               clearTimeout(checkpointTimer);
               checkpointTimer = null;
             }
-            if (!this.isSessionTracked(sendingSession)) {
+            if (!this.isSessionTracked(sendingSession, sessionRunId)) {
               return;
             }
             await enqueueCheckpoint(streamingState);
@@ -1385,7 +1433,7 @@ export class ChatManager {
             new Promise<void>((resolve, reject) => {
               const callbacks: StreamCallbacks = {
                 onChunk: (chunk: string) => {
-                  if (!this.isSessionTracked(sendingSession)) {
+                  if (!this.isSessionTracked(sendingSession, sessionRunId)) {
                     return;
                   }
                   assistantMessage.content += chunk;
@@ -1395,7 +1443,7 @@ export class ChatManager {
                   }
                 },
                 onReasoningChunk: (chunk: string) => {
-                  if (!this.isSessionTracked(sendingSession)) {
+                  if (!this.isSessionTracked(sendingSession, sessionRunId)) {
                     return;
                   }
                   assistantMessage.reasoning =
@@ -1406,7 +1454,7 @@ export class ChatManager {
                   }
                 },
                 onComplete: async (fullContent: string) => {
-                  if (!this.isSessionTracked(sendingSession)) {
+                  if (!this.isSessionTracked(sendingSession, sessionRunId)) {
                     if (checkpointTimer) {
                       clearTimeout(checkpointTimer);
                       checkpointTimer = null;
@@ -1440,6 +1488,7 @@ export class ChatManager {
                   if (summaryTriggered) {
                     contextManager
                       .generateSummaryAsync(sendingSession, async () => {
+                        ensureSendingSessionTracked();
                         await this.sessionStorage.updateSessionMeta(
                           sendingSession,
                         );
@@ -1460,7 +1509,7 @@ export class ChatManager {
                     clearTimeout(checkpointTimer);
                     checkpointTimer = null;
                   }
-                  if (!this.isSessionTracked(sendingSession)) {
+                  if (!this.isSessionTracked(sendingSession, sessionRunId)) {
                     resolve();
                     return;
                   }
@@ -1511,6 +1560,7 @@ export class ChatManager {
               sendingSession,
               failedPaperChatModelId,
             );
+            ensureSendingSessionTracked();
             if (!reroute) {
               throw error;
             }
@@ -1589,7 +1639,7 @@ export class ChatManager {
         return true;
       }
     } finally {
-      this.streamingSessions.delete(sendingSession.id);
+      this.completeSessionRun(sendingSession, sessionRunId);
     }
   }
 
@@ -1607,9 +1657,13 @@ export class ChatManager {
     hasCurrentItem: boolean,
     item: Zotero.Item,
     sendingSession: ChatSession,
+    sessionRunId: number,
   ): Promise<boolean> {
     const pdfToolManager = getPdfToolManager();
     const providerManager = getProviderManager();
+    const ensureSendingSessionTracked = () => {
+      this.ensureTrackedRun(sendingSession, sessionRunId);
+    };
 
     // 获取动态工具列表
     const tools = pdfToolManager.getToolDefinitions(hasCurrentItem);
@@ -1618,6 +1672,7 @@ export class ChatManager {
     const paperStructure = hasCurrentItem
       ? await pdfToolManager.extractAndParsePaper(item.key)
       : undefined;
+    ensureSendingSessionTracked();
 
     // Search for relevant memories using the last user message as query
     const lastUserMessage = messagesForApi
@@ -1626,6 +1681,7 @@ export class ChatManager {
     const memoryContext = await this.memoryManager.buildPromptContext(
       lastUserMessage?.content,
     );
+    ensureSendingSessionTracked();
 
     // 添加论文上下文系统提示
     const buildSystemPrompt = (currentMessages: ChatMessage[]) =>
@@ -1663,6 +1719,7 @@ export class ChatManager {
       if (!fallbackFromProviderName || !fallbackToProviderName) {
         return;
       }
+      ensureSendingSessionTracked();
       try {
         await this.insertFallbackNotice(
           sendingSession,
@@ -1703,6 +1760,7 @@ export class ChatManager {
         } else {
           failedPaperChatModelId = null;
         }
+        ensureSendingSessionTracked();
 
         // 检查 provider 是否支持 tool calling
         if (!providerSupportsToolCalling(currentProvider)) {
@@ -1737,6 +1795,7 @@ export class ChatManager {
               tools,
               paperStructure,
               sendingSession,
+              sessionRunId,
               buildSystemPrompt,
             );
             return;
@@ -1754,6 +1813,7 @@ export class ChatManager {
             tools,
             paperStructure,
             sendingSession,
+            sessionRunId,
             buildSystemPrompt,
           );
         };
@@ -1773,6 +1833,7 @@ export class ChatManager {
             sendingSession,
             failedPaperChatModelId,
           );
+          ensureSendingSessionTracked();
           if (!reroute) {
             throw error;
           }
@@ -1795,6 +1856,9 @@ export class ChatManager {
 
       return true;
     } catch (error) {
+      if (error instanceof SessionRunInvalidatedError) {
+        return true;
+      }
       // 所有 provider 都失败了
       ztoolkit.log("[Tool Calling] All providers failed:", error);
 
@@ -1933,6 +1997,7 @@ export class ChatManager {
       ReturnType<typeof getPdfToolManager.prototype.extractAndParsePaper>
     >,
     sendingSession: ChatSession,
+    sessionRunId: number,
     buildSystemPrompt: (currentMessages: ChatMessage[]) => string,
   ): Promise<void> {
     await this.agentRuntime.executeStreamingToolLoop({
@@ -1944,6 +2009,7 @@ export class ChatManager {
       tools,
       paperStructure,
       sendingSession,
+      sessionRunId,
       refreshSystemPrompt: buildSystemPrompt,
     });
     clearPaperChatRetryableState(sendingSession);
@@ -1965,6 +2031,7 @@ export class ChatManager {
       ReturnType<typeof getPdfToolManager.prototype.extractAndParsePaper>
     >,
     sendingSession: ChatSession,
+    sessionRunId: number,
     buildSystemPrompt: (currentMessages: ChatMessage[]) => string,
   ): Promise<void> {
     await this.agentRuntime.executeNonStreamingToolLoop({
@@ -1976,10 +2043,78 @@ export class ChatManager {
       tools,
       paperStructure,
       sendingSession,
+      sessionRunId,
       refreshSystemPrompt: buildSystemPrompt,
     });
     clearPaperChatRetryableState(sendingSession);
     await this.sessionStorage.updateSessionMeta(sendingSession);
+  }
+
+  async cancelCurrentTurn(): Promise<boolean> {
+    await this.init();
+
+    const session = this.currentSession;
+    if (!session) {
+      return false;
+    }
+
+    const hasActiveRun = this.activeSessionRunIds.has(session.id);
+    const pendingApprovalCount =
+      session.toolApprovalState?.pendingRequests.length || 0;
+    const interruptedMessages = session.messages.filter(
+      (message) =>
+        message.role === "assistant" &&
+        message.streamingState === "in_progress",
+    );
+
+    if (
+      !hasActiveRun &&
+      interruptedMessages.length === 0 &&
+      !session.executionPlan &&
+      pendingApprovalCount === 0
+    ) {
+      return false;
+    }
+
+    this.activeSessionRunIds.delete(session.id);
+    this.streamingSessions.delete(session.id);
+
+    if (pendingApprovalCount > 0) {
+      getToolPermissionManager().denyPendingApprovals({
+        sessionId: session.id,
+        reason:
+          "Pending tool approvals were denied because the user cancelled the current turn.",
+      });
+    }
+
+    const now = Date.now();
+    for (const message of interruptedMessages) {
+      if (!message.content.trim()) {
+        message.content = getString("chat-turn-cancelled");
+      }
+      message.streamingState = "interrupted";
+      message.timestamp = now;
+      await this.sessionStorage.updateMessageContent(
+        session.id,
+        message.id,
+        message.content,
+        message.reasoning,
+        { streamingState: "interrupted" },
+      );
+    }
+
+    session.executionPlan = undefined;
+    session.toolExecutionState = undefined;
+    session.toolApprovalState = undefined;
+    session.updatedAt = now;
+    await this.sessionStorage.updateSessionMeta(session);
+
+    if (this.isSessionActive(session)) {
+      this.onExecutionPlanUpdate?.(session.executionPlan);
+      this.onMessageUpdate?.(session.messages);
+    }
+
+    return true;
   }
 
   /**
@@ -1994,6 +2129,7 @@ export class ChatManager {
       reason:
         "Pending tool approvals were denied because the session was cleared.",
     });
+    this.activeSessionRunIds.delete(clearedSession.id);
     this.streamingSessions.delete(clearedSession.id);
     this.currentSession = clearedSession;
     this.applySessionItemContext(clearedSession);
@@ -2236,6 +2372,7 @@ export class ChatManager {
     getToolPermissionManager().removeApprovalObserver(this.approvalObserver);
     this.currentSession = null;
     this.currentItemKey = null;
+    this.activeSessionRunIds.clear();
     this.streamingSessions.clear();
     getPdfToolManager().setCurrentItemKey(null);
     this.memoryManager.clear();

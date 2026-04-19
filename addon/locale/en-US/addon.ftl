@@ -83,6 +83,7 @@ paperchat-chat-upload-file = Upload File
 paperchat-chat-history = Chat History
 paperchat-chat-input-placeholder = Ask a question about the PDF...
 paperchat-chat-send = Send
+paperchat-chat-stop-generating = Stop Turn
 paperchat-chat-no-messages = (no messages)
 paperchat-chat-message-count = { $count } messages
 paperchat-chat-show-more = Show more ({ $count } remaining)
@@ -104,6 +105,7 @@ paperchat-chat-configure-provider = Please configure a provider in Settings firs
 paperchat-chat-delete = Delete
 paperchat-chat-copy = Copy
 paperchat-chat-interrupted = Interrupted
+paperchat-chat-turn-cancelled = Request cancelled.
 
 # Guide
 paperchat-guide-toolbar-title = Start Chatting with AI
