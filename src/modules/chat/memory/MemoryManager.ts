@@ -13,6 +13,8 @@ import {
   type MemoryExtractorFactory,
 } from "./MemoryExtractor";
 
+const MIN_MEMORY_QUERY_CHARS = 5;
+
 export class MemoryManager {
   private orchestrator: MemoryOrchestrator;
   private memoryService: MemoryService | null = null;
@@ -61,6 +63,7 @@ export class MemoryManager {
 
   async buildPromptContext(query?: string): Promise<string | undefined> {
     if (!query?.trim()) return undefined;
+    if (shouldSkipMemoryPromptLookup(query)) return undefined;
 
     try {
       return await this.getMemoryService().buildPromptContext(query);
@@ -80,4 +83,8 @@ export class MemoryManager {
   clear(): void {
     this.orchestrator.clear();
   }
+}
+
+function shouldSkipMemoryPromptLookup(query: string): boolean {
+  return Array.from(query.trim()).length < MIN_MEMORY_QUERY_CHARS;
 }

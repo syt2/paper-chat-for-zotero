@@ -586,4 +586,64 @@ describe("memory module", function () {
       },
     ]);
   });
+
+  it("skips memory prompt lookup for short messages", async function () {
+    let buildCalls = 0;
+    const manager = new MemoryManager(
+      {} as any,
+      () =>
+        ({
+          buildPromptContext: async () => {
+            buildCalls++;
+            return "memory context";
+          },
+        }) as any,
+      () => ({}) as any,
+    );
+
+    const context = await manager.buildPromptContext("可以");
+
+    assert.isUndefined(context);
+    assert.equal(buildCalls, 0);
+  });
+
+  it("still queries memory for longer user messages", async function () {
+    let buildCalls = 0;
+    const manager = new MemoryManager(
+      {} as any,
+      () =>
+        ({
+          buildPromptContext: async (query: string) => {
+            buildCalls++;
+            return `memory:${query}`;
+          },
+        }) as any,
+      () => ({}) as any,
+    );
+
+    const context = await manager.buildPromptContext("Please answer in concise bullet points.");
+
+    assert.equal(context, "memory:Please answer in concise bullet points.");
+    assert.equal(buildCalls, 1);
+  });
+
+  it("still queries memory for short but meaningful Chinese messages at the threshold", async function () {
+    let buildCalls = 0;
+    const manager = new MemoryManager(
+      {} as any,
+      () =>
+        ({
+          buildPromptContext: async (query: string) => {
+            buildCalls++;
+            return `memory:${query}`;
+          },
+        }) as any,
+      () => ({}) as any,
+    );
+
+    const context = await manager.buildPromptContext("默认中文答复");
+
+    assert.equal(context, "memory:默认中文答复");
+    assert.equal(buildCalls, 1);
+  });
 });
