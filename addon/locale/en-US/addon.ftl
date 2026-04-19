@@ -103,6 +103,7 @@ paperchat-chat-no-models = No models available
 paperchat-chat-configure-provider = Please configure a provider in Settings first
 paperchat-chat-delete = Delete
 paperchat-chat-copy = Copy
+paperchat-chat-interrupted = Interrupted
 
 # Guide
 paperchat-guide-toolbar-title = Start Chatting with AI
@@ -162,3 +163,23 @@ paperchat-unknown = Unknown
 paperchat-tool-status-calling = Calling...
 paperchat-tool-status-done = Done
 paperchat-tool-status-error = Error
+
+# Chat execution banner
+paperchat-chat-banner-running = Running
+paperchat-chat-banner-waiting-approval = Waiting For Approval
+paperchat-chat-banner-auto-recovering = Auto-Recovering
+paperchat-chat-banner-paused-at = Paused at { $step }
+paperchat-chat-banner-progress = { $completed }/{ $total } steps
+paperchat-chat-banner-preparing = Preparing
+paperchat-chat-banner-pending-one = 1 pending approval
+paperchat-chat-banner-pending-many = { $count } pending approvals
+paperchat-chat-banner-extra-many = +{ $count } more
+paperchat-chat-banner-risk-read = read access
+paperchat-chat-banner-risk-network = web access
+paperchat-chat-banner-risk-write = write access
+paperchat-chat-banner-risk-memory = memory write
+paperchat-chat-banner-risk-high-cost = high cost
+paperchat-chat-banner-allow-once = Allow Once
+paperchat-chat-banner-session = Session
+paperchat-chat-banner-always = Always
+paperchat-chat-banner-deny = Deny

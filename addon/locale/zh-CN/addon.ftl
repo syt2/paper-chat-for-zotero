@@ -103,6 +103,7 @@ paperchat-chat-no-models = 暂无可用模型
 paperchat-chat-configure-provider = 请先在设置中配置服务商
 paperchat-chat-delete = 删除
 paperchat-chat-copy = 复制
+paperchat-chat-interrupted = 已中断
 
 # Guide
 paperchat-guide-toolbar-title = 开始与 AI 对话
@@ -162,3 +163,23 @@ paperchat-unknown = 未知
 paperchat-tool-status-calling = 调用中...
 paperchat-tool-status-done = 完成
 paperchat-tool-status-error = 错误
+
+# Chat execution banner
+paperchat-chat-banner-running = 运行中
+paperchat-chat-banner-waiting-approval = 等待审批
+paperchat-chat-banner-auto-recovering = 自动恢复中
+paperchat-chat-banner-paused-at = 已暂停于 { $step }
+paperchat-chat-banner-progress = { $completed }/{ $total } 步
+paperchat-chat-banner-preparing = 准备中
+paperchat-chat-banner-pending-one = 1 个待审批操作
+paperchat-chat-banner-pending-many = { $count } 个待审批操作
+paperchat-chat-banner-extra-many = +另外 { $count } 个
+paperchat-chat-banner-risk-read = 读取权限
+paperchat-chat-banner-risk-network = 联网访问
+paperchat-chat-banner-risk-write = 写入权限
+paperchat-chat-banner-risk-memory = 记忆写入
+paperchat-chat-banner-risk-high-cost = 高成本操作
+paperchat-chat-banner-allow-once = 仅本次允许
+paperchat-chat-banner-session = 本会话允许
+paperchat-chat-banner-always = 始终允许
+paperchat-chat-banner-deny = 拒绝

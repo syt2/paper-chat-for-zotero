@@ -232,6 +232,31 @@ function unescapeXml(str: string): string {
     .replace(/&amp;/g, "&");
 }
 
+function truncateInlineText(text: string, maxLength: number): string {
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+function summarizeToolCardText(text: string): string {
+  const firstLine = text
+    .split("\n")
+    .map((line) => line.trim())
+    .find(Boolean);
+  if (!firstLine) {
+    return "";
+  }
+
+  return truncateInlineText(
+    firstLine
+      .replace(/^Error:\s*/i, "")
+      .replace(/\s+/g, " ")
+      .trim(),
+    120,
+  );
+}
+
 function renderMarkdownFragment(
   doc: Document,
   parent: HTMLElement,
@@ -476,13 +501,18 @@ function renderToolCallCards(
     }
 
     const [, status, toolName, toolArgs, statusText, toolResult] = match;
-    const hasDetails = toolArgs || toolResult;
+    const isError = status === "error";
+    const hasDetails = Boolean(toolArgs || toolResult);
     const isCompleted = status === "completed";
+    const canToggle = hasDetails && (isCompleted || isError);
+    const summaryText = isError
+      ? summarizeToolCardText(unescapeXml(toolResult || statusText || ""))
+      : "";
 
     // Create tool call card
     const card = doc.createElementNS(HTML_NS, "div") as HTMLElement;
-    card.style.margin = "8px 0";
-    card.style.border = `1px solid ${colors.cardBorder}`;
+    card.style.margin = isError ? "6px 0" : "8px 0";
+    card.style.border = `1px solid ${isError ? colors.statusError : colors.cardBorder}`;
     card.style.borderRadius = "8px";
     card.style.background = colors.cardBg;
     card.style.overflow = "hidden";
@@ -494,33 +524,55 @@ function renderToolCallCards(
     const header = doc.createElementNS(HTML_NS, "div") as HTMLElement;
     header.style.display = "flex";
     header.style.alignItems = "center";
-    header.style.padding = "8px 12px";
-    header.style.background = colors.nameBg;
+    header.style.padding = isError ? "7px 10px" : "8px 12px";
+    header.style.background = isError ? colors.cardBg : colors.nameBg;
     header.style.gap = "8px";
-    if (hasDetails && isCompleted) {
+    if (canToggle) {
       header.style.cursor = "pointer";
       header.style.userSelect = "none";
     }
 
     // Expand/collapse chevron (only for completed cards with details)
     let chevron: HTMLElement | null = null;
-    if (hasDetails && isCompleted) {
+    if (canToggle) {
       chevron = doc.createElementNS(HTML_NS, "span") as HTMLElement;
       chevron.style.fontSize = "10px";
       chevron.style.color = colors.argsText;
       chevron.style.transition = "transform 0.2s";
       chevron.style.display = "inline-block";
-      chevron.textContent = "▶"; // Collapsed state
+      chevron.textContent = "▶";
       header.appendChild(chevron);
     }
 
-    // Tool name (unescape XML entities)
+    const textGroup = doc.createElementNS(HTML_NS, "div") as HTMLElement;
+    textGroup.style.display = "flex";
+    textGroup.style.flexDirection = "column";
+    textGroup.style.minWidth = "0";
+    textGroup.style.flex = "1";
+    textGroup.style.gap = "2px";
+
     const nameEl = doc.createElementNS(HTML_NS, "span") as HTMLElement;
     nameEl.style.fontWeight = "600";
     nameEl.style.color = colors.nameText;
-    nameEl.style.flex = "1";
+    nameEl.style.minWidth = "0";
+    nameEl.style.overflow = "hidden";
+    nameEl.style.textOverflow = "ellipsis";
+    nameEl.style.whiteSpace = "nowrap";
     nameEl.textContent = unescapeXml(toolName || "");
-    header.appendChild(nameEl);
+    textGroup.appendChild(nameEl);
+
+    if (summaryText) {
+      const summaryEl = doc.createElementNS(HTML_NS, "div") as HTMLElement;
+      summaryEl.style.fontSize = "10px";
+      summaryEl.style.color = colors.argsText;
+      summaryEl.style.minWidth = "0";
+      summaryEl.style.overflow = "hidden";
+      summaryEl.style.textOverflow = "ellipsis";
+      summaryEl.style.whiteSpace = "nowrap";
+      summaryEl.textContent = summaryText;
+      textGroup.appendChild(summaryEl);
+    }
+    header.appendChild(textGroup);
 
     // Status badge
     const statusEl = doc.createElementNS(HTML_NS, "span") as HTMLElement;
@@ -533,6 +585,7 @@ function renderToolCallCards(
     statusEl.style.fontSize = "11px";
     statusEl.style.color = statusColor;
     statusEl.style.fontWeight = "500";
+    statusEl.style.flexShrink = "0";
     statusEl.textContent = statusText || "";
     header.appendChild(statusEl);
 
@@ -543,11 +596,9 @@ function renderToolCallCards(
     if (hasDetails) {
       detailsContainer = doc.createElementNS(HTML_NS, "div") as HTMLElement;
       detailsContainer.style.borderTop = `1px solid ${colors.cardBorder}`;
-      // Default: collapsed for completed, expanded for calling
-      detailsContainer.style.display = isCompleted ? "none" : "block";
+      detailsContainer.style.display = canToggle ? "none" : "block";
       detailsContainer.style.overflow = "hidden";
 
-      // Args row (if present, unescape XML entities)
       if (toolArgs) {
         const argsEl = doc.createElementNS(HTML_NS, "div") as HTMLElement;
         argsEl.style.padding = "6px 12px";
@@ -562,13 +613,12 @@ function renderToolCallCards(
         detailsContainer.appendChild(argsEl);
       }
 
-      // Result row (if present and completed, unescape XML entities)
-      if (toolResult && isCompleted) {
+      if (toolResult) {
         const resultEl = doc.createElementNS(HTML_NS, "div") as HTMLElement;
         resultEl.style.padding = "6px 12px";
-        resultEl.style.color = colors.resultText;
+        resultEl.style.color = isError ? colors.nameText : colors.resultText;
         resultEl.style.fontSize = "11px";
-        resultEl.style.background = colors.resultBg;
+        resultEl.style.background = isError ? colors.cardBg : colors.resultBg;
         resultEl.style.whiteSpace = "pre-wrap";
         resultEl.style.wordBreak = "break-word";
         resultEl.style.maxHeight = "150px";
@@ -580,10 +630,9 @@ function renderToolCallCards(
       card.appendChild(detailsContainer);
     }
 
-    // Add click handler for expand/collapse (only for completed cards)
-    if (hasDetails && isCompleted && chevron && detailsContainer) {
+    if (canToggle && chevron && detailsContainer) {
       let isExpanded = false;
-      const details = detailsContainer; // Capture for closure
+      const details = detailsContainer;
       const chev = chevron;
 
       header.addEventListener("click", () => {
@@ -592,12 +641,17 @@ function renderToolCallCards(
         chev.style.transform = isExpanded ? "rotate(90deg)" : "rotate(0deg)";
       });
 
-      // Hover effect
       header.addEventListener("mouseenter", () => {
-        header.style.background = dark ? "#2d333b" : "#e6eaef";
+        header.style.background = isError
+          ? dark
+            ? "#1f2937"
+            : "#fef2f2"
+          : dark
+            ? "#2d333b"
+            : "#e6eaef";
       });
       header.addEventListener("mouseleave", () => {
-        header.style.background = colors.nameBg;
+        header.style.background = isError ? colors.cardBg : colors.nameBg;
       });
     }
 

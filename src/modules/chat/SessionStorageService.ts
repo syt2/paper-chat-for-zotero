@@ -488,10 +488,10 @@ export class SessionStorageService {
           session.id,
         ],
       );
-      await db.queryAsync("UPDATE session_meta SET updated_at = ? WHERE id = ?", [
-        nextUpdatedAt,
-        session.id,
-      ]);
+      await db.queryAsync(
+        "UPDATE session_meta SET updated_at = ? WHERE id = ?",
+        [nextUpdatedAt, session.id],
+      );
       session.updatedAt = nextUpdatedAt;
     } catch (error) {
       ztoolkit.log(
@@ -834,6 +834,7 @@ export class SessionStorageService {
       });
 
       const session = mapSessionRowToChatSession(row, messages);
+      await this.clearRecoveredTurnArtifacts(session);
       return session;
     } catch (error) {
       ztoolkit.log("[SessionStorageService] Load session error:", error);
@@ -1091,6 +1092,59 @@ export class SessionStorageService {
       } catch {}
       throw error;
     }
+  }
+
+  private async clearRecoveredTurnArtifacts(
+    session: ChatSession,
+  ): Promise<void> {
+    if (
+      !session.executionPlan &&
+      !session.toolExecutionState &&
+      !session.toolApprovalState
+    ) {
+      return;
+    }
+
+    const hasInterruptedAssistant = session.messages.some(
+      (message) =>
+        message.role === "assistant" &&
+        message.streamingState === "interrupted",
+    );
+    if (!hasInterruptedAssistant) {
+      return;
+    }
+
+    const db = await getStorageDatabase().ensureInit();
+    const now = Date.now();
+    await db.queryAsync("BEGIN TRANSACTION");
+    try {
+      await db.queryAsync(
+        `UPDATE sessions
+         SET execution_plan = NULL,
+             tool_execution_state = NULL,
+             tool_approval_state = NULL,
+             updated_at = ?
+         WHERE id = ?`,
+        [now, session.id],
+      );
+      await db.queryAsync(
+        `UPDATE session_meta
+         SET updated_at = ?
+         WHERE id = ?`,
+        [now, session.id],
+      );
+      await db.queryAsync("COMMIT");
+    } catch (error) {
+      try {
+        await db.queryAsync("ROLLBACK");
+      } catch {}
+      throw error;
+    }
+
+    session.executionPlan = undefined;
+    session.toolExecutionState = undefined;
+    session.toolApprovalState = undefined;
+    session.updatedAt = now;
   }
 
   private async deleteSessionData(

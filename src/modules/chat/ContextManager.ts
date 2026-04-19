@@ -53,7 +53,7 @@ class ContextManager {
     const conversationMessages = messages.filter(
       (m) =>
         m.role === "user" ||
-        m.role === "assistant" ||
+        (m.role === "assistant" && m.streamingState !== "interrupted") ||
         m.role === "tool" ||
         m.isSystemNotice,
     );
@@ -145,7 +145,9 @@ class ContextManager {
 
       // 构建要摘要的消息 (只包含 user/assistant，排除 system/error)
       const conversationMessages = session.messages.filter(
-        (m) => m.role === "user" || m.role === "assistant",
+        (m) =>
+          m.role === "user" ||
+          (m.role === "assistant" && m.streamingState !== "interrupted"),
       );
 
       // 排除最近的消息 (这些会被完整保留)

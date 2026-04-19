@@ -292,7 +292,7 @@ export interface ChatSession {
   toolExecutionState?: ToolExecutionState;
   toolApprovalState?: ToolApprovalState;
   // Memory extraction tracking (persisted to DB)
-  memoryExtractedAt?: number;       // timestamp of last extraction
+  memoryExtractedAt?: number; // timestamp of last extraction
   memoryExtractedMsgCount?: number; // conversational msg count at last extraction
   selectedTier?: "paperchat-lite" | "paperchat-standard" | "paperchat-pro";
   resolvedModelId?: string;

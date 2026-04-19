@@ -1,7 +1,10 @@
 import { assert } from "chai";
 import { destroyAuthManager } from "../src/modules/auth/index.ts";
 import { ChatManager } from "../src/modules/chat/ChatManager.ts";
-import { destroyContextManager, getContextManager } from "../src/modules/chat/ContextManager.ts";
+import {
+  destroyContextManager,
+  getContextManager,
+} from "../src/modules/chat/ContextManager.ts";
 import { SessionStorageService } from "../src/modules/chat/SessionStorageService.ts";
 import {
   StorageDatabase,
@@ -122,12 +125,16 @@ describe("paperchat storage and chat manager", function () {
     ]);
     assert.isTrue(
       recorded.some((entry) =>
-        entry.sql.includes("CREATE TABLE IF NOT EXISTS paperchat_session_state"),
+        entry.sql.includes(
+          "CREATE TABLE IF NOT EXISTS paperchat_session_state",
+        ),
       ),
     );
     assert.isTrue(
-      recorded.some((entry) =>
-        entry.sql === "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1"
+      recorded.some(
+        (entry) =>
+          entry.sql ===
+          "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
       ),
     );
   });
@@ -219,7 +226,10 @@ describe("paperchat storage and chat manager", function () {
             },
           ];
         }
-        if (normalized === "SELECT * FROM paperchat_session_state WHERE session_id = ?") {
+        if (
+          normalized ===
+          "SELECT * FROM paperchat_session_state WHERE session_id = ?"
+        ) {
           return [
             {
               session_id: "session-load-1",
@@ -231,7 +241,10 @@ describe("paperchat storage and chat manager", function () {
             },
           ];
         }
-        if (normalized === "SELECT * FROM messages WHERE session_id = ? ORDER BY seq ASC") {
+        if (
+          normalized ===
+          "SELECT * FROM messages WHERE session_id = ? ORDER BY seq ASC"
+        ) {
           return [
             {
               id: "msg-1",
@@ -274,6 +287,165 @@ describe("paperchat storage and chat manager", function () {
     assert.include(
       recorded.map((entry) => entry.sql),
       "SELECT * FROM paperchat_session_state WHERE session_id = ?",
+    );
+  });
+
+  it("excludes interrupted assistant messages from future context windows", function () {
+    prefStore.set(`${PREFS_PREFIX}.contextMaxRecentPairs`, 10);
+    prefStore.set(`${PREFS_PREFIX}.contextEnableSummary`, false);
+
+    const contextManager = getContextManager();
+    const session: ChatSession = {
+      id: "session-context-1",
+      createdAt: 1,
+      updatedAt: 4,
+      lastActiveItemKey: null,
+      messages: [
+        {
+          id: "user-1",
+          role: "user",
+          content: "Do one web search",
+          timestamp: 1,
+        },
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: "<tool-call>partial web search</tool-call>",
+          timestamp: 2,
+          streamingState: "interrupted",
+        },
+        {
+          id: "system-notice-1",
+          role: "system",
+          content: "Previous run was interrupted.",
+          timestamp: 3,
+          isSystemNotice: true,
+        },
+        {
+          id: "user-2",
+          role: "user",
+          content: "Do one web search again",
+          timestamp: 4,
+        },
+      ],
+    };
+
+    const filtered = contextManager.filterMessages(session);
+
+    assert.deepEqual(
+      filtered.messages.map((message) => message.id),
+      ["user-1", "system-notice-1", "user-2"],
+    );
+  });
+
+  it("clears stale turn state when loading an interrupted assistant session", async function () {
+    const recorded: RecordedQuery[] = [];
+    const fakeDb = {
+      async queryAsync(sql: string, params?: unknown[]) {
+        const normalized = normalizeSql(sql);
+        recorded.push({ sql: normalized, params });
+
+        if (normalized === "SELECT value FROM settings WHERE key = ?") {
+          return [];
+        }
+        if (
+          normalized ===
+          "SELECT COUNT(*) as count FROM messages WHERE session_id = ? AND streaming_state = 'in_progress'"
+        ) {
+          return [{ count: 0 }];
+        }
+        if (normalized === "SELECT * FROM sessions WHERE id = ?") {
+          return [
+            {
+              id: "session-load-2",
+              created_at: 100,
+              updated_at: 200,
+              last_active_item_key: "ITEM-2",
+              context_summary: null,
+              context_state: null,
+              execution_plan: JSON.stringify({
+                id: "plan-1",
+                summary: "stale plan",
+                status: "failed",
+                steps: [],
+                createdAt: 100,
+                updatedAt: 200,
+              }),
+              tool_execution_state: JSON.stringify({
+                turnStartedAt: 150,
+                updatedAt: 200,
+                results: [
+                  {
+                    toolCall: {
+                      id: "tool-1",
+                      type: "function",
+                      function: {
+                        name: "web_search",
+                        arguments: JSON.stringify({ query: "stale query" }),
+                      },
+                    },
+                    args: { query: "stale query" },
+                    status: "completed",
+                    content: "stale result",
+                  },
+                ],
+              }),
+              tool_approval_state: JSON.stringify({
+                pendingRequests: [],
+                updatedAt: 200,
+              }),
+            },
+          ];
+        }
+        if (
+          normalized ===
+          "SELECT * FROM paperchat_session_state WHERE session_id = ?"
+        ) {
+          return [];
+        }
+        if (
+          normalized ===
+          "SELECT * FROM messages WHERE session_id = ? ORDER BY seq ASC"
+        ) {
+          return [
+            {
+              id: "msg-1",
+              role: "user",
+              content: "hello",
+              timestamp: 201,
+            },
+            {
+              id: "msg-2",
+              role: "assistant",
+              content: "partial",
+              timestamp: 202,
+              streaming_state: "interrupted",
+            },
+          ];
+        }
+
+        return [];
+      },
+    };
+
+    const storage = getStorageDatabase() as any;
+    storage.ensureInit = async () => fakeDb;
+
+    const service = new SessionStorageService();
+    const session = await service.loadSession("session-load-2");
+
+    assert.exists(session);
+    assert.equal(session?.id, "session-load-2");
+    assert.isUndefined(session?.executionPlan);
+    assert.isUndefined(session?.toolExecutionState);
+    assert.isUndefined(session?.toolApprovalState);
+    assert.include(
+      recorded.map((entry) => entry.sql),
+      "UPDATE sessions SET execution_plan = NULL, tool_execution_state = NULL, tool_approval_state = NULL, updated_at = ? WHERE id = ?",
+    );
+    assert.include(
+      recorded.map((entry) => entry.sql),
+      "UPDATE session_meta SET updated_at = ? WHERE id = ?",
     );
   });
 
@@ -325,7 +497,9 @@ describe("paperchat storage and chat manager", function () {
 
     const manager = Object.create(ChatManager.prototype) as ChatManager & {
       currentSession: ChatSession;
-      sessionStorage: { updateSessionMeta: (session: ChatSession) => Promise<void> };
+      sessionStorage: {
+        updateSessionMeta: (session: ChatSession) => Promise<void>;
+      };
       init: () => Promise<void>;
     };
     const session: ChatSession = {
@@ -521,7 +695,9 @@ describe("paperchat storage and chat manager", function () {
         },
         pickRandom: (candidates) => candidates[0] ?? null,
       });
-      assert.fail("Expected repairPaperChatSessionAfterHardFailureWithRollback to throw");
+      assert.fail(
+        "Expected repairPaperChatSessionAfterHardFailureWithRollback to throw",
+      );
     } catch (error) {
       assert.instanceOf(error, Error);
       assert.equal((error as Error).message, "persist failed");
@@ -596,7 +772,13 @@ describe("paperchat storage and chat manager", function () {
       id: "user-1",
       role: "user",
       content: "retry this",
-      images: [{ type: "url", data: "https://example.com/a.png", mimeType: "image/png" }],
+      images: [
+        {
+          type: "url",
+          data: "https://example.com/a.png",
+          mimeType: "image/png",
+        },
+      ],
       timestamp: 1,
     };
     const errorMessage: ChatMessage = {
@@ -636,7 +818,10 @@ describe("paperchat storage and chat manager", function () {
         deleted.push([sessionId, messageId]);
       },
       buildSystemNotice: () => "rerouted notice",
-      insertSystemNotice: async (targetSession: ChatSession, content: string) => {
+      insertSystemNotice: async (
+        targetSession: ChatSession,
+        content: string,
+      ) => {
         notices.push(content);
         targetSession.messages.push({
           id: "notice-1",
@@ -822,7 +1007,10 @@ describe("paperchat storage and chat manager", function () {
       const manager = Object.create(ChatManager.prototype) as ChatManager & {
         currentSession: ChatSession;
         sessionStorage: {
-          insertMessage: (sessionId: string, message: ChatMessage) => Promise<void>;
+          insertMessage: (
+            sessionId: string,
+            message: ChatMessage,
+          ) => Promise<void>;
           updateSessionMeta: (targetSession: ChatSession) => Promise<void>;
         };
         streamingSessions: Map<string, ChatSession>;
