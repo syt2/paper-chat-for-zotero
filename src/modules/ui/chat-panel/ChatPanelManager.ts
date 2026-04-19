@@ -1084,9 +1084,7 @@ function createContext(container: HTMLElement): ChatPanelContext {
   const manager = getChatManager();
   const authManager = getAuthManager();
 
-  let context!: ChatPanelContext;
-
-  context = {
+  const context: ChatPanelContext = {
     container: container,
     chatManager: manager,
     authManager,

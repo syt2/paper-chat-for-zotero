@@ -697,6 +697,7 @@ function preprocessMathDelimiters(content: string): string {
 
   // Restore preserved blocks
   processed = processed.replace(
+    // eslint-disable-next-line no-control-regex
     /\x00PRESERVE_(\d+)\x00/g,
     (_, idx) => preserved[parseInt(idx)],
   );

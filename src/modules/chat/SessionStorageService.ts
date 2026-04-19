@@ -1089,7 +1089,9 @@ export class SessionStorageService {
     } catch (error) {
       try {
         await db.queryAsync("ROLLBACK");
-      } catch {}
+      } catch {
+        /* ignore rollback failure */
+      }
       throw error;
     }
   }
@@ -1137,7 +1139,9 @@ export class SessionStorageService {
     } catch (error) {
       try {
         await db.queryAsync("ROLLBACK");
-      } catch {}
+      } catch {
+        /* ignore rollback failure */
+      }
       throw error;
     }
 
@@ -1175,7 +1179,9 @@ export class SessionStorageService {
     } catch (error) {
       try {
         await db.queryAsync("ROLLBACK");
-      } catch {}
+      } catch {
+        /* ignore rollback failure */
+      }
       throw error;
     }
   }
