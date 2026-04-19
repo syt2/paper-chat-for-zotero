@@ -15,6 +15,7 @@ import { HTML_NS } from "./types";
 import { renderMarkdownToElement } from "./MarkdownRenderer";
 import { createElement, copyToClipboard } from "./ChatPanelBuilder";
 import { getString } from "../../../utils/locale";
+import { darkTheme } from "./ChatPanelTheme";
 
 const RECOVERY_STEP_PREFIX = "replan:";
 
@@ -899,11 +900,13 @@ function populateExecutionBannerElement(
     options.showApprovalActions && banner.kind === "waiting_approval";
   const isApprovalSummary =
     !options.showApprovalActions && banner.kind === "waiting_approval";
+  const accent = resolveExecutionBannerAccent(theme, banner);
+  const isDark = theme === darkTheme;
 
   const bar = createElement(doc, "div", {
     border: `1px solid ${
       isApprovalDock
-        ? banner.accentBackground || theme.borderColor
+        ? accent.borderColor
         : theme.borderColor
     }`,
     background: theme.assistantBubbleBg,
@@ -940,8 +943,8 @@ function populateExecutionBannerElement(
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
-    background: banner.accentBackground || "rgba(100, 116, 139, 0.14)",
-    color: banner.accentColor || theme.textPrimary,
+    background: accent.background,
+    color: accent.color,
     fontSize: isApprovalDock ? "10px" : "9px",
     fontWeight: "700",
     flexShrink: "0",
@@ -1015,11 +1018,12 @@ function populateExecutionBannerElement(
       borderRadius: "999px",
       fontSize: "9px",
       fontWeight: "700",
-      color: banner.accentColor || theme.textPrimary,
-      background: banner.accentBackground || theme.buttonBg,
+      color: accent.color,
+      background: accent.background,
       whiteSpace: "nowrap",
       flexShrink: "0",
       marginLeft: isApprovalDock ? "6px" : "5px",
+      border: isDark ? `1px solid ${accent.borderColor}` : "none",
     });
     statusPill.textContent = banner.statusLabel;
     header.appendChild(statusPill);
@@ -1042,6 +1046,62 @@ function populateExecutionBannerElement(
   }
 
   wrapper.appendChild(bar);
+}
+
+function resolveExecutionBannerAccent(
+  theme: ThemeColors,
+  banner: ExecutionBannerState,
+): {
+  color: string;
+  background: string;
+  borderColor: string;
+} {
+  const isDark = theme === darkTheme;
+
+  switch (banner.kind) {
+    case "running":
+      return isDark
+        ? {
+            color: "#cbd5e1",
+            background: "rgba(148, 163, 184, 0.18)",
+            borderColor: "rgba(148, 163, 184, 0.28)",
+          }
+        : {
+            color: "#334155",
+            background: "rgba(100, 116, 139, 0.14)",
+            borderColor: "rgba(100, 116, 139, 0.22)",
+          };
+    case "recovering":
+      return isDark
+        ? {
+            color: "#93c5fd",
+            background: "rgba(59, 130, 246, 0.22)",
+            borderColor: "rgba(96, 165, 250, 0.32)",
+          }
+        : {
+            color: "#1d4ed8",
+            background: "rgba(37, 99, 235, 0.14)",
+            borderColor: "rgba(37, 99, 235, 0.2)",
+          };
+    case "waiting_approval":
+      return isDark
+        ? {
+            color: "#fbbf24",
+            background: "rgba(245, 158, 11, 0.24)",
+            borderColor: "rgba(251, 191, 36, 0.32)",
+          }
+        : {
+            color: "#b45309",
+            background: "rgba(245, 158, 11, 0.16)",
+            borderColor: "rgba(245, 158, 11, 0.24)",
+          };
+    default:
+      return {
+        color: banner.accentColor || theme.textPrimary,
+        background: banner.accentBackground || theme.buttonBg,
+        borderColor: theme.borderColor,
+      };
+  }
 }
 
 function createApprovalActionsRow(
