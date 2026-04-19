@@ -31,6 +31,7 @@ export class AnthropicProvider extends BaseProvider {
     messages: ChatMessage[],
     callbacks: StreamCallbacks,
     pdfAttachment?: PdfAttachment,
+    signal?: AbortSignal,
   ): Promise<void> {
     const { onChunk, onComplete, onError } = callbacks;
 
@@ -59,6 +60,7 @@ export class AnthropicProvider extends BaseProvider {
           messages: anthropicMessages,
           stream: true,
         }),
+        signal,
       });
 
       await this.validateResponse(response);
@@ -68,7 +70,10 @@ export class AnthropicProvider extends BaseProvider {
     }
   }
 
-  async chatCompletion(messages: ChatMessage[]): Promise<string> {
+  async chatCompletion(
+    messages: ChatMessage[],
+    signal?: AbortSignal,
+  ): Promise<string> {
     if (!this.isReady()) {
       throw new Error("Provider is not configured");
     }
@@ -88,6 +93,7 @@ export class AnthropicProvider extends BaseProvider {
         system: this._config.systemPrompt || undefined,
         messages: anthropicMessages,
       }),
+      signal,
     });
 
     await this.validateResponse(response);
@@ -287,6 +293,7 @@ export class AnthropicProvider extends BaseProvider {
   async chatCompletionWithTools(
     messages: ChatMessage[],
     tools?: ToolDefinition[],
+    signal?: AbortSignal,
   ): Promise<{ content: string; toolCalls?: ToolCall[] }> {
     if (!this.isReady()) {
       throw new Error("Provider is not configured");
@@ -320,6 +327,7 @@ export class AnthropicProvider extends BaseProvider {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(requestBody),
+      signal,
     });
 
     await this.validateResponse(response);
@@ -378,6 +386,7 @@ export class AnthropicProvider extends BaseProvider {
     messages: ChatMessage[],
     tools: ToolDefinition[],
     callbacks: StreamToolCallingCallbacks,
+    signal?: AbortSignal,
   ): Promise<void> {
     const {
       onTextDelta,
@@ -419,6 +428,7 @@ export class AnthropicProvider extends BaseProvider {
           "Content-Type": "application/json",
         },
         body: JSON.stringify(requestBody),
+        signal,
       });
 
       await this.validateResponse(response);

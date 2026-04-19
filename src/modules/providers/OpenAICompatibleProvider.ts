@@ -18,6 +18,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
     messages: ChatMessage[],
     callbacks: StreamCallbacks,
     pdfAttachment?: PdfAttachment,
+    signal?: AbortSignal,
   ): Promise<void> {
     const { onChunk, onComplete, onError } = callbacks;
 
@@ -53,6 +54,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
           "Content-Type": "application/json",
         },
         body: JSON.stringify(requestBody),
+        signal,
       });
 
       await this.validateResponse(response);
@@ -62,7 +64,10 @@ export class OpenAICompatibleProvider extends BaseProvider {
     }
   }
 
-  async chatCompletion(messages: ChatMessage[]): Promise<string> {
+  async chatCompletion(
+    messages: ChatMessage[],
+    signal?: AbortSignal,
+  ): Promise<string> {
     if (!this.isReady()) {
       throw new Error("Provider is not configured");
     }
@@ -93,6 +98,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(requestBody),
+      signal,
     });
 
     await this.validateResponse(response);
@@ -153,6 +159,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
   async chatCompletionWithTools(
     messages: ChatMessage[],
     tools?: ToolDefinition[],
+    signal?: AbortSignal,
   ): Promise<{ content: string; toolCalls?: ToolCall[] }> {
     if (!this.isReady()) {
       throw new Error("Provider is not configured");
@@ -206,6 +213,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(requestBody),
+      signal,
     });
 
     await this.validateResponse(response);
@@ -324,6 +332,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
     messages: ChatMessage[],
     tools: ToolDefinition[],
     callbacks: StreamToolCallingCallbacks,
+    signal?: AbortSignal,
   ): Promise<void> {
     const { onTextDelta, onReasoningDelta, onToolCallStart, onToolCallDelta, onComplete, onError } =
       callbacks;
@@ -369,6 +378,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
           "Content-Type": "application/json",
         },
         body: JSON.stringify(requestBody),
+        signal,
       });
 
       await this.validateResponse(response);

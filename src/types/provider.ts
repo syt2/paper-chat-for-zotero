@@ -262,10 +262,11 @@ export interface AIProvider {
     messages: ChatMessage[],
     callbacks: StreamCallbacks,
     pdfAttachment?: PdfAttachment,
+    signal?: AbortSignal,
   ): Promise<void>;
 
   /** Non-streaming chat completion */
-  chatCompletion(messages: ChatMessage[]): Promise<string>;
+  chatCompletion(messages: ChatMessage[], signal?: AbortSignal): Promise<string>;
 
   /** Test connection to the API */
   testConnection(): Promise<boolean>;
@@ -288,6 +289,7 @@ export interface ToolCallingProvider extends AIProvider {
   chatCompletionWithTools(
     messages: ChatMessage[],
     tools?: ToolDefinition[],
+    signal?: AbortSignal,
   ): Promise<{ content: string; toolCalls?: ToolCall[] }>;
 
   /** 流式 tool calling（可选，部分 provider 可能不支持） */
@@ -295,6 +297,7 @@ export interface ToolCallingProvider extends AIProvider {
     messages: ChatMessage[],
     tools: ToolDefinition[],
     callbacks: StreamToolCallingCallbacks,
+    signal?: AbortSignal,
   ): Promise<void>;
 }
 

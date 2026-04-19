@@ -22,6 +22,7 @@ import {
   getProviderManager,
 } from "../src/modules/providers/ProviderManager.ts";
 import type { ChatMessage, ChatSession } from "../src/types/chat";
+import type { ManagedAbortController } from "../src/utils/abort.ts";
 
 const PREFS_PREFIX = "extensions.zotero.paperchat";
 
@@ -54,6 +55,19 @@ function createPrefEnvironment() {
   (globalThis as any).Ci = {
     nsIHttpChannel: Symbol("nsIHttpChannel"),
   };
+  (globalThis as any).addon = {
+    data: {
+      locale: {
+        current: {
+          formatMessagesSync: (messages: Array<{ id: string }>) =>
+            messages.map((message) => ({
+              value: message.id,
+              attributes: null,
+            })),
+        },
+      },
+    },
+  };
 
   (globalThis as any).Zotero = {
     Prefs: {
@@ -80,6 +94,7 @@ describe("paperchat storage and chat manager", function () {
   let originalZtoolkit: unknown;
   let originalServices: unknown;
   let originalCi: unknown;
+  let originalAddon: unknown;
   let prefStore: Map<string, unknown>;
 
   beforeEach(function () {
@@ -87,6 +102,7 @@ describe("paperchat storage and chat manager", function () {
     originalZtoolkit = (globalThis as any).ztoolkit;
     originalServices = (globalThis as any).Services;
     originalCi = (globalThis as any).Ci;
+    originalAddon = (globalThis as any).addon;
     prefStore = createPrefEnvironment();
     destroyStorageDatabase();
     destroyAuthManager();
@@ -105,6 +121,7 @@ describe("paperchat storage and chat manager", function () {
     (globalThis as any).ztoolkit = originalZtoolkit;
     (globalThis as any).Services = originalServices;
     (globalThis as any).Ci = originalCi;
+    (globalThis as any).addon = originalAddon;
   });
 
   it("backfills companion session state during schema v5 migration", async function () {
@@ -897,6 +914,7 @@ describe("paperchat storage and chat manager", function () {
     const manager = Object.create(ChatManager.prototype) as ChatManager & {
       currentSession: ChatSession;
       activeSessionRunIds: Map<string, number>;
+      activeSessionAbortControllers: Map<string, ManagedAbortController>;
       sessionStorage: {
         deleteAllMessages: (sessionId: string) => Promise<void>;
         updateSessionMeta: (session: ChatSession) => Promise<void>;
@@ -960,6 +978,7 @@ describe("paperchat storage and chat manager", function () {
       },
     };
     manager.activeSessionRunIds = new Map();
+    manager.activeSessionAbortControllers = new Map();
     manager.streamingSessions = new Map([[session.id, session]]);
     manager.applySessionItemContext = (appliedSession) => {
       appliedContexts.push(appliedSession);
@@ -1007,6 +1026,7 @@ describe("paperchat storage and chat manager", function () {
     const manager = Object.create(ChatManager.prototype) as ChatManager & {
       currentSession: ChatSession;
       activeSessionRunIds: Map<string, number>;
+      activeSessionAbortControllers: Map<string, ManagedAbortController>;
       streamingSessions: Map<string, ChatSession>;
       sessionStorage: {
         updateMessageContent: (
@@ -1063,6 +1083,7 @@ describe("paperchat storage and chat manager", function () {
 
     manager.currentSession = session;
     manager.activeSessionRunIds = new Map([[session.id, 1]]);
+    manager.activeSessionAbortControllers = new Map();
     manager.streamingSessions = new Map([[session.id, session]]);
     manager.sessionStorage = {
       updateMessageContent: async (
@@ -1152,6 +1173,7 @@ describe("paperchat storage and chat manager", function () {
       const manager = Object.create(ChatManager.prototype) as ChatManager & {
         currentSession: ChatSession;
         activeSessionRunIds: Map<string, number>;
+        activeSessionAbortControllers: Map<string, ManagedAbortController>;
         sessionStorage: {
           insertMessage: (
             sessionId: string,
@@ -1168,6 +1190,7 @@ describe("paperchat storage and chat manager", function () {
 
       manager.currentSession = session;
       manager.activeSessionRunIds = new Map();
+      manager.activeSessionAbortControllers = new Map();
       manager.sessionStorage = {
         insertMessage: async (_sessionId: string, message: ChatMessage) => {
           insertedMessages.push(message);
@@ -1195,6 +1218,161 @@ describe("paperchat storage and chat manager", function () {
         ["user", "assistant"],
       );
       assert.lengthOf(updatedSessions, 1);
+    } finally {
+      providerManager.getActiveProviderId = originalGetActiveProviderId;
+      providerManager.executeWithFallback = originalExecuteWithFallback;
+      contextManager.filterMessages = originalFilterMessages;
+    }
+  });
+
+  it("aborts the in-flight provider request when cancelling the current turn", async function () {
+    const providerManager = getProviderManager() as any;
+    const originalGetActiveProviderId = providerManager.getActiveProviderId;
+    const originalExecuteWithFallback = providerManager.executeWithFallback;
+    const contextManager = getContextManager() as any;
+    const originalFilterMessages = contextManager.filterMessages;
+
+    const insertedMessages: ChatMessage[] = [];
+    const updatedSessions: ChatSession[] = [];
+    const interruptedUpdates: Array<{
+      sessionId: string;
+      messageId: string;
+      streamingState: string | null | undefined;
+    }> = [];
+    let resolveProviderStarted: (() => void) | undefined;
+    const providerStarted = new Promise<void>((resolve) => {
+      resolveProviderStarted = resolve;
+    });
+    let capturedSignal: AbortSignal | undefined;
+
+    const session: ChatSession = {
+      id: "session-cancel-abort-1",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      messages: [],
+    };
+
+    const provider = {
+      config: { id: "openai" },
+      getName: () => "OpenAI",
+      isReady: () => true,
+      supportsPdfUpload: () => false,
+      streamChatCompletion: async (
+        _messages: ChatMessage[],
+        callbacks: {
+          onChunk: (chunk: string) => void;
+          onError: (error: Error) => void;
+        },
+        _pdfAttachment?: unknown,
+        signal?: AbortSignal,
+      ) => {
+        capturedSignal = signal;
+        resolveProviderStarted?.();
+        callbacks.onChunk("working");
+        signal?.addEventListener(
+          "abort",
+          () => {
+            const abortError = new Error("The operation was aborted.");
+            abortError.name = "AbortError";
+            callbacks.onError(abortError);
+          },
+          { once: true },
+        );
+      },
+    };
+
+    providerManager.getActiveProviderId = () => "openai";
+    providerManager.executeWithFallback = async (
+      operation: (currentProvider: typeof provider) => Promise<unknown>,
+    ) => operation(provider);
+    contextManager.filterMessages = (targetSession: ChatSession) => ({
+      messages: [...targetSession.messages],
+      summaryTriggered: false,
+    });
+
+    try {
+      const manager = Object.create(ChatManager.prototype) as ChatManager & {
+        currentSession: ChatSession;
+        activeSessionRunIds: Map<string, number>;
+        activeSessionAbortControllers: Map<string, ManagedAbortController>;
+        streamingSessions: Map<string, ChatSession>;
+        sessionStorage: {
+          insertMessage: (
+            sessionId: string,
+            message: ChatMessage,
+          ) => Promise<void>;
+          updateSessionMeta: (targetSession: ChatSession) => Promise<void>;
+          updateMessageContent: (
+            sessionId: string,
+            messageId: string,
+            content: string,
+            reasoning?: string,
+            options?: { streamingState?: string | null },
+          ) => Promise<void>;
+        };
+        currentItemKey: string | null;
+        init: () => Promise<void>;
+        getActiveProvider: () => typeof provider;
+        isSessionActive: (targetSession: ChatSession) => boolean;
+      };
+
+      manager.currentSession = session;
+      manager.activeSessionRunIds = new Map();
+      manager.activeSessionAbortControllers = new Map();
+      manager.streamingSessions = new Map();
+      manager.sessionStorage = {
+        insertMessage: async (_sessionId: string, message: ChatMessage) => {
+          insertedMessages.push(message);
+        },
+        updateSessionMeta: async (targetSession: ChatSession) => {
+          updatedSessions.push({ ...targetSession, messages: [...targetSession.messages] });
+        },
+        updateMessageContent: async (
+          sessionId,
+          messageId,
+          _content,
+          _reasoning,
+          options,
+        ) => {
+          interruptedUpdates.push({
+            sessionId,
+            messageId,
+            streamingState: options?.streamingState,
+          });
+        },
+      };
+      manager.currentItemKey = null;
+      manager.init = async () => undefined;
+      manager.getActiveProvider = () => provider as any;
+      manager.isSessionActive = () => true;
+
+      const sendPromise = manager.sendMessage("abort me");
+      await providerStarted;
+
+      const cancelled = await manager.cancelCurrentTurn();
+      const accepted = await sendPromise;
+
+      assert.isTrue(cancelled);
+      assert.isTrue(accepted);
+      assert.isDefined(capturedSignal);
+      assert.isTrue(capturedSignal!.aborted);
+      assert.lengthOf(insertedMessages, 2);
+      assert.deepEqual(
+        insertedMessages.map((message) => message.role),
+        ["user", "assistant"],
+      );
+      assert.deepEqual(interruptedUpdates, [
+        {
+          sessionId: "session-cancel-abort-1",
+          messageId: session.messages[1].id,
+          streamingState: "interrupted",
+        },
+      ]);
+      assert.isFalse(manager.activeSessionRunIds.has(session.id));
+      assert.isFalse(manager.activeSessionAbortControllers.has(session.id));
+      assert.isFalse(manager.streamingSessions.has(session.id));
+      assert.isAtLeast(updatedSessions.length, 2);
     } finally {
       providerManager.getActiveProviderId = originalGetActiveProviderId;
       providerManager.executeWithFallback = originalExecuteWithFallback;

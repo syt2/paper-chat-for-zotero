@@ -17,7 +17,7 @@ import type {
 } from "../../../types/tool";
 import type { ToolCallingProvider } from "../../../types/provider";
 import { getErrorMessage } from "../../../utils/common";
-import { SessionRunInvalidatedError } from "../errors";
+import { isAbortError, SessionRunInvalidatedError } from "../errors";
 import type { SessionStorageService } from "../SessionStorageService";
 import type {
   ToolSchedulerExecutionHooks,
@@ -74,6 +74,7 @@ interface RuntimeExecutionOptions {
   paperStructure?: PaperStructure | PaperStructureExtended | null;
   sendingSession: ChatSession;
   sessionRunId?: number;
+  abortSignal?: AbortSignal;
   refreshSystemPrompt?: (
     currentMessages: ChatMessage[],
     session: ChatSession,
@@ -143,6 +144,7 @@ export class AgentRuntime {
       paperStructure,
       sendingSession,
       sessionRunId,
+      abortSignal,
       refreshSystemPrompt,
     } = options;
     const logPrefix = "Streaming Tool Calling";
@@ -175,6 +177,7 @@ export class AgentRuntime {
           tools,
           sendingSession,
           sessionRunId,
+          abortSignal,
           assistantMessage,
           displayBeforeThisRound,
           iteration,
@@ -230,7 +233,11 @@ export class AgentRuntime {
         iteration,
       );
     } catch (error) {
-      if (error instanceof SessionRunInvalidatedError) {
+      if (
+        error instanceof SessionRunInvalidatedError ||
+        (isAbortError(error) &&
+          !this.callbacks.isSessionTracked(sendingSession, sessionRunId))
+      ) {
         return;
       }
       await this.finalizeErroredTurn(
@@ -259,6 +266,7 @@ export class AgentRuntime {
       paperStructure,
       sendingSession,
       sessionRunId,
+      abortSignal,
       refreshSystemPrompt,
     } = options;
     const logPrefix = "Tool Calling";
@@ -287,6 +295,7 @@ export class AgentRuntime {
         const result = await provider.chatCompletionWithTools(
           currentMessages,
           tools,
+          abortSignal,
         );
 
         this.ensureSessionTracked(sendingSession, sessionRunId);
@@ -337,7 +346,11 @@ export class AgentRuntime {
         iteration,
       );
     } catch (error) {
-      if (error instanceof SessionRunInvalidatedError) {
+      if (
+        error instanceof SessionRunInvalidatedError ||
+        (isAbortError(error) &&
+          !this.callbacks.isSessionTracked(sendingSession, sessionRunId))
+      ) {
         return;
       }
       await this.finalizeErroredTurn(
@@ -382,6 +395,7 @@ export class AgentRuntime {
     tools: ToolDefinition[],
     sendingSession: ChatSession,
     sessionRunId: number | undefined,
+    abortSignal: AbortSignal | undefined,
     assistantMessage: ChatMessage,
     displayBeforeThisRound: string,
     iteration: number,
@@ -487,7 +501,12 @@ export class AgentRuntime {
       };
 
       provider
-        .streamChatCompletionWithTools(currentMessages, tools, callbacks)
+        .streamChatCompletionWithTools(
+          currentMessages,
+          tools,
+          callbacks,
+          abortSignal,
+        )
         .catch(reject);
     });
   }

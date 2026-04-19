@@ -48,6 +48,10 @@ import { getAuthManager } from "../auth";
 import { getString } from "../../utils/locale";
 import { getPref, setPref } from "../../utils/prefs";
 import {
+  createAbortController,
+  type ManagedAbortController,
+} from "../../utils/abort";
+import {
   getErrorMessage,
   getItemTitleSmart,
   generateTimestampId,
@@ -73,7 +77,7 @@ import {
 } from "./paperchat-retry-orchestration";
 import { MemoryManager } from "./memory/MemoryManager";
 import { AgentRuntime } from "./agent-runtime/AgentRuntime";
-import { SessionRunInvalidatedError } from "./errors";
+import { isAbortError, SessionRunInvalidatedError } from "./errors";
 // V1 migration now handled by migrateToSQLite.ts at startup
 
 /**
@@ -144,6 +148,10 @@ export class ChatManager {
   // when the user switches back to a session that is still streaming.
   private streamingSessions = new Map<string, ChatSession>();
   private activeSessionRunIds = new Map<string, number>();
+  private activeSessionAbortControllers = new Map<
+    string,
+    ManagedAbortController
+  >();
 
   private memoryManager: MemoryManager;
   private agentRuntime: AgentRuntime;
@@ -495,11 +503,19 @@ export class ChatManager {
     return this.activeSessionRunIds.get(session.id) === runId;
   }
 
-  private beginSessionRun(session: ChatSession): number {
+  private beginSessionRun(session: ChatSession): {
+    runId: number;
+    abortSignal?: AbortSignal;
+  } {
     const nextRunId = (this.activeSessionRunIds.get(session.id) || 0) + 1;
+    const abortController = createAbortController();
     this.activeSessionRunIds.set(session.id, nextRunId);
+    this.activeSessionAbortControllers.set(session.id, abortController);
     this.streamingSessions.set(session.id, session);
-    return nextRunId;
+    return {
+      runId: nextRunId,
+      abortSignal: abortController.signal,
+    };
   }
 
   private completeSessionRun(session: ChatSession, runId: number): void {
@@ -507,7 +523,22 @@ export class ChatManager {
       return;
     }
     this.activeSessionRunIds.delete(session.id);
+    this.activeSessionAbortControllers.delete(session.id);
     this.streamingSessions.delete(session.id);
+  }
+
+  private invalidateSessionRun(
+    sessionId: string,
+    options?: { abort?: boolean },
+  ): void {
+    const abortController = this.activeSessionAbortControllers.get(sessionId);
+    this.activeSessionRunIds.delete(sessionId);
+    this.activeSessionAbortControllers.delete(sessionId);
+    this.streamingSessions.delete(sessionId);
+
+    if (options?.abort) {
+      abortController?.abort();
+    }
   }
 
   private ensureTrackedRun(session: ChatSession, runId: number): void {
@@ -654,8 +685,7 @@ export class ChatManager {
     });
     getToolPermissionManager().clearSessionPolicies(sessionId);
 
-    this.activeSessionRunIds.delete(sessionId);
-    this.streamingSessions.delete(sessionId);
+    this.invalidateSessionRun(sessionId, { abort: true });
     if (deletingCurrentSession) {
       this.currentSession = null;
     }
@@ -1076,7 +1106,8 @@ export class ChatManager {
     // This ensures DB writes and in-memory mutations target the correct
     // session even if the user switches sessions mid-stream.
     const sendingSession = this.currentSession;
-    const sessionRunId = this.beginSessionRun(sendingSession);
+    const { runId: sessionRunId, abortSignal } =
+      this.beginSessionRun(sendingSession);
     const ensureSendingSessionTracked = () => {
       this.ensureTrackedRun(sendingSession, sessionRunId);
     };
@@ -1310,6 +1341,7 @@ export class ChatManager {
           item!,
           sendingSession,
           sessionRunId,
+          abortSignal,
         );
         return true;
       }
@@ -1542,6 +1574,7 @@ export class ChatManager {
                 messagesForApi,
                 callbacks,
                 pdfAttachment,
+                abortSignal,
               );
             });
 
@@ -1584,6 +1617,12 @@ export class ChatManager {
         return true;
       } catch (error) {
         if (error instanceof SessionRunInvalidatedError) {
+          return true;
+        }
+        if (
+          isAbortError(error) &&
+          !this.isSessionTracked(sendingSession, sessionRunId)
+        ) {
           return true;
         }
         // 所有 provider 都失败了
@@ -1658,6 +1697,7 @@ export class ChatManager {
     item: Zotero.Item,
     sendingSession: ChatSession,
     sessionRunId: number,
+    abortSignal?: AbortSignal,
   ): Promise<boolean> {
     const pdfToolManager = getPdfToolManager();
     const providerManager = getProviderManager();
@@ -1797,6 +1837,7 @@ export class ChatManager {
               sendingSession,
               sessionRunId,
               buildSystemPrompt,
+              abortSignal,
             );
             return;
           }
@@ -1815,6 +1856,7 @@ export class ChatManager {
             sendingSession,
             sessionRunId,
             buildSystemPrompt,
+            abortSignal,
           );
         };
 
@@ -1857,6 +1899,12 @@ export class ChatManager {
       return true;
     } catch (error) {
       if (error instanceof SessionRunInvalidatedError) {
+        return true;
+      }
+      if (
+        isAbortError(error) &&
+        !this.isSessionTracked(sendingSession, sessionRunId)
+      ) {
         return true;
       }
       // 所有 provider 都失败了
@@ -1999,6 +2047,7 @@ export class ChatManager {
     sendingSession: ChatSession,
     sessionRunId: number,
     buildSystemPrompt: (currentMessages: ChatMessage[]) => string,
+    abortSignal?: AbortSignal,
   ): Promise<void> {
     await this.agentRuntime.executeStreamingToolLoop({
       provider,
@@ -2010,6 +2059,7 @@ export class ChatManager {
       paperStructure,
       sendingSession,
       sessionRunId,
+      abortSignal,
       refreshSystemPrompt: buildSystemPrompt,
     });
     clearPaperChatRetryableState(sendingSession);
@@ -2033,6 +2083,7 @@ export class ChatManager {
     sendingSession: ChatSession,
     sessionRunId: number,
     buildSystemPrompt: (currentMessages: ChatMessage[]) => string,
+    abortSignal?: AbortSignal,
   ): Promise<void> {
     await this.agentRuntime.executeNonStreamingToolLoop({
       provider,
@@ -2044,6 +2095,7 @@ export class ChatManager {
       paperStructure,
       sendingSession,
       sessionRunId,
+      abortSignal,
       refreshSystemPrompt: buildSystemPrompt,
     });
     clearPaperChatRetryableState(sendingSession);
@@ -2076,8 +2128,7 @@ export class ChatManager {
       return false;
     }
 
-    this.activeSessionRunIds.delete(session.id);
-    this.streamingSessions.delete(session.id);
+    this.invalidateSessionRun(session.id, { abort: true });
 
     if (pendingApprovalCount > 0) {
       getToolPermissionManager().denyPendingApprovals({
@@ -2129,8 +2180,7 @@ export class ChatManager {
       reason:
         "Pending tool approvals were denied because the session was cleared.",
     });
-    this.activeSessionRunIds.delete(clearedSession.id);
-    this.streamingSessions.delete(clearedSession.id);
+    this.invalidateSessionRun(clearedSession.id, { abort: true });
     this.currentSession = clearedSession;
     this.applySessionItemContext(clearedSession);
 
@@ -2372,7 +2422,11 @@ export class ChatManager {
     getToolPermissionManager().removeApprovalObserver(this.approvalObserver);
     this.currentSession = null;
     this.currentItemKey = null;
+    for (const abortController of this.activeSessionAbortControllers.values()) {
+      abortController.abort();
+    }
     this.activeSessionRunIds.clear();
+    this.activeSessionAbortControllers.clear();
     this.streamingSessions.clear();
     getPdfToolManager().setCurrentItemKey(null);
     this.memoryManager.clear();

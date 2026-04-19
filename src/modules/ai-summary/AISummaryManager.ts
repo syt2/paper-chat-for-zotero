@@ -16,6 +16,10 @@ import { AISummaryProcessor } from "./AISummaryProcessor";
 import { AISummaryStorage } from "./AISummaryStorage";
 import { getTemplateById } from "./defaultTemplates";
 import { getString } from "../../utils/locale";
+import {
+  createAbortController,
+  type ManagedAbortController,
+} from "../../utils/abort";
 import { getItemTitle } from "../../utils/common";
 
 export class AISummaryManager {
@@ -31,7 +35,7 @@ export class AISummaryManager {
 
   private processor: AISummaryProcessor;
   private storage: AISummaryStorage;
-  private abortController: AbortController | null = null;
+  private abortController: ManagedAbortController | null = null;
   private initialized: boolean = false;
 
   // 回调
@@ -172,7 +176,7 @@ export class AISummaryManager {
     };
 
     // 创建 abort controller
-    this.abortController = new AbortController();
+    this.abortController = createAbortController();
 
     // 保存初始状态
     await this.saveCurrentState(keys, [], []);
@@ -211,7 +215,7 @@ export class AISummaryManager {
     ztoolkit.log("[AISummary] Resuming batch with", storedState.pendingItemKeys.length, "items");
 
     this.progress.status = "running";
-    this.abortController = new AbortController();
+    this.abortController = createAbortController();
     this.onProgressUpdate?.(this.progress);
 
     await this.processQueue(
@@ -313,7 +317,7 @@ export class AISummaryManager {
 
     while (remaining.length > 0) {
       // 检查是否已取消/暂停
-      if (this.abortController?.signal.aborted) {
+      if (this.abortController?.aborted) {
         ztoolkit.log("[AISummary] Processing aborted");
         break;
       }

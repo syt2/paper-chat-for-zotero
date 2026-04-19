@@ -104,6 +104,7 @@ export class PaperChatProvider implements AIProvider {
     messages: ChatMessage[],
     callbacks: StreamCallbacks,
     pdfAttachment?: PdfAttachment,
+    signal?: AbortSignal,
   ): Promise<void> {
     // Refresh config before each call (API key may have changed)
     this._delegate.updateConfig(this.createDelegateConfig());
@@ -111,12 +112,16 @@ export class PaperChatProvider implements AIProvider {
       messages,
       callbacks,
       pdfAttachment,
+      signal,
     );
   }
 
-  async chatCompletion(messages: ChatMessage[]): Promise<string> {
+  async chatCompletion(
+    messages: ChatMessage[],
+    signal?: AbortSignal,
+  ): Promise<string> {
     this._delegate.updateConfig(this.createDelegateConfig());
-    return this._delegate.chatCompletion(messages);
+    return this._delegate.chatCompletion(messages, signal);
   }
 
   async testConnection(): Promise<boolean> {
@@ -149,9 +154,10 @@ export class PaperChatProvider implements AIProvider {
   async chatCompletionWithTools(
     messages: ChatMessage[],
     tools?: ToolDefinition[],
+    signal?: AbortSignal,
   ): Promise<{ content: string; toolCalls?: ToolCall[] }> {
     this._delegate.updateConfig(this.createDelegateConfig());
-    return this._delegate.chatCompletionWithTools(messages, tools);
+    return this._delegate.chatCompletionWithTools(messages, tools, signal);
   }
 
   /**
@@ -162,12 +168,14 @@ export class PaperChatProvider implements AIProvider {
     messages: ChatMessage[],
     tools: ToolDefinition[],
     callbacks: StreamToolCallingCallbacks,
+    signal?: AbortSignal,
   ): Promise<void> {
     this._delegate.updateConfig(this.createDelegateConfig());
     return this._delegate.streamChatCompletionWithTools(
       messages,
       tools,
       callbacks,
+      signal,
     );
   }
 }

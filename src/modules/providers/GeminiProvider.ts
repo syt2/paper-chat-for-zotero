@@ -12,6 +12,7 @@ export class GeminiProvider extends BaseProvider {
     messages: ChatMessage[],
     callbacks: StreamCallbacks,
     _pdfAttachment?: PdfAttachment,
+    signal?: AbortSignal,
   ): Promise<void> {
     const { onChunk, onComplete, onError } = callbacks;
 
@@ -46,6 +47,7 @@ export class GeminiProvider extends BaseProvider {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(requestBody),
+        signal,
       });
 
       await this.validateResponse(response);
@@ -55,7 +57,10 @@ export class GeminiProvider extends BaseProvider {
     }
   }
 
-  async chatCompletion(messages: ChatMessage[]): Promise<string> {
+  async chatCompletion(
+    messages: ChatMessage[],
+    signal?: AbortSignal,
+  ): Promise<string> {
     if (!this.isReady()) {
       throw new Error("Provider is not configured");
     }
@@ -85,6 +90,7 @@ export class GeminiProvider extends BaseProvider {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(requestBody),
+      signal,
     });
 
     await this.validateResponse(response);

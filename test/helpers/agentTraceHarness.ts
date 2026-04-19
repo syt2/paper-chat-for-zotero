@@ -522,11 +522,19 @@ class ScriptedToolProvider implements ToolCallingProvider {
 
   updateConfig(_config: Partial<ProviderConfig>): void {}
 
-  async streamChatCompletion(): Promise<void> {
+  async streamChatCompletion(
+    _messages?: ChatMessage[],
+    _callbacks?: unknown,
+    _pdfAttachment?: unknown,
+    _signal?: AbortSignal,
+  ): Promise<void> {
     throw new Error("streamChatCompletion is not implemented in the test harness");
   }
 
-  async chatCompletion(): Promise<string> {
+  async chatCompletion(
+    _messages?: ChatMessage[],
+    _signal?: AbortSignal,
+  ): Promise<string> {
     throw new Error("chatCompletion is not implemented in the test harness");
   }
 
@@ -541,6 +549,7 @@ class ScriptedToolProvider implements ToolCallingProvider {
   chatCompletionWithTools(
     messages: ChatMessage[],
     _tools?: ToolDefinition[],
+    _signal?: AbortSignal,
   ): Promise<{ content: string; toolCalls?: ToolCall[] }> {
     const round = this.rounds[this.cursor];
     assert.isDefined(

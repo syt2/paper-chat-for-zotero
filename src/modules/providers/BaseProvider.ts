@@ -58,9 +58,13 @@ export abstract class BaseProvider implements AIProvider {
     messages: ChatMessage[],
     callbacks: StreamCallbacks,
     pdfAttachment?: PdfAttachment,
+    signal?: AbortSignal,
   ): Promise<void>;
 
-  abstract chatCompletion(messages: ChatMessage[]): Promise<string>;
+  abstract chatCompletion(
+    messages: ChatMessage[],
+    signal?: AbortSignal,
+  ): Promise<string>;
 
   abstract testConnection(): Promise<boolean>;
 
