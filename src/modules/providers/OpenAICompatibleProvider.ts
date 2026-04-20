@@ -357,9 +357,12 @@ export class OpenAICompatibleProvider extends BaseProvider {
         messages: apiMessages,
         temperature: this._config.temperature ?? 0.7,
         stream: true,
-        tools: tools,
-        tool_choice: "auto",
       };
+
+      if (tools.length > 0) {
+        requestBody.tools = tools;
+        requestBody.tool_choice = "auto";
+      }
 
       if (this._config.maxTokens && this._config.maxTokens > 0) {
         requestBody.max_tokens = this._config.maxTokens;

@@ -165,6 +165,8 @@ export type FluentMessageId =
   | 'pref-add-model'
   | 'pref-add-provider'
   | 'pref-advanced-options'
+  | 'pref-agent-max-planning-iterations'
+  | 'pref-agent-max-planning-iterations-desc'
   | 'pref-ai-tools-settings'
   | 'pref-aisummary-desc'
   | 'pref-aisummary-include-annotations'

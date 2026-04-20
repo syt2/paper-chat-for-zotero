@@ -29,6 +29,7 @@ declare namespace _ZoteroTypes {
       "contextSummaryThreshold": number;
       "toolPermissionDefaultModes": string;
       "webSearchProvider": string;
+      "agentMaxPlanningIterations": number;
       "enableSemanticSearch": boolean;
     };
   }

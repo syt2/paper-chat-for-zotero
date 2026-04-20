@@ -17,6 +17,7 @@ import type {
 } from "../../../types/tool";
 import type { ToolCallingProvider } from "../../../types/provider";
 import { getErrorMessage } from "../../../utils/common";
+import { getPref } from "../../../utils/prefs";
 import { isAbortError, SessionRunInvalidatedError } from "../errors";
 import type { SessionStorageService } from "../SessionStorageService";
 import type {
@@ -32,6 +33,14 @@ import {
   awaitWhileSessionTracked,
   ensureTrackedSession,
 } from "./sessionTracking";
+import {
+  DEFAULT_AGENT_MAX_PLANNING_ITERATIONS,
+  normalizeAgentMaxPlanningIterations,
+} from "./IterationLimitConfig";
+import {
+  getToolBudgetLimits,
+  type ToolBudgetLimits,
+} from "../tool-budget/ToolBudgetPolicy";
 import { createRecoveryGuidanceSystemMessage } from "../tool-recovery/ToolRecoveryPolicy";
 import { parseToolError } from "../tool-errors/ToolErrorFormatter";
 
@@ -78,6 +87,12 @@ interface RuntimeExecutionOptions {
   refreshSystemPrompt?: (
     currentMessages: ChatMessage[],
     session: ChatSession,
+    runtimeState?: {
+      currentIteration: number;
+      remainingIterations: number;
+      maxIterations: number;
+      forceFinalAnswer: boolean;
+    },
   ) => string;
 }
 
@@ -105,17 +120,25 @@ interface ToolIterationParams {
   accumulatedDisplay: string;
   iteration: number;
   logPrefix: string;
+  budgetLimits: ToolBudgetLimits;
 }
 
 // Hard stop for a single assistant turn. Keeps malformed tool loops bounded
 // while still allowing a few replan / retry pivots inside one response.
-const MAX_ITERATIONS = 15;
 const THINKING_SUFFIX = "\n\n···";
 const MAX_ITERATIONS_MESSAGE =
   "\n\nI apologize, but I was unable to complete the request within the allowed number of iterations.";
 const MAX_ITERATIONS_ERROR = "Maximum tool-calling iterations reached.";
 const AGENT_TRACE_LOG_PREF =
   "extensions.zotero.paperchat.devEnableAgentTraceLogs";
+
+interface IterationControlState {
+  currentIteration: number;
+  remainingIterations: number;
+  maxIterations: number;
+  forceFinalAnswer: boolean;
+  toolsForRound: ToolDefinition[];
+}
 
 export class AgentRuntime {
   private executionPlanManager = new ExecutionPlanManager();
@@ -148,6 +171,8 @@ export class AgentRuntime {
       refreshSystemPrompt,
     } = options;
     const logPrefix = "Streaming Tool Calling";
+    const maxIterations = this.getMaxIterations();
+    const budgetLimits = getToolBudgetLimits(maxIterations);
     let iteration = 0;
     let accumulatedDisplay = "";
     await this.startTurn(
@@ -159,22 +184,33 @@ export class AgentRuntime {
     );
 
     try {
-      while (iteration < MAX_ITERATIONS) {
+      while (iteration < maxIterations) {
         iteration++;
+        const iterationControl = this.createIterationControl(
+          iteration,
+          tools,
+          maxIterations,
+        );
         this.refreshSystemPrompt(
           currentMessages,
           sendingSession,
           refreshSystemPrompt,
+          iterationControl,
         );
         ztoolkit.log(
           `[${logPrefix}] Iteration ${iteration}, messages: ${currentMessages.length}`,
         );
+        if (iterationControl.forceFinalAnswer) {
+          ztoolkit.log(
+            `[${logPrefix}] Final synthesis iteration ${iteration}/${maxIterations}; tools disabled for this round`,
+          );
+        }
 
         const displayBeforeThisRound = accumulatedDisplay;
         const result = await this.runStreamingRound(
           provider,
           currentMessages,
-          tools,
+          iterationControl.toolsForRound,
           sendingSession,
           sessionRunId,
           abortSignal,
@@ -194,7 +230,11 @@ export class AgentRuntime {
           result.stopReason,
         );
 
-        if (result.toolCalls && result.toolCalls.length > 0) {
+        if (
+          !iterationControl.forceFinalAnswer &&
+          result.toolCalls &&
+          result.toolCalls.length > 0
+        ) {
           accumulatedDisplay = await this.runToolIteration({
             sendingSession,
             sessionRunId,
@@ -206,8 +246,27 @@ export class AgentRuntime {
             accumulatedDisplay,
             iteration,
             logPrefix,
+            budgetLimits,
           });
           continue;
+        }
+
+        if (
+          iterationControl.forceFinalAnswer &&
+          !(result.content || "").trim()
+        ) {
+          ztoolkit.log(
+            `[${logPrefix}] Final synthesis round returned no text; falling back to max-iterations message`,
+          );
+          await this.finalizeMaxIterationsTurn(
+            sendingSession,
+            sessionRunId,
+            currentMessages,
+            assistantMessage,
+            accumulatedDisplay + MAX_ITERATIONS_MESSAGE,
+            iteration,
+          );
+          return;
         }
 
         await this.finalizeCompletedTurn({
@@ -223,7 +282,7 @@ export class AgentRuntime {
         return;
       }
 
-      ztoolkit.log(`[${logPrefix}] Max iterations reached`);
+      ztoolkit.log(`[${logPrefix}] Max iterations reached without a terminal response`);
       await this.finalizeMaxIterationsTurn(
         sendingSession,
         sessionRunId,
@@ -270,6 +329,8 @@ export class AgentRuntime {
       refreshSystemPrompt,
     } = options;
     const logPrefix = "Tool Calling";
+    const maxIterations = this.getMaxIterations();
+    const budgetLimits = getToolBudgetLimits(maxIterations);
     let iteration = 0;
     let accumulatedDisplay = "";
     await this.startTurn(
@@ -281,20 +342,31 @@ export class AgentRuntime {
     );
 
     try {
-      while (iteration < MAX_ITERATIONS) {
+      while (iteration < maxIterations) {
         iteration++;
+        const iterationControl = this.createIterationControl(
+          iteration,
+          tools,
+          maxIterations,
+        );
         this.refreshSystemPrompt(
           currentMessages,
           sendingSession,
           refreshSystemPrompt,
+          iterationControl,
         );
         ztoolkit.log(
           `[${logPrefix}] Iteration ${iteration}, messages: ${currentMessages.length}`,
         );
+        if (iterationControl.forceFinalAnswer) {
+          ztoolkit.log(
+            `[${logPrefix}] Final synthesis iteration ${iteration}/${maxIterations}; tools disabled for this round`,
+          );
+        }
 
         const result = await provider.chatCompletionWithTools(
           currentMessages,
-          tools,
+          iterationControl.toolsForRound,
           abortSignal,
         );
 
@@ -307,7 +379,11 @@ export class AgentRuntime {
           result.toolCalls?.length || 0,
         );
 
-        if (result.toolCalls && result.toolCalls.length > 0) {
+        if (
+          !iterationControl.forceFinalAnswer &&
+          result.toolCalls &&
+          result.toolCalls.length > 0
+        ) {
           accumulatedDisplay = await this.runToolIteration({
             sendingSession,
             sessionRunId,
@@ -319,8 +395,27 @@ export class AgentRuntime {
             accumulatedDisplay,
             iteration,
             logPrefix,
+            budgetLimits,
           });
           continue;
+        }
+
+        if (
+          iterationControl.forceFinalAnswer &&
+          !(result.content || "").trim()
+        ) {
+          ztoolkit.log(
+            `[${logPrefix}] Final synthesis round returned no text; falling back to max-iterations message`,
+          );
+          await this.finalizeMaxIterationsTurn(
+            sendingSession,
+            sessionRunId,
+            currentMessages,
+            assistantMessage,
+            accumulatedDisplay + MAX_ITERATIONS_MESSAGE,
+            iteration,
+          );
+          return;
         }
 
         await this.finalizeCompletedTurn({
@@ -336,7 +431,7 @@ export class AgentRuntime {
         return;
       }
 
-      ztoolkit.log(`[${logPrefix}] Max iterations reached`);
+      ztoolkit.log(`[${logPrefix}] Max iterations reached without a terminal response`);
       await this.finalizeMaxIterationsTurn(
         sendingSession,
         sessionRunId,
@@ -530,6 +625,7 @@ export class AgentRuntime {
       roundContent,
       iteration,
       logPrefix,
+      budgetLimits,
     } = params;
 
     const assistantToolMessage: ChatMessage = {
@@ -550,6 +646,7 @@ export class AgentRuntime {
       sendingSession,
       assistantMessage,
       toolCalls,
+      budgetLimits,
       paperStructure,
     );
 
@@ -728,6 +825,7 @@ export class AgentRuntime {
     session: ChatSession,
     assistantMessage: ChatMessage,
     toolCalls: ToolCall[],
+    budgetLimits: ToolBudgetLimits,
     paperStructure?: PaperStructure | PaperStructureExtended | null,
   ): ToolExecutionBatchEntry[] {
     return planToolExecutionEntries({
@@ -738,6 +836,7 @@ export class AgentRuntime {
       paperStructure,
       createExecutionBatches: (requests) =>
         this.toolScheduler.createExecutionBatches(requests),
+      budgetLimits,
     });
   }
 
@@ -1127,17 +1226,54 @@ export class AgentRuntime {
     currentMessages.push(systemMessage);
   }
 
+  private createIterationControl(
+    iteration: number,
+    tools: ToolDefinition[],
+    maxIterations: number,
+  ): IterationControlState {
+    const remainingIterations = maxIterations - iteration + 1;
+    const forceFinalAnswer = remainingIterations === 1;
+    return {
+      currentIteration: iteration,
+      remainingIterations,
+      maxIterations,
+      forceFinalAnswer,
+      toolsForRound: forceFinalAnswer ? [] : tools,
+    };
+  }
+
+  private getMaxIterations(): number {
+    try {
+      const raw = getPref("agentMaxPlanningIterations") as number | undefined;
+      return normalizeAgentMaxPlanningIterations(raw);
+    } catch {
+      return DEFAULT_AGENT_MAX_PLANNING_ITERATIONS;
+    }
+  }
+
   private refreshSystemPrompt(
     currentMessages: ChatMessage[],
     session: ChatSession,
     promptBuilder?: (
       currentMessages: ChatMessage[],
       session: ChatSession,
+      runtimeState?: {
+        currentIteration: number;
+        remainingIterations: number;
+        maxIterations: number;
+        forceFinalAnswer: boolean;
+      },
     ) => string,
+    runtimeState?: {
+      currentIteration: number;
+      remainingIterations: number;
+      maxIterations: number;
+      forceFinalAnswer: boolean;
+    },
   ): void {
     if (!promptBuilder) return;
 
-    const content = promptBuilder(currentMessages, session);
+    const content = promptBuilder(currentMessages, session, runtimeState);
     const existing = currentMessages.find(
       (message) => message.id === "paper-context",
     );

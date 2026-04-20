@@ -78,6 +78,11 @@ import {
 } from "./paperchat-retry-orchestration";
 import { MemoryManager } from "./memory/MemoryManager";
 import { AgentRuntime } from "./agent-runtime/AgentRuntime";
+import { normalizeAgentMaxPlanningIterations } from "./agent-runtime/IterationLimitConfig";
+import {
+  createToolBudgetState,
+  getToolBudgetLimits,
+} from "./tool-budget/ToolBudgetPolicy";
 import { isAbortError, SessionRunInvalidatedError } from "./errors";
 // V1 migration now handled by migrateToSQLite.ts at startup
 
@@ -265,6 +270,12 @@ export class ChatManager {
     item?: Zotero.Item;
     memoryContext?: string;
     sendingSession: ChatSession;
+    runtimeState?: {
+      currentIteration?: number;
+      remainingIterations?: number;
+      maxIterations: number;
+      forceFinalAnswer: boolean;
+    };
   }): string {
     const {
       currentMessages,
@@ -273,10 +284,18 @@ export class ChatManager {
       item,
       memoryContext,
       sendingSession,
+      runtimeState,
     } = params;
     const pdfToolManager = getPdfToolManager();
-    const recentToolResults =
-      sendingSession.toolExecutionState?.results.slice(-5) || [];
+    const allToolResults = sendingSession.toolExecutionState?.results || [];
+    const recentToolResults = allToolResults.slice(-5);
+    const hardIterationLimit =
+      runtimeState?.maxIterations ??
+      normalizeAgentMaxPlanningIterations(
+        getPref("agentMaxPlanningIterations") as number | undefined,
+      );
+    const toolBudgetLimits = getToolBudgetLimits(hardIterationLimit);
+    const toolBudgetState = createToolBudgetState(allToolResults);
 
     return pdfToolManager.generatePaperContextPrompt(
       paperStructure || undefined,
@@ -287,6 +306,28 @@ export class ChatManager {
       {
         executionPlan: sendingSession.executionPlan,
         recentToolResults,
+        runtimeLimits: {
+          hardIterationLimit,
+          currentIteration: runtimeState?.currentIteration,
+          remainingIterations: runtimeState?.remainingIterations,
+          forceFinalAnswer: runtimeState?.forceFinalAnswer,
+        },
+        toolBudget: {
+          webSearchUsed: toolBudgetState.webSearchCalls,
+          webSearchRemaining: Math.max(
+            0,
+            toolBudgetLimits.maxWebSearchCallsPerTurn -
+              toolBudgetState.webSearchCalls,
+          ),
+          webSearchLimit: toolBudgetLimits.maxWebSearchCallsPerTurn,
+          getFullTextUsed: toolBudgetState.getFullTextCalls,
+          getFullTextRemaining: Math.max(
+            0,
+            toolBudgetLimits.maxFullTextCallsPerTurn -
+              toolBudgetState.getFullTextCalls,
+          ),
+          getFullTextLimit: toolBudgetLimits.maxFullTextCallsPerTurn,
+        },
       },
     );
   }
@@ -1732,7 +1773,16 @@ export class ChatManager {
     ensureSendingSessionTracked();
 
     // 添加论文上下文系统提示
-    const buildSystemPrompt = (currentMessages: ChatMessage[]) =>
+    const buildSystemPrompt = (
+      currentMessages: ChatMessage[],
+      _session?: ChatSession,
+      runtimeState?: {
+        currentIteration?: number;
+        remainingIterations?: number;
+        maxIterations: number;
+        forceFinalAnswer: boolean;
+      },
+    ) =>
       this.buildToolCallingSystemPrompt({
         currentMessages,
         paperStructure,
@@ -1740,9 +1790,15 @@ export class ChatManager {
         item: hasCurrentItem ? item : undefined,
         memoryContext,
         sendingSession,
+        runtimeState,
       });
 
-    const paperContextPrompt = buildSystemPrompt(messagesForApi);
+    const paperContextPrompt = buildSystemPrompt(messagesForApi, sendingSession, {
+      maxIterations: normalizeAgentMaxPlanningIterations(
+        getPref("agentMaxPlanningIterations") as number | undefined,
+      ),
+      forceFinalAnswer: false,
+    });
 
     const messagesWithContext: ChatMessage[] = [
       {
@@ -2054,7 +2110,16 @@ export class ChatManager {
     >,
     sendingSession: ChatSession,
     sessionRunId: number,
-    buildSystemPrompt: (currentMessages: ChatMessage[]) => string,
+    buildSystemPrompt: (
+      currentMessages: ChatMessage[],
+      session: ChatSession,
+      runtimeState?: {
+        currentIteration?: number;
+        remainingIterations?: number;
+        maxIterations: number;
+        forceFinalAnswer: boolean;
+      },
+    ) => string,
     abortSignal?: AbortSignal,
   ): Promise<void> {
     await this.agentRuntime.executeStreamingToolLoop({
@@ -2090,7 +2155,16 @@ export class ChatManager {
     >,
     sendingSession: ChatSession,
     sessionRunId: number,
-    buildSystemPrompt: (currentMessages: ChatMessage[]) => string,
+    buildSystemPrompt: (
+      currentMessages: ChatMessage[],
+      session: ChatSession,
+      runtimeState?: {
+        currentIteration?: number;
+        remainingIterations?: number;
+        maxIterations: number;
+        forceFinalAnswer: boolean;
+      },
+    ) => string,
     abortSignal?: AbortSignal,
   ): Promise<void> {
     await this.agentRuntime.executeNonStreamingToolLoop({

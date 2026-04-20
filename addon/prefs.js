@@ -37,6 +37,7 @@ pref("contextSummaryThreshold", 20);
 // AI Tools Settings
 pref("toolPermissionDefaultModes", ""); // 各工具默认权限模式映射（JSON）
 pref("webSearchProvider", "duckduckgo"); // Web 搜索后端
+pref("agentMaxPlanningIterations", 15); // 单个 agent turn 的最大 planning 轮次
 
 // Semantic Search Settings
 pref("enableSemanticSearch", true); // 是否启用语义搜索（RAG）

@@ -7,12 +7,27 @@ import type {
   PaperStructureExtended,
   ToolExecutionResult,
 } from "../../../types/tool";
+import { getPlanningWarningThreshold } from "../agent-runtime/IterationLimitConfig";
 import { summarizeRecoveryDirectives } from "../tool-recovery/ToolRecoveryPolicy";
 import { summarizeRetryBlockedCalls } from "../tool-retry/ToolRetryPolicy";
 
 export interface AgentPromptContext {
   executionPlan?: ExecutionPlan;
   recentToolResults?: ToolExecutionResult[];
+  runtimeLimits?: {
+    hardIterationLimit: number;
+    currentIteration?: number;
+    remainingIterations?: number;
+    forceFinalAnswer?: boolean;
+  };
+  toolBudget?: {
+    webSearchUsed: number;
+    webSearchRemaining: number;
+    webSearchLimit: number;
+    getFullTextUsed: number;
+    getFullTextRemaining: number;
+    getFullTextLimit: number;
+  };
 }
 
 /**
@@ -31,6 +46,8 @@ export function generatePaperContextPrompt(
   agentContext?: AgentPromptContext,
 ): string {
   let prompt = `You are a helpful research assistant analyzing academic papers.\n\n`;
+  const toolUseDisabledThisIteration =
+    agentContext?.runtimeLimits?.forceFinalAnswer === true;
   const webSearchLine =
     "- web_search: Search the public web for information outside Zotero (subject to approval policy)\n";
   const importantNotesTail =
@@ -38,7 +55,19 @@ export function generatePaperContextPrompt(
 
   // 如果没有当前 item，显示提示
   if (!hasCurrentItem) {
-    prompt += `=== NO PAPER SELECTED ===
+    if (toolUseDisabledThisIteration) {
+      prompt += `=== NO PAPER SELECTED ===
+Currently, no paper is selected in the reader.
+
+=== TOOL AVAILABILITY ===
+Tool calling is disabled for this final synthesis iteration. Do not request any tools. Use only evidence already gathered in this turn and provide the final answer directly.
+
+=== MENTION FORMAT ===
+Users may reference Zotero items using @[title](key:XXX) format in their messages.
+The "key" is the Zotero item key - use it directly when referring to prior evidence.
+\n`;
+    } else {
+      prompt += `=== NO PAPER SELECTED ===
 Currently, no paper is selected in the reader. You can always access Zotero library tools, and you can also use PDF content tools when you provide an explicit itemKey for an item that has a PDF attachment:
 ${webSearchLine}
 - list_all_items: List all items in the Zotero library (with pagination)
@@ -66,6 +95,7 @@ For multi-paper comparisons, compose repeated atomic tool calls with explicit it
 Users may reference Zotero items using @[title](key:XXX) format in their messages.
 The "key" is the Zotero item key - use it directly with tools (e.g., itemKey, noteKey).
 \n`;
+    }
     if (memoryContext) {
       prompt += memoryContext;
     }
@@ -105,8 +135,22 @@ The "key" is the Zotero item key - use it directly with tools (e.g., itemKey, no
 
   prompt += formatAgentPromptContext(agentContext);
 
-  // 工具使用说明
-  prompt += `=== PDF CONTENT TOOLS ===
+  if (toolUseDisabledThisIteration) {
+    prompt += `=== TOOL AVAILABILITY ===
+Tool calling is disabled for this final synthesis iteration. Ignore the standard tool catalog for this turn and provide the final answer using only the evidence already gathered.
+
+=== MENTION FORMAT ===
+Users may reference Zotero items using @[title](key:XXX) format in their messages.
+The "key" is the Zotero item key - use it directly when referring to prior evidence.
+
+=== IMPORTANT NOTES ===
+1. Do not request any tools in this iteration.
+2. Base the response only on tool results and user content already present in this turn.
+3. If evidence is incomplete, state the limitation explicitly instead of attempting another lookup.
+`;
+  } else {
+    // 工具使用说明
+    prompt += `=== PDF CONTENT TOOLS ===
 - get_paper_section: Get content of a specific section
 - search_paper_content: Search for keywords/phrases
 - get_paper_metadata: Get paper metadata from PDF content
@@ -148,6 +192,7 @@ The "key" is the Zotero item key - use it directly with tools (e.g., itemKey, no
 5. Use get_item_metadata to get bibliographic info even without a PDF.
 6. For multi-paper analysis, compose repeated atomic tool calls per itemKey instead of inventing a dedicated compare/search tool.
 ${importantNotesTail}`;
+  }
 
   return prompt;
 }
@@ -156,6 +201,51 @@ function formatAgentPromptContext(agentContext?: AgentPromptContext): string {
   if (!agentContext) return "";
 
   let section = "";
+
+  const runtimeLimits = agentContext.runtimeLimits;
+  const toolBudget = agentContext.toolBudget;
+  if (runtimeLimits || toolBudget) {
+    section += `\n=== TURN LIMITS ===\n`;
+    if (runtimeLimits) {
+      section += `- This turn has a hard limit of ${runtimeLimits.hardIterationLimit} planning iterations.\n`;
+      const warningThreshold = getPlanningWarningThreshold(
+        runtimeLimits.hardIterationLimit,
+      );
+      if (
+        typeof runtimeLimits.currentIteration === "number" &&
+        typeof runtimeLimits.remainingIterations === "number"
+      ) {
+        section += `- Current iteration: ${runtimeLimits.currentIteration}/${runtimeLimits.hardIterationLimit}\n`;
+        section += `- Remaining planning iterations (including this one): ${runtimeLimits.remainingIterations}\n`;
+        if (
+          runtimeLimits.currentIteration > 1 &&
+          runtimeLimits.remainingIterations === warningThreshold &&
+          runtimeLimits.remainingIterations > 1
+        ) {
+          section +=
+            `- Warning: Only ${warningThreshold} planning iterations remain including this one. Minimize tool use and start synthesizing now.\n`;
+        } else if (runtimeLimits.remainingIterations === 1) {
+          section +=
+            "- Final iteration warning: Only 1 planning iteration remains, and it is this one.\n";
+        }
+      } else {
+        section +=
+          "- Plan ahead so you preserve enough budget to deliver a grounded final answer before the limit is reached.\n";
+      }
+
+      if (runtimeLimits.forceFinalAnswer) {
+        section +=
+          "- Final iteration directive: Do not call any tools in this iteration.\n";
+        section +=
+          "- Use only the evidence already gathered in this turn and provide the final user-facing answer now.\n";
+      }
+    }
+
+    if (toolBudget) {
+      section += `- web_search budget: ${toolBudget.webSearchUsed}/${toolBudget.webSearchLimit} used, ${toolBudget.webSearchRemaining} remaining.\n`;
+      section += `- get_full_text budget: ${toolBudget.getFullTextUsed}/${toolBudget.getFullTextLimit} used, ${toolBudget.getFullTextRemaining} remaining.\n`;
+    }
+  }
 
   if (agentContext.executionPlan) {
     const plan = agentContext.executionPlan;

@@ -2,6 +2,11 @@ import { assert } from "chai";
 import type { ChatMessage } from "../src/types/chat";
 import type { ToolCall, ToolExecutionResult } from "../src/types/tool";
 
+const DEFAULT_TEST_BUDGET = {
+  maxFullTextCallsPerTurn: 3,
+  maxWebSearchCallsPerTurn: 5,
+};
+
 describe("tool execution entry planner", function () {
   const assistantMessage: ChatMessage = {
     id: "assistant-1",
@@ -122,6 +127,7 @@ describe("tool execution entry planner", function () {
       toolCalls: [createToolCall("tool-1", "ITEM-1", "get_full_text")],
       previousResults: [],
       createExecutionBatches: (requests) => [requests],
+      budgetLimits: DEFAULT_TEST_BUDGET,
     });
 
     assert.lengthOf(entries, 1);
@@ -180,6 +186,7 @@ describe("tool execution entry planner", function () {
       toolCalls: [createToolCall("tool-2", "ITEM-4", "get_full_text")],
       previousResults,
       createExecutionBatches: (requests) => [requests],
+      budgetLimits: DEFAULT_TEST_BUDGET,
     });
 
     assert.lengthOf(entries, 1);
@@ -212,6 +219,7 @@ describe("tool execution entry planner", function () {
       ],
       previousResults,
       createExecutionBatches: (requests) => [requests],
+      budgetLimits: DEFAULT_TEST_BUDGET,
     });
 
     assert.lengthOf(entries, 1);
@@ -266,6 +274,7 @@ describe("tool execution entry planner", function () {
       toolCalls: [createWebSearchCall("tool-6", "query six")],
       previousResults,
       createExecutionBatches: (requests) => [requests],
+      budgetLimits: DEFAULT_TEST_BUDGET,
     });
 
     assert.lengthOf(entries, 1);

@@ -33,6 +33,7 @@ import {
   listWebSearchProviders,
   normalizeWebSearchProviderId,
 } from "../chat/web-search/WebSearchRegistry";
+import { normalizeAgentMaxPlanningIterations } from "../chat/agent-runtime/IterationLimitConfig";
 import { getErrorMessage } from "../../utils/common";
 import type { PrefsRefreshOptions } from "./types";
 import type {
@@ -168,6 +169,7 @@ function initPdfSettingsCheckbox(doc: Document): void {
  */
 function initAIToolsSettingsCheckbox(doc: Document): void {
   populateWebSearchProviderOptions(doc);
+  initAgentIterationLimitControl(doc);
   initToolPermissionDefaultsControls(doc);
 }
 
@@ -289,7 +291,36 @@ function bindAIToolsSettingsEvent(doc: Document): void {
     });
   }
 
+  const agentIterationInput = doc.getElementById(
+    "pref-agent-max-planning-iterations",
+  ) as HTMLInputElement | null;
+  if (agentIterationInput) {
+    const persist = () => {
+      const parsed = Number.parseInt(agentIterationInput.value, 10);
+      const normalized = normalizeAgentMaxPlanningIterations(parsed);
+      agentIterationInput.value = String(normalized);
+      setPref("agentMaxPlanningIterations", normalized);
+    };
+
+    agentIterationInput.addEventListener("change", persist);
+    agentIterationInput.addEventListener("blur", persist);
+  }
+
   bindToolPermissionDefaultsEvents(doc);
+}
+
+function initAgentIterationLimitControl(doc: Document): void {
+  const agentIterationInput = doc.getElementById(
+    "pref-agent-max-planning-iterations",
+  ) as HTMLInputElement | null;
+  if (!agentIterationInput) {
+    return;
+  }
+
+  const configured = getPref("agentMaxPlanningIterations") as number | undefined;
+  agentIterationInput.value = String(
+    normalizeAgentMaxPlanningIterations(configured),
+  );
 }
 
 function populateWebSearchProviderOptions(doc: Document): void {

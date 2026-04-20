@@ -2,10 +2,11 @@ import type { ToolCall, ToolExecutionResult } from "../../../types/tool";
 import { preflightToolArguments } from "../tool-arguments/ToolArgumentPreflight";
 import { formatToolError, parseToolError } from "../tool-errors/ToolErrorFormatter";
 import { getToolRuntimeMetadata } from "../tool-scheduler/ToolMetadataRegistry";
+import { normalizeAgentMaxPlanningIterations } from "../agent-runtime/IterationLimitConfig";
 
 const CURRENT_PAPER_TARGET = "__current_paper__";
-const MAX_FULL_TEXT_CALLS_PER_TURN = 3;
-const MAX_WEB_SEARCH_CALLS_PER_TURN = 5;
+const MAX_FULL_TEXT_CEILING = 3;
+const MAX_WEB_SEARCH_CEILING = 8;
 
 const NARROW_PAPER_TOOLS = new Set([
   "get_paper_section",
@@ -23,6 +24,11 @@ export interface ToolBudgetState {
   webSearchCalls: number;
   webSearchQueries: string[];
   narrowPaperTargets: Set<string>;
+}
+
+export interface ToolBudgetLimits {
+  maxFullTextCallsPerTurn: number;
+  maxWebSearchCallsPerTurn: number;
 }
 
 export function createToolBudgetState(
@@ -61,9 +67,23 @@ export function createToolBudgetState(
   return state;
 }
 
+export function getToolBudgetLimits(
+  maxIterations: number,
+): ToolBudgetLimits {
+  const normalizedIterations = normalizeAgentMaxPlanningIterations(maxIterations);
+  return {
+    maxFullTextCallsPerTurn: Math.min(normalizedIterations, MAX_FULL_TEXT_CEILING),
+    maxWebSearchCallsPerTurn: Math.min(
+      MAX_WEB_SEARCH_CEILING,
+      Math.max(1, Math.floor(normalizedIterations / 3)),
+    ),
+  };
+}
+
 export function applyToolBudgetPolicy(
   toolCall: ToolCall,
   state: ToolBudgetState,
+  limits: ToolBudgetLimits,
 ): ToolExecutionResult | null {
   // This policy is intentionally stateful: allowed calls update the per-turn
   // budget snapshot so later calls in the same planning pass see the new usage.
@@ -77,11 +97,11 @@ export function applyToolBudgetPolicy(
 
   if (toolName === "get_full_text") {
     const targetKey = getPaperTargetKey(args);
-    if (state.getFullTextCalls >= MAX_FULL_TEXT_CALLS_PER_TURN) {
+    if (state.getFullTextCalls >= limits.maxFullTextCallsPerTurn) {
       return createBudgetBlockedResult(toolCall, args, {
         summary: "Blocked get_full_text because the turn budget is exhausted.",
         cause:
-          `High-cost tool limit reached: get_full_text may only run ${MAX_FULL_TEXT_CALLS_PER_TURN} times per user turn.`,
+          `High-cost tool limit reached: get_full_text may only run ${limits.maxFullTextCallsPerTurn} times per user turn.`,
         suggestedFix:
           "Use the full-text result already gathered in this turn, or wait for a new user turn before requesting full text again.",
         saferAlternative:
@@ -90,7 +110,7 @@ export function applyToolBudgetPolicy(
           tool: toolName,
           targetKey,
           getFullTextCalls: state.getFullTextCalls,
-          limit: MAX_FULL_TEXT_CALLS_PER_TURN,
+          limit: limits.maxFullTextCallsPerTurn,
         },
       });
     }
@@ -134,11 +154,11 @@ export function applyToolBudgetPolicy(
         },
       });
     }
-    if (state.webSearchCalls >= MAX_WEB_SEARCH_CALLS_PER_TURN) {
+    if (state.webSearchCalls >= limits.maxWebSearchCallsPerTurn) {
       return createBudgetBlockedResult(toolCall, args, {
         summary: "Blocked web_search because the turn budget is exhausted.",
         cause:
-          `High-cost tool limit reached: web_search may only run ${MAX_WEB_SEARCH_CALLS_PER_TURN} times per user turn.`,
+          `High-cost tool limit reached: web_search may only run ${limits.maxWebSearchCallsPerTurn} times per user turn.`,
         suggestedFix:
           "Use the web results already gathered in this turn, or wait for a new user turn before searching again.",
         saferAlternative:
@@ -147,7 +167,7 @@ export function applyToolBudgetPolicy(
           tool: toolName,
           query,
           webSearchCalls: state.webSearchCalls,
-          limit: MAX_WEB_SEARCH_CALLS_PER_TURN,
+          limit: limits.maxWebSearchCallsPerTurn,
         },
       });
     }

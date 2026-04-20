@@ -9,7 +9,10 @@ import type { ToolSchedulerRequest } from "../tool-scheduler/ToolScheduler";
 import {
   applyToolBudgetPolicy,
   createToolBudgetState,
+  getToolBudgetLimits,
+  type ToolBudgetLimits,
 } from "../tool-budget/ToolBudgetPolicy";
+import { DEFAULT_AGENT_MAX_PLANNING_ITERATIONS } from "./IterationLimitConfig";
 import {
   createBlockedRetryResult,
   findBlockedRetryMatch,
@@ -34,6 +37,7 @@ export function planToolExecutionEntries(params: {
   createExecutionBatches: (
     requests: ToolSchedulerRequest[],
   ) => ToolSchedulerRequest[][];
+  budgetLimits?: ToolBudgetLimits;
 }): ToolExecutionBatchEntry[] {
   const {
     sessionId,
@@ -42,10 +46,13 @@ export function planToolExecutionEntries(params: {
     previousResults,
     paperStructure,
     createExecutionBatches,
+    budgetLimits,
   } = params;
   const entries: ToolExecutionBatchEntry[] = [];
   let runnableSegment: ToolSchedulerRequest[] = [];
   const budgetState = createToolBudgetState(previousResults);
+  const effectiveBudgetLimits =
+    budgetLimits ?? getToolBudgetLimits(DEFAULT_AGENT_MAX_PLANNING_ITERATIONS);
 
   const flushRunnableSegment = () => {
     if (runnableSegment.length === 0) {
@@ -71,7 +78,11 @@ export function planToolExecutionEntries(params: {
       continue;
     }
 
-    const blockedByBudget = applyToolBudgetPolicy(toolCall, budgetState);
+    const blockedByBudget = applyToolBudgetPolicy(
+      toolCall,
+      budgetState,
+      effectiveBudgetLimits,
+    );
     if (blockedByBudget) {
       flushRunnableSegment();
       entries.push({

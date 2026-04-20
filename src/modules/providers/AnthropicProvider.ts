@@ -410,9 +410,12 @@ export class AnthropicProvider extends BaseProvider {
         system: this._config.systemPrompt || undefined,
         messages: anthropicMessages,
         stream: true,
-        tools: this.convertToAnthropicTools(tools),
-        tool_choice: { type: "auto" },
       };
+
+      if (tools.length > 0) {
+        requestBody.tools = this.convertToAnthropicTools(tools);
+        requestBody.tool_choice = { type: "auto" };
+      }
 
       ztoolkit.log(
         "[AnthropicProvider.streamChatCompletionWithTools] Sending streaming request with",
