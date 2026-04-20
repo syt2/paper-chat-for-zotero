@@ -13,7 +13,7 @@ import { showMessage } from "./utils";
 
 type AuthManagerType = ReturnType<typeof getAuthManager>;
 
-const LOW_BALANCE_WARNING_THRESHOLD = 5000;
+const LOW_BALANCE_WARNING_THRESHOLD = 10000;
 const PREFS_REFRESH_MAX_ATTEMPTS = 12;
 const PREFS_REFRESH_RETRY_DELAY_MS = 120;
 const TOPUP_ATTENTION_DURATION_MS = 8000;
