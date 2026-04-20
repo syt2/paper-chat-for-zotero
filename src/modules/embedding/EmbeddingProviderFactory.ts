@@ -130,6 +130,11 @@ export class EmbeddingProviderFactory {
   /**
    * Get embedding provider instance
    * Returns null if no provider is available
+   *
+   * This is intentionally a local resolution step only. Connectivity is
+   * verified either by explicit health checks or the first real embedding
+   * request, so startup/background callers do not proactively hit remote
+   * embedding endpoints.
    */
   async getProvider(): Promise<EmbeddingProvider | null> {
     const status = await this.getStatus();
@@ -144,7 +149,7 @@ export class EmbeddingProviderFactory {
     }
 
     // Create new provider
-    const provider = await this.createProvider(status.provider);
+    const provider = this.createProvider(status.provider);
     this.cachedProvider = provider;
     return provider;
   }
@@ -152,19 +157,14 @@ export class EmbeddingProviderFactory {
   /**
    * Create provider instance by type
    */
-  private async createProvider(
-    type: EmbeddingProviderType,
-  ): Promise<EmbeddingProvider | null> {
+  private createProvider(type: EmbeddingProviderType): EmbeddingProvider | null {
     const providerManager = getProviderManager();
     const allConfigs = providerManager.getAllConfigs();
 
     switch (type) {
       case "paperchat": {
         try {
-          const provider = new PaperChatEmbedding();
-          if (await provider.testConnection()) {
-            return provider;
-          }
+          return new PaperChatEmbedding();
         } catch (error) {
           ztoolkit.log(
             "[EmbeddingProviderFactory] PaperChat embedding failed:",
@@ -186,11 +186,7 @@ export class EmbeddingProviderFactory {
       }
 
       case "ollama": {
-        const ollama = new OllamaEmbedding();
-        if (await ollama.testConnection()) {
-          return ollama;
-        }
-        return null;
+        return new OllamaEmbedding();
       }
 
       case "openai": {
