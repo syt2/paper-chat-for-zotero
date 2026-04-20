@@ -167,24 +167,7 @@ function initPdfSettingsCheckbox(doc: Document): void {
  * Initialize AI tools settings checkbox
  */
 function initAIToolsSettingsCheckbox(doc: Document): void {
-  const enableAIWriteCheckbox = doc.getElementById(
-    "pref-enable-ai-write-checkbox",
-  ) as XUL.Checkbox | null;
-  if (enableAIWriteCheckbox) {
-    enableAIWriteCheckbox.checked = getPref(
-      "enableAIWriteOperations",
-    ) as boolean;
-  }
-
-  const enableWebSearchCheckbox = doc.getElementById(
-    "pref-enable-web-search-checkbox",
-  ) as XUL.Checkbox | null;
-  if (enableWebSearchCheckbox) {
-    enableWebSearchCheckbox.checked = getPref("enableWebSearch") as boolean;
-  }
-
   populateWebSearchProviderOptions(doc);
-  updateWebSearchControls(doc);
   initToolPermissionDefaultsControls(doc);
 }
 
@@ -294,25 +277,6 @@ function bindPdfSettingsEvent(doc: Document): void {
  * Bind AI tools settings checkbox events
  */
 function bindAIToolsSettingsEvent(doc: Document): void {
-  const enableAIWriteCheckbox = doc.getElementById(
-    "pref-enable-ai-write-checkbox",
-  ) as XUL.Checkbox | null;
-  if (enableAIWriteCheckbox) {
-    enableAIWriteCheckbox.addEventListener("command", () => {
-      setPref("enableAIWriteOperations", enableAIWriteCheckbox.checked);
-    });
-  }
-
-  const enableWebSearchCheckbox = doc.getElementById(
-    "pref-enable-web-search-checkbox",
-  ) as XUL.Checkbox | null;
-  if (enableWebSearchCheckbox) {
-    enableWebSearchCheckbox.addEventListener("command", () => {
-      setPref("enableWebSearch", enableWebSearchCheckbox.checked);
-      updateWebSearchControls(doc);
-    });
-  }
-
   const webSearchProviderSelect = doc.getElementById(
     "pref-web-search-provider",
   ) as unknown as XULMenuListElement | null;
@@ -358,21 +322,6 @@ function populateWebSearchProviderOptions(doc: Document): void {
     setPref("webSearchProvider", normalizedProvider);
   }
   providerSelect.value = normalizedProvider;
-}
-
-function updateWebSearchControls(doc: Document): void {
-  const enableWebSearchCheckbox = doc.getElementById(
-    "pref-enable-web-search-checkbox",
-  ) as XUL.Checkbox | null;
-  const webSearchProviderSelect = doc.getElementById(
-    "pref-web-search-provider",
-  ) as unknown as XULMenuListElement | null;
-
-  if (!enableWebSearchCheckbox || !webSearchProviderSelect) {
-    return;
-  }
-
-  webSearchProviderSelect.disabled = !enableWebSearchCheckbox.checked;
 }
 
 function initToolPermissionDefaultsControls(doc: Document): void {

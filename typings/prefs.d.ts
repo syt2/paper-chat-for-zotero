@@ -27,8 +27,6 @@ declare namespace _ZoteroTypes {
       "contextMaxRecentPairs": number;
       "contextEnableSummary": boolean;
       "contextSummaryThreshold": number;
-      "enableAIWriteOperations": boolean;
-      "enableWebSearch": boolean;
       "toolPermissionDefaultModes": string;
       "webSearchProvider": string;
       "enableSemanticSearch": boolean;

@@ -181,7 +181,6 @@ describe("web search", function () {
     originalZtoolkit = (globalThis as any).ztoolkit;
 
     const prefStore = new Map<string, unknown>([
-      ["extensions.zotero.paperchat.enableWebSearch", true],
       ["extensions.zotero.paperchat.webSearchProvider", "duckduckgo"],
     ]);
 

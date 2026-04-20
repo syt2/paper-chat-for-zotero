@@ -87,7 +87,6 @@ import {
   executeBatchUpdateTags,
   executeAddItem,
 } from "./libraryExecutors";
-import { getPref } from "../../../utils/prefs";
 import { getErrorMessage } from "../../../utils/common";
 
 // 缓存条目类型
@@ -271,45 +270,41 @@ export class PdfToolManager {
 
     // Library 工具 (始终可用，不需要 PDF)
     const libraryTools: ToolDefinition[] = [
-      ...((getPref("enableWebSearch") as boolean)
-        ? [
-            {
-              type: "function" as const,
-              function: {
-                name: "web_search",
+      {
+        type: "function" as const,
+        function: {
+          name: "web_search",
+          description:
+            "Search the public web for current information beyond the local Zotero library. Use this when the user asks about recent developments, external websites, or information not contained in the selected papers.",
+          parameters: {
+            type: "object" as const,
+            properties: {
+              query: {
+                type: "string" as const,
                 description:
-                  "Search the public web for current information beyond the local Zotero library. Use this when the user asks about recent developments, external websites, or information not contained in the selected papers.",
-                parameters: {
-                  type: "object" as const,
-                  properties: {
-                    query: {
-                      type: "string" as const,
-                      description:
-                        "The web search query. Be specific and include key entities or phrases.",
-                    },
-                    max_results: {
-                      type: "number" as const,
-                      description:
-                        "Maximum number of results to return (default: 5, max: 8).",
-                    },
-                    domain_filter: {
-                      type: "array" as const,
-                      items: { type: "string" },
-                      description:
-                        "Optional list of domains to keep results from, for example ['arxiv.org', 'nature.com'].",
-                    },
-                    include_content: {
-                      type: "boolean" as const,
-                      description:
-                        "Whether to fetch untrusted page content excerpts for top results. Default: false.",
-                    },
-                  },
-                  required: ["query"],
-                },
+                  "The web search query. Be specific and include key entities or phrases.",
+              },
+              max_results: {
+                type: "number" as const,
+                description:
+                  "Maximum number of results to return (default: 5, max: 8).",
+              },
+              domain_filter: {
+                type: "array" as const,
+                items: { type: "string" },
+                description:
+                  "Optional list of domains to keep results from, for example ['arxiv.org', 'nature.com'].",
+              },
+              include_content: {
+                type: "boolean" as const,
+                description:
+                  "Whether to fetch untrusted page content excerpts for top results. Default: false.",
               },
             },
-          ]
-        : []),
+            required: ["query"],
+          },
+        },
+      },
       {
         type: "function",
         function: {
@@ -605,94 +600,89 @@ export class PdfToolManager {
       },
     ];
 
-    // 写入工具（根据设置动态添加）
-    const enableAIWrite = getPref("enableAIWriteOperations") as boolean;
-    if (enableAIWrite) {
-      libraryTools.push(
-        {
-          type: "function",
-          function: {
-            name: "create_note",
-            description:
-              "Create a new note in Zotero, optionally attached to a specific item. The note will be saved to the user's library.",
-            parameters: {
-              type: "object",
-              properties: {
-                ...itemKeyProp,
-                content: {
-                  type: "string",
-                  description:
-                    "The note content. Can be plain text or HTML. Required.",
-                },
-                tags: {
-                  type: "string",
-                  description: "Comma-separated list of tags to add. Optional.",
-                },
+    libraryTools.push(
+      {
+        type: "function",
+        function: {
+          name: "create_note",
+          description:
+            "Create a new note in Zotero, optionally attached to a specific item. The note will be saved to the user's library.",
+          parameters: {
+            type: "object",
+            properties: {
+              ...itemKeyProp,
+              content: {
+                type: "string",
+                description:
+                  "The note content. Can be plain text or HTML. Required.",
               },
-              required: ["content"],
+              tags: {
+                type: "string",
+                description: "Comma-separated list of tags to add. Optional.",
+              },
             },
+            required: ["content"],
           },
         },
-        {
-          type: "function",
-          function: {
-            name: "batch_update_tags",
-            description:
-              "Add or remove tags from multiple items matching a search query. Useful for organizing your library.",
-            parameters: {
-              type: "object",
-              properties: {
-                query: {
-                  type: "string",
-                  description:
-                    "Search query to find items to update. Required.",
-                },
-                addTags: {
-                  type: "string",
-                  description:
-                    "Comma-separated list of tags to add to matching items.",
-                },
-                removeTags: {
-                  type: "string",
-                  description:
-                    "Comma-separated list of tags to remove from matching items.",
-                },
-                limit: {
-                  type: "number",
-                  description:
-                    "Maximum number of items to affect (max 100). Default: 50",
-                },
+      },
+      {
+        type: "function",
+        function: {
+          name: "batch_update_tags",
+          description:
+            "Add or remove tags from multiple items matching a search query. Useful for organizing your library.",
+          parameters: {
+            type: "object",
+            properties: {
+              query: {
+                type: "string",
+                description: "Search query to find items to update. Required.",
               },
-              required: ["query"],
+              addTags: {
+                type: "string",
+                description:
+                  "Comma-separated list of tags to add to matching items.",
+              },
+              removeTags: {
+                type: "string",
+                description:
+                  "Comma-separated list of tags to remove from matching items.",
+              },
+              limit: {
+                type: "number",
+                description:
+                  "Maximum number of items to affect (max 100). Default: 50",
+              },
             },
+            required: ["query"],
           },
         },
-        {
-          type: "function",
-          function: {
-            name: "add_item",
-            description:
-              "Add a new item to the Zotero library by identifier (DOI, ISBN, PMID, arXiv ID). Uses Zotero's built-in metadata lookup.",
-            parameters: {
-              type: "object",
-              properties: {
-                identifier: {
-                  type: "string",
-                  description:
-                    "The identifier to look up. Supports DOI (e.g. 10.1038/nature12373), ISBN, PMID, or arXiv ID.",
-                },
-                collection_key: {
-                  type: "string",
-                  description:
-                    "Optional. The key of a collection to add the item to. Use get_collections to find available collections.",
-                },
+      },
+      {
+        type: "function",
+        function: {
+          name: "add_item",
+          description:
+            "Add a new item to the Zotero library by identifier (DOI, ISBN, PMID, arXiv ID). Uses Zotero's built-in metadata lookup.",
+          parameters: {
+            type: "object",
+            properties: {
+              identifier: {
+                type: "string",
+                description:
+                  "The identifier to look up. Supports DOI (e.g. 10.1038/nature12373), ISBN, PMID, or arXiv ID.",
               },
-              required: ["identifier"],
+              collection_key: {
+                type: "string",
+                description:
+                  "Optional. The key of a collection to add the item to. Use get_collections to find available collections.",
+              },
             },
+            required: ["identifier"],
           },
         },
-      );
-    }
+      },
+    );
 
     // Memory tool (always available)
     const memoryTools: ToolDefinition[] = [
@@ -1132,9 +1122,6 @@ export class PdfToolManager {
     // === Zotero Library 工具（不需要 PDF）===
     switch (name) {
       case "web_search":
-        if (!(getPref("enableWebSearch") as boolean)) {
-          return "Error: Web search is disabled in settings.";
-        }
         if (!this.isWebSearchArgs(args)) {
           return "Error: Invalid arguments for web_search. Required: query (string)";
         }
@@ -1213,11 +1200,6 @@ export class PdfToolManager {
         return executeSearchNotes(args);
 
       case "create_note": {
-        // 检查写入权限
-        const canWrite1 = getPref("enableAIWriteOperations") as boolean;
-        if (!canWrite1) {
-          return "Error: AI write operations are disabled. The user needs to enable 'Allow AI to create notes and modify tags' in settings.";
-        }
         if (!this.isCreateNoteArgs(args)) {
           return "Error: Invalid arguments for create_note. Required: content (string)";
         }
@@ -1225,11 +1207,6 @@ export class PdfToolManager {
       }
 
       case "batch_update_tags": {
-        // 检查写入权限
-        const canWrite2 = getPref("enableAIWriteOperations") as boolean;
-        if (!canWrite2) {
-          return "Error: AI write operations are disabled. The user needs to enable 'Allow AI to create notes and modify tags' in settings.";
-        }
         if (!this.isBatchUpdateTagsArgs(args)) {
           return "Error: Invalid arguments for batch_update_tags. Required: query (string)";
         }
@@ -1237,10 +1214,6 @@ export class PdfToolManager {
       }
 
       case "add_item": {
-        const canWrite3 = getPref("enableAIWriteOperations") as boolean;
-        if (!canWrite3) {
-          return "Error: AI write operations are disabled. The user needs to enable 'Allow AI to create notes and modify tags' in settings.";
-        }
         if (!this.isAddItemArgs(args)) {
           return "Error: Invalid arguments for add_item. Required: identifier (string)";
         }

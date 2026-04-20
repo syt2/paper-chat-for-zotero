@@ -125,24 +125,6 @@ function inferToolError(
   }
 
   if (
-    /disabled in settings/i.test(message) ||
-    /AI write operations are disabled/i.test(message)
-  ) {
-    return {
-      summary: `${toolName} is unavailable in the current settings.`,
-      category: "unavailable",
-      retryable: false,
-      cause: message,
-      suggestedFix:
-        "Continue without this tool unless the user explicitly enables it.",
-      saferAlternative:
-        toolName === "web_search"
-          ? "Use Zotero library tools instead of external web search."
-          : "Use read-only tools that do not mutate Zotero state.",
-    };
-  }
-
-  if (
     /No item specified/i.test(message) ||
     /No paper content available/i.test(message) ||
     /Could not extract PDF content/i.test(message) ||

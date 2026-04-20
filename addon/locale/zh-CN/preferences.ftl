@@ -82,10 +82,6 @@ pref-upload-raw-pdf-desc = 启用后，若文本提取失败将上传原始 PDF 
 
 # AI Tools Settings
 pref-ai-tools-settings = AI 工具设置
-pref-enable-ai-write = 允许 AI 创建笔记和修改标签
-pref-enable-ai-write-desc = 启用后，AI 可以在您的文献库中创建笔记和批量更新标签。请谨慎使用。
-pref-enable-web-search = 允许 AI 进行网页搜索
-pref-enable-web-search-desc = 启用后，AI 可以搜索外部网站，并抓取页面摘要来回答超出 Zotero 文献库范围的问题。
 pref-web-search-provider = 搜索后端
 pref-web-search-provider-desc = 本地 web_search 工具使用的搜索后端。
 pref-web-search-provider-duckduckgo = DuckDuckGo（HTML 抓取）

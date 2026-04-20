@@ -296,6 +296,7 @@ export class ChatManager {
    */
   private isAuthError(error: Error): boolean {
     const message = error.message || "";
+    // Quota failures may also arrive as HTTP 403, so this must run before the generic 403/auth checks.
     if (isPaperChatQuotaError(error)) {
       return false;
     }
