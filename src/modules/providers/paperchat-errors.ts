@@ -5,6 +5,11 @@ export interface PaperChatQuotaErrorDetails {
   rawMessage: string;
 }
 
+export interface PaperChatParsedError {
+  message: string;
+  code?: string;
+}
+
 interface PaperChatErrorPayload {
   error?: {
     message?: string;
@@ -25,10 +30,7 @@ function extractErrorPayload(raw: string): PaperChatErrorPayload | null {
   }
 }
 
-function extractErrorMessage(raw: string): {
-  message: string;
-  code?: string;
-} {
+export function parsePaperChatError(raw: string): PaperChatParsedError {
   const payload = extractErrorPayload(raw);
   const message = payload?.error?.message?.trim();
   return {
@@ -38,13 +40,13 @@ function extractErrorMessage(raw: string): {
 }
 
 export function getPaperChatErrorDisplayMessage(raw: string): string {
-  return extractErrorMessage(raw).message;
+  return parsePaperChatError(raw).message;
 }
 
 export function parsePaperChatQuotaError(
   raw: string,
 ): PaperChatQuotaErrorDetails | null {
-  const { message, code } = extractErrorMessage(raw);
+  const { message, code } = parsePaperChatError(raw);
   const normalized = `${raw}\n${message}\n${code || ""}`.toLowerCase();
 
   const isQuotaError =

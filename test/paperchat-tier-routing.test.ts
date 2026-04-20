@@ -284,6 +284,13 @@ describe("paperchat tier routing", function () {
     assert.isTrue(
       isPaperChatModelHardFailure(new Error("API Error: 404 - unsupported model")),
     );
+    assert.isTrue(
+      isPaperChatModelHardFailure(
+        new Error(
+          'API Error: 503 - {"error":{"code":"model_not_found","message":"分组 default 下模型 test-model 无可用渠道（distributor）"}}',
+        ),
+      ),
+    );
     assert.isFalse(
       isPaperChatModelHardFailure(new Error("API Error: 429 - rate limit exceeded")),
     );

@@ -1,3 +1,5 @@
+import { parsePaperChatError } from "./paperchat-errors";
+
 export const PAPERCHAT_TIERS = [
   "paperchat-lite",
   "paperchat-standard",
@@ -212,8 +214,16 @@ export function rerollTierModel(
 }
 
 export function isPaperChatModelHardFailure(error: Error): boolean {
-  const message = error.message.toLowerCase();
-  return message.includes("model not found") || message.includes("unsupported model");
+  const { message, code } = parsePaperChatError(error.message);
+  const normalized = `${error.message}\n${message}\n${code || ""}`.toLowerCase();
+
+  return (
+    code === "model_not_found" ||
+    code === "unsupported_model" ||
+    normalized.includes("model not found") ||
+    normalized.includes("unsupported model") ||
+    normalized.includes("无可用渠道")
+  );
 }
 
 export function validateTierState(
