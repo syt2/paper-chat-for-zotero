@@ -10,7 +10,7 @@ export const DEFAULT_MODE_BY_RISK_LEVEL: Record<
 > = {
   read: "auto_allow",
   network: "ask",
-  write: "ask",
+  write: "auto_allow",
   memory: "auto_allow",
   high_cost: "ask",
 };

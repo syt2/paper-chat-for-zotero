@@ -51,33 +51,24 @@ function shouldHighlightTopup(
   };
 }
 
-function animateTopupButton(button: HTMLElement): void {
-  if (button.getAttribute("data-topup-animated") === "true") {
+function animateTopupElement(
+  element: HTMLElement,
+  animationKey: string,
+  keyframes: Keyframe[],
+  duration: number,
+  fallbackResetDelay: number,
+): void {
+  const attr = `data-${animationKey}-animated`;
+  if (element.getAttribute(attr) === "true") {
     return;
   }
 
-  button.setAttribute("data-topup-animated", "true");
+  element.setAttribute(attr, "true");
   try {
-    const animation = button.animate?.(
-      [
-        {
-          transform: "translateX(-6px) scale(1)",
-          boxShadow: "0 0 0 rgba(255, 145, 0, 0)",
-          opacity: 0.88,
-        },
-        {
-          transform: "translateX(6px) scale(1.04)",
-          boxShadow: "0 0 0 6px rgba(255, 145, 0, 0.18)",
-          opacity: 1,
-        },
-        {
-          transform: "translateX(0) scale(1)",
-          boxShadow: "0 0 0 rgba(255, 145, 0, 0)",
-          opacity: 1,
-        },
-      ],
+    const animation = element.animate?.(
+      keyframes,
       {
-        duration: 1400,
+        duration,
         easing: "ease-out",
         iterations: 2,
       },
@@ -85,17 +76,69 @@ function animateTopupButton(button: HTMLElement): void {
 
     if (animation) {
       animation.addEventListener("finish", () => {
-        button.removeAttribute("data-topup-animated");
+        element.removeAttribute(attr);
       });
       return;
     }
   } catch (error) {
-    ztoolkit.log("[Preferences] Topup button animation unavailable:", error);
+    ztoolkit.log("[Preferences] Topup animation unavailable:", error);
   }
 
   setTimeout(() => {
-    button.removeAttribute("data-topup-animated");
-  }, 2800);
+    element.removeAttribute(attr);
+  }, fallbackResetDelay);
+}
+
+function animateTopupButton(button: HTMLElement): void {
+  animateTopupElement(
+    button,
+    "topup-button",
+    [
+      {
+        transform: "translateX(-6px) scale(1)",
+        boxShadow: "0 0 0 rgba(255, 145, 0, 0)",
+        opacity: 0.88,
+      },
+      {
+        transform: "translateX(6px) scale(1.04)",
+        boxShadow: "0 0 0 6px rgba(255, 145, 0, 0.18)",
+        opacity: 1,
+      },
+      {
+        transform: "translateX(0) scale(1)",
+        boxShadow: "0 0 0 rgba(255, 145, 0, 0)",
+        opacity: 1,
+      },
+    ],
+    1400,
+    2800,
+  );
+}
+
+function animateLowBalanceLabel(label: HTMLElement): void {
+  animateTopupElement(
+    label,
+    "topup-balance",
+    [
+      {
+        transform: "translateX(0) scale(1)",
+        textShadow: "0 0 0 rgba(220, 38, 38, 0)",
+        opacity: 0.92,
+      },
+      {
+        transform: "translateX(2px) scale(1.04)",
+        textShadow: "0 0 10px rgba(220, 38, 38, 0.28)",
+        opacity: 1,
+      },
+      {
+        transform: "translateX(0) scale(1)",
+        textShadow: "0 0 0 rgba(220, 38, 38, 0)",
+        opacity: 1,
+      },
+    ],
+    1400,
+    2800,
+  );
 }
 
 function scheduleWithAvailableTimer(callback: () => void, delay: number): void {
@@ -137,6 +180,11 @@ function applyTopupAttentionStyles(
     userBalanceEl.style.color = options.lowBalance ? prefColors.testError : "";
     userBalanceEl.style.fontWeight = options.lowBalance ? "700" : "";
     userBalanceEl.style.opacity = options.lowBalance ? "1" : "0.8";
+    userBalanceEl.style.textShadow = "";
+
+    if (options.lowBalance) {
+      animateLowBalanceLabel(userBalanceEl);
+    }
   }
 
   if (!getRedeemCodeBtn) {
