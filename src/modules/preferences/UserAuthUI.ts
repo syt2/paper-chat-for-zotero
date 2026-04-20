@@ -8,9 +8,171 @@ import { prefColors } from "../../utils/colors";
 import { getAuthManager } from "../auth";
 import { BUILTIN_PROVIDERS } from "../providers";
 import { showAuthDialog } from "../ui/AuthDialog";
+import type { PrefsRefreshOptions } from "./types";
 import { showMessage } from "./utils";
 
 type AuthManagerType = ReturnType<typeof getAuthManager>;
+
+const LOW_BALANCE_WARNING_THRESHOLD = 5000;
+const PREFS_REFRESH_MAX_ATTEMPTS = 12;
+const PREFS_REFRESH_RETRY_DELAY_MS = 120;
+const TOPUP_ATTENTION_DURATION_MS = 8000;
+
+type TopupAttentionAddonData = typeof addon.data & {
+  paperchatTopupAttentionUntil?: number;
+};
+
+function getTopupAttentionAddonData(): TopupAttentionAddonData {
+  return addon.data as TopupAttentionAddonData;
+}
+
+function markTopupAttentionRequested(): void {
+  getTopupAttentionAddonData().paperchatTopupAttentionUntil =
+    Date.now() + TOPUP_ATTENTION_DURATION_MS;
+}
+
+function hasActiveTopupAttention(): boolean {
+  const attentionUntil = getTopupAttentionAddonData().paperchatTopupAttentionUntil;
+  return typeof attentionUntil === "number" && attentionUntil > Date.now();
+}
+
+function shouldHighlightTopup(
+  authManager: AuthManagerType,
+): { highlight: boolean; forced: boolean; lowBalance: boolean } {
+  const lowBalance =
+    authManager.isLoggedIn() &&
+    authManager.getBalance().quota < LOW_BALANCE_WARNING_THRESHOLD;
+  const forced = hasActiveTopupAttention();
+
+  return {
+    highlight: lowBalance || forced,
+    forced,
+    lowBalance,
+  };
+}
+
+function animateTopupButton(button: HTMLElement): void {
+  if (button.getAttribute("data-topup-animated") === "true") {
+    return;
+  }
+
+  button.setAttribute("data-topup-animated", "true");
+  try {
+    const animation = button.animate?.(
+      [
+        {
+          transform: "translateX(-6px) scale(1)",
+          boxShadow: "0 0 0 rgba(255, 145, 0, 0)",
+          opacity: 0.88,
+        },
+        {
+          transform: "translateX(6px) scale(1.04)",
+          boxShadow: "0 0 0 6px rgba(255, 145, 0, 0.18)",
+          opacity: 1,
+        },
+        {
+          transform: "translateX(0) scale(1)",
+          boxShadow: "0 0 0 rgba(255, 145, 0, 0)",
+          opacity: 1,
+        },
+      ],
+      {
+        duration: 1400,
+        easing: "ease-out",
+        iterations: 2,
+      },
+    );
+
+    if (animation) {
+      animation.addEventListener("finish", () => {
+        button.removeAttribute("data-topup-animated");
+      });
+      return;
+    }
+  } catch (error) {
+    ztoolkit.log("[Preferences] Topup button animation unavailable:", error);
+  }
+
+  setTimeout(() => {
+    button.removeAttribute("data-topup-animated");
+  }, 2800);
+}
+
+function scheduleWithAvailableTimer(callback: () => void, delay: number): void {
+  const prefsWindow = addon.data.prefs?.window;
+  if (prefsWindow?.setTimeout) {
+    prefsWindow.setTimeout(callback, delay);
+    return;
+  }
+
+  setTimeout(callback, delay);
+}
+
+function schedulePrefsRefresh(
+  options: PrefsRefreshOptions,
+  attempt: number = 0,
+): void {
+  scheduleWithAvailableTimer(() => {
+    if (!addon.data.prefs?.window) {
+      if (attempt < PREFS_REFRESH_MAX_ATTEMPTS) {
+        schedulePrefsRefresh(options, attempt + 1);
+      }
+      return;
+    }
+
+    void import("./index")
+      .then((module) => module.refreshPrefsUI(options))
+      .catch((error) => {
+        ztoolkit.log("[Preferences] Failed to refresh PaperChat prefs UI:", error);
+      });
+  }, attempt === 0 ? 0 : PREFS_REFRESH_RETRY_DELAY_MS);
+}
+
+function applyTopupAttentionStyles(
+  userBalanceEl: HTMLElement | null,
+  getRedeemCodeBtn: HTMLElement | null,
+  options: { highlight: boolean; forced: boolean; lowBalance: boolean },
+): void {
+  if (userBalanceEl) {
+    userBalanceEl.style.color = options.lowBalance ? prefColors.testError : "";
+    userBalanceEl.style.fontWeight = options.lowBalance ? "700" : "";
+    userBalanceEl.style.opacity = options.lowBalance ? "1" : "0.8";
+  }
+
+  if (!getRedeemCodeBtn) {
+    return;
+  }
+
+  if (options.highlight) {
+    getRedeemCodeBtn.style.border = "1px solid #f59e0b";
+    getRedeemCodeBtn.style.background =
+      "linear-gradient(135deg, rgba(255, 244, 214, 0.98), rgba(255, 223, 128, 0.98))";
+    getRedeemCodeBtn.style.boxShadow = "0 0 0 3px rgba(245, 158, 11, 0.18)";
+    getRedeemCodeBtn.style.fontWeight = "700";
+    animateTopupButton(getRedeemCodeBtn);
+  } else {
+    getRedeemCodeBtn.style.border = "";
+    getRedeemCodeBtn.style.background = "";
+    getRedeemCodeBtn.style.boxShadow = "";
+    getRedeemCodeBtn.style.fontWeight = "";
+  }
+}
+
+export function openPaperChatSettingsForTopup(): void {
+  markTopupAttentionRequested();
+  Zotero.Utilities.Internal.openPreferences("paperchat-prefpane");
+  schedulePrefsRefresh({
+    syncUserInfo: true,
+    providerId: "paperchat",
+  });
+}
+
+export function openPaperChatPreferences(): void {
+  Zotero.Utilities.Internal.openPreferences("paperchat-prefpane");
+  schedulePrefsRefresh({
+    syncUserInfo: true,
+  });
+}
 
 /**
  * Update user status display in preferences
@@ -30,6 +192,7 @@ export function updateUserDisplay(
   const getRedeemCodeBtn = doc.getElementById(
     "pref-get-redeem-code-btn",
   ) as HTMLElement | null;
+  const topupAttention = shouldHighlightTopup(authManager);
 
   if (authManager.isLoggedIn()) {
     const user = authManager.getUser();
@@ -78,6 +241,8 @@ export function updateUserDisplay(
       getRedeemCodeBtn.style.display = "none";
     }
   }
+
+  applyTopupAttentionStyles(userBalanceEl, getRedeemCodeBtn, topupAttention);
 }
 
 /**
@@ -87,7 +252,7 @@ export function bindUserAuthEvents(
   doc: Document,
   authManager: AuthManagerType,
   onProviderListRefresh: () => void,
-): void {
+): () => void {
   // Login/Logout button
   const loginBtn = doc.getElementById("pref-login-btn");
   loginBtn?.addEventListener("click", async () => {
@@ -153,7 +318,7 @@ export function bindUserAuthEvents(
   });
 
   // Auth callbacks - refresh provider list on login status change
-  authManager.addListener({
+  const removeAuthListener = authManager.addListener({
     onBalanceUpdate: () => updateUserDisplay(doc, authManager),
     onLoginStatusChange: () => {
       updateUserDisplay(doc, authManager);
@@ -161,6 +326,10 @@ export function bindUserAuthEvents(
       onProviderListRefresh();
     },
   });
+
+  return () => {
+    removeAuthListener();
+  };
 }
 
 // Singleton: track current redeem code dialog

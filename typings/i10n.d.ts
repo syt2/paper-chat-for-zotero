@@ -97,6 +97,8 @@ export type FluentMessageId =
   | 'paperchat-chat-copy'
   | 'paperchat-chat-delete'
   | 'paperchat-chat-error-no-provider'
+  | 'paperchat-chat-error-paperchat-insufficient-quota'
+  | 'paperchat-chat-error-paperchat-topup-action'
   | 'paperchat-chat-error-session-expired'
   | 'paperchat-chat-history'
   | 'paperchat-chat-input-placeholder'

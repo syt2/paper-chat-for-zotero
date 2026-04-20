@@ -215,6 +215,15 @@ export async function refreshCheckinDisplay(
 export function setupEventHandlers(context: ChatPanelContext): void {
   const { container, chatManager, authManager } = context;
 
+  const openPluginPreferencesSafely = (): void => {
+    void import("../../preferences/UserAuthUI")
+      .then((module) => module.openPaperChatPreferences())
+      .catch((error) => {
+        ztoolkit.log("[Chat] Failed to open PaperChat preferences:", error);
+        Zotero.Utilities.Internal.openPreferences("paperchat-prefpane");
+      });
+  };
+
   // Get DOM elements
   const messageInput = container.querySelector(
     "#chat-message-input",
@@ -625,8 +634,7 @@ export function setupEventHandlers(context: ChatPanelContext): void {
   if (settingsBtn) {
     settingsBtn.addEventListener("click", () => {
       ztoolkit.log("Settings button clicked");
-      // Open preferences and navigate to this plugin's pane
-      Zotero.Utilities.Internal.openPreferences("paperchat-prefpane");
+      openPluginPreferencesSafely();
     });
 
     // Hover effect
@@ -645,7 +653,7 @@ export function setupEventHandlers(context: ChatPanelContext): void {
   if (userBarSettingsBtn) {
     userBarSettingsBtn.addEventListener("click", () => {
       ztoolkit.log("User bar settings button clicked");
-      Zotero.Utilities.Internal.openPreferences("paperchat-prefpane");
+      openPluginPreferencesSafely();
     });
 
     // Hover effect

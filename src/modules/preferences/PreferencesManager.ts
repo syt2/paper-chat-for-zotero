@@ -34,6 +34,7 @@ import {
   normalizeWebSearchProviderId,
 } from "../chat/web-search/WebSearchRegistry";
 import { getErrorMessage } from "../../utils/common";
+import type { PrefsRefreshOptions } from "./types";
 import type {
   ToolPermissionMode,
   ToolPermissionRiskLevel,
@@ -68,12 +69,55 @@ export function setCurrentProviderId(id: string): void {
 export async function initializePrefsUI(): Promise<void> {
   if (addon.data.prefs?.window == undefined) return;
 
-  const doc = addon.data.prefs.window.document;
   const authManager = getAuthManager();
   const providerManager = getProviderManager();
 
   // Initialize auth manager
   await authManager.initialize();
+
+  await refreshPrefsUI({
+    syncUserInfo: false,
+  });
+}
+
+function resolveCurrentProviderId(
+  doc: Document,
+  providerManager: ReturnType<typeof getProviderManager>,
+  options: PrefsRefreshOptions,
+): string {
+  if (
+    options.providerId &&
+    providerManager.getProviderConfig(options.providerId)
+  ) {
+    return options.providerId;
+  }
+
+  const selectedProviderId = doc
+    .querySelector('.provider-list-item[data-selected="true"]')
+    ?.getAttribute("data-provider-id");
+
+  const candidateProviderId =
+    selectedProviderId || currentProviderId || providerManager.getActiveProviderId();
+
+  if (candidateProviderId && providerManager.getProviderConfig(candidateProviderId)) {
+    return candidateProviderId;
+  }
+
+  return providerManager.getActiveProviderId();
+}
+
+export async function refreshPrefsUI(
+  options: PrefsRefreshOptions = {},
+): Promise<void> {
+  if (addon.data.prefs?.window == undefined) return;
+
+  const doc = addon.data.prefs.window.document;
+  const authManager = getAuthManager();
+  const providerManager = getProviderManager();
+
+  if (options.syncUserInfo && authManager.isLoggedIn()) {
+    await authManager.refreshUserInfo();
+  }
 
   // Load cached model ratios
   loadCachedRatios();
@@ -84,8 +128,8 @@ export async function initializePrefsUI(): Promise<void> {
   // Populate active provider dropdown
   populateActiveProviderDropdown(doc);
 
-  // Select current active provider in sidebar
-  currentProviderId = providerManager.getActiveProviderId();
+  // Preserve current sidebar selection when possible instead of resetting to active provider
+  currentProviderId = resolveCurrentProviderId(doc, providerManager, options);
   selectProvider(doc, currentProviderId, setCurrentProviderId);
 
   // Update paperchat user status display
@@ -151,14 +195,52 @@ export function bindPrefEvents(): void {
   if (!addon.data.prefs?.window) return;
 
   const doc = addon.data.prefs.window.document;
+  const win = addon.data.prefs.window;
   const authManager = getAuthManager();
+
+  type PrefsWindowState = Window & {
+    __paperchatPrefsFocusBound?: boolean;
+    __paperchatPrefsCleanup?: Array<() => void>;
+    __paperchatPrefsUnloadBound?: boolean;
+  };
+  const prefsWin = win as PrefsWindowState;
+
+  if (!prefsWin.__paperchatPrefsFocusBound) {
+    prefsWin.__paperchatPrefsFocusBound = true;
+    win.addEventListener("focus", () => {
+      void refreshPrefsUI({
+        syncUserInfo: false,
+      });
+    });
+  }
+
+  if (!prefsWin.__paperchatPrefsCleanup) {
+    prefsWin.__paperchatPrefsCleanup = [];
+  }
+
+  if (!prefsWin.__paperchatPrefsUnloadBound) {
+    prefsWin.__paperchatPrefsUnloadBound = true;
+    win.addEventListener("unload", () => {
+      for (const cleanup of prefsWin.__paperchatPrefsCleanup || []) {
+        cleanup();
+      }
+      prefsWin.__paperchatPrefsCleanup = [];
+      prefsWin.__paperchatPrefsFocusBound = false;
+      prefsWin.__paperchatPrefsUnloadBound = false;
+    });
+  }
 
   // Refresh callbacks for provider list
   const refreshProviderList = () => populateProviderList(doc);
   const refreshActiveProvider = () => populateActiveProviderDropdown(doc);
 
   // Bind user auth events
-  bindUserAuthEvents(doc, authManager, refreshProviderList);
+  const cleanupUserAuthEvents = bindUserAuthEvents(
+    doc,
+    authManager,
+    refreshProviderList,
+  );
+  prefsWin.__paperchatPrefsCleanup.push(cleanupUserAuthEvents);
 
   // Bind PaperChat events
   bindPaperchatEvents(doc, async () => {

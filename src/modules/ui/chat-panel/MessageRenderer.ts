@@ -15,6 +15,10 @@ import { HTML_NS } from "./types";
 import { renderMarkdownToElement } from "./MarkdownRenderer";
 import { createElement, copyToClipboard } from "./ChatPanelBuilder";
 import { getString } from "../../../utils/locale";
+import {
+  getPaperChatErrorDisplayMessage,
+  parsePaperChatQuotaError,
+} from "../../providers/paperchat-errors";
 import { darkTheme } from "./ChatPanelTheme";
 
 const RECOVERY_STEP_PREFIX = "replan:";
@@ -40,6 +44,48 @@ interface ExecutionBannerState {
 type ExecutionInsetPanelElement = HTMLElement & {
   __executionInsetResizeObserver?: ResizeObserver;
 };
+
+function createTopupButton(doc: Document): HTMLElement {
+  const btn = createElement(
+    doc,
+    "button",
+    {
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+      marginTop: "12px",
+      marginLeft: "auto",
+      marginRight: "auto",
+      padding: "7px 12px",
+      borderRadius: "8px",
+      border: "1px solid #f59e0b",
+      background:
+        "linear-gradient(135deg, rgba(255, 244, 214, 0.98), rgba(255, 223, 128, 0.98))",
+      color: "#7c3e00",
+      fontSize: "12px",
+      fontWeight: "700",
+      lineHeight: "1.2",
+      textAlign: "center",
+      cursor: "pointer",
+      boxShadow: "0 2px 8px rgba(245, 158, 11, 0.2)",
+    },
+    { class: "paperchat-topup-btn" },
+  );
+
+  btn.setAttribute("type", "button");
+  btn.textContent = getString("chat-error-paperchat-topup-action");
+  btn.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void import("../../preferences/UserAuthUI")
+      .then((module) => module.openPaperChatSettingsForTopup())
+      .catch((error) => {
+        ztoolkit.log("[Chat] Failed to open PaperChat settings for topup:", error);
+        Zotero.Utilities.Internal.openPreferences("paperchat-prefpane");
+      });
+  });
+  return btn;
+}
 
 /**
  * Create a system notice element (for item switching, etc.)
@@ -193,6 +239,7 @@ export function createMessageElement(
 
   // Store raw content for copying
   let rawContent = msg.content;
+  let quotaDetails: ReturnType<typeof parsePaperChatQuotaError> = null;
 
   if (msg.role === "user") {
     // Format user message for display
@@ -206,21 +253,13 @@ export function createMessageElement(
   } else if (msg.role === "error") {
     // 错误消息显示为纯文本，带警告图标
     // 尝试解析 JSON 错误消息以获取更友好的显示
-    let errorDisplay = msg.content;
-    try {
-      // 尝试从 "API Error: 403 - {json}" 格式中提取错误信息
-      const jsonMatch = msg.content.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const errorJson = JSON.parse(jsonMatch[0]);
-        if (errorJson.error?.message) {
-          errorDisplay = errorJson.error.message;
-        }
-      }
-    } catch {
-      // 解析失败，使用原始内容
+    let errorDisplay = getPaperChatErrorDisplayMessage(msg.content);
+    quotaDetails = parsePaperChatQuotaError(msg.content);
+    if (quotaDetails) {
+      errorDisplay = quotaDetails.displayMessage;
     }
     content.textContent = `⚠️ ${errorDisplay}`;
-    rawContent = errorDisplay;
+    rawContent = quotaDetails?.rawMessage || errorDisplay;
   } else {
     // Render assistant message as markdown
     if (isLastAssistant && !msg.content) {
@@ -296,13 +335,17 @@ export function createMessageElement(
 
   bubble.appendChild(content);
 
+  if (quotaDetails) {
+    bubble.appendChild(createTopupButton(doc));
+  }
+
   // Add copy button
   const copyBtn = createCopyButton(doc, theme, rawContent);
   setupCopyButtonHover(bubble, copyBtn);
 
   bubble.appendChild(copyBtn);
 
-  if (showReroll && onReroll) {
+  if (showReroll && onReroll && !quotaDetails) {
     const rerollBtn = createRerollButton(doc, theme, onReroll, onRerollError);
     bubble.appendChild(rerollBtn);
   }

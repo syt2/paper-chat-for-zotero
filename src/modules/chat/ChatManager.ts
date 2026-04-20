@@ -65,6 +65,7 @@ import {
   parseTierState,
   type PaperChatTier,
 } from "../providers/paperchat-tier-routing";
+import { isPaperChatQuotaError } from "../providers/paperchat-errors";
 import {
   applyPaperChatSessionBinding,
   clearPaperChatRetryableState,
@@ -295,6 +296,9 @@ export class ChatManager {
    */
   private isAuthError(error: Error): boolean {
     const message = error.message || "";
+    if (isPaperChatQuotaError(error)) {
+      return false;
+    }
     return (
       message.includes("API Error: 401") ||
       message.includes("API Error: 403") ||
@@ -990,13 +994,16 @@ export class ChatManager {
       }
     }
 
-    session.lastRetryableUserMessageId = isPaperChatFailure
+    const isRetryablePaperChatFailure =
+      isPaperChatFailure && !isPaperChatQuotaError(error);
+
+    session.lastRetryableUserMessageId = isRetryablePaperChatFailure
       ? userMessageId
       : undefined;
-    session.lastRetryableErrorMessageId = isPaperChatFailure
+    session.lastRetryableErrorMessageId = isRetryablePaperChatFailure
       ? errorMessage.id
       : undefined;
-    session.lastRetryableFailedModelId = isPaperChatFailure
+    session.lastRetryableFailedModelId = isRetryablePaperChatFailure
       ? (failedModelId ?? undefined)
       : undefined;
   }

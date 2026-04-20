@@ -5,7 +5,12 @@
  * user authentication, and model settings.
  */
 
-import { initializePrefsUI, bindPrefEvents } from "./PreferencesManager";
+import {
+  initializePrefsUI,
+  bindPrefEvents,
+  refreshPrefsUI as refreshPrefsUIState,
+} from "./PreferencesManager";
+import type { PrefsRefreshOptions } from "./types";
 
 /**
  * Register preferences scripts - main entry point
@@ -17,4 +22,14 @@ export async function registerPrefsScripts(_window: Window): Promise<void> {
 
   await initializePrefsUI();
   bindPrefEvents();
+}
+
+export async function refreshPrefsUI(
+  options?: PrefsRefreshOptions,
+): Promise<void> {
+  if (!addon.data.prefs?.window) {
+    return;
+  }
+
+  await refreshPrefsUIState(options);
 }
