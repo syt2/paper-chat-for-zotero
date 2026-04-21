@@ -10,6 +10,7 @@ import { BUILTIN_PROVIDERS } from "../providers";
 import { showAuthDialog } from "../ui/AuthDialog";
 import type { PrefsRefreshOptions } from "./types";
 import { showMessage } from "./utils";
+import { ANALYTICS_EVENTS, getAnalyticsService } from "../analytics";
 
 type AuthManagerType = ReturnType<typeof getAuthManager>;
 
@@ -207,6 +208,9 @@ function applyTopupAttentionStyles(
 }
 
 export function openPaperChatSettingsForTopup(): void {
+  getAnalyticsService().track(ANALYTICS_EVENTS.paperChatTopupOpened, {
+    entry: "topup_cta",
+  });
   markTopupAttentionRequested();
   Zotero.Utilities.Internal.openPreferences("paperchat-prefpane");
   schedulePrefsRefresh({

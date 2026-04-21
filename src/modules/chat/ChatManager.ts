@@ -84,6 +84,7 @@ import {
   getToolBudgetLimits,
 } from "./tool-budget/ToolBudgetPolicy";
 import { isAbortError, SessionRunInvalidatedError } from "./errors";
+import { ANALYTICS_EVENTS, getAnalyticsService } from "../analytics";
 // V1 migration now handled by migrateToSQLite.ts at startup
 
 /**
@@ -422,6 +423,20 @@ export class ChatManager {
         old: previousModel,
         new: nextModel,
       },
+    });
+  }
+
+  private trackPaperChatModelRerouted(
+    tier: PaperChatTier,
+    previousModel: string,
+    nextModel: string,
+    reason: "streaming" | "tool_calling" | "failure_repair",
+  ): void {
+    getAnalyticsService().track(ANALYTICS_EVENTS.paperChatModelRerouted, {
+      tier,
+      previous_model: previousModel,
+      next_model: nextModel,
+      reason,
     });
   }
 
@@ -1023,17 +1038,31 @@ export class ChatManager {
 
     if (isHardFailure) {
       try {
-        await this.repairPaperChatSessionAfterHardFailure(
+        const reroute = await this.repairPaperChatSessionAfterHardFailure(
           session,
           failedModelId,
           false,
         );
+        if (reroute) {
+          this.trackPaperChatModelRerouted(
+            reroute.tier,
+            reroute.previousModel,
+            reroute.nextModel,
+            "failure_repair",
+          );
+        }
       } catch (repairError) {
         ztoolkit.log(
           "[ChatManager] Failed to repair PaperChat tier state after hard failure:",
           getErrorMessage(repairError),
         );
       }
+    }
+
+    if (isPaperChatFailure && isPaperChatQuotaError(error)) {
+      getAnalyticsService().track(ANALYTICS_EVENTS.paperChatQuotaError, {
+        provider: failedProviderId,
+      });
     }
 
     const isRetryablePaperChatFailure =
@@ -1160,6 +1189,15 @@ export class ChatManager {
     const ensureSendingSessionTracked = () => {
       this.ensureTrackedRun(sendingSession, sessionRunId);
     };
+
+    getAnalyticsService().track(ANALYTICS_EVENTS.chatSent, {
+      provider: getProviderManager().getActiveProviderId(),
+      has_item: hasCurrentItem,
+      attach_pdf: !!options.attachPdf,
+      image_count: options.images?.length || 0,
+      file_count: options.files?.length || 0,
+      has_selected_text: !!options.selectedText,
+    });
 
     try {
       // 检查是否需要插入 item 切换通知
@@ -1658,6 +1696,12 @@ export class ChatManager {
                 reroute.nextModel,
               ),
             );
+            this.trackPaperChatModelRerouted(
+              reroute.tier,
+              reroute.previousModel,
+              reroute.nextModel,
+              "streaming",
+            );
 
             return await streamCurrentProvider();
           }
@@ -1954,6 +1998,12 @@ export class ChatManager {
               reroute.previousModel,
               reroute.nextModel,
             ),
+          );
+          this.trackPaperChatModelRerouted(
+            reroute.tier,
+            reroute.previousModel,
+            reroute.nextModel,
+            "tool_calling",
           );
 
           await executeToolCallingAttempt();

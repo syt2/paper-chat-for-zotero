@@ -22,6 +22,11 @@ import { checkAndMigrateToV3 } from "./modules/chat/migration/migrateToSQLite";
 import { destroyMemoryStores } from "./modules/chat/memory/MemoryStore";
 import { destroyMemoryIndexers, getMemoryIndexer } from "./modules/chat/memory/MemoryIndexer";
 import { getTaskManager } from "./modules/chat/task-manager";
+import {
+  ANALYTICS_EVENTS,
+  destroyAnalyticsService,
+  getAnalyticsService,
+} from "./modules/analytics";
 
 async function onStartup() {
   await Promise.all([
@@ -31,6 +36,7 @@ async function onStartup() {
   ]);
 
   initLocale();
+  void getAnalyticsService().init();
 
   // Register preference pane first — must not be blocked by storage/migration errors
   Zotero.PreferencePanes.register({
@@ -81,6 +87,9 @@ async function onStartup() {
   );
 
   addon.data.initialized = true;
+  getAnalyticsService().track(ANALYTICS_EVENTS.pluginStarted, {
+    startup_mode: "normal",
+  });
 }
 
 async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
@@ -149,6 +158,7 @@ async function onShutdown(): Promise<void> {
   destroyMemoryIndexers();
   // Destroy StorageDatabase
   destroyStorageDatabase();
+  destroyAnalyticsService();
   addon.data.dialog?.window?.close();
   addon.data.alive = false;
   // @ts-expect-error - Plugin instance is not typed

@@ -21,6 +21,7 @@ import {
   type ManagedAbortController,
 } from "../../utils/abort";
 import { getItemTitle } from "../../utils/common";
+import { ANALYTICS_EVENTS, getAnalyticsService } from "../analytics";
 
 export class AISummaryManager {
   private config: AISummaryConfig = { ...DEFAULT_AISUMMARY_CONFIG };
@@ -163,6 +164,11 @@ export class AISummaryManager {
       ztoolkit.log("[AISummary] No items to process");
       return;
     }
+
+    getAnalyticsService().track(ANALYTICS_EVENTS.aiSummaryBatchStarted, {
+      item_count: keys.length,
+      trigger: itemKeys ? "manual_selection" : "configured_batch",
+    });
 
     // 初始化进度
     this.progress = {

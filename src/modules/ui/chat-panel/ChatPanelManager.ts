@@ -44,6 +44,7 @@ import {
 } from "./ChatPanelEvents";
 import { loadCachedRatios } from "../../preferences/ModelsFetcher";
 import { Guide } from "../Guide";
+import { ANALYTICS_EVENTS, getAnalyticsService } from "../../analytics";
 
 // Panel display mode: 'sidebar' or 'floating'
 export type PanelMode = "sidebar" | "floating";
@@ -842,6 +843,9 @@ function setupChatManagerCallbacks(
       }
     },
     onMessageComplete: async () => {
+      getAnalyticsService().track(ANALYTICS_EVENTS.chatCompleted, {
+        provider: getProviderManager().getActiveProviderId(),
+      });
       const providerManager = getProviderManager();
       if (providerManager.getActiveProviderId() === "paperchat") {
         ztoolkit.log("[Balance] Refreshing balance after message completion");
@@ -880,6 +884,9 @@ export function showPanel(): void {
 
   // Update toolbar button pressed state
   updateToolbarButtonState(true);
+  getAnalyticsService().track(ANALYTICS_EVENTS.chatPanelOpened, {
+    panel_mode: currentPanelMode,
+  });
 
   if (currentPanelMode === "sidebar") {
     showSidebarPanel();
