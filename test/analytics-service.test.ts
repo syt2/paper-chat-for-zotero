@@ -52,6 +52,8 @@ describe("AnalyticsService batching", function () {
     isDebug: true,
     sdkVersion: "paper-chat-analytics/1",
     getLocale: () => "en-US",
+    getOsName: () => "Windows",
+    getOsVersion: () => "11",
     flushIntervalMs: 0,
   };
 
@@ -90,6 +92,8 @@ describe("AnalyticsService batching", function () {
     assert.equal(body[0].timestamp, new Date(1_700_000_000_000).toISOString());
     assert.deepEqual(body[0].systemProps, {
       locale: "en-US",
+      osName: "Windows",
+      osVersion: "11",
       isDebug: true,
       appVersion: "9.9.9",
       sdkVersion: "paper-chat-analytics/1",

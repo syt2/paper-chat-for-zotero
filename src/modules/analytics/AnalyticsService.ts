@@ -33,6 +33,8 @@ export interface AnalyticsServiceOptions {
   logger?: AnalyticsLogger;
   sessionTimeoutMs?: number;
   getLocale?: () => string;
+  getOsName?: () => string;
+  getOsVersion?: () => string;
   now?: () => number;
   randomSessionIdSuffix?: () => string;
   maxBatchSize?: number;
@@ -47,6 +49,8 @@ interface AnalyticsEvent {
   eventName: string;
   systemProps: {
     locale: string;
+    osName: string;
+    osVersion: string;
     isDebug: boolean;
     appVersion: string;
     sdkVersion: string;
@@ -111,6 +115,68 @@ function defaultGetLocale(): string {
   }
 }
 
+function getMozillaServices():
+  | {
+      appinfo?: { OS?: string };
+      sysinfo?: { getProperty?: (name: string) => string };
+    }
+  | undefined {
+  const maybeServices = (globalThis as { Services?: unknown }).Services;
+  if (!maybeServices || typeof maybeServices !== "object") {
+    return undefined;
+  }
+  return maybeServices as {
+    appinfo?: { OS?: string };
+    sysinfo?: { getProperty?: (name: string) => string };
+  };
+}
+
+function normalizeOsName(raw: string | undefined): string {
+  switch (raw) {
+    case "WINNT":
+      return "Windows";
+    case "Darwin":
+      return "macOS";
+    case "Linux":
+      return "Linux";
+    default:
+      return raw && raw.trim() ? raw : "unknown";
+  }
+}
+
+function defaultGetOsName(): string {
+  const services = getMozillaServices();
+  const appinfoOs = services?.appinfo?.OS;
+  if (typeof appinfoOs === "string") {
+    return normalizeOsName(appinfoOs);
+  }
+
+  if (typeof navigator !== "undefined" && typeof navigator.platform === "string") {
+    return normalizeOsName(navigator.platform);
+  }
+
+  return "unknown";
+}
+
+function defaultGetOsVersion(): string {
+  const services = getMozillaServices();
+  const getProperty = services?.sysinfo?.getProperty;
+  if (typeof getProperty === "function") {
+    for (const key of ["version", "kernel_version"]) {
+      try {
+        const value = getProperty(key);
+        if (typeof value === "string" && value.trim()) {
+          return value.trim();
+        }
+      } catch {
+        // Try next known property.
+      }
+    }
+  }
+
+  return "unknown";
+}
+
 export class AnalyticsService {
   private sessionId: string;
   private lastActivityAt: number;
@@ -123,6 +189,8 @@ export class AnalyticsService {
   private readonly sessionTimeoutMs: number;
   private readonly sdkVersion: string;
   private readonly getLocale: () => string;
+  private readonly getOsName: () => string;
+  private readonly getOsVersion: () => string;
   private readonly now: () => number;
   private readonly randomSessionIdSuffix: () => string;
   private readonly maxBatchSize: number;
@@ -149,6 +217,8 @@ export class AnalyticsService {
       options.sessionTimeoutMs ?? DEFAULT_SESSION_TIMEOUT_MS;
     this.sdkVersion = options.sdkVersion ?? DEFAULT_SDK_VERSION;
     this.getLocale = options.getLocale ?? defaultGetLocale;
+    this.getOsName = options.getOsName ?? defaultGetOsName;
+    this.getOsVersion = options.getOsVersion ?? defaultGetOsVersion;
     this.now = options.now ?? Date.now;
     this.randomSessionIdSuffix =
       options.randomSessionIdSuffix ?? defaultRandomSuffix;
@@ -179,6 +249,8 @@ export class AnalyticsService {
       eventName,
       systemProps: {
         locale: this.getLocale(),
+        osName: this.getOsName(),
+        osVersion: this.getOsVersion(),
         isDebug: this.isDebug,
         appVersion: this.appVersion,
         sdkVersion: this.sdkVersion,
