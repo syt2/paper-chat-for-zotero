@@ -30,6 +30,11 @@ import {
   findMentionAtCursor,
 } from "./MentionSelector";
 import { ANALYTICS_EVENTS, getAnalyticsService } from "../../analytics";
+import { buildErrorProps } from "../../analytics/errorProps";
+import {
+  extractStatusCode,
+  isNetworkErrorMessage,
+} from "../../analytics/errorClassify";
 
 // Import getActiveReaderItem from the manager module to avoid circular dependency
 // This is set by ChatPanelManager during initialization
@@ -51,6 +56,45 @@ function trackChatModelSwitched(props: Record<string, string | boolean>): void {
   getAnalyticsService().track(ANALYTICS_EVENTS.chatModelSwitched, props);
 }
 
+function mapSignInReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error || "");
+  const normalized = message.toLowerCase();
+  const status = extractStatusCode(message);
+
+  if (status !== null && status >= 500) {
+    return "server_error";
+  }
+  if (isNetworkErrorMessage(message) && status === null) {
+    return "network_error";
+  }
+  if (
+    normalized.includes("今天已签到") ||
+    normalized.includes("already checked in") ||
+    normalized.includes("already signed in")
+  ) {
+    return "already_signed_in";
+  }
+  if (
+    normalized.includes("未登录") ||
+    normalized.includes("unauthorized") ||
+    normalized.includes("not authenticated") ||
+    normalized.includes("无权")
+  ) {
+    return "not_authenticated";
+  }
+  if (
+    normalized.includes("rate limit") ||
+    normalized.includes("too many") ||
+    normalized.includes("429") ||
+    normalized.includes("频繁") ||
+    normalized.includes("稍后再试")
+  ) {
+    return "rate_limited";
+  }
+
+  return "unknown";
+}
+
 function getPaperChatTierLabel(tier: PaperChatTier): string {
   if (tier === "paperchat-lite") {
     return getString("chat-tier-lite");
@@ -61,6 +105,18 @@ function getPaperChatTierLabel(tier: PaperChatTier): string {
   }
 
   return getString("chat-tier-standard");
+}
+
+function setCheckinButtonReadyState(button: HTMLButtonElement): void {
+  button.textContent = getString("user-checkin-btn");
+  button.disabled = false;
+}
+
+function setCheckinButtonCheckedInState(button: HTMLButtonElement): void {
+  button.textContent = getString("user-checked-in");
+  button.disabled = true;
+  button.style.opacity = "0.65";
+  button.style.cursor = "default";
 }
 
 function focusTextarea(input: HTMLTextAreaElement | null | undefined): void {
@@ -268,22 +324,52 @@ export function setupEventHandlers(context: ChatPanelContext): void {
     if (checkinBtn.disabled) return;
     checkinBtn.disabled = true;
     checkinBtn.textContent = "...";
-    const result = await authManager.doCheckin();
+
+    let result;
+    try {
+      result = await authManager.doCheckin();
+    } catch (error) {
+      getAnalyticsService().track(ANALYTICS_EVENTS.signInCompleted, {
+        success: false,
+        ...buildErrorProps(mapSignInReason(error), error),
+      });
+      setCheckinButtonReadyState(checkinBtn);
+      return;
+    }
+
     if (result.success) {
+      const rewardCount = result.quotaAwarded || undefined;
+      getAnalyticsService().track(ANALYTICS_EVENTS.signInCompleted, {
+        success: true,
+        ...(rewardCount !== undefined ? { reward_count: rewardCount } : {}),
+      });
+
       // Flash "+quota" for 5 s, then settle into the checked-in state
       if (result.quotaAwarded) {
         checkinBtn.textContent = `+${result.quotaAwarded}`;
         setTimeout(() => {
-          refreshCheckinDisplay(container, authManager);
+          void refreshCheckinDisplay(container, authManager).catch((error) => {
+            ztoolkit.log("[ChatPanel] Failed to refresh check-in state:", error);
+            setCheckinButtonCheckedInState(checkinBtn);
+          });
         }, CHECKIN_FLASH_DURATION_MS);
       } else {
-        await refreshCheckinDisplay(container, authManager);
+        try {
+          await refreshCheckinDisplay(container, authManager);
+        } catch (error) {
+          ztoolkit.log("[ChatPanel] Failed to refresh check-in state:", error);
+          setCheckinButtonCheckedInState(checkinBtn);
+        }
       }
-    } else {
-      // Restore clickable state on failure
-      checkinBtn.textContent = getString("user-checkin-btn");
-      checkinBtn.disabled = false;
+      return;
     }
+
+    const reason = mapSignInReason(result.message);
+    getAnalyticsService().track(ANALYTICS_EVENTS.signInCompleted, {
+      success: false,
+      ...buildErrorProps(reason, result.message),
+    });
+    setCheckinButtonReadyState(checkinBtn);
   });
 
   // Fetch check-in status on init if already logged in

@@ -7,8 +7,156 @@
 import { getString } from "../../utils/locale";
 import { authColors, colors } from "../../utils/colors";
 import { getAuthManager } from "../auth";
+import { ANALYTICS_EVENTS, getAnalyticsService } from "../analytics";
+import { buildErrorProps } from "../analytics/errorProps";
+import {
+  extractStatusCode,
+  isNetworkErrorMessage,
+} from "../analytics/errorClassify";
 
 type DialogMode = "login" | "register";
+
+function mapAuthCompletedReason(mode: DialogMode, error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error || "");
+  const normalized = message.toLowerCase();
+  const status = extractStatusCode(message);
+
+  if (status !== null && status >= 500) {
+    return "server_error";
+  }
+  if (isNetworkErrorMessage(message) && status === null) {
+    return "network_error";
+  }
+  if (
+    normalized.includes("用户名或密码错误") ||
+    normalized.includes("wrong credentials") ||
+    normalized.includes("wrong password") ||
+    normalized.includes("invalid password") ||
+    normalized.includes("password error")
+  ) {
+    return "wrong_credentials";
+  }
+  if (
+    normalized.includes("账号不存在") ||
+    normalized.includes("账户不存在") ||
+    normalized.includes("用户不存在") ||
+    normalized.includes("account not found") ||
+    normalized.includes("user not found")
+  ) {
+    return "account_not_found";
+  }
+  if (
+    mode === "register" &&
+    (normalized.includes("邮箱已") ||
+      normalized.includes("email already") ||
+      normalized.includes("email has already") ||
+      normalized.includes("email taken"))
+  ) {
+    return "email_taken";
+  }
+  if (
+    (normalized.includes("验证码") &&
+      (normalized.includes("错误") ||
+        normalized.includes("无效") ||
+        normalized.includes("过期"))) ||
+    normalized.includes("invalid verification code") ||
+    normalized.includes("verification code invalid") ||
+    normalized.includes("verification code expired")
+  ) {
+    return "invalid_verification_code";
+  }
+  if (
+    normalized.includes("rate limit") ||
+    normalized.includes("too many") ||
+    normalized.includes("429") ||
+    normalized.includes("频繁") ||
+    normalized.includes("稍后再试")
+  ) {
+    return "rate_limited";
+  }
+
+  return "unknown";
+}
+
+function mapVerificationReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error || "");
+  const normalized = message.toLowerCase();
+  const status = extractStatusCode(message);
+
+  if (status !== null && status >= 500) {
+    return "server_error";
+  }
+  if (isNetworkErrorMessage(message) && status === null) {
+    return "network_error";
+  }
+  if (
+    normalized.includes("rate limit") ||
+    normalized.includes("too many") ||
+    normalized.includes("429") ||
+    normalized.includes("频繁") ||
+    normalized.includes("稍后再试")
+  ) {
+    return "rate_limited";
+  }
+  if (
+    normalized.includes("invalid email") ||
+    normalized.includes("邮箱格式") ||
+    normalized.includes("邮箱无效") ||
+    normalized.includes("email format")
+  ) {
+    return "invalid_email";
+  }
+  if (
+    normalized.includes("quota exceeded") ||
+    normalized.includes("额度") ||
+    normalized.includes("配额") ||
+    normalized.includes("次数已用完")
+  ) {
+    return "quota_exceeded";
+  }
+
+  return "unknown";
+}
+
+function trackAuthCompleted(
+  mode: DialogMode,
+  success: boolean,
+  error?: unknown,
+): void {
+  if (success) {
+    getAnalyticsService().track(ANALYTICS_EVENTS.authCompleted, {
+      mode,
+      success: true,
+    });
+    return;
+  }
+
+  getAnalyticsService().track(ANALYTICS_EVENTS.authCompleted, {
+    mode,
+    success: false,
+    ...buildErrorProps(mapAuthCompletedReason(mode, error), error),
+  });
+}
+
+function trackVerificationCodeSent(
+  scene: "register" | "login" | "reset_password",
+  success: boolean,
+  error?: unknown,
+): void {
+  if (success) {
+    getAnalyticsService().track(ANALYTICS_EVENTS.authVerificationCodeSent, {
+      scene,
+      success: true,
+    });
+    return;
+  }
+
+  getAnalyticsService().track(ANALYTICS_EVENTS.authVerificationCodeSent, {
+    scene,
+    success: false,
+    ...buildErrorProps(mapVerificationReason(error), error),
+  });
+}
 
 // 单例：跟踪当前打开的对话框
 let currentDialogWindow: Window | null = null;
@@ -441,6 +589,11 @@ export async function showAuthDialog(
 
       let currentMode: DialogMode = initialMode;
       let countdownTimer: ReturnType<typeof setInterval> | null = null;
+      const trackAuthPageViewed = (mode: DialogMode) => {
+        getAnalyticsService().track(ANALYTICS_EVENTS.authPageViewed, {
+          mode,
+        });
+      };
 
       // 更新UI状态
       function updateUI() {
@@ -498,16 +651,24 @@ export async function showAuthDialog(
 
       // 切换到登录
       tabLogin?.addEventListener("click", () => {
+        if (currentMode === "login") {
+          return;
+        }
         currentMode = "login";
         updateUI();
         hideMessage();
+        trackAuthPageViewed("login");
       });
 
       // 切换到注册
       tabRegister?.addEventListener("click", () => {
+        if (currentMode === "register") {
+          return;
+        }
         currentMode = "register";
         updateUI();
         hideMessage();
+        trackAuthPageViewed("register");
       });
 
       // 忘记密码
@@ -522,16 +683,31 @@ export async function showAuthDialog(
         forgotPasswordLink.style.opacity = "0.5";
         forgotPasswordLink.style.pointerEvents = "none";
 
-        const authManager = getAuthManager();
-        const result = await authManager.resetPassword(username);
+        try {
+          const authManager = getAuthManager();
+          const result = await authManager.resetPassword(username);
+          trackVerificationCodeSent(
+            "reset_password",
+            result.success,
+            result.message,
+          );
 
-        forgotPasswordLink.style.opacity = "1";
-        forgotPasswordLink.style.pointerEvents = "auto";
-
-        if (result.success) {
-          showMessage(getString("auth-reset-email-sent"), false);
-        } else {
-          showMessage(result.message, true);
+          if (result.success) {
+            showMessage(getString("auth-reset-email-sent"), false);
+          } else {
+            showMessage(result.message, true);
+          }
+        } catch (error) {
+          trackVerificationCodeSent("reset_password", false, error);
+          showMessage(
+            error instanceof Error
+              ? error.message
+              : getString("auth-error-unknown"),
+            true,
+          );
+        } finally {
+          forgotPasswordLink.style.opacity = "1";
+          forgotPasswordLink.style.pointerEvents = "auto";
         }
       });
 
@@ -543,31 +719,49 @@ export async function showAuthDialog(
           return;
         }
 
+        const scene = currentMode;
         sendCodeBtn.disabled = true;
         sendCodeBtn.textContent = getString("auth-sending");
+        let startedCountdown = false;
 
-        const authManager = getAuthManager();
-        const result = await authManager.sendVerificationCode(email);
+        try {
+          const authManager = getAuthManager();
+          const result = await authManager.sendVerificationCode(email);
+          trackVerificationCodeSent(scene, result.success, result.message);
 
-        if (result.success) {
-          showMessage(getString("auth-code-sent"), false);
-          // 开始倒计时
-          let countdown = 60;
-          sendCodeBtn.textContent = `${countdown}s`;
-          countdownTimer = setInterval(() => {
-            countdown--;
-            if (countdown <= 0) {
-              if (countdownTimer) clearInterval(countdownTimer);
-              sendCodeBtn.disabled = false;
-              sendCodeBtn.textContent = getString("auth-send-code");
-            } else {
-              sendCodeBtn.textContent = `${countdown}s`;
-            }
-          }, 1000);
-        } else {
+          if (result.success) {
+            showMessage(getString("auth-code-sent"), false);
+            // 开始倒计时
+            let countdown = 60;
+            sendCodeBtn.textContent = `${countdown}s`;
+            countdownTimer = setInterval(() => {
+              countdown--;
+              if (countdown <= 0) {
+                if (countdownTimer) clearInterval(countdownTimer);
+                sendCodeBtn.disabled = false;
+                sendCodeBtn.textContent = getString("auth-send-code");
+              } else {
+                sendCodeBtn.textContent = `${countdown}s`;
+              }
+            }, 1000);
+            startedCountdown = true;
+            return;
+          }
+
           showMessage(result.message, true);
-          sendCodeBtn.disabled = false;
-          sendCodeBtn.textContent = getString("auth-send-code");
+        } catch (error) {
+          trackVerificationCodeSent(scene, false, error);
+          showMessage(
+            error instanceof Error
+              ? error.message
+              : getString("auth-error-unknown"),
+            true,
+          );
+        } finally {
+          if (!startedCountdown) {
+            sendCodeBtn.disabled = false;
+            sendCodeBtn.textContent = getString("auth-send-code");
+          }
         }
       });
 
@@ -643,12 +837,14 @@ export async function showAuthDialog(
           }
 
           if (result.success) {
+            trackAuthCompleted(currentMode, true);
             showMessage(getString("auth-success"), false);
             setTimeout(() => {
               dialogHelper.window?.close();
               resolve(true);
             }, 1000);
           } else {
+            trackAuthCompleted(currentMode, false, result.message);
             // 显示API返回的错误消息
             const errorMsg = result.message || getString("auth-error-unknown");
             ztoolkit.log("[AuthDialog] Login/Register failed:", errorMsg);
@@ -656,6 +852,7 @@ export async function showAuthDialog(
             buttons.forEach((btn: HTMLButtonElement) => (btn.disabled = false));
           }
         } catch (error) {
+          trackAuthCompleted(currentMode, false, error);
           showMessage(
             error instanceof Error
               ? error.message
@@ -692,6 +889,7 @@ export async function showAuthDialog(
 
       // 初始化UI
       updateUI();
+      trackAuthPageViewed(currentMode);
     }, 100);
   });
 
