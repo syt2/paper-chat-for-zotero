@@ -157,7 +157,7 @@ async function onShutdown(): Promise<void> {
   destroyMemoryIndexers();
   // Destroy StorageDatabase
   destroyStorageDatabase();
-  destroyAnalyticsService();
+  await destroyAnalyticsService();
   addon.data.dialog?.window?.close();
   addon.data.alive = false;
   // @ts-expect-error - Plugin instance is not typed

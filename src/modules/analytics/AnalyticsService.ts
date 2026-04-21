@@ -35,10 +35,31 @@ export interface AnalyticsServiceOptions {
   getLocale?: () => string;
   now?: () => number;
   randomSessionIdSuffix?: () => string;
+  maxBatchSize?: number;
+  flushIntervalMs?: number;
+  maxQueueSize?: number;
+  maxConsecutiveFailures?: number;
+}
+
+interface AnalyticsEvent {
+  timestamp: string;
+  sessionId: string;
+  eventName: string;
+  systemProps: {
+    locale: string;
+    isDebug: boolean;
+    appVersion: string;
+    sdkVersion: string;
+  };
+  props?: Record<string, string | number | boolean>;
 }
 
 const DEFAULT_SESSION_TIMEOUT_MS = 60 * 60 * 1000;
 const DEFAULT_SDK_VERSION = "analytics/1";
+const DEFAULT_MAX_BATCH_SIZE = 25;
+const DEFAULT_FLUSH_INTERVAL_MS = 10_000;
+const DEFAULT_MAX_QUEUE_SIZE = 500;
+const DEFAULT_MAX_CONSECUTIVE_FAILURES = 3;
 
 function defaultRandomSuffix(): string {
   return Math.floor(Math.random() * 1e8)
@@ -104,6 +125,18 @@ export class AnalyticsService {
   private readonly getLocale: () => string;
   private readonly now: () => number;
   private readonly randomSessionIdSuffix: () => string;
+  private readonly maxBatchSize: number;
+  private readonly maxQueueSize: number;
+  private readonly maxConsecutiveFailures: number;
+
+  private pendingEvents: AnalyticsEvent[] = [];
+  private consecutiveFailures = 0;
+  private skipTicksRemaining = 0;
+  private acceptingEvents = true;
+  private destroyed = false;
+  private activeFlushPromise: Promise<boolean> | null = null;
+  private destroyPromise: Promise<void> | null = null;
+  private flushTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(options: AnalyticsServiceOptions) {
     this.appKey = options.appKey;
@@ -119,13 +152,28 @@ export class AnalyticsService {
     this.now = options.now ?? Date.now;
     this.randomSessionIdSuffix =
       options.randomSessionIdSuffix ?? defaultRandomSuffix;
+    this.maxBatchSize = options.maxBatchSize ?? DEFAULT_MAX_BATCH_SIZE;
+    this.maxQueueSize = options.maxQueueSize ?? DEFAULT_MAX_QUEUE_SIZE;
+    this.maxConsecutiveFailures =
+      options.maxConsecutiveFailures ?? DEFAULT_MAX_CONSECUTIVE_FAILURES;
     this.sessionId = createSessionId(this.now, this.randomSessionIdSuffix);
     this.lastActivityAt = this.now();
+
+    const flushIntervalMs =
+      options.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS;
+    if (flushIntervalMs > 0) {
+      this.flushTimer = setInterval(() => {
+        this.onTimerTick();
+      }, flushIntervalMs);
+    }
   }
 
   track(eventName: string, props?: AnalyticsEventProps): void {
-    const normalizedProps = normalizeEventProps(props);
-    const payload = {
+    if (!this.acceptingEvents || this.destroyed) {
+      return;
+    }
+
+    const event: AnalyticsEvent = {
       timestamp: new Date(this.now()).toISOString(),
       sessionId: this.getCurrentSessionId(),
       eventName,
@@ -135,50 +183,165 @@ export class AnalyticsService {
         appVersion: this.appVersion,
         sdkVersion: this.sdkVersion,
       },
-      props: normalizedProps,
+      props: normalizeEventProps(props),
     };
 
-    void Promise.resolve()
-      .then(() =>
-        this.http({
+    if (this.pendingEvents.length >= this.maxQueueSize) {
+      const dropped = this.pendingEvents.shift();
+      this.logger?.log("[Analytics] queue overflow, dropped oldest event", {
+        droppedEventName: dropped?.eventName,
+        queueLimit: this.maxQueueSize,
+      });
+    }
+    this.pendingEvents.push(event);
+
+    if (this.pendingEvents.length >= this.maxBatchSize) {
+      void this.flushOnce();
+    }
+  }
+
+  async flush(): Promise<void> {
+    while (!this.destroyed && this.pendingEvents.length > 0) {
+      const sent = await this.flushOnce();
+      if (!sent) {
+        break;
+      }
+    }
+  }
+
+  async destroy(): Promise<void> {
+    if (this.destroyPromise) {
+      return this.destroyPromise;
+    }
+
+    this.acceptingEvents = false;
+    this.destroyPromise = (async () => {
+      if (this.flushTimer) {
+        clearInterval(this.flushTimer);
+        this.flushTimer = null;
+      }
+
+      if (this.activeFlushPromise) {
+        await this.activeFlushPromise;
+      }
+
+      await this.flush();
+
+      if (this.pendingEvents.length > 0) {
+        this.logger?.log("[Analytics] dropping pending events during destroy", {
+          droppedCount: this.pendingEvents.length,
+        });
+        this.pendingEvents = [];
+      }
+
+      this.destroyed = true;
+      this.activeFlushPromise = null;
+    })();
+
+    return this.destroyPromise;
+  }
+
+  private onTimerTick(): void {
+    if (this.destroyed || !this.acceptingEvents) {
+      return;
+    }
+    if (this.flushTimer) {
+      if (this.skipTicksRemaining > 0) {
+        this.skipTicksRemaining -= 1;
+        return;
+      }
+      void this.flushOnce();
+    }
+  }
+
+  private flushOnce(): Promise<boolean> {
+    if (this.activeFlushPromise) {
+      return this.activeFlushPromise;
+    }
+    if (this.destroyed || this.pendingEvents.length === 0) {
+      return Promise.resolve(false);
+    }
+
+    const batch = this.pendingEvents.splice(0, this.maxBatchSize);
+    const flushPromise = (async (): Promise<boolean> => {
+      try {
+        const response = await this.http({
           method: "POST",
           url: this.endpoint,
           headers: {
             "Content-Type": "application/json",
             "App-Key": this.appKey,
           },
-          body: JSON.stringify(payload),
-        }),
-      )
-      .then((response) => {
-        if (response.status >= 300) {
-          this.logger?.log("[Analytics] event send failed", {
-            eventName,
-            status: response.status,
-            response: response.responseText || "",
-          });
-        }
-      })
-      .catch((error) => {
-        if (error && typeof error === "object" && "status" in error) {
-          const httpError = error as {
-            status: number;
-            responseText?: string;
-          };
-          this.logger?.log("[Analytics] event send failed", {
-            eventName,
-            status: httpError.status,
-            response: httpError.responseText || "",
-          });
-          return;
+          body: JSON.stringify(batch),
+        });
+
+        if (response.status >= 200 && response.status < 300) {
+          this.consecutiveFailures = 0;
+          this.skipTicksRemaining = 0;
+          return true;
         }
 
-        this.logger?.log("[Analytics] event send failed", {
-          eventName,
-          props: normalizedProps || {},
+        if (
+          response.status >= 400 &&
+          response.status < 500 &&
+          response.status !== 429
+        ) {
+          this.logger?.log("[Analytics] batch rejected, dropping", {
+            status: response.status,
+            response: response.responseText || "",
+            batchSize: batch.length,
+          });
+          this.consecutiveFailures = 0;
+          this.skipTicksRemaining = 0;
+          return true;
+        }
+
+        return this.requeueAfterFailure(batch, {
+          reason: "retriable_status",
+          status: response.status,
+          response: response.responseText || "",
+        });
+      } catch (error) {
+        return this.requeueAfterFailure(batch, {
+          reason: "transport_error",
           error,
         });
-      });
+      } finally {
+        this.activeFlushPromise = null;
+      }
+    })();
+
+    this.activeFlushPromise = flushPromise;
+    return flushPromise;
+  }
+
+  private requeueAfterFailure(
+    batch: AnalyticsEvent[],
+    context: Record<string, unknown>,
+  ): boolean {
+    this.consecutiveFailures += 1;
+    if (this.consecutiveFailures > this.maxConsecutiveFailures) {
+      this.logger?.log(
+        "[Analytics] dropping batch after max consecutive failures",
+        {
+          ...context,
+          batchSize: batch.length,
+          maxConsecutiveFailures: this.maxConsecutiveFailures,
+        },
+      );
+      this.consecutiveFailures = 0;
+      this.skipTicksRemaining = 0;
+      return true;
+    }
+
+    this.logger?.log("[Analytics] batch send failed, will retry", {
+      ...context,
+      attempt: this.consecutiveFailures,
+      batchSize: batch.length,
+    });
+    this.skipTicksRemaining = this.consecutiveFailures;
+    this.pendingEvents.unshift(...batch);
+    return false;
   }
 
   private getCurrentSessionId(): string {

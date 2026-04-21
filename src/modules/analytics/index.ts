@@ -23,17 +23,21 @@ const ANALYTICS_HOST = "https://aptabase.zotero.store";
 const ANALYTICS_SDK_VERSION = "paper-chat-analytics/1";
 
 const APTABASE_CLOUD_ENDPOINTS: Record<string, string> = {
-  US: "https://us.aptabase.com/api/v0/event",
-  EU: "https://eu.aptabase.com/api/v0/event",
-  DEV: "http://localhost:3000/api/v0/event",
+  US: "https://us.aptabase.com/api/v0/events",
+  EU: "https://eu.aptabase.com/api/v0/events",
+  DEV: "http://localhost:3000/api/v0/events",
 };
 
 export interface Analytics {
   track(eventName: string, props?: AnalyticsEventProps): void;
+  destroy(): Promise<void>;
 }
 
 class NoopAnalyticsService implements Analytics {
   track(): void {
+    // intentionally empty
+  }
+  async destroy(): Promise<void> {
     // intentionally empty
   }
 }
@@ -56,7 +60,7 @@ function resolveAptabaseEndpoint(
 ): string | undefined {
   const region = appKey.split("-")[1];
   if (region === "SH") {
-    return host ? `${host}/api/v0/event` : undefined;
+    return host ? `${host}/api/v0/events` : undefined;
   }
   return APTABASE_CLOUD_ENDPOINTS[region];
 }
@@ -131,6 +135,7 @@ export function getAnalyticsService(): Analytics {
   return analyticsService;
 }
 
-export function destroyAnalyticsService(): void {
+export async function destroyAnalyticsService(): Promise<void> {
+  await analyticsService?.destroy();
   analyticsService = null;
 }
