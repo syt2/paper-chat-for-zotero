@@ -1189,6 +1189,19 @@ export class ChatManager {
     const ensureSendingSessionTracked = () => {
       this.ensureTrackedRun(sendingSession, sessionRunId);
     };
+    const chatStartedAt = Date.now();
+    let chatCompletedTracked = false;
+    const trackChatCompleted = (success: boolean) => {
+      if (chatCompletedTracked) {
+        return;
+      }
+      chatCompletedTracked = true;
+      getAnalyticsService().track(ANALYTICS_EVENTS.chatCompleted, {
+        provider: getProviderManager().getActiveProviderId(),
+        success,
+        duration_ms: Math.max(0, Date.now() - chatStartedAt),
+      });
+    };
 
     getAnalyticsService().track(ANALYTICS_EVENTS.chatSent, {
       provider: getProviderManager().getActiveProviderId(),
@@ -1259,6 +1272,7 @@ export class ChatManager {
         if (this.isSessionActive(sendingSession)) {
           this.onMessageUpdate?.(sendingSession.messages);
         }
+        trackChatCompleted(false);
         return false;
       }
 
@@ -1418,7 +1432,7 @@ export class ChatManager {
       // 如果启用 tool calling
       if (useToolCalling && providerSupportsToolCalling(provider)) {
         ztoolkit.log("[Tool Calling] Using tool calling mode");
-        await this.sendMessageWithToolCalling(
+        const toolCallingResult = await this.sendMessageWithToolCalling(
           provider,
           messagesForApi,
           assistantMessage,
@@ -1430,6 +1444,9 @@ export class ChatManager {
           sessionRunId,
           abortSignal,
         );
+        if (toolCallingResult !== null) {
+          trackChatCompleted(toolCallingResult);
+        }
         return true;
       }
 
@@ -1707,6 +1724,7 @@ export class ChatManager {
           }
         });
 
+        trackChatCompleted(true);
         return true;
       } catch (error) {
         if (error instanceof SessionRunInvalidatedError) {
@@ -1768,8 +1786,12 @@ export class ChatManager {
         // The user message has already been persisted into the session.
         // Return success here so the UI clears the input instead of restoring
         // a draft that now duplicates the visible chat history.
+        trackChatCompleted(false);
         return true;
       }
+    } catch (error) {
+      trackChatCompleted(false);
+      throw error;
     } finally {
       this.completeSessionRun(sendingSession, sessionRunId);
     }
@@ -1791,7 +1813,7 @@ export class ChatManager {
     sendingSession: ChatSession,
     sessionRunId: number,
     abortSignal?: AbortSignal,
-  ): Promise<boolean> {
+  ): Promise<boolean | null> {
     const pdfToolManager = getPdfToolManager();
     const providerManager = getProviderManager();
     const ensureSendingSessionTracked = () => {
@@ -2013,13 +2035,13 @@ export class ChatManager {
       return true;
     } catch (error) {
       if (error instanceof SessionRunInvalidatedError) {
-        return true;
+        return null;
       }
       if (
         isAbortError(error) &&
         !this.isSessionTracked(sendingSession, sessionRunId)
       ) {
-        return true;
+        return null;
       }
       // 所有 provider 都失败了
       ztoolkit.log("[Tool Calling] All providers failed:", error);
@@ -2066,7 +2088,7 @@ export class ChatManager {
       // The user message has already been persisted into the session.
       // Keep tool-calling failure semantics aligned with the non-tool path so
       // the UI does not treat this as an unaccepted draft.
-      return true;
+      return false;
     }
   }
 

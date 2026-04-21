@@ -48,6 +48,7 @@ import { ANALYTICS_EVENTS, getAnalyticsService } from "../../analytics";
 
 // Panel display mode: 'sidebar' or 'floating'
 export type PanelMode = "sidebar" | "floating";
+export type ChatPanelOpenSource = "menu" | "toolbar" | "unknown";
 
 function buildApprovalActions(manager: ChatManager): {
   onResolveApproval: (
@@ -138,6 +139,9 @@ let floatingWindow: Window | null = null;
 let floatingContainer: HTMLElement | null = null;
 let floatingContentInitialized = false;
 let floatingTabNotifierID: string | null = null;
+let panelVisibleSince: number | null = null;
+let panelOpenSource: ChatPanelOpenSource = "unknown";
+let suppressFloatingUnloadTracking = false;
 
 // Attachment state
 let pendingImages: ImageAttachment[] = [];
@@ -379,6 +383,10 @@ function openFloatingWindow(): void {
     // Handle window close - only after content is loaded
     floatingWindow?.addEventListener("unload", () => {
       ztoolkit.log("Floating window unload event");
+      if (!suppressFloatingUnloadTracking) {
+        trackChatPanelClosed();
+      }
+      suppressFloatingUnloadTracking = false;
       // Immediately reset state
       floatingWindow = null;
       floatingContainer = null;
@@ -597,7 +605,10 @@ function closeFloatingWindow(): void {
   }
 
   if (floatingWindow && !floatingWindow.closed) {
+    suppressFloatingUnloadTracking = true;
     floatingWindow.close();
+  } else {
+    suppressFloatingUnloadTracking = false;
   }
   floatingWindow = null;
   floatingContainer = null;
@@ -843,9 +854,6 @@ function setupChatManagerCallbacks(
       }
     },
     onMessageComplete: async () => {
-      getAnalyticsService().track(ANALYTICS_EVENTS.chatCompleted, {
-        provider: getProviderManager().getActiveProviderId(),
-      });
       const providerManager = getProviderManager();
       if (providerManager.getActiveProviderId() === "paperchat") {
         ztoolkit.log("[Balance] Refreshing balance after message completion");
@@ -872,10 +880,24 @@ export function isPanelShown(): boolean {
   }
 }
 
+function trackChatPanelClosed(): void {
+  if (panelVisibleSince == null) {
+    return;
+  }
+
+  getAnalyticsService().track(ANALYTICS_EVENTS.chatPanelClosed, {
+    panel_mode: currentPanelMode,
+    open_source: panelOpenSource,
+    visible_duration_ms: Math.max(0, Date.now() - panelVisibleSince),
+  });
+  panelVisibleSince = null;
+  panelOpenSource = "unknown";
+}
+
 /**
  * Show the chat panel
  */
-export function showPanel(): void {
+export function showPanel(source: ChatPanelOpenSource = "unknown"): void {
   // Initialize events module
   initializeEventsModule();
 
@@ -884,8 +906,11 @@ export function showPanel(): void {
 
   // Update toolbar button pressed state
   updateToolbarButtonState(true);
+  panelVisibleSince = Date.now();
+  panelOpenSource = source;
   getAnalyticsService().track(ANALYTICS_EVENTS.chatPanelOpened, {
     panel_mode: currentPanelMode,
+    open_source: source,
   });
 
   if (currentPanelMode === "sidebar") {
@@ -899,6 +924,7 @@ export function showPanel(): void {
  * Hide the chat panel
  */
 export function hidePanel(): void {
+  trackChatPanelClosed();
   if (currentPanelMode === "sidebar") {
     hideSidebarPanel();
   } else {
@@ -975,11 +1001,11 @@ function unregisterGlobalTabNotifier(): void {
 /**
  * Toggle the chat panel
  */
-export function togglePanel(): void {
+export function togglePanel(source: ChatPanelOpenSource = "unknown"): void {
   if (isPanelShown()) {
     hidePanel();
   } else {
-    showPanel();
+    showPanel(source);
   }
 }
 
@@ -1026,7 +1052,7 @@ export function registerToolbarButton(): void {
       listeners: [
         {
           type: "click",
-          listener: () => togglePanel(),
+          listener: () => togglePanel("toolbar"),
         },
         {
           type: "mouseover",

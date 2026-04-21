@@ -13,6 +13,8 @@ import type {
 import { clearElement } from "./utils";
 import { populatePaperchatPanel } from "./PaperchatProviderUI";
 import { populateApiKeyPanel } from "./ApiKeyProviderUI";
+import { ANALYTICS_EVENTS, getAnalyticsService } from "../analytics";
+import { isPaperChatLowBalance } from "./UserAuthUI";
 
 /**
  * Populate provider list in sidebar
@@ -148,6 +150,10 @@ export function selectProvider(
   doc: Document,
   providerId: string,
   setCurrentProviderId: (id: string) => void,
+  options: {
+    trackAnalytics?: boolean;
+    analyticsSource?: string;
+  } = {},
 ): void {
   setCurrentProviderId(providerId);
   const providerManager = getProviderManager();
@@ -189,6 +195,16 @@ export function selectProvider(
     if (config) {
       populateApiKeyPanel(doc, config, metadata);
     }
+  }
+
+  if (options.trackAnalytics) {
+    const authManager = getAuthManager();
+    getAnalyticsService().track(ANALYTICS_EVENTS.settingsProviderViewed, {
+      provider: providerId,
+      source: options.analyticsSource || "unknown",
+      low_balance:
+        providerId === "paperchat" ? isPaperChatLowBalance(authManager) : false,
+    });
   }
 }
 
@@ -239,7 +255,10 @@ export function bindProviderListClickEvents(
     if (item) {
       const providerId = item.getAttribute("data-provider-id");
       if (providerId) {
-        selectProvider(doc, providerId, setCurrentProviderId);
+        selectProvider(doc, providerId, setCurrentProviderId, {
+          trackAnalytics: true,
+          analyticsSource: "sidebar_click",
+        });
       }
     }
   });

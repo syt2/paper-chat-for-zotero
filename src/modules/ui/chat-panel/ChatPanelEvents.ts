@@ -29,6 +29,7 @@ import {
   type MentionResource,
   findMentionAtCursor,
 } from "./MentionSelector";
+import { ANALYTICS_EVENTS, getAnalyticsService } from "../../analytics";
 
 // Import getActiveReaderItem from the manager module to avoid circular dependency
 // This is set by ChatPanelManager during initialization
@@ -45,6 +46,10 @@ const CHECKIN_FLASH_DURATION_MS = 5000;
 const MESSAGE_INPUT_MIN_HEIGHT = 60;
 const MESSAGE_INPUT_MAX_HEIGHT = 140;
 const CHAT_HISTORY_BOTTOM_STICKY_THRESHOLD = 24;
+
+function trackChatModelSwitched(props: Record<string, string | boolean>): void {
+  getAnalyticsService().track(ANALYTICS_EVENTS.chatModelSwitched, props);
+}
 
 function getPaperChatTierLabel(tier: PaperChatTier): string {
   if (tier === "paperchat-lite") {
@@ -1260,6 +1265,14 @@ function populateModelDropdown(
               context.renderMessages(activeSession.messages);
             }
 
+            trackChatModelSwitched({
+              source: "tier_dropdown",
+              previous_provider: previousActiveProviderId || "unknown",
+              provider: "paperchat",
+              previous_tier: previousTierState.selectedTier,
+              tier: opt.value,
+            });
+
             updateModelSelectorDisplay(container);
             dropdown.style.display = "none";
             context.updateUserBar();
@@ -1346,9 +1359,10 @@ function populateModelDropdown(
 
         // Click to select model
         modelItem.addEventListener("click", async () => {
+          const previousProviderId = providerManager.getActiveProviderId();
+          const previousModel = getPref("model") as string | undefined;
           const leavingPaperChat =
-            providerManager.getActiveProviderId() === "paperchat" &&
-            config.id !== "paperchat";
+            previousProviderId === "paperchat" && config.id !== "paperchat";
 
           try {
             if (leavingPaperChat) {
@@ -1371,6 +1385,14 @@ function populateModelDropdown(
             // Update provider config
             providerManager.updateProviderConfig(config.id, {
               defaultModel: model,
+            });
+
+            trackChatModelSwitched({
+              source: "model_dropdown",
+              previous_provider: previousProviderId || "unknown",
+              provider: config.id,
+              previous_model: previousModel || "",
+              model,
             });
 
             // Update display and close dropdown

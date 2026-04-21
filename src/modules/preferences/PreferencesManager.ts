@@ -40,6 +40,7 @@ import type {
   ToolPermissionMode,
   ToolPermissionRiskLevel,
 } from "../../types/tool";
+import { ANALYTICS_EVENTS, getAnalyticsService } from "../analytics";
 
 // Current selected provider ID
 let currentProviderId: string = "paperchat";
@@ -71,13 +72,18 @@ export async function initializePrefsUI(): Promise<void> {
   if (addon.data.prefs?.window == undefined) return;
 
   const authManager = getAuthManager();
-  const providerManager = getProviderManager();
 
   // Initialize auth manager
   await authManager.initialize();
 
   await refreshPrefsUI({
     syncUserInfo: false,
+    trackProviderView: true,
+    providerViewSource: "settings_opened",
+  });
+
+  getAnalyticsService().track(ANALYTICS_EVENTS.settingsOpened, {
+    selected_provider: currentProviderId,
   });
 }
 
@@ -131,7 +137,10 @@ export async function refreshPrefsUI(
 
   // Preserve current sidebar selection when possible instead of resetting to active provider
   currentProviderId = resolveCurrentProviderId(doc, providerManager, options);
-  selectProvider(doc, currentProviderId, setCurrentProviderId);
+  selectProvider(doc, currentProviderId, setCurrentProviderId, {
+    trackAnalytics: options.trackProviderView === true,
+    analyticsSource: options.providerViewSource || "refresh",
+  });
 
   // Update paperchat user status display
   updateUserDisplay(doc, authManager);
@@ -195,6 +204,7 @@ export function bindPrefEvents(): void {
     win.addEventListener("focus", () => {
       void refreshPrefsUI({
         syncUserInfo: false,
+        trackProviderView: false,
       });
     });
   }

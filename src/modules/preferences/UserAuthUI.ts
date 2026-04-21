@@ -37,12 +37,17 @@ function hasActiveTopupAttention(): boolean {
   return typeof attentionUntil === "number" && attentionUntil > Date.now();
 }
 
+export function isPaperChatLowBalance(authManager: AuthManagerType): boolean {
+  return (
+    authManager.isLoggedIn() &&
+    authManager.getBalance().quota < LOW_BALANCE_WARNING_THRESHOLD
+  );
+}
+
 function shouldHighlightTopup(
   authManager: AuthManagerType,
 ): { highlight: boolean; forced: boolean; lowBalance: boolean } {
-  const lowBalance =
-    authManager.isLoggedIn() &&
-    authManager.getBalance().quota < LOW_BALANCE_WARNING_THRESHOLD;
+  const lowBalance = isPaperChatLowBalance(authManager);
   const forced = hasActiveTopupAttention();
 
   return {
@@ -208,14 +213,13 @@ function applyTopupAttentionStyles(
 }
 
 export function openPaperChatSettingsForTopup(): void {
-  getAnalyticsService().track(ANALYTICS_EVENTS.paperChatTopupOpened, {
-    entry: "topup_cta",
-  });
   markTopupAttentionRequested();
   Zotero.Utilities.Internal.openPreferences("paperchat-prefpane");
   schedulePrefsRefresh({
     syncUserInfo: true,
     providerId: "paperchat",
+    trackProviderView: true,
+    providerViewSource: "topup_cta",
   });
 }
 
@@ -223,6 +227,8 @@ export function openPaperChatPreferences(): void {
   Zotero.Utilities.Internal.openPreferences("paperchat-prefpane");
   schedulePrefsRefresh({
     syncUserInfo: true,
+    trackProviderView: true,
+    providerViewSource: "preferences_open",
   });
 }
 
@@ -358,6 +364,9 @@ export function bindUserAuthEvents(
   // Get redemption code button - show QR code dialog
   const getRedeemCodeBtn = doc.getElementById("pref-get-redeem-code-btn");
   getRedeemCodeBtn?.addEventListener("click", () => {
+    getAnalyticsService().track(ANALYTICS_EVENTS.paperChatRedeemCodeClicked, {
+      low_balance: isPaperChatLowBalance(authManager),
+    });
     showRedeemCodeDialog();
   });
 

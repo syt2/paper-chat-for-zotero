@@ -126,7 +126,7 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
     label: getString("chat-menu-open"),
     icon: `chrome://${addon.data.config.addonRef}/content/icons/favicon.svg`,
     commandListener: () => {
-      togglePanel();
+      togglePanel("menu");
     },
   });
 }

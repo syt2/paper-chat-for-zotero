@@ -20,6 +20,7 @@ import {
   parsePaperChatQuotaError,
 } from "../../providers/paperchat-errors";
 import { darkTheme } from "./ChatPanelTheme";
+import { ANALYTICS_EVENTS, getAnalyticsService } from "../../analytics";
 
 const RECOVERY_STEP_PREFIX = "replan:";
 
@@ -77,6 +78,9 @@ function createTopupButton(doc: Document): HTMLElement {
   btn.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
+    getAnalyticsService().track(ANALYTICS_EVENTS.paperChatQuotaTopupClicked, {
+      source: "quota_error_card",
+    });
     void import("../../preferences/UserAuthUI")
       .then((module) => module.openPaperChatSettingsForTopup())
       .catch((error) => {
