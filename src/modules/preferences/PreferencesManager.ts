@@ -72,18 +72,21 @@ export async function initializePrefsUI(): Promise<void> {
   if (addon.data.prefs?.window == undefined) return;
 
   const authManager = getAuthManager();
+  const doc = addon.data.prefs.window.document;
+  const providerManager = getProviderManager();
 
   // Initialize auth manager
   await authManager.initialize();
+
+  const initialProviderId = resolveCurrentProviderId(doc, providerManager, {});
+  getAnalyticsService().track(ANALYTICS_EVENTS.settingsOpened, {
+    selected_provider: initialProviderId,
+  });
 
   await refreshPrefsUI({
     syncUserInfo: false,
     trackProviderView: true,
     providerViewSource: "settings_opened",
-  });
-
-  getAnalyticsService().track(ANALYTICS_EVENTS.settingsOpened, {
-    selected_provider: currentProviderId,
   });
 }
 

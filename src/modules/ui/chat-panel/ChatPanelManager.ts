@@ -341,11 +341,11 @@ function updateContainerSize(): void {
 /**
  * Open floating window
  */
-function openFloatingWindow(): void {
+function openFloatingWindow(): boolean {
   // Close existing floating window if any
   if (floatingWindow && !floatingWindow.closed) {
     floatingWindow.focus();
-    return;
+    return true;
   }
 
   // Reset state before opening new window
@@ -372,7 +372,7 @@ function openFloatingWindow(): void {
 
   if (!floatingWindow) {
     ztoolkit.log("Failed to open floating window");
-    return;
+    return false;
   }
 
   // Wait for window to load, then initialize content
@@ -396,6 +396,7 @@ function openFloatingWindow(): void {
   });
 
   ztoolkit.log("Floating window opened");
+  return true;
 }
 
 /**
@@ -618,7 +619,7 @@ function closeFloatingWindow(): void {
 /**
  * Show sidebar panel
  */
-function showSidebarPanel(): void {
+function showSidebarPanel(): boolean {
   const doc = Zotero.getMainWindow().document;
   const win = Zotero.getMainWindow();
   const manager = getChatManager();
@@ -747,6 +748,7 @@ function showSidebarPanel(): void {
   }
 
   ztoolkit.log("Sidebar panel shown");
+  return true;
 }
 
 /**
@@ -904,20 +906,21 @@ export function showPanel(source: ChatPanelOpenSource = "unknown"): void {
   // Load saved panel mode
   loadPanelMode();
 
-  // Update toolbar button pressed state
-  updateToolbarButtonState(true);
+  const didOpen =
+    currentPanelMode === "sidebar" ? showSidebarPanel() : openFloatingWindow();
+  if (!didOpen) {
+    updateToolbarButtonState(false);
+    return;
+  } else {
+    updateToolbarButtonState(true);
+  }
+
   panelVisibleSince = Date.now();
   panelOpenSource = source;
   getAnalyticsService().track(ANALYTICS_EVENTS.chatPanelOpened, {
     panel_mode: currentPanelMode,
     open_source: source,
   });
-
-  if (currentPanelMode === "sidebar") {
-    showSidebarPanel();
-  } else {
-    openFloatingWindow();
-  }
 }
 
 /**

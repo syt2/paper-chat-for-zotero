@@ -1190,6 +1190,7 @@ export class ChatManager {
       this.ensureTrackedRun(sendingSession, sessionRunId);
     };
     const chatStartedAt = Date.now();
+    let chatProviderId = getProviderManager().getActiveProviderId();
     let chatCompletedTracked = false;
     const trackChatCompleted = (success: boolean) => {
       if (chatCompletedTracked) {
@@ -1197,7 +1198,7 @@ export class ChatManager {
       }
       chatCompletedTracked = true;
       getAnalyticsService().track(ANALYTICS_EVENTS.chatCompleted, {
-        provider: getProviderManager().getActiveProviderId(),
+        provider: chatProviderId,
         success,
         duration_ms: Math.max(0, Date.now() - chatStartedAt),
       });
@@ -1243,6 +1244,7 @@ export class ChatManager {
       // 获取活动的 AI 提供商
       const providerManager = getProviderManager();
       const provider = this.getActiveProvider();
+      chatProviderId = providerManager.getActiveProviderId();
       ztoolkit.log(
         "[ChatManager] provider:",
         provider?.getName(),
@@ -1442,6 +1444,9 @@ export class ChatManager {
           item!,
           sendingSession,
           sessionRunId,
+          (providerId) => {
+            chatProviderId = providerId;
+          },
           abortSignal,
         );
         if (toolCallingResult !== null) {
@@ -1486,6 +1491,7 @@ export class ChatManager {
       // 传统模式：流式调用（带自动降级）
       try {
         await providerManager.executeWithFallback(async (currentProvider) => {
+          chatProviderId = currentProvider.config.id;
           if (currentProvider.config.id !== failedProviderId) {
             fallbackFromProviderName = failedProvider.getName();
             fallbackToProviderName = currentProvider.getName();
@@ -1812,6 +1818,7 @@ export class ChatManager {
     item: Zotero.Item,
     sendingSession: ChatSession,
     sessionRunId: number,
+    onProviderUsed: (providerId: string) => void,
     abortSignal?: AbortSignal,
   ): Promise<boolean | null> {
     const pdfToolManager = getPdfToolManager();
@@ -1914,6 +1921,7 @@ export class ChatManager {
 
     try {
       await providerManager.executeWithFallback(async (currentProvider) => {
+        onProviderUsed(currentProvider.config.id);
         if (currentProvider.config.id !== failedProviderId) {
           fallbackFromProviderName = failedProvider.getName();
           fallbackToProviderName = currentProvider.getName();
