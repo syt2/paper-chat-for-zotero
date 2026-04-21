@@ -36,7 +36,6 @@ async function onStartup() {
   ]);
 
   initLocale();
-  void getAnalyticsService().init();
 
   // Register preference pane first — must not be blocked by storage/migration errors
   Zotero.PreferencePanes.register({
