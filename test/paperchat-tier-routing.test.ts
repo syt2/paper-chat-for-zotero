@@ -437,6 +437,69 @@ describe("paperchat tier routing", function () {
     assert.equal(result.state.tiers["paperchat-standard"].modelId, "m4");
   });
 
+  it("prefers the manual tier override over a stale session binding", function () {
+    const result = resolveSessionPaperChatModel(
+      {
+        id: "s-stale",
+        createdAt: 1,
+        updatedAt: 1,
+        lastActiveItemKey: null,
+        messages: [],
+        selectedTier: "paperchat-standard",
+        resolvedModelId: "m3",
+      },
+      {
+        selectedTier: "paperchat-standard",
+        tiers: {
+          "paperchat-lite": { mode: "auto", modelId: "m1" },
+          "paperchat-standard": { mode: "manual", modelId: "m4" },
+          "paperchat-pro": { mode: "auto", modelId: "m6" },
+        },
+      },
+      ["m1", "m3", "m4", "m6"],
+      { m1: 1, m3: 3, m4: 4, m6: 6 },
+      () => {
+        throw new Error("should not pick a new model on manual override");
+      },
+    );
+
+    assert.equal(result.modelId, "m4");
+    assert.equal(result.selectedTier, "paperchat-standard");
+    assert.deepEqual(result.pools, {
+      "paperchat-lite": [],
+      "paperchat-standard": ["m4"],
+      "paperchat-pro": [],
+    });
+  });
+
+  it("ignores a manual tier override whose model is unavailable", function () {
+    const result = resolveSessionPaperChatModel(
+      {
+        id: "s-unavail",
+        createdAt: 1,
+        updatedAt: 1,
+        lastActiveItemKey: null,
+        messages: [],
+        selectedTier: "paperchat-standard",
+        resolvedModelId: "m3",
+      },
+      {
+        selectedTier: "paperchat-standard",
+        tiers: {
+          "paperchat-lite": { mode: "auto", modelId: "m1" },
+          "paperchat-standard": { mode: "manual", modelId: "m-missing" },
+          "paperchat-pro": { mode: "auto", modelId: "m6" },
+        },
+      },
+      ["m1", "m3", "m4", "m6"],
+      { m1: 1, m3: 3, m4: 4, m6: 6 },
+      (candidates) => candidates[0],
+    );
+
+    assert.equal(result.modelId, "m3");
+    assert.equal(result.selectedTier, "paperchat-standard");
+  });
+
   it("short-circuits pool resolution when the session binding is still valid", function () {
     const ratios = new Proxy<Record<string, number>>(
       {},

@@ -1,6 +1,5 @@
 import type { ChatSession } from "../../types/chat";
 import {
-  PAPERCHAT_TIERS,
   parseTierState,
   resolveTierModel,
   type PaperChatTier,
@@ -30,21 +29,34 @@ export function resolveSessionPaperChatModel(
   modelId: string | null;
   pools: ReturnType<typeof resolveTierModel>["pools"];
 } {
+  const globalState = parseTierState(tierStateRaw);
+  const selectedTier = session.selectedTier || globalState.selectedTier;
   const availableSet = new Set(availableModels);
+  const configuredTierEntry = globalState.tiers[selectedTier];
 
-  if (session.resolvedModelId && availableSet.has(session.resolvedModelId)) {
-    const globalState = parseTierState(tierStateRaw);
-    const selectedTier = session.selectedTier || globalState.selectedTier;
+  if (
+    configuredTierEntry.mode === "manual" &&
+    configuredTierEntry.modelId &&
+    availableSet.has(configuredTierEntry.modelId)
+  ) {
     const state = {
       selectedTier,
       tiers: { ...globalState.tiers },
     };
 
-    // Keep the reported selected tier aligned with the session binding while
-    // avoiding a full pool re-derivation on the common send-message path.
-    if (!PAPERCHAT_TIERS.includes(state.selectedTier)) {
-      state.selectedTier = globalState.selectedTier;
-    }
+    return {
+      selectedTier,
+      state,
+      modelId: configuredTierEntry.modelId,
+      pools: createFastPathPools(selectedTier, configuredTierEntry.modelId),
+    };
+  }
+
+  if (session.resolvedModelId && availableSet.has(session.resolvedModelId)) {
+    const state = {
+      selectedTier,
+      tiers: { ...globalState.tiers },
+    };
 
     return {
       selectedTier,
@@ -54,8 +66,6 @@ export function resolveSessionPaperChatModel(
     };
   }
 
-  const globalState = parseTierState(tierStateRaw);
-  const selectedTier = session.selectedTier || globalState.selectedTier;
   const resolved = resolveTierModel(
     globalState,
     selectedTier,

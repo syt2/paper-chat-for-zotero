@@ -16,6 +16,7 @@ import {
 import { showAuthDialog } from "../AuthDialog";
 import { getString } from "../../../utils/locale";
 import { getProviderManager } from "../../providers";
+import type { PaperChatProviderConfig } from "../../../types/provider";
 import { getPref, setPref } from "../../../utils/prefs";
 import { formatModelLabel } from "../../preferences/ModelsFetcher";
 import {
@@ -1219,11 +1220,23 @@ export function updateModelSelectorDisplay(container: HTMLElement): void {
   );
   const session = getChatManager().getActiveSession();
   const tier = session?.selectedTier || tierState.selectedTier;
-  const resolved = session?.resolvedModelId;
+  const tierEntry = tierState.tiers[tier];
+  const paperchatConfig = providerManager.getProviderConfig(
+    "paperchat",
+  ) as PaperChatProviderConfig | null;
+  const availableModels = paperchatConfig?.availableModels ?? [];
+  // Mirror the availability check in paperchat-session-routing.ts so the
+  // displayed model stays in sync with what the next request will actually use.
+  const effectiveModel =
+    tierEntry.mode === "manual" &&
+    tierEntry.modelId &&
+    availableModels.includes(tierEntry.modelId)
+      ? tierEntry.modelId
+      : session?.resolvedModelId;
   const tierLabel = getPaperChatTierLabel(tier);
 
-  modelSelectorText.textContent = resolved
-    ? `PaperChat: ${tierLabel} · ${resolved}`
+  modelSelectorText.textContent = effectiveModel
+    ? `PaperChat: ${tierLabel} · ${effectiveModel}`
     : `PaperChat: ${tierLabel}`;
 }
 
