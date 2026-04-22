@@ -167,6 +167,7 @@ paperchat-unknown = Unknown
 paperchat-tool-status-calling = Calling...
 paperchat-tool-status-done = Done
 paperchat-tool-status-error = Error
+paperchat-chat-tool-group-earlier = Show { $count } earlier calls
 
 # Chat execution banner
 paperchat-chat-banner-running = Running

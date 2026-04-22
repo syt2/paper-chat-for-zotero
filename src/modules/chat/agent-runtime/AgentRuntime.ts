@@ -504,19 +504,52 @@ export class AgentRuntime {
       let roundContent = "";
       let stopReason = "end_turn";
 
+      const buildDraftToolCallDisplay = (): string => {
+        const ordered = [...pendingToolCalls.entries()].sort(
+          ([leftIndex], [rightIndex]) => leftIndex - rightIndex,
+        );
+        return ordered
+          .map(([, toolCall]) =>
+            this.callbacks.formatToolCallCard(
+              toolCall.name,
+              toolCall.arguments,
+              "calling",
+            ),
+          )
+          .join("");
+      };
+
+      const getPersistedStreamingContent = (): string =>
+        displayBeforeThisRound + roundContent;
+
+      const getUiStreamingContent = (): string =>
+        getPersistedStreamingContent() + buildDraftToolCallDisplay();
+
+      const updateAssistantStreamingContent = (): string | undefined => {
+        if (!this.callbacks.isSessionTracked(sendingSession, sessionRunId)) {
+          return undefined;
+        }
+        const uiContent = getUiStreamingContent();
+        assistantMessage.content = getPersistedStreamingContent();
+        assistantMessage.streamingState = "in_progress";
+        this.scheduleAssistantMessageCheckpoint(
+          sendingSession,
+          sessionRunId,
+          assistantMessage,
+        );
+        if (this.callbacks.isSessionActive(sendingSession)) {
+          this.callbacks.onStreamingUpdate?.(uiContent, assistantMessage.id);
+        }
+        return uiContent;
+      };
+
       const callbacks: StreamToolCallingCallbacks = {
         onTextDelta: (text) => {
           if (!this.callbacks.isSessionTracked(sendingSession, sessionRunId)) {
             return;
           }
           roundContent += text;
-          assistantMessage.content = displayBeforeThisRound + roundContent;
-          assistantMessage.streamingState = "in_progress";
-          this.scheduleAssistantMessageCheckpoint(
-            sendingSession,
-            sessionRunId,
-            assistantMessage,
-          );
+          const uiContent = updateAssistantStreamingContent();
           this.emitRuntimeEvent<"text_delta">(
             sendingSession,
             sessionRunId,
@@ -524,16 +557,10 @@ export class AgentRuntime {
             {
               type: "text_delta",
               delta: text,
-              content: assistantMessage.content,
+              content: uiContent || assistantMessage.content,
               iteration,
             },
           );
-          if (this.callbacks.isSessionActive(sendingSession)) {
-            this.callbacks.onStreamingUpdate?.(
-              assistantMessage.content,
-              assistantMessage.id,
-            );
-          }
         },
         onReasoningDelta: (text) => {
           if (!this.callbacks.isSessionTracked(sendingSession, sessionRunId)) {
@@ -570,11 +597,13 @@ export class AgentRuntime {
           ztoolkit.log(
             `[Streaming Tool Calling] Tool call started: ${name} (${id})`,
           );
+          updateAssistantStreamingContent();
         },
         onToolCallDelta: (index, argumentsDelta) => {
           const tc = pendingToolCalls.get(index);
           if (tc) {
             tc.arguments += argumentsDelta;
+            updateAssistantStreamingContent();
           }
         },
         onComplete: (result) => {

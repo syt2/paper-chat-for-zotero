@@ -23,6 +23,7 @@ import {
 } from "../src/modules/providers/ProviderManager.ts";
 import type { ChatMessage, ChatSession } from "../src/types/chat";
 import type { ManagedAbortController } from "../src/utils/abort.ts";
+import { getString } from "../src/utils/locale.ts";
 
 const PREFS_PREFIX = "extensions.zotero.paperchat";
 
@@ -1137,6 +1138,354 @@ describe("paperchat storage and chat manager", function () {
     assert.equal(renderedMessages[0][1].streamingState, "interrupted");
   });
 
+  it("removes unfinished calling tool cards when cancelling the current turn", async function () {
+    const messageUpdates: Array<{
+      sessionId: string;
+      messageId: string;
+      content: string;
+      streamingState: string | null | undefined;
+    }> = [];
+
+    const manager = Object.create(ChatManager.prototype) as ChatManager & {
+      currentSession: ChatSession;
+      activeSessionRunIds: Map<string, number>;
+      activeSessionAbortControllers: Map<string, ManagedAbortController>;
+      streamingSessions: Map<string, ChatSession>;
+      sessionStorage: {
+        updateMessageContent: (
+          sessionId: string,
+          messageId: string,
+          content: string,
+          reasoning?: string,
+          options?: { streamingState?: string | null },
+        ) => Promise<void>;
+        updateSessionMeta: (session: ChatSession) => Promise<void>;
+      };
+      init: () => Promise<void>;
+      isSessionActive: (session: ChatSession) => boolean;
+      onExecutionPlanUpdate?: (plan?: unknown) => void;
+      onMessageUpdate?: (messages: ChatMessage[]) => void;
+    };
+
+    const session: ChatSession = {
+      id: "session-cancel-toolcall-1",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: "ITEM-1",
+      messages: [
+        {
+          id: "user-1",
+          role: "user",
+          content: "hello",
+          timestamp: 1,
+        },
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: [
+            "Working on it.",
+            '<tool-call status="calling">',
+            "<tool-name>⏳ create_note</tool-name>",
+            "<tool-args>title=\"test\"</tool-args>",
+            "<tool-status>tool-status-calling</tool-status>",
+            "</tool-call>",
+          ].join("\n"),
+          streamingState: "in_progress",
+          timestamp: 2,
+        },
+      ],
+      executionPlan: {
+        id: "plan-1",
+        summary: "Working",
+        status: "in_progress",
+        steps: [],
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      toolExecutionState: {
+        planId: "plan-1",
+        turnStartedAt: 1,
+        updatedAt: 2,
+        results: [],
+      },
+      toolApprovalState: {
+        pendingRequests: [],
+      },
+    };
+
+    manager.currentSession = session;
+    manager.activeSessionRunIds = new Map([[session.id, 1]]);
+    manager.activeSessionAbortControllers = new Map();
+    manager.streamingSessions = new Map([[session.id, session]]);
+    manager.sessionStorage = {
+      updateMessageContent: async (
+        sessionId,
+        messageId,
+        content,
+        _reasoning,
+        options,
+      ) => {
+        messageUpdates.push({
+          sessionId,
+          messageId,
+          content,
+          streamingState: options?.streamingState,
+        });
+      },
+      updateSessionMeta: async () => undefined,
+    };
+    manager.init = async () => undefined;
+    manager.isSessionActive = () => false;
+    manager.onExecutionPlanUpdate = () => undefined;
+    manager.onMessageUpdate = () => undefined;
+
+    const cancelled = await manager.cancelCurrentTurn();
+
+    assert.isTrue(cancelled);
+    assert.equal(session.messages[1].streamingState, "interrupted");
+    assert.equal(session.messages[1].content, "Working on it.");
+    assert.deepEqual(messageUpdates, [
+      {
+        sessionId: "session-cancel-toolcall-1",
+        messageId: "assistant-1",
+        content: "Working on it.",
+        streamingState: "interrupted",
+      },
+    ]);
+  });
+
+  it("falls back to the cancelled message when cancelling a turn whose content is only calling tool cards", async function () {
+    const cancelledMessage = getString("chat-turn-cancelled");
+    const messageUpdates: Array<{
+      sessionId: string;
+      messageId: string;
+      content: string;
+      streamingState: string | null | undefined;
+    }> = [];
+
+    const manager = Object.create(ChatManager.prototype) as ChatManager & {
+      currentSession: ChatSession;
+      activeSessionRunIds: Map<string, number>;
+      activeSessionAbortControllers: Map<string, ManagedAbortController>;
+      streamingSessions: Map<string, ChatSession>;
+      sessionStorage: {
+        updateMessageContent: (
+          sessionId: string,
+          messageId: string,
+          content: string,
+          reasoning?: string,
+          options?: { streamingState?: string | null },
+        ) => Promise<void>;
+        updateSessionMeta: (session: ChatSession) => Promise<void>;
+      };
+      init: () => Promise<void>;
+      isSessionActive: (session: ChatSession) => boolean;
+      onExecutionPlanUpdate?: (plan?: unknown) => void;
+      onMessageUpdate?: (messages: ChatMessage[]) => void;
+    };
+
+    const session: ChatSession = {
+      id: "session-cancel-toolcall-only-1",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: "ITEM-1",
+      messages: [
+        {
+          id: "user-1",
+          role: "user",
+          content: "hello",
+          timestamp: 1,
+        },
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: [
+            '<tool-call status="calling">',
+            "<tool-name>⏳ create_note</tool-name>",
+            "<tool-args>title=\"test\"</tool-args>",
+            "<tool-status>tool-status-calling</tool-status>",
+            "</tool-call>",
+          ].join("\n"),
+          streamingState: "in_progress",
+          timestamp: 2,
+        },
+      ],
+      executionPlan: {
+        id: "plan-1",
+        summary: "Working",
+        status: "in_progress",
+        steps: [],
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      toolExecutionState: {
+        planId: "plan-1",
+        turnStartedAt: 1,
+        updatedAt: 2,
+        results: [],
+      },
+      toolApprovalState: {
+        pendingRequests: [],
+      },
+    };
+
+    manager.currentSession = session;
+    manager.activeSessionRunIds = new Map([[session.id, 1]]);
+    manager.activeSessionAbortControllers = new Map();
+    manager.streamingSessions = new Map([[session.id, session]]);
+    manager.sessionStorage = {
+      updateMessageContent: async (
+        sessionId,
+        messageId,
+        content,
+        _reasoning,
+        options,
+      ) => {
+        messageUpdates.push({
+          sessionId,
+          messageId,
+          content,
+          streamingState: options?.streamingState,
+        });
+      },
+      updateSessionMeta: async () => undefined,
+    };
+    manager.init = async () => undefined;
+    manager.isSessionActive = () => false;
+    manager.onExecutionPlanUpdate = () => undefined;
+    manager.onMessageUpdate = () => undefined;
+
+    const cancelled = await manager.cancelCurrentTurn();
+
+    assert.isTrue(cancelled);
+    assert.equal(session.messages[1].streamingState, "interrupted");
+    assert.equal(session.messages[1].content, cancelledMessage);
+    assert.deepEqual(messageUpdates, [
+      {
+        sessionId: "session-cancel-toolcall-only-1",
+        messageId: "assistant-1",
+        content: cancelledMessage,
+        streamingState: "interrupted",
+      },
+    ]);
+  });
+
+  it("cleans calling tool cards during cancel even when the assistant message is no longer marked in_progress", async function () {
+    const messageUpdates: Array<{
+      sessionId: string;
+      messageId: string;
+      content: string;
+      streamingState: string | null | undefined;
+    }> = [];
+
+    const manager = Object.create(ChatManager.prototype) as ChatManager & {
+      currentSession: ChatSession;
+      activeSessionRunIds: Map<string, number>;
+      activeSessionAbortControllers: Map<string, ManagedAbortController>;
+      streamingSessions: Map<string, ChatSession>;
+      sessionStorage: {
+        updateMessageContent: (
+          sessionId: string,
+          messageId: string,
+          content: string,
+          reasoning?: string,
+          options?: { streamingState?: string | null },
+        ) => Promise<void>;
+        updateSessionMeta: (session: ChatSession) => Promise<void>;
+      };
+      init: () => Promise<void>;
+      isSessionActive: (session: ChatSession) => boolean;
+      onExecutionPlanUpdate?: (plan?: unknown) => void;
+      onMessageUpdate?: (messages: ChatMessage[]) => void;
+    };
+
+    const session: ChatSession = {
+      id: "session-cancel-toolcall-stale-1",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: "ITEM-1",
+      messages: [
+        {
+          id: "user-1",
+          role: "user",
+          content: "hello",
+          timestamp: 1,
+        },
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: [
+            "Working on it.",
+            '<tool-call status="calling">',
+            "<tool-name>⏳ create_note</tool-name>",
+            "<tool-args>title=\"test\"</tool-args>",
+            "<tool-status>tool-status-calling</tool-status>",
+            "</tool-call>",
+          ].join("\n"),
+          streamingState: undefined,
+          timestamp: 2,
+        },
+      ],
+      executionPlan: {
+        id: "plan-1",
+        summary: "Working",
+        status: "in_progress",
+        steps: [],
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      toolExecutionState: {
+        planId: "plan-1",
+        turnStartedAt: 1,
+        updatedAt: 2,
+        results: [],
+      },
+      toolApprovalState: {
+        pendingRequests: [],
+      },
+    };
+
+    manager.currentSession = session;
+    manager.activeSessionRunIds = new Map([[session.id, 1]]);
+    manager.activeSessionAbortControllers = new Map();
+    manager.streamingSessions = new Map([[session.id, session]]);
+    manager.sessionStorage = {
+      updateMessageContent: async (
+        sessionId,
+        messageId,
+        content,
+        _reasoning,
+        options,
+      ) => {
+        messageUpdates.push({
+          sessionId,
+          messageId,
+          content,
+          streamingState: options?.streamingState,
+        });
+      },
+      updateSessionMeta: async () => undefined,
+    };
+    manager.init = async () => undefined;
+    manager.isSessionActive = () => false;
+    manager.onExecutionPlanUpdate = () => undefined;
+    manager.onMessageUpdate = () => undefined;
+
+    const cancelled = await manager.cancelCurrentTurn();
+
+    assert.isTrue(cancelled);
+    assert.equal(session.messages[1].streamingState, "interrupted");
+    assert.equal(session.messages[1].content, "Working on it.");
+    assert.deepEqual(messageUpdates, [
+      {
+        sessionId: "session-cancel-toolcall-stale-1",
+        messageId: "assistant-1",
+        content: "Working on it.",
+        streamingState: "interrupted",
+      },
+    ]);
+  });
+
   it("treats session invalidation after message persistence as an accepted send", async function () {
     const providerManager = getProviderManager() as any;
     const originalGetActiveProviderId = providerManager.getActiveProviderId;
@@ -1173,6 +1522,7 @@ describe("paperchat storage and chat manager", function () {
       const manager = Object.create(ChatManager.prototype) as ChatManager & {
         currentSession: ChatSession;
         activeSessionRunIds: Map<string, number>;
+        sessionRunCounters: Map<string, number>;
         activeSessionAbortControllers: Map<string, ManagedAbortController>;
         sessionStorage: {
           insertMessage: (
@@ -1190,6 +1540,7 @@ describe("paperchat storage and chat manager", function () {
 
       manager.currentSession = session;
       manager.activeSessionRunIds = new Map();
+      manager.sessionRunCounters = new Map();
       manager.activeSessionAbortControllers = new Map();
       manager.sessionStorage = {
         insertMessage: async (_sessionId: string, message: ChatMessage) => {
@@ -1295,6 +1646,7 @@ describe("paperchat storage and chat manager", function () {
       const manager = Object.create(ChatManager.prototype) as ChatManager & {
         currentSession: ChatSession;
         activeSessionRunIds: Map<string, number>;
+        sessionRunCounters: Map<string, number>;
         activeSessionAbortControllers: Map<string, ManagedAbortController>;
         streamingSessions: Map<string, ChatSession>;
         sessionStorage: {
@@ -1319,6 +1671,7 @@ describe("paperchat storage and chat manager", function () {
 
       manager.currentSession = session;
       manager.activeSessionRunIds = new Map();
+      manager.sessionRunCounters = new Map();
       manager.activeSessionAbortControllers = new Map();
       manager.streamingSessions = new Map();
       manager.sessionStorage = {

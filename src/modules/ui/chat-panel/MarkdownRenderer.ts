@@ -6,8 +6,14 @@ import MarkdownIt from "markdown-it";
 import hljs from "highlight.js";
 import katex from "katex";
 import { chatColors } from "../../../utils/colors";
+import { getString } from "../../../utils/locale";
 import { HTML_NS } from "./types";
 import { isDarkMode } from "./ChatPanelTheme";
+import {
+  getToolCallGroupExpandKey,
+  isToolCallGroupExpanded,
+  setToolCallGroupExpanded,
+} from "./ToolCallGroupExpandState";
 
 // Initialize markdown-it with XHTML output
 const md = new MarkdownIt({
@@ -182,6 +188,26 @@ const toolCallStyles = {
   },
 };
 
+type ToolCallCardStatus = "calling" | "completed" | "error";
+
+interface ToolCallCardData {
+  status: ToolCallCardStatus;
+  toolName: string;
+  toolArgs?: string;
+  statusText: string;
+  toolResult?: string;
+}
+
+type ToolCallFragment =
+  | {
+      kind: "markdown";
+      content: string;
+    }
+  | {
+      kind: "tool";
+      entry: ToolCallCardData;
+    };
+
 type SourceGroupType =
   | "paper"
   | "note"
@@ -255,6 +281,282 @@ function summarizeToolCardText(text: string): string {
       .trim(),
     120,
   );
+}
+
+function getToolCardStatusColor(
+  colors: typeof toolCallStyles.light,
+  status: ToolCallCardStatus,
+): string {
+  return status === "calling"
+    ? colors.statusCalling
+    : status === "completed"
+      ? colors.statusDone
+      : colors.statusError;
+}
+
+function parseToolCallFragments(content: string): ToolCallFragment[] {
+  const toolCallRegex =
+    /<tool-call status="(calling|completed|error)">\s*<tool-name>([^<]*)<\/tool-name>\s*(?:<tool-args>([^<]*)<\/tool-args>\s*)?<tool-status>([^<]*)<\/tool-status>\s*(?:<tool-result>([^<]*)<\/tool-result>\s*)?<\/tool-call>/g;
+
+  const fragments: ToolCallFragment[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = toolCallRegex.exec(content)) !== null) {
+    if (match.index > lastIndex) {
+      const markdownBefore = content.slice(lastIndex, match.index);
+      if (markdownBefore.trim()) {
+        fragments.push({
+          kind: "markdown",
+          content: markdownBefore,
+        });
+      }
+    }
+
+    const [, status, toolName, toolArgs, statusText, toolResult] = match;
+
+    fragments.push({
+      kind: "tool",
+      entry: {
+        status: status as ToolCallCardStatus,
+        toolName,
+        toolArgs,
+        statusText,
+        toolResult,
+      },
+    });
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (fragments.length === 0) {
+    return [{ kind: "markdown", content }];
+  }
+
+  if (lastIndex < content.length) {
+    const trailingMarkdown = content.slice(lastIndex);
+    if (trailingMarkdown.trim()) {
+      fragments.push({
+        kind: "markdown",
+        content: trailingMarkdown,
+      });
+    }
+  }
+
+  return fragments;
+}
+
+function buildToolCallCardElement(
+  doc: Document,
+  entry: ToolCallCardData,
+): HTMLElement {
+  const dark = isDarkMode();
+  const colors = dark ? toolCallStyles.dark : toolCallStyles.light;
+  const { status, toolName, toolArgs, statusText, toolResult } = entry;
+  const isError = status === "error";
+  const hasDetails = Boolean(toolArgs || toolResult);
+  const isCompleted = status === "completed";
+  const canToggle = hasDetails && (isCompleted || isError);
+  const summaryText = isError
+    ? summarizeToolCardText(unescapeXml(toolResult || statusText || ""))
+    : "";
+
+  const card = doc.createElementNS(HTML_NS, "div") as HTMLElement;
+  card.style.margin = isError ? "6px 0" : "8px 0";
+  card.style.border = `1px solid ${isError ? colors.statusError : colors.cardBorder}`;
+  card.style.borderRadius = "8px";
+  card.style.background = colors.cardBg;
+  card.style.overflow = "hidden";
+  card.style.fontFamily =
+    '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
+  card.style.fontSize = "12px";
+
+  const header = doc.createElementNS(HTML_NS, "div") as HTMLElement;
+  header.style.display = "flex";
+  header.style.alignItems = "center";
+  header.style.padding = isError ? "7px 10px" : "8px 12px";
+  header.style.background = isError ? colors.cardBg : colors.nameBg;
+  header.style.gap = "8px";
+  if (canToggle) {
+    header.style.cursor = "pointer";
+    header.style.userSelect = "none";
+  }
+
+  let chevron: HTMLElement | null = null;
+  if (canToggle) {
+    chevron = doc.createElementNS(HTML_NS, "span") as HTMLElement;
+    chevron.style.fontSize = "10px";
+    chevron.style.color = colors.argsText;
+    chevron.style.transition = "transform 0.2s";
+    chevron.style.display = "inline-block";
+    chevron.textContent = "▶";
+    header.appendChild(chevron);
+  }
+
+  const textGroup = doc.createElementNS(HTML_NS, "div") as HTMLElement;
+  textGroup.style.display = "flex";
+  textGroup.style.flexDirection = "column";
+  textGroup.style.minWidth = "0";
+  textGroup.style.flex = "1";
+  textGroup.style.gap = "2px";
+
+  const nameEl = doc.createElementNS(HTML_NS, "span") as HTMLElement;
+  nameEl.style.fontWeight = "600";
+  nameEl.style.color = colors.nameText;
+  nameEl.style.minWidth = "0";
+  nameEl.style.overflow = "hidden";
+  nameEl.style.textOverflow = "ellipsis";
+  nameEl.style.whiteSpace = "nowrap";
+  nameEl.textContent = unescapeXml(toolName || "");
+  textGroup.appendChild(nameEl);
+
+  if (summaryText) {
+    const summaryEl = doc.createElementNS(HTML_NS, "div") as HTMLElement;
+    summaryEl.style.fontSize = "10px";
+    summaryEl.style.color = colors.argsText;
+    summaryEl.style.minWidth = "0";
+    summaryEl.style.overflow = "hidden";
+    summaryEl.style.textOverflow = "ellipsis";
+    summaryEl.style.whiteSpace = "nowrap";
+    summaryEl.textContent = summaryText;
+    textGroup.appendChild(summaryEl);
+  }
+  header.appendChild(textGroup);
+
+  const statusEl = doc.createElementNS(HTML_NS, "span") as HTMLElement;
+  statusEl.style.fontSize = "11px";
+  statusEl.style.color = getToolCardStatusColor(colors, status);
+  statusEl.style.fontWeight = "500";
+  statusEl.style.flexShrink = "0";
+  statusEl.textContent = statusText || "";
+  header.appendChild(statusEl);
+
+  card.appendChild(header);
+
+  let detailsContainer: HTMLElement | null = null;
+  if (hasDetails) {
+    detailsContainer = doc.createElementNS(HTML_NS, "div") as HTMLElement;
+    detailsContainer.style.borderTop = `1px solid ${colors.cardBorder}`;
+    detailsContainer.style.display = canToggle ? "none" : "block";
+    detailsContainer.style.overflow = "hidden";
+
+    if (toolArgs) {
+      const argsEl = doc.createElementNS(HTML_NS, "div") as HTMLElement;
+      argsEl.style.padding = "6px 12px";
+      argsEl.style.color = colors.argsText;
+      argsEl.style.fontFamily = '"SF Mono", Monaco, Consolas, monospace';
+      argsEl.style.fontSize = "11px";
+      argsEl.style.borderBottom = toolResult
+        ? `1px solid ${colors.cardBorder}`
+        : "none";
+      argsEl.style.wordBreak = "break-all";
+      argsEl.textContent = unescapeXml(toolArgs);
+      detailsContainer.appendChild(argsEl);
+    }
+
+    if (toolResult) {
+      const resultEl = doc.createElementNS(HTML_NS, "div") as HTMLElement;
+      resultEl.style.padding = "6px 12px";
+      resultEl.style.color = isError ? colors.nameText : colors.resultText;
+      resultEl.style.fontSize = "11px";
+      resultEl.style.background = isError ? colors.cardBg : colors.resultBg;
+      resultEl.style.whiteSpace = "pre-wrap";
+      resultEl.style.wordBreak = "break-word";
+      resultEl.style.maxHeight = "150px";
+      resultEl.style.overflow = "auto";
+      resultEl.textContent = unescapeXml(toolResult);
+      detailsContainer.appendChild(resultEl);
+    }
+
+    card.appendChild(detailsContainer);
+  }
+
+  if (canToggle && chevron && detailsContainer) {
+    let isExpanded = false;
+    const details = detailsContainer;
+    const chev = chevron;
+
+    header.addEventListener("click", () => {
+      isExpanded = !isExpanded;
+      details.style.display = isExpanded ? "block" : "none";
+      chev.style.transform = isExpanded ? "rotate(90deg)" : "rotate(0deg)";
+    });
+
+    header.addEventListener("mouseenter", () => {
+      header.style.background = isError
+        ? dark
+          ? "#1f2937"
+          : "#fef2f2"
+        : dark
+          ? "#2d333b"
+          : "#e6eaef";
+    });
+    header.addEventListener("mouseleave", () => {
+      header.style.background = isError ? colors.cardBg : colors.nameBg;
+    });
+  }
+
+  return card;
+}
+
+/**
+ * Render a run of consecutive tool-call entries. Single entries render as a
+ * plain card. Two or more: the latest entry stays visible, earlier ones fold
+ * into a native `<details>`. Expand state is keyed by `${messageId}#${groupIndex}`
+ * so it survives streaming re-renders.
+ */
+function renderToolCallGroup(
+  doc: Document,
+  parent: HTMLElement,
+  entries: ToolCallCardData[],
+  messageId: string | undefined,
+  groupIndex: number,
+): void {
+  if (entries.length === 1) {
+    parent.appendChild(buildToolCallCardElement(doc, entries[0]));
+    return;
+  }
+
+  const earlier = entries.slice(0, -1);
+  const latest = entries[entries.length - 1];
+  const stateKey = getToolCallGroupExpandKey(messageId, groupIndex);
+  const isOpen = isToolCallGroupExpanded(stateKey);
+
+  const dark = isDarkMode();
+  const colors = dark ? toolCallStyles.dark : toolCallStyles.light;
+
+  const details = doc.createElementNS(HTML_NS, "details") as HTMLDetailsElement;
+  details.style.margin = "6px 0";
+  if (isOpen) {
+    details.setAttribute("open", "");
+  }
+
+  const summary = doc.createElementNS(HTML_NS, "summary") as HTMLElement;
+  summary.style.cursor = "pointer";
+  summary.style.userSelect = "none";
+  summary.style.fontSize = "11px";
+  summary.style.color = colors.argsText;
+  summary.style.padding = "4px 2px";
+  summary.textContent = getString("chat-tool-group-earlier", {
+    args: { count: earlier.length },
+  });
+  details.appendChild(summary);
+
+  const earlierBody = doc.createElementNS(HTML_NS, "div") as HTMLElement;
+  earlierBody.style.paddingLeft = "4px";
+  for (const entry of earlier) {
+    earlierBody.appendChild(buildToolCallCardElement(doc, entry));
+  }
+  details.appendChild(earlierBody);
+
+  if (stateKey !== null) {
+    details.addEventListener("toggle", () => {
+      setToolCallGroupExpanded(stateKey, details.open);
+    });
+  }
+
+  parent.appendChild(details);
+  parent.appendChild(buildToolCallCardElement(doc, latest));
 }
 
 function renderMarkdownFragment(
@@ -475,198 +777,39 @@ function renderToolCallCards(
   doc: Document,
   parent: HTMLElement,
   content: string,
+  messageId: string | undefined,
 ): string {
-  const dark = isDarkMode();
-  const colors = dark ? toolCallStyles.dark : toolCallStyles.light;
+  const fragments = parseToolCallFragments(content);
+  if (fragments.length === 1 && fragments[0].kind === "markdown") {
+    return content;
+  }
 
-  // Regex to match tool-call blocks
-  const toolCallRegex =
-    /<tool-call status="(calling|completed|error)">\s*<tool-name>([^<]*)<\/tool-name>\s*(?:<tool-args>([^<]*)<\/tool-args>\s*)?<tool-status>([^<]*)<\/tool-status>\s*(?:<tool-result>([^<]*)<\/tool-result>\s*)?<\/tool-call>/g;
+  let groupIndex = 0;
+  for (let i = 0; i < fragments.length; ) {
+    const fragment = fragments[i];
+    if (fragment.kind === "markdown") {
+      if (!renderSourceGroupBlocks(doc, parent, fragment.content)) {
+        renderMarkdownFragment(doc, parent, fragment.content);
+      }
+      i++;
+      continue;
+    }
 
-  let lastIndex = 0;
-  let match;
-  let remainingContent = "";
-  let hasToolCards = false;
-
-  while ((match = toolCallRegex.exec(content)) !== null) {
-    hasToolCards = true;
-
-    // Add text before this match as remaining content to render as markdown
-    if (match.index > lastIndex) {
-      renderMarkdownFragment(
-        doc,
-        parent,
-        content.slice(lastIndex, match.index),
+    const entries: ToolCallCardData[] = [];
+    while (i < fragments.length && fragments[i].kind === "tool") {
+      entries.push(
+        (fragments[i] as Extract<ToolCallFragment, { kind: "tool" }>).entry,
       );
+      i++;
     }
 
-    const [, status, toolName, toolArgs, statusText, toolResult] = match;
-    const isError = status === "error";
-    const hasDetails = Boolean(toolArgs || toolResult);
-    const isCompleted = status === "completed";
-    const canToggle = hasDetails && (isCompleted || isError);
-    const summaryText = isError
-      ? summarizeToolCardText(unescapeXml(toolResult || statusText || ""))
-      : "";
-
-    // Create tool call card
-    const card = doc.createElementNS(HTML_NS, "div") as HTMLElement;
-    card.style.margin = isError ? "6px 0" : "8px 0";
-    card.style.border = `1px solid ${isError ? colors.statusError : colors.cardBorder}`;
-    card.style.borderRadius = "8px";
-    card.style.background = colors.cardBg;
-    card.style.overflow = "hidden";
-    card.style.fontFamily =
-      '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
-    card.style.fontSize = "12px";
-
-    // Header row (clickable for expand/collapse)
-    const header = doc.createElementNS(HTML_NS, "div") as HTMLElement;
-    header.style.display = "flex";
-    header.style.alignItems = "center";
-    header.style.padding = isError ? "7px 10px" : "8px 12px";
-    header.style.background = isError ? colors.cardBg : colors.nameBg;
-    header.style.gap = "8px";
-    if (canToggle) {
-      header.style.cursor = "pointer";
-      header.style.userSelect = "none";
+    if (entries.length > 0) {
+      renderToolCallGroup(doc, parent, entries, messageId, groupIndex);
+      groupIndex++;
     }
-
-    // Expand/collapse chevron (only for completed cards with details)
-    let chevron: HTMLElement | null = null;
-    if (canToggle) {
-      chevron = doc.createElementNS(HTML_NS, "span") as HTMLElement;
-      chevron.style.fontSize = "10px";
-      chevron.style.color = colors.argsText;
-      chevron.style.transition = "transform 0.2s";
-      chevron.style.display = "inline-block";
-      chevron.textContent = "▶";
-      header.appendChild(chevron);
-    }
-
-    const textGroup = doc.createElementNS(HTML_NS, "div") as HTMLElement;
-    textGroup.style.display = "flex";
-    textGroup.style.flexDirection = "column";
-    textGroup.style.minWidth = "0";
-    textGroup.style.flex = "1";
-    textGroup.style.gap = "2px";
-
-    const nameEl = doc.createElementNS(HTML_NS, "span") as HTMLElement;
-    nameEl.style.fontWeight = "600";
-    nameEl.style.color = colors.nameText;
-    nameEl.style.minWidth = "0";
-    nameEl.style.overflow = "hidden";
-    nameEl.style.textOverflow = "ellipsis";
-    nameEl.style.whiteSpace = "nowrap";
-    nameEl.textContent = unescapeXml(toolName || "");
-    textGroup.appendChild(nameEl);
-
-    if (summaryText) {
-      const summaryEl = doc.createElementNS(HTML_NS, "div") as HTMLElement;
-      summaryEl.style.fontSize = "10px";
-      summaryEl.style.color = colors.argsText;
-      summaryEl.style.minWidth = "0";
-      summaryEl.style.overflow = "hidden";
-      summaryEl.style.textOverflow = "ellipsis";
-      summaryEl.style.whiteSpace = "nowrap";
-      summaryEl.textContent = summaryText;
-      textGroup.appendChild(summaryEl);
-    }
-    header.appendChild(textGroup);
-
-    // Status badge
-    const statusEl = doc.createElementNS(HTML_NS, "span") as HTMLElement;
-    const statusColor =
-      status === "calling"
-        ? colors.statusCalling
-        : status === "completed"
-          ? colors.statusDone
-          : colors.statusError;
-    statusEl.style.fontSize = "11px";
-    statusEl.style.color = statusColor;
-    statusEl.style.fontWeight = "500";
-    statusEl.style.flexShrink = "0";
-    statusEl.textContent = statusText || "";
-    header.appendChild(statusEl);
-
-    card.appendChild(header);
-
-    // Details container (collapsible)
-    let detailsContainer: HTMLElement | null = null;
-    if (hasDetails) {
-      detailsContainer = doc.createElementNS(HTML_NS, "div") as HTMLElement;
-      detailsContainer.style.borderTop = `1px solid ${colors.cardBorder}`;
-      detailsContainer.style.display = canToggle ? "none" : "block";
-      detailsContainer.style.overflow = "hidden";
-
-      if (toolArgs) {
-        const argsEl = doc.createElementNS(HTML_NS, "div") as HTMLElement;
-        argsEl.style.padding = "6px 12px";
-        argsEl.style.color = colors.argsText;
-        argsEl.style.fontFamily = '"SF Mono", Monaco, Consolas, monospace';
-        argsEl.style.fontSize = "11px";
-        argsEl.style.borderBottom = toolResult
-          ? `1px solid ${colors.cardBorder}`
-          : "none";
-        argsEl.style.wordBreak = "break-all";
-        argsEl.textContent = unescapeXml(toolArgs);
-        detailsContainer.appendChild(argsEl);
-      }
-
-      if (toolResult) {
-        const resultEl = doc.createElementNS(HTML_NS, "div") as HTMLElement;
-        resultEl.style.padding = "6px 12px";
-        resultEl.style.color = isError ? colors.nameText : colors.resultText;
-        resultEl.style.fontSize = "11px";
-        resultEl.style.background = isError ? colors.cardBg : colors.resultBg;
-        resultEl.style.whiteSpace = "pre-wrap";
-        resultEl.style.wordBreak = "break-word";
-        resultEl.style.maxHeight = "150px";
-        resultEl.style.overflow = "auto";
-        resultEl.textContent = unescapeXml(toolResult);
-        detailsContainer.appendChild(resultEl);
-      }
-
-      card.appendChild(detailsContainer);
-    }
-
-    if (canToggle && chevron && detailsContainer) {
-      let isExpanded = false;
-      const details = detailsContainer;
-      const chev = chevron;
-
-      header.addEventListener("click", () => {
-        isExpanded = !isExpanded;
-        details.style.display = isExpanded ? "block" : "none";
-        chev.style.transform = isExpanded ? "rotate(90deg)" : "rotate(0deg)";
-      });
-
-      header.addEventListener("mouseenter", () => {
-        header.style.background = isError
-          ? dark
-            ? "#1f2937"
-            : "#fef2f2"
-          : dark
-            ? "#2d333b"
-            : "#e6eaef";
-      });
-      header.addEventListener("mouseleave", () => {
-        header.style.background = isError ? colors.cardBg : colors.nameBg;
-      });
-    }
-
-    parent.appendChild(card);
-    lastIndex = match.index + match[0].length;
   }
 
-  // Return remaining content after last tool card
-  if (hasToolCards) {
-    remainingContent = content.slice(lastIndex).trim();
-    return remainingContent;
-  }
-
-  // No tool cards found, return original content
-  return content;
+  return "";
 }
 
 /**
@@ -773,13 +916,19 @@ function renderMathFallback(
 export function renderMarkdownToElement(
   element: HTMLElement,
   markdownContent: string,
+  messageId?: string,
 ): void {
   element.textContent = "";
   const doc = element.ownerDocument;
   if (!doc) return;
 
   // First, check for and render tool call cards
-  const remainingContent = renderToolCallCards(doc, element, markdownContent);
+  const remainingContent = renderToolCallCards(
+    doc,
+    element,
+    markdownContent,
+    messageId,
+  );
 
   if (!remainingContent) {
     return;

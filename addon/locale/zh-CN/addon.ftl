@@ -167,6 +167,7 @@ paperchat-unknown = 未知
 paperchat-tool-status-calling = 调用中...
 paperchat-tool-status-done = 完成
 paperchat-tool-status-error = 错误
+paperchat-chat-tool-group-earlier = 展开更早的 { $count } 次调用
 
 # Chat execution banner
 paperchat-chat-banner-running = 运行中

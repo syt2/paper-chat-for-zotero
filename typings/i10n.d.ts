@@ -125,6 +125,7 @@ export type FluentMessageId =
   | 'paperchat-chat-tier-pro'
   | 'paperchat-chat-tier-standard'
   | 'paperchat-chat-toggle-panel-mode'
+  | 'paperchat-chat-tool-group-earlier'
   | 'paperchat-chat-toolbar-button-tooltip'
   | 'paperchat-chat-turn-cancelled'
   | 'paperchat-chat-upload-file'

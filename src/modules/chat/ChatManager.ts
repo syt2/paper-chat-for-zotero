@@ -2180,6 +2180,20 @@ export class ChatManager {
     return card;
   }
 
+  private stripPendingToolCallCards(content: string): string {
+    return content
+      .replace(
+        /\n?<tool-call status="calling">[\s\S]*?<\/tool-call>\n?/g,
+        "\n",
+      )
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+
+  private hasPendingToolCallCards(content: string): boolean {
+    return /<tool-call status="calling">[\s\S]*?<\/tool-call>/.test(content);
+  }
+
   /**
    * 流式 Tool Calling - 边输出边调用工具
    * 实现类似 Claude Code 的效果：实时显示文本和工具调用状态
@@ -2288,7 +2302,8 @@ export class ChatManager {
     const interruptedMessages = session.messages.filter(
       (message) =>
         message.role === "assistant" &&
-        message.streamingState === "in_progress",
+        (message.streamingState === "in_progress" ||
+          this.hasPendingToolCallCards(message.content)),
     );
 
     if (
@@ -2312,7 +2327,10 @@ export class ChatManager {
 
     const now = Date.now();
     for (const message of interruptedMessages) {
-      if (!message.content.trim()) {
+      const cleanedContent = this.stripPendingToolCallCards(message.content);
+      if (cleanedContent) {
+        message.content = cleanedContent;
+      } else {
         message.content = getString("chat-turn-cancelled");
       }
       message.streamingState = "interrupted";

@@ -805,16 +805,36 @@ function setupChatManagerCallbacks(
     },
     onStreamingUpdate: (content, messageId) => {
       if (container) {
+        const activeMessage = manager
+          .getActiveSession()
+          ?.messages.find((message) => message.id === messageId);
+        if (
+          !activeMessage ||
+          activeMessage.role !== "assistant" ||
+          activeMessage.streamingState !== "in_progress"
+        ) {
+          return;
+        }
         const streamingEl = container.querySelector(
           getStreamingContentSelector(messageId),
         );
         if (streamingEl) {
-          renderMarkdownToElement(streamingEl as HTMLElement, content);
+          renderMarkdownToElement(streamingEl as HTMLElement, content, messageId);
         }
       }
     },
     onReasoningUpdate: (reasoning, messageId) => {
       if (container) {
+        const activeMessage = manager
+          .getActiveSession()
+          ?.messages.find((message) => message.id === messageId);
+        if (
+          !activeMessage ||
+          activeMessage.role !== "assistant" ||
+          activeMessage.streamingState !== "in_progress"
+        ) {
+          return;
+        }
         const reasoningEl = container.querySelector(
           getStreamingReasoningSelector(messageId),
         );

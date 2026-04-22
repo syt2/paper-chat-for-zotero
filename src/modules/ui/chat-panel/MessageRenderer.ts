@@ -239,7 +239,7 @@ export function createMessageElement(
   );
 
   const contentAttrs: Record<string, string> = { class: "chat-content" };
-  if (msg.role === "assistant") {
+  if (msg.role === "assistant" && msg.streamingState === "in_progress") {
     contentAttrs["data-streaming-content-for"] = msg.id;
   }
 
@@ -309,7 +309,7 @@ export function createMessageElement(
       // Inject animation keyframes
       injectTypingAnimation(doc);
     } else {
-      renderMarkdownToElement(content, msg.content);
+      renderMarkdownToElement(content, msg.content, msg.id);
     }
   }
 
@@ -342,7 +342,7 @@ export function createMessageElement(
         false,
       );
       bubble.appendChild(reasoningContainer);
-    } else if (isLastAssistant) {
+    } else if (isLastAssistant && msg.streamingState === "in_progress") {
       // Streaming placeholder - hidden by default, shown when reasoning arrives
       const reasoningContainer = createReasoningContainer(doc, theme, "", true);
       reasoningContainer.setAttribute(
@@ -1331,7 +1331,7 @@ export function updateStreamingContent(
     getStreamingContentSelector(messageId),
   );
   if (streamingEl) {
-    renderMarkdownToElement(streamingEl as HTMLElement, content);
+    renderMarkdownToElement(streamingEl as HTMLElement, content, messageId);
   }
 }
 
