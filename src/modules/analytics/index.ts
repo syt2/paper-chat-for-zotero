@@ -18,7 +18,7 @@ export type {
 export { ANALYTICS_EVENTS, type AnalyticsEventName } from "./events";
 
 const ANALYTICS_ENABLED = true;
-const ANALYTICS_APP_KEY = "A-SH-6952478977";
+const ANALYTICS_APP_KEY = "A-SH-9454265759";
 const ANALYTICS_HOST = "https://aptabase.zotero.store";
 const ANALYTICS_SDK_VERSION = "paper-chat-analytics/1";
 
