@@ -253,7 +253,7 @@ export function savePaperchatConfig(doc: Document): void {
 
   const state = loadTierState();
   state.selectedTier =
-    (tierSelect?.value as PaperChatTier | "") || "paperchat-standard";
+    (tierSelect?.value as PaperChatTier | "") || "paperchat-pro";
 
   for (const tier of PAPERCHAT_TIERS) {
     const select = doc.getElementById(
