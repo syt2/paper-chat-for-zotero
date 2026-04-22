@@ -877,6 +877,31 @@ function updateSendButtonPresentation(
     return;
   }
 
+  if (icon.tagName.toLowerCase() === "img") {
+    const imageIcon = icon as HTMLElement;
+    if (isRunning) {
+      imageIcon.removeAttribute("src");
+      imageIcon.style.display = "flex";
+      imageIcon.style.alignItems = "center";
+      imageIcon.style.justifyContent = "center";
+      imageIcon.style.width = "12px";
+      imageIcon.style.height = "12px";
+      imageIcon.style.background = "currentColor";
+      imageIcon.style.borderRadius = "2px";
+    } else {
+      imageIcon.setAttribute(
+        "src",
+        `chrome://${config.addonRef}/content/icons/send.svg`,
+      );
+      imageIcon.style.display = "block";
+      imageIcon.style.width = "16px";
+      imageIcon.style.height = "16px";
+      imageIcon.style.background = "";
+      imageIcon.style.borderRadius = "";
+    }
+    return;
+  }
+
   icon.textContent = isRunning ? "■" : "↑";
   icon.style.fontSize = isRunning ? "12px" : "16px";
   icon.style.fontWeight = "700";

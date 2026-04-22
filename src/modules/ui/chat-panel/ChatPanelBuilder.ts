@@ -672,17 +672,15 @@ export function createChatContainer(
   // Arrow up icon
   const sendIcon = createElement(
     doc,
-    "span",
+    "img",
     {
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      fontSize: "16px",
-      fontWeight: "bold",
+      width: "16px",
+      height: "16px",
+      display: "block",
     },
-    { id: "chat-send-icon" },
-  );
-  sendIcon.textContent = "↑";
+    { id: "chat-send-icon", alt: "" },
+  ) as HTMLImageElement;
+  sendIcon.src = `chrome://${config.addonRef}/content/icons/send.svg`;
   sendButton.appendChild(sendIcon);
 
   inputBottomBar.appendChild(leftContainer);
