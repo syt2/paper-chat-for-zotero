@@ -16,6 +16,14 @@ import { formatModelLabel, getModelRatios } from "./ModelsFetcher";
 import { clearElement } from "./utils";
 import { isEmbeddingModel } from "../embedding/providers/PaperChatEmbedding";
 import { getString } from "../../utils/locale";
+import {
+  renderPaperChatNotice,
+  syncPaperChatNoticeDebugUI,
+} from "./PaperChatNoticeRenderer";
+import {
+  clearPaperChatNoticeDebugOverride,
+  setPaperChatNoticeDebugOverride,
+} from "../providers/PaperChatNoticeService";
 
 const TIER_MODEL_SELECTORS: Record<PaperChatTier, string> = {
   "paperchat-lite": "pref-paperchat-lite-model",
@@ -148,6 +156,9 @@ export function populatePaperchatPanel(doc: Document): void {
   ) as PaperChatProviderConfig;
 
   if (!config) return;
+
+  renderPaperChatNotice(doc);
+  syncPaperChatNoticeDebugUI(doc);
 
   // Populate tier selector and per-tier override dropdowns
   populatePaperchatModels(doc);
@@ -288,5 +299,31 @@ export function bindPaperchatEvents(
   paperchatRefreshBtn?.addEventListener("click", async () => {
     ztoolkit.log("[Preferences] Refresh models button clicked");
     await onRefreshModels();
+  });
+
+  const noticeDebugApplyBtn = doc.getElementById(
+    "pref-paperchat-notice-debug-apply",
+  ) as HTMLButtonElement | null;
+  const noticeDebugClearBtn = doc.getElementById(
+    "pref-paperchat-notice-debug-clear",
+  ) as HTMLButtonElement | null;
+  const noticeDebugInput = doc.getElementById(
+    "pref-paperchat-notice-debug-input",
+  ) as HTMLTextAreaElement | null;
+
+  noticeDebugApplyBtn?.addEventListener("click", () => {
+    const content = noticeDebugInput?.value || "";
+    const applied = setPaperChatNoticeDebugOverride(content);
+    if (!applied) {
+      clearPaperChatNoticeDebugOverride();
+    }
+    renderPaperChatNotice(doc);
+    syncPaperChatNoticeDebugUI(doc);
+  });
+
+  noticeDebugClearBtn?.addEventListener("click", () => {
+    clearPaperChatNoticeDebugOverride();
+    renderPaperChatNotice(doc);
+    syncPaperChatNoticeDebugUI(doc);
   });
 }

@@ -41,6 +41,7 @@ import type {
   ToolPermissionRiskLevel,
 } from "../../types/tool";
 import { ANALYTICS_EVENTS, getAnalyticsService } from "../analytics";
+import { refreshPaperChatNoticeUI } from "./PaperChatNoticeRenderer";
 
 // Current selected provider ID
 let currentProviderId: string = "paperchat";
@@ -88,6 +89,8 @@ export async function initializePrefsUI(): Promise<void> {
     trackProviderView: true,
     providerViewSource: "settings_opened",
   });
+
+  void refreshPaperChatNoticeUI(doc);
 }
 
 function resolveCurrentProviderId(

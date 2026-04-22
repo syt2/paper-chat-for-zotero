@@ -48,6 +48,7 @@ import {
 import { loadCachedRatios } from "../../preferences/ModelsFetcher";
 import { Guide } from "../Guide";
 import { ANALYTICS_EVENTS, getAnalyticsService } from "../../analytics";
+import { refreshPaperChatNotice } from "../../providers/PaperChatNoticeService";
 
 // Panel display mode: 'sidebar' or 'floating'
 export type PanelMode = "sidebar" | "floating";
@@ -918,6 +919,10 @@ export function showPanel(source: ChatPanelOpenSource = "unknown"): void {
     return;
   } else {
     updateToolbarButtonState(true);
+  }
+
+  if (getProviderManager().getActiveProviderId() === "paperchat") {
+    void refreshPaperChatNotice();
   }
 
   panelVisibleSince = Date.now();

@@ -34,6 +34,78 @@
           style="margin-bottom: 12px; color: #666"
         ></label>
 
+        <html:details
+          id="pref-paperchat-notice-wrap"
+          style="margin-top: 12px; margin-bottom: 12px"
+        >
+          <html:summary
+            data-l10n-id="pref-paperchat-notice-title"
+            style="cursor: pointer; font-weight: bold; margin-bottom: 8px"
+          ></html:summary>
+          <html:div
+            style="
+              border: 1px solid var(--color-border, #ddd);
+              border-radius: 8px;
+              background: color-mix(in srgb, var(--material-sidepane, #fff) 92%, #6366f1 8%);
+              overflow: hidden;
+            "
+          >
+            <html:div
+              id="pref-paperchat-notice-scroll"
+              style="
+              height: 60px;
+              overflow-y: auto;
+              padding: 6px 10px;
+              line-height: 1.6;
+            "
+            ></html:div>
+          </html:div>
+        </html:details>
+
+        <html:details
+          id="pref-paperchat-notice-debug-wrap"
+          hidden="true"
+          style="margin-top: 8px; margin-bottom: 12px"
+        >
+          <html:summary
+            data-l10n-id="pref-paperchat-notice-debug-title"
+            style="cursor: pointer; font-weight: bold; margin-bottom: 8px"
+          ></html:summary>
+          <label
+            data-l10n-id="pref-paperchat-notice-debug-description"
+            style="display: block; margin: 8px 0; color: #666"
+          ></label>
+          <html:textarea
+            id="pref-paperchat-notice-debug-input"
+            style="
+              width: 100%;
+              min-height: 120px;
+              resize: vertical;
+              box-sizing: border-box;
+              margin-bottom: 8px;
+              font-family: monospace;
+              font-size: 12px;
+            "
+          ></html:textarea>
+          <hbox align="center" style="gap: 8px; margin-bottom: 6px">
+            <button
+              id="pref-paperchat-notice-debug-apply"
+              data-l10n-id="pref-paperchat-notice-debug-apply"
+              style="cursor: pointer"
+            ></button>
+            <button
+              id="pref-paperchat-notice-debug-clear"
+              data-l10n-id="pref-paperchat-notice-debug-clear"
+              style="cursor: pointer"
+            ></button>
+          </hbox>
+          <label
+            id="pref-paperchat-notice-debug-status"
+            hidden="true"
+            style="display: block; font-size: 12px; color: #c05621"
+          ></label>
+        </html:details>
+
         <hbox
           id="pref-user-bar"
           align="center"
