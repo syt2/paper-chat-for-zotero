@@ -72,7 +72,10 @@ export class PaperChatProvider implements AIProvider {
       baseUrl: BUILTIN_PROVIDERS.paperchat.defaultBaseUrl,
       defaultModel: model,
       availableModels,
-      maxTokens: this._config.maxTokens || 4096,
+      maxTokens:
+        typeof this._config.maxTokens === "number" && this._config.maxTokens > 0
+          ? this._config.maxTokens
+          : undefined,
       temperature: this._config.temperature ?? 0.7,
       systemPrompt: this._config.systemPrompt || "",
     };

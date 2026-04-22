@@ -54,6 +54,16 @@ const TIER_LABEL_KEYS: Record<PaperChatTier, string> = {
   "paperchat-pro": "pref-paperchat-tier-pro",
 };
 
+function parseOptionalPositiveInt(value: string | undefined): number | undefined {
+  const trimmed = value?.trim() || "";
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 function syncTierSelectorLabels(doc: Document): void {
   const tierSelect = doc.getElementById(
     "pref-paperchat-tier",
@@ -174,7 +184,12 @@ export function populatePaperchatPanel(doc: Document): void {
     "pref-paperchat-systemprompt",
   ) as HTMLTextAreaElement;
 
-  if (maxTokensEl) maxTokensEl.value = String(config.maxTokens || 4096);
+  if (maxTokensEl) {
+    maxTokensEl.value =
+      typeof config.maxTokens === "number" && config.maxTokens > 0
+        ? String(config.maxTokens)
+        : "";
+  }
   if (temperatureEl) temperatureEl.value = String(config.temperature ?? 0.7);
   if (systemPromptEl) systemPromptEl.value = config.systemPrompt || "";
 }
@@ -261,7 +276,7 @@ export function savePaperchatConfig(doc: Document): void {
   ).modelId;
   providerManager.updateProviderConfig("paperchat", {
     defaultModel: resolvedDefaultModel || undefined,
-    maxTokens: parseInt(maxTokensEl?.value) || 4096,
+    maxTokens: parseOptionalPositiveInt(maxTokensEl?.value),
     temperature: parseFloat(temperatureEl?.value) || 0.7,
     systemPrompt: systemPromptEl?.value || "",
   });

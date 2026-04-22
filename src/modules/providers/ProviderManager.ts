@@ -449,6 +449,8 @@ const RETRYABLE_ERROR_PATTERNS = [
   /insufficient.?quota/i,
 ];
 
+const LEGACY_PAPERCHAT_DEFAULT_MAX_TOKENS = new Set([4096]);
+
 export class ProviderManager {
   private providers: Map<string, AIProvider> = new Map();
   private activeProviderId: string = "paperchat";
@@ -513,10 +515,14 @@ export class ProviderManager {
         }
 
         this.activeProviderId = data.activeProviderId || "paperchat";
-        this.configs = providers;
+        const { configs, changed } = this.normalizeLoadedConfigs(providers);
+        this.configs = configs;
         // Load fallback config
         if (data.fallbackConfig) {
           this.fallbackConfig = { ...DEFAULT_FALLBACK_CONFIG, ...data.fallbackConfig };
+        }
+        if (changed) {
+          this.saveToPrefs();
         }
         ztoolkit.log(
           "[ProviderManager] Loaded configs:",
@@ -562,7 +568,6 @@ export class ProviderManager {
         order: 0,
         defaultModel: BUILTIN_PROVIDERS.paperchat.defaultModels[0],
         availableModels: BUILTIN_PROVIDERS.paperchat.defaultModels,
-        maxTokens: 4096,
         temperature: 0.7,
         systemPrompt: "",
       } as PaperChatProviderConfig,
@@ -596,6 +601,33 @@ export class ProviderManager {
     });
 
     return configs;
+  }
+
+  private normalizeLoadedConfigs(providers: ProviderConfig[]): {
+    configs: ProviderConfig[];
+    changed: boolean;
+  } {
+    let changed = false;
+    const configs = providers.map((provider) => {
+      if (provider.id !== "paperchat" || provider.type !== "paperchat") {
+        return provider;
+      }
+
+      const paperchat = { ...provider } as PaperChatProviderConfig;
+      const maxTokens = paperchat.maxTokens;
+      const shouldClearMaxTokens =
+        maxTokens === undefined ||
+        maxTokens === null ||
+        maxTokens <= 0 ||
+        LEGACY_PAPERCHAT_DEFAULT_MAX_TOKENS.has(maxTokens);
+      if (shouldClearMaxTokens && "maxTokens" in paperchat) {
+        delete paperchat.maxTokens;                                                                                    
+        changed = true;                           
+      }                                                                                                                
+      return paperchat;
+    });
+
+    return { configs, changed };
   }
 
   /**

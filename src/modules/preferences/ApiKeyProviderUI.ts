@@ -49,7 +49,7 @@ export function populateApiKeyPanel(
   if (apikeyEl) apikeyEl.value = config.apiKey || "";
   if (baseurlEl)
     baseurlEl.value = config.baseUrl || metadata?.defaultBaseUrl || "";
-  if (maxTokensEl) maxTokensEl.value = String(config.maxTokens || 4096);
+  if (maxTokensEl) maxTokensEl.value = String(config.maxTokens || 8192);
   if (temperatureEl) temperatureEl.value = String(config.temperature ?? 0.7);
   if (systemPromptEl) systemPromptEl.value = config.systemPrompt || "";
 
@@ -261,7 +261,7 @@ export function saveCurrentProviderConfig(
     apiKey,
     baseUrl: baseurlEl?.value || "",
     defaultModel: modelSelect?.value || "",
-    maxTokens: parseInt(maxTokensEl?.value) || 4096,
+    maxTokens: parseInt(maxTokensEl?.value) || 8192,
     temperature: parseFloat(temperatureEl?.value) || 0.7,
     systemPrompt: systemPromptEl?.value || "",
   };
