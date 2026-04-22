@@ -7,7 +7,6 @@ import { normalizeAgentMaxPlanningIterations } from "../agent-runtime/IterationL
 const CURRENT_PAPER_TARGET = "__current_paper__";
 const MAX_FULL_TEXT_CEILING = 3;
 const MAX_WEB_SEARCH_CEILING = 8;
-
 const NARROW_PAPER_TOOLS = new Set([
   "get_paper_section",
   "search_paper_content",
@@ -114,19 +113,23 @@ export function applyToolBudgetPolicy(
         },
       });
     }
-    if (!state.narrowPaperTargets.has(targetKey)) {
-      return createBudgetBlockedResult(toolCall, args, {
+    if (
+      state.getFullTextCalls >= 1 &&
+      !state.narrowPaperTargets.has(targetKey)
+    ) {
+      return createEvidenceRequiredResult(toolCall, args, {
         summary:
-          "Blocked get_full_text until a narrower paper tool has been used for the same target.",
+          "Blocked get_full_text because repeated full-text fetches need narrower evidence for the same target.",
         cause:
-          "Use narrower tools first before calling get_full_text in the current turn.",
+          "After the first get_full_text call in a turn, another full-text fetch requires narrower paper evidence for that target.",
         suggestedFix:
-          "Call get_paper_section, search_paper_content, get_pages, or another narrower paper tool first, then request full text only if it is still necessary.",
+          "Use get_paper_section, search_paper_content, get_pages, get_outline, list_sections, get_page_count, or get_paper_metadata for this target first, then retry get_full_text if it is still necessary.",
         saferAlternative:
-          "Use targeted paper tools, metadata, notes, or annotations instead of full text.",
+          "Continue with narrower paper tools or synthesize from the evidence already gathered.",
         data: {
           tool: toolName,
           targetKey,
+          getFullTextCalls: state.getFullTextCalls,
           narrowPaperTargets: [...state.narrowPaperTargets],
         },
       });
@@ -220,6 +223,44 @@ function createBudgetBlockedResult(
   };
 }
 
+function createEvidenceRequiredResult(
+  toolCall: ToolCall,
+  args: Record<string, unknown> | null,
+  options: {
+    summary: string;
+    cause: string;
+    suggestedFix: string;
+    saferAlternative: string;
+    data?: Record<string, unknown>;
+  },
+): ToolExecutionResult {
+  return {
+    toolCall,
+    args: args || undefined,
+    metadata: getToolRuntimeMetadata(toolCall.function.name) || undefined,
+    policyTrace: [
+      {
+        stage: "planner",
+        policy: "budget_block",
+        outcome: "blocked",
+        summary: options.summary,
+        detail: options.cause,
+        data: options.data,
+      },
+    ],
+    status: "failed",
+    content: formatToolError({
+      summary: `Additional evidence required before retrying ${toolCall.function.name}.`,
+      category: "evidence_required",
+      retryable: false,
+      cause: options.cause,
+      suggestedFix: options.suggestedFix,
+      saferAlternative: options.saferAlternative,
+    }),
+    error: options.cause,
+  };
+}
+
 function shouldCountResultTowardBudget(result: ToolExecutionResult): boolean {
   if (result.status === "denied") {
     return false;
@@ -231,6 +272,7 @@ function shouldCountResultTowardBudget(result: ToolExecutionResult): boolean {
     parsed?.category === "invalid_arguments" ||
     parsed?.category === "permission_denied" ||
     parsed?.category === "budget_exhausted" ||
+    parsed?.category === "evidence_required" ||
     summary.startsWith("Repeated unchanged tool call blocked")
   ) {
     return false;

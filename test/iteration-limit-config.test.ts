@@ -1,4 +1,5 @@
 import { assert } from "chai";
+import type { ToolExecutionResult } from "../src/types/tool";
 
 describe("IterationLimitConfig", function () {
   it("clamps finite values into the [min, max] range", async function () {
@@ -103,5 +104,48 @@ describe("ToolBudgetLimits", function () {
     const fromNaN = getToolBudgetLimits(Number.NaN);
     const fromDefault = getToolBudgetLimits(15);
     assert.deepEqual(fromNaN, fromDefault);
+  });
+
+  it("does not count evidence_required get_full_text blocks toward the full-text budget", async function () {
+    const { createToolBudgetState } = await import(
+      "../src/modules/chat/tool-budget/ToolBudgetPolicy.ts"
+    );
+
+    const previousResults: ToolExecutionResult[] = [
+      {
+        toolCall: {
+          id: "tool-fulltext-1",
+          type: "function",
+          function: {
+            name: "get_full_text",
+            arguments: JSON.stringify({ itemKey: "ITEM-1" }),
+          },
+        },
+        args: { itemKey: "ITEM-1" },
+        status: "completed",
+        content: "Full text content",
+      },
+      {
+        toolCall: {
+          id: "tool-fulltext-2",
+          type: "function",
+          function: {
+            name: "get_full_text",
+            arguments: JSON.stringify({ itemKey: "ITEM-1" }),
+          },
+        },
+        args: { itemKey: "ITEM-1" },
+        status: "failed",
+        content: [
+          "Error: Additional evidence required before retrying get_full_text.",
+          "Category: evidence_required",
+          "Retryable: no",
+          "Cause: After the first get_full_text call in a turn, another full-text fetch requires narrower paper evidence for that target.",
+        ].join("\n"),
+      },
+    ];
+
+    const state = createToolBudgetState(previousResults);
+    assert.equal(state.getFullTextCalls, 1);
   });
 });

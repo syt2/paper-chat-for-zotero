@@ -7,6 +7,7 @@ export type ToolErrorCategory =
   | "invalid_arguments"
   | "permission_denied"
   | "budget_exhausted"
+  | "evidence_required"
   | "missing_context"
   | "not_found"
   | "unavailable"
@@ -105,7 +106,6 @@ function inferToolError(
   if (
     /budget exhausted/i.test(message) ||
     /high-cost tool limit/i.test(message) ||
-    /use narrower tools first/i.test(message) ||
     /similar web_search query already used/i.test(message)
   ) {
     return {
@@ -115,12 +115,29 @@ function inferToolError(
       cause: message,
       suggestedFix:
         toolName === "get_full_text"
-          ? "Use narrower paper tools first, or wait for a new user turn before requesting full text again."
+          ? "Use the full-text result already gathered in this turn, or wait for a new user turn before requesting full text again."
           : "Use the existing search results, narrow the question, or wait for a new user turn before searching again.",
       saferAlternative:
         toolName === "web_search"
           ? "Use Zotero library tools or synthesize from results already gathered in this turn."
           : "Use targeted section, page, metadata, notes, or annotation tools instead of full text.",
+    };
+  }
+
+  if (
+    /additional evidence required/i.test(message) ||
+    /repeated full-text fetches need narrower evidence/i.test(message) ||
+    /requires narrower paper evidence/i.test(message)
+  ) {
+    return {
+      summary: `Additional evidence required for ${toolName}.`,
+      category: "evidence_required",
+      retryable: false,
+      cause: message,
+      suggestedFix:
+        "Use a narrower paper tool for the same target first, then retry only if full text is still necessary.",
+      saferAlternative:
+        "Continue with section, page, outline, metadata, notes, or annotation tools instead of another full-text fetch.",
     };
   }
 

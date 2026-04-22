@@ -80,7 +80,7 @@ describe("agent trace eval harness", function () {
     assertToolResultContains(result, "web_search", "permission_denied");
   });
 
-  it("replans after get_full_text is budget-blocked and uses a narrower paper tool", async function () {
+  it("replans after repeated get_full_text needs narrower evidence and uses a narrower paper tool", async function () {
     const result = await runAgentTraceScenario({
       userContent: "Read the full paper and tell me the method.",
       rounds: [
@@ -93,19 +93,11 @@ describe("agent trace eval harness", function () {
           ],
         },
         {
-          content: "Full text is too expensive first, so I will search the method section.",
-          expectMessages: (messages) => {
-            const recovery = messages.find(
-              (message) =>
-                message.role === "system" &&
-                message.content.includes("budget_exhausted"),
-            );
-            assert.isDefined(recovery);
-            assert.include(recovery?.content || "", "Suggested tools");
-            assert.include(recovery?.content || "", "search_paper_content");
-            assert.include(recovery?.content || "", "get_paper_section");
-          },
+          content: "I should narrow down the evidence before fetching full text again, so I will search the method section.",
           toolCalls: [
+            createToolCall("tool-full-2", "get_full_text", {
+              itemKey: "ITEM-1",
+            }),
             createToolCall("tool-search-1", "search_paper_content", {
               itemKey: "ITEM-1",
               query: "method",
@@ -114,9 +106,26 @@ describe("agent trace eval harness", function () {
         },
         {
           content: "The method is described in the local paper search results.",
+          expectMessages: (messages) => {
+            const recovery = messages.find(
+              (message) =>
+                message.role === "system" &&
+                message.content.includes("evidence_required"),
+            );
+            assert.isDefined(recovery);
+            assert.include(recovery?.content || "", "Suggested tools");
+            assert.include(recovery?.content || "", "search_paper_content");
+            assert.include(recovery?.content || "", "get_paper_section");
+          },
         },
       ],
       executeTool: (toolCall, args) => {
+        if (toolCall.function.name === "get_full_text") {
+          assert.deepEqual(args, {
+            itemKey: "ITEM-1",
+          });
+          return "Full text content";
+        }
         if (toolCall.function.name === "search_paper_content") {
           assert.deepEqual(args, {
             itemKey: "ITEM-1",
@@ -130,26 +139,39 @@ describe("agent trace eval harness", function () {
 
     assertTraceContainsSequence(result, [
       "turn_started:Read the full paper and tell me the method.",
+      "tool_started:get_full_text",
+      "tool_completed:get_full_text:completed",
       "tool_completed:get_full_text:failed",
       "tool_started:search_paper_content",
       "tool_completed:search_paper_content:completed",
       /^turn_completed:I will fetch the full paper text\./,
     ]);
     assert.deepEqual(getToolCompletionStatuses(result), [
+      "get_full_text:completed",
       "get_full_text:failed",
       "search_paper_content:completed",
     ]);
     assert.includeMembers(getToolCompletionPolicies(result), [
+      "get_full_text:completed:executor:none",
       "get_full_text:failed:planner:budget_block",
       "search_paper_content:completed:executor:none",
     ]);
-    assertExecutedTools(result, ["search_paper_content"]);
+    assertExecutedTools(result, ["get_full_text", "search_paper_content"]);
     assertExecutionPlanTerminalState(result, "completed", "Compose final answer");
-    assertRecoveryNoticeIncludes(result, "budget_exhausted", [
+    assertRecoveryNoticeIncludes(result, "evidence_required", [
       "search_paper_content",
       "get_paper_section",
     ]);
-    assertToolResultContains(result, "get_full_text", "Use narrower tools first");
+    const blockedFullTextResult = result.session.toolExecutionState?.results.find(
+      (entry) =>
+        entry.toolCall.function.name === "get_full_text" &&
+        entry.status === "failed",
+    );
+    assert.isDefined(blockedFullTextResult);
+    assert.include(
+      blockedFullTextResult?.content || "",
+      "requires narrower paper evidence",
+    );
   });
 
   it("surfaces a denied write tool in the trace and still completes the turn", async function () {

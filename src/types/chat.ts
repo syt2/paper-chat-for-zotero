@@ -233,6 +233,7 @@ export interface AgentRuntimeToolCompletedEvent extends AgentRuntimeEventBase {
     | "invalid_arguments"
     | "permission_denied"
     | "budget_exhausted"
+    | "evidence_required"
     | "missing_context"
     | "not_found"
     | "unavailable"

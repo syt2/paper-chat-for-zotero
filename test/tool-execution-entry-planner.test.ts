@@ -116,7 +116,7 @@ describe("tool execution entry planner", function () {
     }
   });
 
-  it("blocks get_full_text until a narrower paper tool has been used in the turn", async function () {
+  it("allows the first get_full_text call in a turn", async function () {
     const { planToolExecutionEntries } = await import(
       "../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts"
     );
@@ -131,10 +131,42 @@ describe("tool execution entry planner", function () {
     });
 
     assert.lengthOf(entries, 1);
+    assert.equal(entries[0].kind, "execute");
+    if (entries[0].kind === "execute") {
+      assert.lengthOf(entries[0].requests, 1);
+      assert.equal(entries[0].requests[0].toolCall.id, "tool-1");
+      assert.equal(entries[0].requests[0].toolCall.function.name, "get_full_text");
+    }
+  });
+
+  it("blocks repeated get_full_text calls until a narrower paper tool has been used for the same target", async function () {
+    const { planToolExecutionEntries } = await import(
+      "../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts"
+    );
+
+    const previousResults: ToolExecutionResult[] = [
+      {
+        toolCall: createToolCall("tool-fulltext-1", "ITEM-1", "get_full_text"),
+        args: { itemKey: "ITEM-1" },
+        status: "completed",
+        content: "Full text content",
+      },
+    ];
+
+    const entries = planToolExecutionEntries({
+      sessionId: "session-1",
+      assistantMessage,
+      toolCalls: [createToolCall("tool-2", "ITEM-1", "get_full_text")],
+      previousResults,
+      createExecutionBatches: (requests) => [requests],
+      budgetLimits: DEFAULT_TEST_BUDGET,
+    });
+
+    assert.lengthOf(entries, 1);
     assert.equal(entries[0].kind, "synthetic");
     if (entries[0].kind === "synthetic") {
-      assert.include(entries[0].results[0].content, "Category: budget_exhausted");
-      assert.include(entries[0].results[0].content, "Use narrower tools first");
+      assert.include(entries[0].results[0].content, "Category: evidence_required");
+      assert.include(entries[0].results[0].content, "requires narrower paper evidence");
       assert.deepInclude(entries[0].results[0].policyTrace?.[0], {
         stage: "planner",
         policy: "budget_block",

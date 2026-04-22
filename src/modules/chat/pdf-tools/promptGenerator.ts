@@ -159,7 +159,7 @@ The "key" is the Zotero item key - use it directly when referring to prior evide
 - search_with_regex: Advanced search with regex and context
 - get_outline: Get document outline/TOC
 - list_sections: List all available sections
-- get_full_text: [HIGH TOKEN COST] Full paper text when narrower paper tools are insufficient
+- get_full_text: [HIGH TOKEN COST] Full paper text when full-document evidence is necessary; after the first full-text fetch in a turn, further full-text fetches require narrower evidence for that target
 
 === ZOTERO LIBRARY TOOLS ===
 ${webSearchLine}

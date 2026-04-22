@@ -118,6 +118,10 @@ export function deriveRecoveryCategory(
     return "budget_exhausted";
   }
 
+  if (parsed?.category === "evidence_required") {
+    return "evidence_required";
+  }
+
   return parsed?.category || "unspecified";
 }
 
@@ -165,10 +169,17 @@ function getDirectiveTemplate(
       return {
         immediateAction:
           toolName === "get_full_text"
-            ? "Do not call get_full_text again in this turn. Use narrower paper tools or the evidence already collected."
+            ? "Do not call get_full_text again in this turn. Use the evidence already collected or continue without full text."
             : "Do not spend more web-search budget in this turn. Use the results already gathered or pivot to local tools.",
         planningInstruction:
           "For budget-exhausted tools, treat the runtime limit as final for this turn. Replan with narrower or cheaper tools instead of retrying.",
+      };
+    case "evidence_required":
+      return {
+        immediateAction:
+          "Before another get_full_text call in this turn, gather narrower evidence for the same target with section/search/page/outline tools.",
+        planningInstruction:
+          "For repeated full-text fetches, first collect targeted evidence for that same paper or target, then retry full text only if the narrower evidence is still insufficient.",
       };
     case "missing_context":
       return {
@@ -222,7 +233,9 @@ function getDefaultAlternative(
     case "budget_exhausted":
       return toolName === "web_search"
         ? "Use Zotero library tools or the current-turn web results instead of another search."
-        : "Use narrower paper tools or synthesize from the evidence already gathered.";
+        : "Use the evidence already gathered or synthesize without another full-text fetch.";
+    case "evidence_required":
+      return "Use narrower paper tools on the same target before another full-text fetch.";
     case "missing_context":
       return "Use metadata, notes, annotations, or library search first.";
     case "not_found":
@@ -280,6 +293,16 @@ function getRecommendedTools(
             "get_item_metadata",
             "get_item_notes",
           ]);
+    case "evidence_required":
+      return [
+        "get_paper_section",
+        "search_paper_content",
+        "get_pages",
+        "get_outline",
+        "list_sections",
+        "get_page_count",
+        "get_paper_metadata",
+      ];
     case "unavailable":
       return toolName === "web_search"
         ? ["search_items", "search_notes", "list_all_items"]
