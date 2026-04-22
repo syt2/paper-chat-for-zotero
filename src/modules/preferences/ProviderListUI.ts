@@ -13,6 +13,7 @@ import type {
 import { clearElement } from "./utils";
 import { populatePaperchatPanel } from "./PaperchatProviderUI";
 import { populateApiKeyPanel } from "./ApiKeyProviderUI";
+import { collapsePaperChatNotice } from "./PaperChatNoticeRenderer";
 import { ANALYTICS_EVENTS, getAnalyticsService } from "../analytics";
 import { isPaperChatLowBalance } from "./UserAuthUI";
 
@@ -183,6 +184,7 @@ export function selectProvider(
     // Load PaperChat settings
     populatePaperchatPanel(doc);
   } else {
+    collapsePaperChatNotice(doc);
     paperchatPanel?.setAttribute("hidden", "true");
     apikeyPanel?.removeAttribute("hidden");
 

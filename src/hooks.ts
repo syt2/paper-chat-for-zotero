@@ -1,5 +1,8 @@
 import { getString, initLocale } from "./utils/locale";
-import { registerPrefsScripts } from "./modules/preferences";
+import {
+  registerPrefsScripts,
+  togglePaperChatNoticeUI,
+} from "./modules/preferences";
 import { createZToolkit } from "./utils/ztoolkit";
 import { registerToolbarButton, unregisterChatPanel, togglePanel } from "./modules/ui";
 import { getAuthManager, destroyAuthManager } from "./modules/auth";
@@ -171,6 +174,9 @@ async function onPrefsEvent(type: string, data: { [key: string]: unknown }) {
   switch (type) {
     case "load":
       registerPrefsScripts(data.window as Window);
+      break;
+    case "paperchat-notice-toggle":
+      togglePaperChatNoticeUI(data.window as Window);
       break;
     default:
       return;

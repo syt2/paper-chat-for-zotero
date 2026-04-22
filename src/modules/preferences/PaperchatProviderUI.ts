@@ -17,6 +17,7 @@ import { clearElement } from "./utils";
 import { isEmbeddingModel } from "../embedding/providers/PaperChatEmbedding";
 import { getString } from "../../utils/locale";
 import {
+  bindPaperChatNoticeEvents,
   renderPaperChatNotice,
   syncPaperChatNoticeDebugUI,
 } from "./PaperChatNoticeRenderer";
@@ -167,6 +168,7 @@ export function populatePaperchatPanel(doc: Document): void {
 
   if (!config) return;
 
+  bindPaperChatNoticeEvents(doc);
   renderPaperChatNotice(doc);
   syncPaperChatNoticeDebugUI(doc);
 

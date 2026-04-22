@@ -10,6 +10,7 @@ import {
   bindPrefEvents,
   refreshPrefsUI as refreshPrefsUIState,
 } from "./PreferencesManager";
+import { togglePaperChatNotice } from "./PaperChatNoticeRenderer";
 import type { PrefsRefreshOptions } from "./types";
 
 /**
@@ -32,4 +33,8 @@ export async function refreshPrefsUI(
   }
 
   await refreshPrefsUIState(options);
+}
+
+export function togglePaperChatNoticeUI(window: Window): void {
+  togglePaperChatNotice(window.document);
 }
