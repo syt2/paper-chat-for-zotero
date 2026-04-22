@@ -34,7 +34,8 @@ export interface AnalyticsServiceOptions {
   sessionTimeoutMs?: number;
   getLocale?: () => string;
   getOsName?: () => string;
-  getOsVersion?: () => string;
+  getZoteroVersion?: () => string;
+  getSystemVersion?: () => string;
   now?: () => number;
   randomSessionIdSuffix?: () => string;
   maxBatchSize?: number;
@@ -51,6 +52,7 @@ interface AnalyticsEvent {
     locale: string;
     osName: string;
     osVersion: string;
+    deviceModel: string;
     isDebug: boolean;
     appVersion: string;
     sdkVersion: string;
@@ -158,7 +160,7 @@ function defaultGetOsName(): string {
   return "unknown";
 }
 
-function defaultGetOsVersion(): string {
+function defaultGetSystemVersion(): string {
   const services = getMozillaServices();
   const getProperty = services?.sysinfo?.getProperty;
   if (typeof getProperty === "function") {
@@ -177,6 +179,12 @@ function defaultGetOsVersion(): string {
   return "unknown";
 }
 
+function defaultGetZoteroVersion(): string {
+  const zotero = (globalThis as { Zotero?: { version?: unknown } }).Zotero;
+  const version = zotero?.version;
+  return typeof version === "string" && version.trim() ? version.trim() : "unknown";
+}
+
 export class AnalyticsService {
   private sessionId: string;
   private lastActivityAt: number;
@@ -190,7 +198,8 @@ export class AnalyticsService {
   private readonly sdkVersion: string;
   private readonly getLocale: () => string;
   private readonly getOsName: () => string;
-  private readonly getOsVersion: () => string;
+  private readonly getZoteroVersion: () => string;
+  private readonly getSystemVersion: () => string;
   private readonly now: () => number;
   private readonly randomSessionIdSuffix: () => string;
   private readonly maxBatchSize: number;
@@ -218,7 +227,10 @@ export class AnalyticsService {
     this.sdkVersion = options.sdkVersion ?? DEFAULT_SDK_VERSION;
     this.getLocale = options.getLocale ?? defaultGetLocale;
     this.getOsName = options.getOsName ?? defaultGetOsName;
-    this.getOsVersion = options.getOsVersion ?? defaultGetOsVersion;
+    this.getZoteroVersion =
+      options.getZoteroVersion ?? defaultGetZoteroVersion;
+    this.getSystemVersion =
+      options.getSystemVersion ?? defaultGetSystemVersion;
     this.now = options.now ?? Date.now;
     this.randomSessionIdSuffix =
       options.randomSessionIdSuffix ?? defaultRandomSuffix;
@@ -250,7 +262,8 @@ export class AnalyticsService {
       systemProps: {
         locale: this.getLocale(),
         osName: this.getOsName(),
-        osVersion: this.getOsVersion(),
+        osVersion: this.getZoteroVersion(),
+        deviceModel: this.getSystemVersion(),
         isDebug: this.isDebug,
         appVersion: this.appVersion,
         sdkVersion: this.sdkVersion,

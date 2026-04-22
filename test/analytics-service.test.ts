@@ -53,7 +53,8 @@ describe("AnalyticsService batching", function () {
     sdkVersion: "paper-chat-analytics/1",
     getLocale: () => "en-US",
     getOsName: () => "Windows",
-    getOsVersion: () => "11",
+    getZoteroVersion: () => "7.0.15",
+    getSystemVersion: () => "11",
     flushIntervalMs: 0,
   };
 
@@ -93,7 +94,8 @@ describe("AnalyticsService batching", function () {
     assert.deepEqual(body[0].systemProps, {
       locale: "en-US",
       osName: "Windows",
-      osVersion: "11",
+      osVersion: "7.0.15",
+      deviceModel: "11",
       isDebug: true,
       appVersion: "9.9.9",
       sdkVersion: "paper-chat-analytics/1",
