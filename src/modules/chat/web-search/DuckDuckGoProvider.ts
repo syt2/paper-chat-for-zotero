@@ -4,16 +4,10 @@ import type {
   WebSearchResponse,
   WebSearchResult,
 } from "./WebSearchProvider";
+import { requestHttp } from "./WebSearchHttp";
+import { cleanText, matchesDomainFilter, truncate } from "./WebSearchUtils";
 
 const SEARCH_URL = "https://html.duckduckgo.com/html/";
-
-interface HtmlResponse {
-  status: number;
-  statusText: string;
-  contentType: string;
-  contentLength?: number;
-  body: string;
-}
 
 export class DuckDuckGoProvider implements WebSearchProvider {
   readonly id = "duckduckgo";
@@ -37,6 +31,7 @@ export class DuckDuckGoProvider implements WebSearchProvider {
 
     const results = await this.parseResults(response.body, request);
     return {
+      providerId: this.id,
       provider: this.displayName,
       results,
     };
@@ -49,7 +44,9 @@ export class DuckDuckGoProvider implements WebSearchProvider {
     const doc = new DOMParser().parseFromString(html, "text/html");
     const parsedResults: WebSearchResult[] = [];
 
-    for (const node of Array.from(doc.querySelectorAll(".result")) as Element[]) {
+    for (const node of Array.from(
+      doc.querySelectorAll(".result"),
+    ) as Element[]) {
       const linkEl = node.querySelector(
         ".result__title a.result__a, a.result__a",
       ) as Element | null;
@@ -57,9 +54,9 @@ export class DuckDuckGoProvider implements WebSearchProvider {
         continue;
       }
 
-      const title = this.cleanText(linkEl.textContent || "");
+      const title = cleanText(linkEl.textContent || "");
       const url = this.resolveResultUrl(linkEl.getAttribute("href") || "");
-      const snippet = this.cleanText(
+      const snippet = cleanText(
         node.querySelector(".result__snippet")?.textContent || "",
       );
 
@@ -67,7 +64,7 @@ export class DuckDuckGoProvider implements WebSearchProvider {
         continue;
       }
 
-      if (!this.matchesDomainFilter(url, request.domainFilter)) {
+      if (!matchesDomainFilter(url, request.domainFilter)) {
         continue;
       }
 
@@ -94,6 +91,9 @@ export class DuckDuckGoProvider implements WebSearchProvider {
     await Promise.all(
       targets.map(async (result) => {
         result.contentExcerpt = await this.fetchContentExcerpt(result.url);
+        if (result.contentExcerpt) {
+          result.contentType = "webpage_excerpt";
+        }
       }),
     );
   }
@@ -121,7 +121,7 @@ export class DuckDuckGoProvider implements WebSearchProvider {
 
       const extractedText = this.extractContentText(response.body);
       return extractedText
-        ? this.truncate(extractedText, this.contentExcerptLength)
+        ? truncate(extractedText, this.contentExcerptLength)
         : undefined;
     } catch {
       return undefined;
@@ -161,46 +161,11 @@ export class DuckDuckGoProvider implements WebSearchProvider {
     url: string,
     timeoutMs: number,
     method: "GET" | "HEAD" = "GET",
-  ): Promise<HtmlResponse> {
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      let timeoutTriggered = false;
-
-      xhr.open(method, url, true);
-      xhr.timeout = timeoutMs;
-      xhr.setRequestHeader("Accept", "text/html,application/xhtml+xml");
-
-      xhr.onload = () => {
-        const contentLengthHeader = xhr.getResponseHeader("Content-Length");
-        resolve({
-          status: xhr.status,
-          statusText: xhr.statusText,
-          contentType: xhr.getResponseHeader("Content-Type") || "",
-          contentLength: contentLengthHeader
-            ? Number.parseInt(contentLengthHeader, 10)
-            : undefined,
-          body: xhr.responseText || "",
-        });
-      };
-
-      xhr.onerror = () => {
-        reject(new Error(`Request failed for ${url}`));
-      };
-
-      xhr.ontimeout = () => {
-        timeoutTriggered = true;
-        xhr.abort();
-        reject(new Error(`Request timed out after ${timeoutMs}ms: ${url}`));
-      };
-
-      xhr.onabort = () => {
-        if (timeoutTriggered) {
-          return;
-        }
-        reject(new Error(`Request aborted: ${url}`));
-      };
-
-      xhr.send();
+  ) {
+    return requestHttp(url, {
+      timeoutMs,
+      method,
+      accept: "text/html,application/xhtml+xml",
     });
   }
 
@@ -219,7 +184,7 @@ export class DuckDuckGoProvider implements WebSearchProvider {
         continue;
       }
 
-      const text = this.cleanText(candidate.textContent || "");
+      const text = cleanText(candidate.textContent || "");
       if (text.length > bestText.length) {
         bestText = text;
       }
@@ -269,35 +234,5 @@ export class DuckDuckGoProvider implements WebSearchProvider {
     } catch {
       return normalizedUrl;
     }
-  }
-
-  private matchesDomainFilter(url: string, domainFilter?: string[]): boolean {
-    if (!domainFilter || domainFilter.length === 0) {
-      return true;
-    }
-
-    try {
-      const hostname = new URL(url).hostname.toLowerCase();
-      return domainFilter.some((domain) => {
-        const normalizedDomain = domain.toLowerCase();
-        return (
-          hostname === normalizedDomain ||
-          hostname.endsWith(`.${normalizedDomain}`)
-        );
-      });
-    } catch {
-      return false;
-    }
-  }
-
-  private cleanText(text: string): string {
-    return text.replace(/\s+/g, " ").trim();
-  }
-
-  private truncate(text: string, maxLength: number): string {
-    if (text.length <= maxLength) {
-      return text;
-    }
-    return `${text.slice(0, maxLength - 3)}...`;
   }
 }

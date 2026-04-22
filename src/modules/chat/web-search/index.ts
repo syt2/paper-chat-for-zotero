@@ -12,3 +12,6 @@ export type {
   WebSearchResponse,
   WebSearchResult,
 } from "./WebSearchProvider";
+export { SemanticScholarProvider } from "./SemanticScholarProvider";
+export { OpenAlexProvider } from "./OpenAlexProvider";
+export { EuropePmcProvider } from "./EuropePmcProvider";

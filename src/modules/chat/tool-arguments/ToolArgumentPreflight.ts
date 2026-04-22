@@ -11,6 +11,14 @@ const TOOL_SPECIFIC_ALIASES: Record<string, Record<string, string>> = {
     includeContent: "include_content",
     domainFilter: "domain_filter",
     domains: "domain_filter",
+    provider: "source",
+    searchIntent: "intent",
+    yearFrom: "year_from",
+    yearTo: "year_to",
+    openAccessOnly: "open_access_only",
+    seedTitle: "seed_title",
+    seedDoi: "seed_doi",
+    seedPaperId: "seed_paper_id",
   },
   list_all_items: {
     page_size: "pageSize",
@@ -49,6 +57,7 @@ const BOOLEAN_KEYS = new Set([
   "selectedOnly",
   "includePosition",
   "include_content",
+  "open_access_only",
 ]);
 
 const NUMBER_KEYS = new Set([
@@ -58,6 +67,8 @@ const NUMBER_KEYS = new Set([
   "days",
   "max_results",
   "importance",
+  "year_from",
+  "year_to",
 ]);
 
 const STRING_ARRAY_KEYS = new Set(["domain_filter"]);

@@ -257,5 +257,9 @@ export type FluentMessageId =
   | 'pref-upload-raw-pdf'
   | 'pref-upload-raw-pdf-desc'
   | 'pref-web-search-provider'
+  | 'pref-web-search-provider-auto'
   | 'pref-web-search-provider-desc'
-  | 'pref-web-search-provider-duckduckgo';
+  | 'pref-web-search-provider-duckduckgo'
+  | 'pref-web-search-provider-europe-pmc'
+  | 'pref-web-search-provider-openalex'
+  | 'pref-web-search-provider-semantic-scholar';

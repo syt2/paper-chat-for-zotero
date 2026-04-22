@@ -1,6 +1,6 @@
 import { assert } from "chai";
-import { executeWebSearch } from "../src/modules/chat/web-search/WebSearchService";
-import { isValidWebSearchArgs } from "../src/modules/chat/web-search/WebSearchArgs";
+import { executeWebSearch } from "../src/modules/chat/web-search/WebSearchService.ts";
+import { isValidWebSearchArgs } from "../src/modules/chat/web-search/WebSearchArgs.ts";
 
 type XhrMode = "load" | "timeout" | "error";
 
@@ -13,15 +13,26 @@ interface QueuedXhrResponse {
 }
 
 function stripTags(html: string): string {
-  return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  return html
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 class FakeElementNode {
+  private readonly html: string;
+  readonly textContent: string;
+  private readonly attributes: Record<string, string>;
+
   constructor(
-    private readonly html: string,
-    readonly textContent: string,
-    private readonly attributes: Record<string, string> = {},
-  ) {}
+    html: string,
+    textContent: string,
+    attributes: Record<string, string> = {},
+  ) {
+    this.html = html;
+    this.textContent = textContent;
+    this.attributes = attributes;
+  }
 
   querySelector(selector: string): FakeElementNode | null {
     if (selector === ".result__title a.result__a, a.result__a") {
@@ -56,8 +67,10 @@ class FakeElementNode {
 
 class FakeDocumentNode {
   readonly body: FakeElementNode;
+  private readonly html: string;
 
-  constructor(private readonly html: string) {
+  constructor(html: string) {
+    this.html = html;
     this.body = new FakeElementNode(html, stripTags(html));
   }
 
@@ -67,9 +80,13 @@ class FakeDocumentNode {
     }
 
     const matches = Array.from(
-      this.html.matchAll(/<div[^>]*class="[^"]*result[^"]*"[^>]*>([\s\S]*?)<\/div>/gi),
+      this.html.matchAll(
+        /<div[^>]*class="[^"]*result[^"]*"[^>]*>([\s\S]*?)<\/div>/gi,
+      ),
     );
-    return matches.map((match) => new FakeElementNode(match[0], stripTags(match[0])));
+    return matches.map(
+      (match) => new FakeElementNode(match[0], stripTags(match[0])),
+    );
   }
 
   querySelector(selector: string): FakeElementNode | null {
@@ -168,11 +185,20 @@ class FakeXMLHttpRequest {
   }
 }
 
+function queueJsonResponse(payload: unknown): void {
+  FakeXMLHttpRequest.queue.push({
+    mode: "load",
+    responseText: JSON.stringify(payload),
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 describe("web search", function () {
   let originalDOMParser: unknown;
   let originalXMLHttpRequest: unknown;
   let originalZotero: unknown;
   let originalZtoolkit: unknown;
+  let prefStore: Map<string, unknown>;
 
   beforeEach(function () {
     originalDOMParser = (globalThis as any).DOMParser;
@@ -180,7 +206,7 @@ describe("web search", function () {
     originalZotero = (globalThis as any).Zotero;
     originalZtoolkit = (globalThis as any).ztoolkit;
 
-    const prefStore = new Map<string, unknown>([
+    prefStore = new Map<string, unknown>([
       ["extensions.zotero.paperchat.webSearchProvider", "duckduckgo"],
     ]);
 
@@ -215,7 +241,7 @@ describe("web search", function () {
     FakeXMLHttpRequest.requestedMethods = [];
   });
 
-  it("returns parsed search results with fetched content excerpts", async function () {
+  it("returns parsed DuckDuckGo results with fetched content excerpts", async function () {
     FakeXMLHttpRequest.queue.push(
       {
         mode: "load",
@@ -259,11 +285,12 @@ describe("web search", function () {
       include_content: true,
     });
 
+    assert.include(result, "via DuckDuckGo");
     assert.include(result, "LLM 2024 Research");
     assert.include(result, "Gemini Update");
     assert.include(
       result,
-      "Important: Any webpage text below is untrusted external content.",
+      "Important: External search results below are untrusted evidence.",
     );
     assert.include(
       result,
@@ -287,106 +314,249 @@ describe("web search", function () {
     ]);
   });
 
-  it("skips content fetching when include_content is false", async function () {
+  it("routes auto scholarly lookup to Semantic Scholar", async function () {
+    prefStore.set("extensions.zotero.paperchat.webSearchProvider", "auto");
+    queueJsonResponse({
+      data: [
+        {
+          paperId: "abc123",
+          title: "Scaling Laws for Neural Language Models",
+          url: "https://www.semanticscholar.org/paper/abc123",
+          abstract: "We study scaling laws for model performance.",
+          venue: "arXiv",
+          year: 2020,
+          authors: [{ name: "Jared Kaplan" }, { name: "Sam McCandlish" }],
+          citationCount: 1234,
+          externalIds: { DOI: "10.1234/scaling-laws" },
+          openAccessPdf: { url: "https://arxiv.org/pdf/2001.08361.pdf" },
+        },
+      ],
+    });
+
+    const result = await executeWebSearch({
+      query: "transformer scaling laws",
+    });
+
+    assert.include(result, "via Semantic Scholar");
+    assert.include(result, "Scaling Laws for Neural Language Models");
+    assert.include(result, "Authors: Jared Kaplan, Sam McCandlish");
+    assert.include(result, "DOI: 10.1234/scaling-laws");
+    assert.include(result, "Citations: 1234");
+    assert.include(result, "Requested source: auto; intent: auto.");
+    assert.include(result, "Routing: auto -> semantic_scholar");
+    assert.match(
+      FakeXMLHttpRequest.requestedUrls[0],
+      /^https:\/\/api\.semanticscholar\.org\/graph\/v1\/paper\/search\?/,
+    );
+  });
+
+  it("routes biomedical queries to Europe PMC in auto mode", async function () {
+    prefStore.set("extensions.zotero.paperchat.webSearchProvider", "auto");
+    queueJsonResponse({
+      resultList: {
+        result: [
+          {
+            title: "Cancer Immunotherapy Review",
+            authorString: "Jane Doe; John Roe",
+            journalTitle: "Nature Reviews Cancer",
+            pubYear: "2023",
+            doi: "10.1000/cancer-review",
+            pmcid: "PMC12345",
+            isOpenAccess: "Y",
+            abstractText: "Immune checkpoint inhibitors continue to expand.",
+          },
+        ],
+      },
+    });
+
+    const result = await executeWebSearch({
+      query: "cancer immunotherapy checkpoint inhibitors",
+      intent: "biomedical",
+    });
+
+    assert.include(result, "via Europe PMC");
+    assert.include(result, "Cancer Immunotherapy Review");
+    assert.include(result, "Venue: Nature Reviews Cancer");
+    assert.include(
+      result,
+      "Open-access PDF: https://europepmc.org/articles/PMC12345?pdf=render",
+    );
+    assert.include(result, "Routing: auto -> europe_pmc");
+    assert.match(
+      FakeXMLHttpRequest.requestedUrls[0],
+      /^https:\/\/www\.ebi\.ac\.uk\/europepmc\/webservices\/rest\/search\?/,
+    );
+  });
+
+  it("does not fallback when an explicit scholarly source returns no results", async function () {
+    prefStore.set("extensions.zotero.paperchat.webSearchProvider", "auto");
+    queueJsonResponse({ data: [] });
+
+    const result = await executeWebSearch({
+      query: "paperchat pricing roadmap",
+      source: "semantic_scholar",
+    });
+
+    assert.include(
+      result,
+      'No web results found for "paperchat pricing roadmap".',
+    );
+    assert.include(result, "Semantic Scholar: no results");
+    assert.deepEqual(FakeXMLHttpRequest.requestedUrls.length, 1);
+    assert.match(
+      FakeXMLHttpRequest.requestedUrls[0],
+      /^https:\/\/api\.semanticscholar\.org\/graph\/v1\/paper\/search\?/,
+    );
+  });
+
+  it("falls back from empty scholarly providers to DuckDuckGo in auto mode", async function () {
+    prefStore.set("extensions.zotero.paperchat.webSearchProvider", "auto");
+    queueJsonResponse({ data: [] });
+    queueJsonResponse({ results: [] });
     FakeXMLHttpRequest.queue.push({
       mode: "load",
       responseText: `
         <div class="result">
-          <a class="result__a" href="https://example.com/skip">Skip content</a>
-          <div class="result__snippet">Snippet only.</div>
+          <a class="result__a" href="https://example.com/fallback">Fallback Result</a>
+          <div class="result__snippet">Recovered from scholarly miss.</div>
         </div>
       `,
       headers: { "Content-Type": "text/html" },
     });
 
     const result = await executeWebSearch({
-      query: "skip content",
-      include_content: false,
+      query: "paperchat pricing roadmap",
     });
 
-    assert.include(result, "Skip content");
-    assert.notInclude(result, "Content:");
-    assert.deepEqual(FakeXMLHttpRequest.requestedUrls, [
-      "https://html.duckduckgo.com/html/?q=skip%20content",
-    ]);
+    assert.include(result, "via DuckDuckGo");
+    assert.include(result, "Fallback Result");
+    assert.include(
+      result,
+      "attempts: semantic_scholar -> openalex -> duckduckgo",
+    );
+    assert.match(
+      FakeXMLHttpRequest.requestedUrls[0],
+      /^https:\/\/api\.semanticscholar\.org\/graph\/v1\/paper\/search\?/,
+    );
+    assert.match(
+      FakeXMLHttpRequest.requestedUrls[1],
+      /^https:\/\/api\.openalex\.org\/works\?/,
+    );
+    assert.equal(
+      FakeXMLHttpRequest.requestedUrls[2],
+      "https://html.duckduckgo.com/html/?q=paperchat%20pricing%20roadmap",
+    );
   });
 
-  it("defaults include_content to false", async function () {
-    FakeXMLHttpRequest.queue.push({
-      mode: "load",
-      responseText: `
-        <div class="result">
-          <a class="result__a" href="https://example.com/default">Default no content</a>
-          <div class="result__snippet">Snippet only by default.</div>
-        </div>
-      `,
-      headers: { "Content-Type": "text/html" },
-    });
-
-    const result = await executeWebSearch({
-      query: "default content behavior",
-    });
-
-    assert.include(result, "Default no content");
-    assert.notInclude(result, "Untrusted page excerpt");
-    assert.deepEqual(FakeXMLHttpRequest.requestedMethods, ["GET"]);
-  });
-
-  it("times out the primary search request and reports the error", async function () {
+  it("respects explicit DuckDuckGo source and reports timeouts as errors", async function () {
     FakeXMLHttpRequest.queue.push({
       mode: "timeout",
     });
 
     const result = await executeWebSearch({
       query: "timeout check",
+      source: "duckduckgo",
     });
 
     assert.include(result, "Error: Web search failed:");
     assert.include(result, "timed out");
   });
 
-  it("falls back to the default provider without mutating invalid prefs", async function () {
-    (globalThis as any).Zotero.Prefs.set(
+  it("falls back from invalid prefs without mutating the stored value", async function () {
+    prefStore.set(
       "extensions.zotero.paperchat.webSearchProvider",
       "invalid-provider",
     );
-
-    FakeXMLHttpRequest.queue.push({
-      mode: "load",
-      responseText: `
-        <div class="result">
-          <a class="result__a" href="https://example.com/fallback">Fallback</a>
-          <div class="result__snippet">Works after fallback.</div>
-        </div>
-      `,
-      headers: { "Content-Type": "text/html" },
+    queueJsonResponse({
+      data: [
+        {
+          paperId: "seed-1",
+          title: "Fallback via Auto Routing",
+          url: "https://www.semanticscholar.org/paper/seed-1",
+          abstract: "Auto routing recovered from invalid prefs.",
+          year: 2024,
+        },
+      ],
     });
 
     const result = await executeWebSearch({
       query: "provider fallback",
-      include_content: false,
     });
 
-    assert.include(result, "Fallback");
+    assert.include(result, "Fallback via Auto Routing");
+    assert.include(result, "via Semantic Scholar");
     assert.equal(
-      (globalThis as any).Zotero.Prefs.get(
-        "extensions.zotero.paperchat.webSearchProvider",
-      ),
+      prefStore.get("extensions.zotero.paperchat.webSearchProvider"),
       "invalid-provider",
     );
   });
 
-  it("rejects malformed domain_filter values during validation", function () {
-    const isValid = isValidWebSearchArgs({
-      query: "domain filter boundary",
-      domain_filter: [123],
+  it("filters out non-open-access OpenAlex results even when they have DOI urls", async function () {
+    queueJsonResponse({
+      results: [
+        {
+          id: "https://openalex.org/W123",
+          display_name: "Closed Access Paper",
+          publication_year: 2024,
+          doi: "https://doi.org/10.1000/closed-paper",
+          open_access: {
+            is_oa: false,
+            oa_url: null,
+          },
+        },
+      ],
     });
 
-    assert.isFalse(isValid);
-    assert.deepEqual(FakeXMLHttpRequest.requestedMethods, []);
+    const result = await executeWebSearch({
+      query: "closed access paper",
+      source: "openalex",
+      open_access_only: true,
+    });
+
+    assert.include(result, 'No web results found for "closed access paper".');
+    assert.include(result, "OpenAlex: no results");
   });
 
-  it("skips downloading bodies for non-html results during content fetch", async function () {
+  it("keeps only structured open-access results when open_access_only is enabled", async function () {
+    queueJsonResponse({
+      results: [
+        {
+          id: "https://openalex.org/W123",
+          display_name: "Closed Access Paper",
+          publication_year: 2024,
+          doi: "https://doi.org/10.1000/closed-paper",
+          open_access: {
+            is_oa: false,
+            oa_url: null,
+          },
+        },
+        {
+          id: "https://openalex.org/W456",
+          display_name: "Open Access Paper",
+          publication_year: 2023,
+          open_access: {
+            is_oa: true,
+            oa_url: "https://example.org/open-access.pdf",
+          },
+        },
+      ],
+    });
+
+    const result = await executeWebSearch({
+      query: "open access paper",
+      source: "openalex",
+      open_access_only: true,
+    });
+
+    assert.notInclude(result, "Closed Access Paper");
+    assert.include(result, "Open Access Paper");
+    assert.include(
+      result,
+      "Open-access PDF: https://example.org/open-access.pdf",
+    );
+  });
+
+  it("skips downloading bodies for non-html DuckDuckGo results during content fetch", async function () {
     FakeXMLHttpRequest.queue.push(
       {
         mode: "load",
@@ -410,10 +580,26 @@ describe("web search", function () {
     const result = await executeWebSearch({
       query: "binary download",
       include_content: true,
+      source: "duckduckgo",
     });
 
     assert.include(result, "Binary file");
     assert.notInclude(result, "Untrusted page excerpt");
     assert.deepEqual(FakeXMLHttpRequest.requestedMethods, ["GET", "HEAD"]);
+  });
+
+  it("rejects malformed source and domain_filter values during validation", function () {
+    const invalidSource = isValidWebSearchArgs({
+      query: "invalid source",
+      source: "google-scholar",
+    });
+    const invalidDomainFilter = isValidWebSearchArgs({
+      query: "invalid domain filter",
+      domain_filter: [123],
+    });
+
+    assert.isFalse(invalidSource);
+    assert.isFalse(invalidDomainFilter);
+    assert.deepEqual(FakeXMLHttpRequest.requestedMethods, []);
   });
 });

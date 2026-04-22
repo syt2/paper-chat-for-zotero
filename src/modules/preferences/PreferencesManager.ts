@@ -110,9 +110,14 @@ function resolveCurrentProviderId(
     ?.getAttribute("data-provider-id");
 
   const candidateProviderId =
-    selectedProviderId || currentProviderId || providerManager.getActiveProviderId();
+    selectedProviderId ||
+    currentProviderId ||
+    providerManager.getActiveProviderId();
 
-  if (candidateProviderId && providerManager.getProviderConfig(candidateProviderId)) {
+  if (
+    candidateProviderId &&
+    providerManager.getProviderConfig(candidateProviderId)
+  ) {
     return candidateProviderId;
   }
 
@@ -302,7 +307,7 @@ function bindAIToolsSettingsEvent(doc: Document): void {
     webSearchProviderSelect.addEventListener("command", () => {
       setPref(
         "webSearchProvider",
-        webSearchProviderSelect.value || "duckduckgo",
+        webSearchProviderSelect.value || DEFAULT_WEB_SEARCH_PROVIDER_ID,
       );
     });
   }
@@ -333,7 +338,9 @@ function initAgentIterationLimitControl(doc: Document): void {
     return;
   }
 
-  const configured = getPref("agentMaxPlanningIterations") as number | undefined;
+  const configured = getPref("agentMaxPlanningIterations") as
+    | number
+    | undefined;
   agentIterationInput.value = String(
     normalizeAgentMaxPlanningIterations(configured),
   );
