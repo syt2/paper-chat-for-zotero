@@ -44,8 +44,8 @@ let getActiveReaderItemFn: (() => Zotero.Item | null) | null = null;
 // Toggle panel mode function reference (set by ChatPanelManager)
 let togglePanelModeFn: (() => void) | null = null;
 
-// 发送锁（按 session 分配，防止同一 session 内重复发送，同时允许切换 session 后正常发送）
-const sessionSendLocks = new Set<string>();
+// 发送锁（按 session 分配，并附带 token，避免旧请求 finally 误释放新请求的锁）
+const sessionSendLocks = new Map<string, symbol>();
 
 // Duration (ms) to show the "+quota" flash on the check-in button after a successful check-in
 const CHECKIN_FLASH_DURATION_MS = 5000;
@@ -401,7 +401,7 @@ export function setupEventHandlers(context: ChatPanelContext): void {
     if (sessionSendLocks.has(activeSessionId)) {
       const didCancel = await chatManager.cancelCurrentTurn();
       if (didCancel) {
-        releaseSendLock(activeSessionId);
+        releaseSendLock(activeSessionId, getSendLockToken(activeSessionId));
         syncSendButtonState(sendButton, chatManager);
         focusTextarea(messageInput);
       }
@@ -840,15 +840,22 @@ function acquireSendLock(sessionId: string): boolean {
   if (sessionSendLocks.has(sessionId)) {
     return false;
   }
-  sessionSendLocks.add(sessionId);
+  sessionSendLocks.set(sessionId, Symbol(sessionId));
   return true;
 }
 
 /**
  * 释放发送锁
  */
-function releaseSendLock(sessionId: string): void {
+function releaseSendLock(sessionId: string, token?: symbol): void {
+  if (token && sessionSendLocks.get(sessionId) !== token) {
+    return;
+  }
   sessionSendLocks.delete(sessionId);
+}
+
+function getSendLockToken(sessionId: string): symbol | undefined {
+  return sessionSendLocks.get(sessionId);
 }
 
 function updateSendButtonPresentation(
@@ -921,6 +928,7 @@ async function sendMessage(
 
   let draftState: { content: string; attachmentState: AttachmentState } | null =
     null;
+  const sendLockToken = getSendLockToken(sessionId);
 
   // acquire 后立即进 try/finally，确保所有路径都能释放锁并同步按钮状态
   try {
@@ -1086,7 +1094,7 @@ async function sendMessage(
     }
     context.appendError(error instanceof Error ? error.message : String(error));
   } finally {
-    releaseSendLock(sessionId);
+    releaseSendLock(sessionId, sendLockToken);
     // 根据当前活跃 session 的锁状态同步按钮（而非无条件恢复，避免覆盖其他 session 的 disabled 状态）
     syncSendButtonState(sendButton, chatManager);
     focusTextarea(messageInput);

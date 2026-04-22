@@ -154,6 +154,7 @@ export class ChatManager {
   // so that isSessionActive() returns true and UI updates resume
   // when the user switches back to a session that is still streaming.
   private streamingSessions = new Map<string, ChatSession>();
+  private sessionRunCounters = new Map<string, number>();
   private activeSessionRunIds = new Map<string, number>();
   private activeSessionAbortControllers = new Map<
     string,
@@ -165,8 +166,8 @@ export class ChatManager {
 
   // UI回调
   private onMessageUpdate?: (messages: ChatMessage[]) => void;
-  private onStreamingUpdate?: (content: string) => void;
-  private onReasoningUpdate?: (reasoning: string) => void;
+  private onStreamingUpdate?: (content: string, messageId: string) => void;
+  private onReasoningUpdate?: (reasoning: string, messageId: string) => void;
   private onError?: (error: Error) => void;
   private onPdfAttached?: () => void;
   private onMessageComplete?: () => void;
@@ -185,8 +186,10 @@ export class ChatManager {
         isSessionActive: (session) => this.isSessionActive(session),
         isSessionTracked: (session, runId) =>
           this.isSessionTracked(session, runId),
-        onStreamingUpdate: (content) => this.onStreamingUpdate?.(content),
-        onReasoningUpdate: (reasoning) => this.onReasoningUpdate?.(reasoning),
+        onStreamingUpdate: (content, messageId) =>
+          this.onStreamingUpdate?.(content, messageId),
+        onReasoningUpdate: (reasoning, messageId) =>
+          this.onReasoningUpdate?.(reasoning, messageId),
         onMessageUpdate: (messages) => this.onMessageUpdate?.(messages),
         onPdfAttached: () => this.onPdfAttached?.(),
         onMessageComplete: () => this.onMessageComplete?.(),
@@ -568,8 +571,9 @@ export class ChatManager {
     runId: number;
     abortSignal?: AbortSignal;
   } {
-    const nextRunId = (this.activeSessionRunIds.get(session.id) || 0) + 1;
+    const nextRunId = (this.sessionRunCounters.get(session.id) || 0) + 1;
     const abortController = createAbortController();
+    this.sessionRunCounters.set(session.id, nextRunId);
     this.activeSessionRunIds.set(session.id, nextRunId);
     this.activeSessionAbortControllers.set(session.id, abortController);
     this.streamingSessions.set(session.id, session);
@@ -613,8 +617,8 @@ export class ChatManager {
    */
   setCallbacks(callbacks: {
     onMessageUpdate?: (messages: ChatMessage[]) => void;
-    onStreamingUpdate?: (content: string) => void;
-    onReasoningUpdate?: (reasoning: string) => void;
+    onStreamingUpdate?: (content: string, messageId: string) => void;
+    onReasoningUpdate?: (reasoning: string, messageId: string) => void;
     onError?: (error: Error) => void;
     onPdfAttached?: () => void;
     onMessageComplete?: () => void;
@@ -1581,7 +1585,10 @@ export class ChatManager {
                   assistantMessage.content += chunk;
                   scheduleCheckpoint();
                   if (this.isSessionActive(sendingSession)) {
-                    this.onStreamingUpdate?.(assistantMessage.content);
+                    this.onStreamingUpdate?.(
+                      assistantMessage.content,
+                      assistantMessage.id,
+                    );
                   }
                 },
                 onReasoningChunk: (chunk: string) => {
@@ -1592,7 +1599,10 @@ export class ChatManager {
                     (assistantMessage.reasoning || "") + chunk;
                   scheduleCheckpoint();
                   if (this.isSessionActive(sendingSession)) {
-                    this.onReasoningUpdate?.(assistantMessage.reasoning);
+                    this.onReasoningUpdate?.(
+                      assistantMessage.reasoning,
+                      assistantMessage.id,
+                    );
                   }
                 },
                 onComplete: async (fullContent: string) => {
@@ -2587,6 +2597,7 @@ export class ChatManager {
     for (const abortController of this.activeSessionAbortControllers.values()) {
       abortController.abort();
     }
+    this.sessionRunCounters.clear();
     this.activeSessionRunIds.clear();
     this.activeSessionAbortControllers.clear();
     this.streamingSessions.clear();

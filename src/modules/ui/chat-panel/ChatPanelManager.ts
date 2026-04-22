@@ -25,6 +25,9 @@ import {
 } from "./ChatPanelTheme";
 import { createChatContainer } from "./ChatPanelBuilder";
 import {
+  getStreamingContentSelector,
+  getStreamingReasoningContainerSelector,
+  getStreamingReasoningSelector,
   renderMessages as renderMessageElements,
   updateExecutionPlanView,
   updateApprovalView,
@@ -799,24 +802,26 @@ function setupChatManagerCallbacks(
       context.renderMessages(messages);
       updateModelSelectorDisplay(container);
     },
-    onStreamingUpdate: (content) => {
+    onStreamingUpdate: (content, messageId) => {
       if (container) {
-        const streamingEl = container.querySelector("#chat-streaming-content");
+        const streamingEl = container.querySelector(
+          getStreamingContentSelector(messageId),
+        );
         if (streamingEl) {
           renderMarkdownToElement(streamingEl as HTMLElement, content);
         }
       }
     },
-    onReasoningUpdate: (reasoning) => {
+    onReasoningUpdate: (reasoning, messageId) => {
       if (container) {
         const reasoningEl = container.querySelector(
-          "#chat-streaming-reasoning",
+          getStreamingReasoningSelector(messageId),
         );
         if (reasoningEl) {
           reasoningEl.textContent = reasoning;
           // Show the reasoning container when content arrives
           const reasoningContainer = container.querySelector(
-            "#chat-streaming-reasoning-container",
+            getStreamingReasoningContainerSelector(messageId),
           ) as HTMLElement;
           if (reasoningContainer && reasoning) {
             reasoningContainer.style.display = "block";

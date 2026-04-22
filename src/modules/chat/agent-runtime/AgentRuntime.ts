@@ -48,8 +48,8 @@ interface AgentRuntimeCallbacks {
   isSessionActive: (session: ChatSession) => boolean;
   isSessionTracked: (session: ChatSession, runId?: number) => boolean;
   onRuntimeEvent?: (event: AgentRuntimeEvent) => void;
-  onStreamingUpdate?: (content: string) => void;
-  onReasoningUpdate?: (reasoning: string) => void;
+  onStreamingUpdate?: (content: string, messageId: string) => void;
+  onReasoningUpdate?: (reasoning: string, messageId: string) => void;
   onMessageUpdate?: (messages: ChatMessage[]) => void;
   onPdfAttached?: () => void;
   onMessageComplete?: () => void;
@@ -529,7 +529,10 @@ export class AgentRuntime {
             },
           );
           if (this.callbacks.isSessionActive(sendingSession)) {
-            this.callbacks.onStreamingUpdate?.(assistantMessage.content);
+            this.callbacks.onStreamingUpdate?.(
+              assistantMessage.content,
+              assistantMessage.id,
+            );
           }
         },
         onReasoningDelta: (text) => {
@@ -556,7 +559,10 @@ export class AgentRuntime {
             },
           );
           if (this.callbacks.isSessionActive(sendingSession)) {
-            this.callbacks.onReasoningUpdate?.(assistantMessage.reasoning);
+            this.callbacks.onReasoningUpdate?.(
+              assistantMessage.reasoning,
+              assistantMessage.id,
+            );
           }
         },
         onToolCallStart: ({ index, id, name }) => {
@@ -686,7 +692,10 @@ export class AgentRuntime {
         await this.sessionStorage.updateSessionMeta(sendingSession);
         this.emitPlanUpdate(sendingSession, sessionRunId);
         if (this.callbacks.isSessionActive(sendingSession)) {
-          this.callbacks.onStreamingUpdate?.(callingDisplay);
+          this.callbacks.onStreamingUpdate?.(
+            callingDisplay,
+            assistantMessage.id,
+          );
         }
       }
 
@@ -783,7 +792,10 @@ export class AgentRuntime {
           },
         );
         if (this.callbacks.isSessionActive(sendingSession)) {
-          this.callbacks.onStreamingUpdate?.(accumulatedDisplay);
+          this.callbacks.onStreamingUpdate?.(
+            accumulatedDisplay,
+            assistantMessage.id,
+          );
         }
       }
 
@@ -815,7 +827,10 @@ export class AgentRuntime {
     );
     this.ensureSessionTracked(sendingSession, sessionRunId);
     if (this.callbacks.isSessionActive(sendingSession)) {
-      this.callbacks.onStreamingUpdate?.(thinkingDisplay);
+      this.callbacks.onStreamingUpdate?.(
+        thinkingDisplay,
+        assistantMessage.id,
+      );
     }
 
     return accumulatedDisplay;

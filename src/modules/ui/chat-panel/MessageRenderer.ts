@@ -13,6 +13,20 @@ import { chatColors } from "../../../utils/colors";
 import type { ThemeColors } from "./types";
 import { HTML_NS } from "./types";
 import { renderMarkdownToElement } from "./MarkdownRenderer";
+
+export function getStreamingContentSelector(messageId: string): string {
+  return `[data-streaming-content-for="${messageId}"]`;
+}
+
+export function getStreamingReasoningSelector(messageId: string): string {
+  return `[data-streaming-reasoning-for="${messageId}"]`;
+}
+
+export function getStreamingReasoningContainerSelector(
+  messageId: string,
+): string {
+  return `[data-streaming-reasoning-container-for="${messageId}"]`;
+}
 import { createElement, copyToClipboard } from "./ChatPanelBuilder";
 import { getString } from "../../../utils/locale";
 import {
@@ -225,8 +239,8 @@ export function createMessageElement(
   );
 
   const contentAttrs: Record<string, string> = { class: "chat-content" };
-  if (msg.role === "assistant" && isLastAssistant) {
-    contentAttrs.id = "chat-streaming-content";
+  if (msg.role === "assistant") {
+    contentAttrs["data-streaming-content-for"] = msg.id;
   }
 
   const content = createElement(
@@ -331,7 +345,14 @@ export function createMessageElement(
     } else if (isLastAssistant) {
       // Streaming placeholder - hidden by default, shown when reasoning arrives
       const reasoningContainer = createReasoningContainer(doc, theme, "", true);
-      reasoningContainer.id = "chat-streaming-reasoning-container";
+      reasoningContainer.setAttribute(
+        "data-streaming-reasoning-container-for",
+        msg.id,
+      );
+      const reasoningBody = reasoningContainer.querySelector(
+        '[data-streaming-reasoning-role="body"]',
+      ) as HTMLElement | null;
+      reasoningBody?.setAttribute("data-streaming-reasoning-for", msg.id);
       reasoningContainer.style.display = "none";
       bubble.appendChild(reasoningContainer);
     }
@@ -421,7 +442,7 @@ function createReasoningContainer(
   });
 
   if (isStreaming) {
-    body.id = "chat-streaming-reasoning";
+    body.setAttribute("data-streaming-reasoning-role", "body");
   } else {
     body.textContent = reasoning;
   }
@@ -1304,8 +1325,11 @@ function formatRiskLevel(
 export function updateStreamingContent(
   container: HTMLElement,
   content: string,
+  messageId: string,
 ): void {
-  const streamingEl = container.querySelector("#chat-streaming-content");
+  const streamingEl = container.querySelector(
+    getStreamingContentSelector(messageId),
+  );
   if (streamingEl) {
     renderMarkdownToElement(streamingEl as HTMLElement, content);
   }

@@ -85,7 +85,8 @@ export interface ChatPanelContext {
   // Callbacks reference for multi-doc selector
   callbacks?: {
     onMessageUpdate?: (messages: ChatMessage[]) => void;
-    onStreamingUpdate?: (content: string) => void;
+    onStreamingUpdate?: (content: string, messageId: string) => void;
+    onReasoningUpdate?: (reasoning: string, messageId: string) => void;
     onError?: (error: Error) => void;
     onPdfAttached?: () => void;
     onMessageComplete?: () => void;
