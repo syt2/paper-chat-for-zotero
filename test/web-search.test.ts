@@ -1,7 +1,10 @@
 import { assert } from "chai";
 import { executeWebSearch } from "../src/modules/chat/web-search/WebSearchService.ts";
 import { isValidWebSearchArgs } from "../src/modules/chat/web-search/WebSearchArgs.ts";
-import { __setHiddenBrowserConstructorForTests } from "../src/modules/chat/web-search/HiddenBrowserSearch.ts";
+import {
+  __setHiddenBrowserConstructorForTests,
+  loadPageWithHiddenBrowser,
+} from "../src/modules/chat/web-search/HiddenBrowserSearch.ts";
 
 type XhrMode = "load" | "timeout" | "error";
 
@@ -195,6 +198,7 @@ function queueJsonResponse(payload: unknown): void {
 }
 
 interface QueuedHiddenBrowserPageData {
+  loadResult?: boolean;
   title?: string;
   bodyText?: string;
   html?: string;
@@ -203,13 +207,18 @@ interface QueuedHiddenBrowserPageData {
 class FakeHiddenBrowser {
   static queue: QueuedHiddenBrowserPageData[] = [];
   static requestedUrls: string[] = [];
+  private pageData: QueuedHiddenBrowserPageData | null = null;
 
-  async load(url: string): Promise<void> {
+  async load(url: string): Promise<boolean | void> {
     FakeHiddenBrowser.requestedUrls.push(url);
+    this.pageData = FakeHiddenBrowser.queue.shift() || {};
+    if (this.pageData.loadResult === false) {
+      return false;
+    }
   }
 
   async getPageData(): Promise<Record<string, unknown>> {
-    const queued = FakeHiddenBrowser.queue.shift() || {};
+    const queued = this.pageData || {};
     return {
       title: queued.title || "",
       bodyText: queued.bodyText || "",
@@ -231,6 +240,7 @@ describe("web search", function () {
 
   let originalDOMParser: unknown;
   let originalXMLHttpRequest: unknown;
+  let originalChromeUtils: unknown;
   let originalZotero: unknown;
   let originalZtoolkit: unknown;
   let prefStore: Map<string, unknown>;
@@ -238,6 +248,7 @@ describe("web search", function () {
   beforeEach(function () {
     originalDOMParser = (globalThis as any).DOMParser;
     originalXMLHttpRequest = (globalThis as any).XMLHttpRequest;
+    originalChromeUtils = (globalThis as any).ChromeUtils;
     originalZotero = (globalThis as any).Zotero;
     originalZtoolkit = (globalThis as any).ztoolkit;
 
@@ -271,6 +282,7 @@ describe("web search", function () {
   afterEach(function () {
     (globalThis as any).DOMParser = originalDOMParser;
     (globalThis as any).XMLHttpRequest = originalXMLHttpRequest;
+    (globalThis as any).ChromeUtils = originalChromeUtils;
     (globalThis as any).Zotero = originalZotero;
     (globalThis as any).ztoolkit = originalZtoolkit;
     __setHiddenBrowserConstructorForTests(null);
@@ -831,5 +843,71 @@ describe("web search", function () {
     assert.isFalse(removedEuropePmc);
     assert.isFalse(invalidDomainFilter);
     assert.deepEqual(FakeXMLHttpRequest.requestedMethods, []);
+  });
+
+  it("uses ChromeUtils.import for legacy HiddenBrowser.jsm on Zotero 7", async function () {
+    __setHiddenBrowserConstructorForTests(null);
+
+    class LegacyHiddenBrowser {
+      async load(): Promise<void> {}
+
+      async getPageData(): Promise<Record<string, unknown>> {
+        return {
+          title: "Legacy hidden browser title",
+          bodyText: "Legacy hidden browser body",
+          documentHTML: "<main>legacy hidden browser html</main>",
+        };
+      }
+
+      async destroy(): Promise<void> {}
+    }
+
+    const importESModuleCalls: string[] = [];
+    const importCalls: string[] = [];
+
+    (globalThis as any).ChromeUtils = {
+      importESModule: (path: string) => {
+        importESModuleCalls.push(path);
+        throw new Error(`ES module not available for ${path}`);
+      },
+      import: (path: string) => {
+        importCalls.push(path);
+        if (path === "chrome://zotero/content/HiddenBrowser.jsm") {
+          return { HiddenBrowser: LegacyHiddenBrowser };
+        }
+        throw new Error(`Legacy module not available for ${path}`);
+      },
+    };
+
+    const page = await loadPageWithHiddenBrowser("https://example.org/legacy", {
+      settleDelayMs: 0,
+    });
+
+    assert.equal(page.title, "Legacy hidden browser title");
+    assert.equal(page.bodyText, "Legacy hidden browser body");
+    assert.equal(page.html, "<main>legacy hidden browser html</main>");
+    assert.include(importESModuleCalls, "chrome://zotero/content/HiddenBrowser.mjs");
+    assert.include(importCalls, "chrome://zotero/content/HiddenBrowser.jsm");
+  });
+
+  it("throws a clear error when HiddenBrowser.load reports failure", async function () {
+    queueHiddenBrowserPageData({
+      loadResult: false,
+    });
+
+    let caughtError: Error | null = null;
+    try {
+      await loadPageWithHiddenBrowser("https://example.org/failure", {
+        settleDelayMs: 0,
+      });
+    } catch (error) {
+      caughtError = error as Error;
+    }
+
+    assert.instanceOf(caughtError, Error);
+    assert.include(
+      caughtError?.message || "",
+      "Hidden browser failed to load https://example.org/failure",
+    );
   });
 });
