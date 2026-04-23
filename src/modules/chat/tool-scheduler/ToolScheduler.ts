@@ -11,9 +11,11 @@ import { config } from "../../../../package.json";
 import { getErrorMessage } from "../../../utils/common";
 import { getPdfToolManager } from "../pdf-tools";
 import { preflightToolArguments } from "../tool-arguments/ToolArgumentPreflight";
+import { validateAndRepairToolArguments } from "../tool-arguments/ToolArgumentValidation";
 import {
   formatDeniedToolResult,
   formatToolArgumentParseError,
+  formatToolError,
   normalizeToolErrorContent,
 } from "../tool-errors/ToolErrorFormatter";
 import { getToolPermissionManager } from "../tool-permissions";
@@ -46,10 +48,15 @@ interface PreparedToolExecution {
   metadata?: ToolRuntimeMetadata;
   args: Record<string, unknown>;
   permissionDecision: ToolPermissionDecision;
+  policyTrace?: ToolExecutionResult["policyTrace"];
 }
 
 type ParsedArgsResult =
-  | { ok: true; args: Record<string, unknown> }
+  | {
+      ok: true;
+      args: Record<string, unknown>;
+      policyTrace?: ToolExecutionResult["policyTrace"];
+    }
   | { ok: false; result: ToolExecutionResult };
 
 interface ToolFaultInjectionConfig {
@@ -173,34 +180,101 @@ export class ToolScheduler {
         Array.isArray(parsed)
       ) {
         const cause = `Invalid arguments JSON: ${toolCall.function.arguments}`;
-      return {
-        ok: false,
-        result: {
-          toolCall,
-          status: "failed",
-          policyTrace: [
-            {
-              stage: "scheduler",
-              policy: "argument_parse",
-              outcome: "blocked",
-              summary: `Blocked ${toolCall.function.name} because tool arguments did not decode to an object.`,
-              detail: cause,
-            },
-          ],
-          content: formatToolArgumentParseError(
+        return {
+          ok: false,
+          result: {
             toolCall,
-            `${cause}. Tool arguments must decode to an object.`,
+            status: "failed",
+            policyTrace: [
+              {
+                stage: "scheduler",
+                policy: "argument_parse",
+                outcome: "blocked",
+                summary: `Blocked ${toolCall.function.name} because tool arguments did not decode to an object.`,
+                detail: cause,
+              },
+            ],
+            content: formatToolArgumentParseError(
+              toolCall,
+              `${cause}. Tool arguments must decode to an object.`,
             ),
             error: "Tool arguments must decode to an object.",
           },
         };
       }
+
+      const preflighted = preflightToolArguments(
+        toolCall.function.name,
+        parsed as Record<string, unknown>,
+      );
+      const validated = validateAndRepairToolArguments(
+        toolCall.function.name,
+        preflighted,
+      );
+
+      if (!validated.ok) {
+        return {
+          ok: false,
+          result: {
+            toolCall,
+            status: "failed",
+            policyTrace: [
+              {
+                stage: "scheduler",
+                policy: "argument_validation",
+                outcome: "blocked",
+                summary: `Blocked ${toolCall.function.name} because arguments did not satisfy the tool schema.`,
+                detail: validated.issues.join(" | "),
+                data: {
+                  repairedKeys: validated.repairedKeys,
+                  droppedKeys: validated.droppedKeys,
+                  issues: validated.issues,
+                },
+              },
+            ],
+            content: formatToolError({
+              summary: `Invalid arguments for ${toolCall.function.name}.`,
+              category: "invalid_arguments",
+              retryable: true,
+              cause: validated.issues.join(" | "),
+              suggestedFix:
+                "Retry with only the required fields and correct value types that match the tool schema.",
+              saferAlternative:
+                "Start from the minimal valid payload, then add optional fields only if needed.",
+            }),
+            error: "Tool arguments do not match the tool schema.",
+          },
+        };
+      }
+
       return {
         ok: true,
-        args: preflightToolArguments(
-          toolCall.function.name,
-          parsed as Record<string, unknown>,
-        ),
+        args: validated.args,
+        policyTrace:
+          validated.repairedKeys.length > 0 || validated.droppedKeys.length > 0
+            ? [
+                {
+                  stage: "scheduler",
+                  policy: "argument_repair",
+                  outcome: "rewritten",
+                  summary: `Repaired arguments for ${toolCall.function.name} before execution.`,
+                  detail: [
+                    validated.repairedKeys.length > 0
+                      ? `repaired=${validated.repairedKeys.join(", ")}`
+                      : "",
+                    validated.droppedKeys.length > 0
+                      ? `dropped=${validated.droppedKeys.join(", ")}`
+                      : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" | "),
+                  data: {
+                    repairedKeys: validated.repairedKeys,
+                    droppedKeys: validated.droppedKeys,
+                  },
+                },
+              ]
+            : undefined,
       };
     } catch {
       const cause = `Invalid arguments JSON: ${toolCall.function.arguments}`;
@@ -233,6 +307,7 @@ export class ToolScheduler {
     args: Record<string, unknown>,
     metadata: ToolExecutionResult["metadata"],
     permissionDecision: ToolPermissionDecision,
+    priorPolicyTrace?: ToolExecutionResult["policyTrace"],
   ): ToolExecutionResult | null {
     const state = this.readFaultInjectionConfig();
     const cfg = state.config;
@@ -266,6 +341,7 @@ export class ToolScheduler {
         metadata,
         permissionDecision: deniedDecision,
         policyTrace: [
+          ...(priorPolicyTrace || []),
           {
             stage: "scheduler",
             policy: "fault_injection",
@@ -293,6 +369,7 @@ export class ToolScheduler {
       metadata,
       permissionDecision,
       policyTrace: [
+        ...(priorPolicyTrace || []),
         {
           stage: "scheduler",
           policy: "fault_injection",
@@ -374,6 +451,7 @@ export class ToolScheduler {
         metadata: metadata || undefined,
         permissionDecision,
         policyTrace: [
+          ...(argsResult.policyTrace || []),
           {
             stage: "scheduler",
             policy: "permission_decision",
@@ -399,6 +477,7 @@ export class ToolScheduler {
       argsResult.args,
       metadata || undefined,
       permissionDecision,
+      argsResult.policyTrace,
     );
     if (injectedResult) {
       return injectedResult;
@@ -409,6 +488,7 @@ export class ToolScheduler {
       metadata: metadata || undefined,
       args: argsResult.args,
       permissionDecision,
+      policyTrace: argsResult.policyTrace,
     };
   }
 
@@ -433,6 +513,7 @@ export class ToolScheduler {
         args: prepared.args,
         metadata: prepared.metadata,
         permissionDecision: prepared.permissionDecision,
+        policyTrace: prepared.policyTrace,
         status: normalizedError ? "failed" : "completed",
         content: normalizedError ? normalizedError.content : content,
         error: normalizedError
@@ -450,6 +531,7 @@ export class ToolScheduler {
         args: prepared.args,
         metadata: prepared.metadata,
         permissionDecision: prepared.permissionDecision,
+        policyTrace: prepared.policyTrace,
         status: "failed",
         content: normalizedError.content,
         error: normalizedError.parsed.cause || normalizedError.parsed.summary,

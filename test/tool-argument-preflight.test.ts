@@ -111,4 +111,80 @@ describe("tool argument preflight", function () {
     });
     assert.deepEqual(result.args, calls[0]);
   });
+
+  it("repairs schema-shaped key casing, enum casing, and drops unsupported keys", async function () {
+    const { ToolScheduler } =
+      await import("../src/modules/chat/tool-scheduler/ToolScheduler.ts");
+    const calls: Record<string, unknown>[] = [];
+    const scheduler = new ToolScheduler(async (_toolCall, _fallback, args) => {
+      calls.push(args);
+      return "ok";
+    });
+
+    const toolCall: ToolCall = {
+      id: "tool-2",
+      type: "function",
+      function: {
+        name: "search_by_tag",
+        arguments: JSON.stringify({
+          TAGS: ["llm", "agents"],
+          MODE: "AND",
+          UNUSED_FLAG: true,
+        }),
+      },
+    };
+
+    const result = await scheduler.execute({
+      toolCall,
+      sessionId: "session-1",
+    });
+
+    assert.equal(result.status, "completed");
+    assert.deepEqual(calls[0], {
+      tags: "llm, agents",
+      mode: "and",
+    });
+    assert.deepInclude(result.policyTrace?.[0], {
+      stage: "scheduler",
+      policy: "argument_repair",
+      outcome: "rewritten",
+    });
+  });
+
+  it("blocks arguments that still violate the schema after repair", async function () {
+    const { ToolScheduler } =
+      await import("../src/modules/chat/tool-scheduler/ToolScheduler.ts");
+    let invoked = false;
+    const scheduler = new ToolScheduler(async () => {
+      invoked = true;
+      return "ok";
+    });
+
+    const toolCall: ToolCall = {
+      id: "tool-3",
+      type: "function",
+      function: {
+        name: "web_search",
+        arguments: JSON.stringify({
+          query: "attention is all you need",
+          max_results: "abc",
+        }),
+      },
+    };
+
+    const result = await scheduler.execute({
+      toolCall,
+      sessionId: "session-1",
+    });
+
+    assert.equal(invoked, false);
+    assert.equal(result.status, "failed");
+    assert.include(result.content, "Category: invalid_arguments");
+    assert.include(result.content, "max_results: expected number");
+    assert.deepInclude(result.policyTrace?.[0], {
+      stage: "scheduler",
+      policy: "argument_validation",
+      outcome: "blocked",
+    });
+  });
 });

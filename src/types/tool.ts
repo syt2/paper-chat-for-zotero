@@ -126,6 +126,8 @@ export type ToolPolicyName =
   | "budget_block"
   | "permission_decision"
   | "argument_parse"
+  | "argument_repair"
+  | "argument_validation"
   | "fault_injection";
 
 export type ToolPolicyOutcome = "allowed" | "blocked" | "rewritten";
