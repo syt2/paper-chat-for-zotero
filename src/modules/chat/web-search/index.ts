@@ -12,6 +12,7 @@ export type {
   WebSearchResponse,
   WebSearchResult,
 } from "./WebSearchProvider";
-export { SemanticScholarProvider } from "./SemanticScholarProvider";
+export { SemanticScholarWebProvider } from "./SemanticScholarWebProvider";
+export { GoogleScholarProvider } from "./GoogleScholarProvider";
 export { OpenAlexProvider } from "./OpenAlexProvider";
 export { EuropePmcProvider } from "./EuropePmcProvider";

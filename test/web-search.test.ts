@@ -1,6 +1,7 @@
 import { assert } from "chai";
 import { executeWebSearch } from "../src/modules/chat/web-search/WebSearchService.ts";
 import { isValidWebSearchArgs } from "../src/modules/chat/web-search/WebSearchArgs.ts";
+import { __setHiddenBrowserConstructorForTests } from "../src/modules/chat/web-search/HiddenBrowserSearch.ts";
 
 type XhrMode = "load" | "timeout" | "error";
 
@@ -193,7 +194,39 @@ function queueJsonResponse(payload: unknown): void {
   });
 }
 
+interface QueuedHiddenBrowserPageData {
+  title?: string;
+  bodyText?: string;
+}
+
+class FakeHiddenBrowser {
+  static queue: QueuedHiddenBrowserPageData[] = [];
+  static requestedUrls: string[] = [];
+
+  async load(url: string): Promise<void> {
+    FakeHiddenBrowser.requestedUrls.push(url);
+  }
+
+  async getPageData(): Promise<Record<string, unknown>> {
+    const queued = FakeHiddenBrowser.queue.shift() || {};
+    return {
+      title: queued.title || "",
+      bodyText: queued.bodyText || "",
+    };
+  }
+
+  async destroy(): Promise<void> {}
+}
+
+function queueHiddenBrowserPageData(
+  pageData: QueuedHiddenBrowserPageData = {},
+): void {
+  FakeHiddenBrowser.queue.push(pageData);
+}
+
 describe("web search", function () {
+  this.timeout(8000);
+
   let originalDOMParser: unknown;
   let originalXMLHttpRequest: unknown;
   let originalZotero: unknown;
@@ -224,10 +257,13 @@ describe("web search", function () {
         },
       },
     };
+    __setHiddenBrowserConstructorForTests(FakeHiddenBrowser as any);
 
     FakeXMLHttpRequest.queue = [];
     FakeXMLHttpRequest.requestedUrls = [];
     FakeXMLHttpRequest.requestedMethods = [];
+    FakeHiddenBrowser.queue = [];
+    FakeHiddenBrowser.requestedUrls = [];
   });
 
   afterEach(function () {
@@ -235,10 +271,13 @@ describe("web search", function () {
     (globalThis as any).XMLHttpRequest = originalXMLHttpRequest;
     (globalThis as any).Zotero = originalZotero;
     (globalThis as any).ztoolkit = originalZtoolkit;
+    __setHiddenBrowserConstructorForTests(null);
 
     FakeXMLHttpRequest.queue = [];
     FakeXMLHttpRequest.requestedUrls = [];
     FakeXMLHttpRequest.requestedMethods = [];
+    FakeHiddenBrowser.queue = [];
+    FakeHiddenBrowser.requestedUrls = [];
   });
 
   it("returns parsed DuckDuckGo results with fetched content excerpts", async function () {
@@ -314,40 +353,53 @@ describe("web search", function () {
     ]);
   });
 
-  it("routes auto scholarly lookup to Semantic Scholar", async function () {
+  it("routes auto scholarly lookup to Google Scholar", async function () {
     prefStore.set("extensions.zotero.paperchat.webSearchProvider", "auto");
-    queueJsonResponse({
-      data: [
-        {
-          paperId: "abc123",
-          title: "Scaling Laws for Neural Language Models",
-          url: "https://www.semanticscholar.org/paper/abc123",
-          abstract: "We study scaling laws for model performance.",
-          venue: "arXiv",
-          year: 2020,
-          authors: [{ name: "Jared Kaplan" }, { name: "Sam McCandlish" }],
-          citationCount: 1234,
-          externalIds: { DOI: "10.1234/scaling-laws" },
-          openAccessPdf: { url: "https://arxiv.org/pdf/2001.08361.pdf" },
-        },
-      ],
+    queueHiddenBrowserPageData({
+      title: "Google Scholar",
+      bodyText: "Search results page",
+    });
+    FakeXMLHttpRequest.queue.push({
+      mode: "load",
+      responseText: `
+        <div class="gs_r gs_or gs_scl">
+          <div class="gs_or_ggsm">
+            <a href="https://arxiv.org/pdf/2001.08361.pdf">[PDF]</a>
+          </div>
+          <div class="gs_ri">
+            <h3 class="gs_rt">
+              <a href="https://example.org/scaling-laws">Scaling Laws for Neural Language Models</a>
+            </h3>
+            <div class="gs_a">Jared Kaplan, Sam McCandlish - arXiv, 2020</div>
+            <div class="gs_rs">We study scaling laws for model performance.</div>
+            <div class="gs_fl"><a href="/scholar?cites=12345">Cited by 1234</a></div>
+          </div>
+        </div>
+      `,
+      headers: { "Content-Type": "text/html" },
     });
 
     const result = await executeWebSearch({
       query: "transformer scaling laws",
     });
 
-    assert.include(result, "via Semantic Scholar");
+    assert.include(result, "via Google Scholar");
     assert.include(result, "Scaling Laws for Neural Language Models");
     assert.include(result, "Authors: Jared Kaplan, Sam McCandlish");
-    assert.include(result, "DOI: 10.1234/scaling-laws");
+    assert.include(result, "Venue: arXiv, 2020");
+    assert.include(result, "Year: 2020");
     assert.include(result, "Citations: 1234");
+    assert.include(
+      result,
+      "Open-access PDF: https://arxiv.org/pdf/2001.08361.pdf",
+    );
     assert.include(result, "Requested source: auto; intent: auto.");
-    assert.include(result, "Routing: auto -> semantic_scholar");
+    assert.include(result, "Routing: auto -> google_scholar");
     assert.match(
       FakeXMLHttpRequest.requestedUrls[0],
-      /^https:\/\/api\.semanticscholar\.org\/graph\/v1\/paper\/search\?/,
+      /^https:\/\/scholar\.google\.com\/scholar\?/,
     );
+    assert.equal(FakeHiddenBrowser.requestedUrls.length, 1);
   });
 
   it("routes biomedical queries to Europe PMC in auto mode", async function () {
@@ -390,7 +442,15 @@ describe("web search", function () {
 
   it("does not fallback when an explicit scholarly source returns no results", async function () {
     prefStore.set("extensions.zotero.paperchat.webSearchProvider", "auto");
-    queueJsonResponse({ data: [] });
+    queueHiddenBrowserPageData({
+      title: "Semantic Scholar",
+      bodyText: "Search results",
+    });
+    FakeXMLHttpRequest.queue.push({
+      mode: "load",
+      responseText: `<html><body><main>No results found</main></body></html>`,
+      headers: { "Content-Type": "text/html" },
+    });
 
     const result = await executeWebSearch({
       query: "paperchat pricing roadmap",
@@ -405,13 +465,21 @@ describe("web search", function () {
     assert.deepEqual(FakeXMLHttpRequest.requestedUrls.length, 1);
     assert.match(
       FakeXMLHttpRequest.requestedUrls[0],
-      /^https:\/\/api\.semanticscholar\.org\/graph\/v1\/paper\/search\?/,
+      /^https:\/\/www\.semanticscholar\.org\/search\?/,
     );
   });
 
   it("falls back from empty scholarly providers to DuckDuckGo in auto mode", async function () {
     prefStore.set("extensions.zotero.paperchat.webSearchProvider", "auto");
-    queueJsonResponse({ data: [] });
+    queueHiddenBrowserPageData({
+      title: "Google Scholar",
+      bodyText: "Search results",
+    });
+    FakeXMLHttpRequest.queue.push({
+      mode: "load",
+      responseText: `<html><body><main>No scholar results</main></body></html>`,
+      headers: { "Content-Type": "text/html" },
+    });
     queueJsonResponse({ results: [] });
     FakeXMLHttpRequest.queue.push({
       mode: "load",
@@ -432,11 +500,11 @@ describe("web search", function () {
     assert.include(result, "Fallback Result");
     assert.include(
       result,
-      "attempts: semantic_scholar -> openalex -> duckduckgo",
+      "attempts: google_scholar -> openalex -> duckduckgo",
     );
     assert.match(
       FakeXMLHttpRequest.requestedUrls[0],
-      /^https:\/\/api\.semanticscholar\.org\/graph\/v1\/paper\/search\?/,
+      /^https:\/\/scholar\.google\.com\/scholar\?/,
     );
     assert.match(
       FakeXMLHttpRequest.requestedUrls[1],
@@ -467,16 +535,24 @@ describe("web search", function () {
       "extensions.zotero.paperchat.webSearchProvider",
       "invalid-provider",
     );
-    queueJsonResponse({
-      data: [
-        {
-          paperId: "seed-1",
-          title: "Fallback via Auto Routing",
-          url: "https://www.semanticscholar.org/paper/seed-1",
-          abstract: "Auto routing recovered from invalid prefs.",
-          year: 2024,
-        },
-      ],
+    queueHiddenBrowserPageData({
+      title: "Google Scholar",
+      bodyText: "Search results",
+    });
+    FakeXMLHttpRequest.queue.push({
+      mode: "load",
+      responseText: `
+        <div class="gs_r gs_or gs_scl">
+          <div class="gs_ri">
+            <h3 class="gs_rt">
+              <a href="https://example.org/fallback-auto-routing">Fallback via Auto Routing</a>
+            </h3>
+            <div class="gs_a">Jane Doe - Example Venue, 2024</div>
+            <div class="gs_rs">Auto routing recovered from invalid prefs.</div>
+          </div>
+        </div>
+      `,
+      headers: { "Content-Type": "text/html" },
     });
 
     const result = await executeWebSearch({
@@ -484,10 +560,47 @@ describe("web search", function () {
     });
 
     assert.include(result, "Fallback via Auto Routing");
-    assert.include(result, "via Semantic Scholar");
+    assert.include(result, "via Google Scholar");
     assert.equal(
       prefStore.get("extensions.zotero.paperchat.webSearchProvider"),
       "invalid-provider",
+    );
+  });
+
+  it("falls back hidden semantic scholar prefs to auto routing for this request", async function () {
+    prefStore.set(
+      "extensions.zotero.paperchat.webSearchProvider",
+      "semantic_scholar",
+    );
+    queueHiddenBrowserPageData({
+      title: "Google Scholar",
+      bodyText: "Search results",
+    });
+    FakeXMLHttpRequest.queue.push({
+      mode: "load",
+      responseText: `
+        <div class="gs_r gs_or gs_scl">
+          <div class="gs_ri">
+            <h3 class="gs_rt">
+              <a href="https://example.org/hidden-pref-fallback">Hidden Pref Fallback</a>
+            </h3>
+            <div class="gs_a">Jane Doe - Example Venue, 2024</div>
+            <div class="gs_rs">Hidden provider prefs should route through visible providers.</div>
+          </div>
+        </div>
+      `,
+      headers: { "Content-Type": "text/html" },
+    });
+
+    const result = await executeWebSearch({
+      query: "hidden provider pref fallback",
+    });
+
+    assert.include(result, "via Google Scholar");
+    assert.include(result, "Hidden Pref Fallback");
+    assert.equal(
+      prefStore.get("extensions.zotero.paperchat.webSearchProvider"),
+      "semantic_scholar",
     );
   });
 
@@ -556,6 +669,51 @@ describe("web search", function () {
     );
   });
 
+  it("reports semantic scholar web block pages as provider failures", async function () {
+    queueHiddenBrowserPageData({
+      title: "Error | Semantic Scholar",
+      bodyText: "Our servers are having a bit of trouble. Error: 405",
+    });
+
+    const result = await executeWebSearch({
+      query: "blocked semantic scholar search",
+      source: "semantic_scholar_web",
+    });
+
+    assert.include(result, "Error: Web search failed:");
+    assert.include(result, "semantic_scholar_web");
+    assert.equal(FakeXMLHttpRequest.requestedUrls.length, 0);
+    assert.equal(FakeHiddenBrowser.requestedUrls.length, 1);
+  });
+
+  it("routes the legacy semantic_scholar source through the web scraper", async function () {
+    queueHiddenBrowserPageData({
+      title: "Semantic Scholar",
+      bodyText: "Search results",
+    });
+    FakeXMLHttpRequest.queue.push({
+      mode: "load",
+      responseText: `
+        <a href="https://www.semanticscholar.org/paper/abc123">Legacy Alias Still Works</a>
+      `,
+      headers: { "Content-Type": "text/html" },
+    });
+
+    const result = await executeWebSearch({
+      query: "legacy semantic scholar alias",
+      source: "semantic_scholar",
+    });
+
+    assert.include(result, "Legacy Alias Still Works");
+    assert.include(result, "via Semantic Scholar");
+    assert.notInclude(result, "via Semantic Scholar Web");
+    assert.match(
+      FakeXMLHttpRequest.requestedUrls[0],
+      /^https:\/\/www\.semanticscholar\.org\/search\?/,
+    );
+    assert.equal(FakeHiddenBrowser.requestedUrls.length, 1);
+  });
+
   it("skips downloading bodies for non-html DuckDuckGo results during content fetch", async function () {
     FakeXMLHttpRequest.queue.push(
       {
@@ -588,7 +746,15 @@ describe("web search", function () {
     assert.deepEqual(FakeXMLHttpRequest.requestedMethods, ["GET", "HEAD"]);
   });
 
-  it("rejects malformed source and domain_filter values during validation", function () {
+  it("accepts new scholarly web providers and rejects malformed source values", function () {
+    const validGoogleScholar = isValidWebSearchArgs({
+      query: "valid source",
+      source: "google_scholar",
+    });
+    const validSemanticScholarWeb = isValidWebSearchArgs({
+      query: "valid semantic source",
+      source: "semantic_scholar_web",
+    });
     const invalidSource = isValidWebSearchArgs({
       query: "invalid source",
       source: "google-scholar",
@@ -598,6 +764,8 @@ describe("web search", function () {
       domain_filter: [123],
     });
 
+    assert.isTrue(validGoogleScholar);
+    assert.isTrue(validSemanticScholarWeb);
     assert.isFalse(invalidSource);
     assert.isFalse(invalidDomainFilter);
     assert.deepEqual(FakeXMLHttpRequest.requestedMethods, []);

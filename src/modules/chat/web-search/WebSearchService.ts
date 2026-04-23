@@ -107,27 +107,27 @@ function buildProviderOrder(
 
   if (request.intent === "biomedical") {
     return {
-      providerIds: ["europe_pmc", "semantic_scholar", "openalex", "duckduckgo"],
+      providerIds: ["europe_pmc", "google_scholar", "openalex", "duckduckgo"],
       reason: "intent=biomedical prefers Europe PMC first",
     };
   }
 
   if (request.intent === "discover") {
     return {
-      providerIds: ["openalex", "semantic_scholar", "duckduckgo"],
+      providerIds: ["openalex", "google_scholar", "duckduckgo"],
       reason: "intent=discover prefers broad literature discovery",
     };
   }
 
   if (request.intent === "related") {
     return {
-      providerIds: ["semantic_scholar", "openalex", "duckduckgo"],
+      providerIds: ["google_scholar", "openalex", "duckduckgo"],
       reason: "intent=related prefers citation-oriented sources",
     };
   }
 
   return {
-    providerIds: ["semantic_scholar", "openalex", "duckduckgo"],
+    providerIds: ["google_scholar", "openalex", "duckduckgo"],
     reason: "auto routing defaults to paper lookup first",
   };
 }

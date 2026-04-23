@@ -261,5 +261,6 @@ export type FluentMessageId =
   | 'pref-web-search-provider-desc'
   | 'pref-web-search-provider-duckduckgo'
   | 'pref-web-search-provider-europe-pmc'
+  | 'pref-web-search-provider-google-scholar'
   | 'pref-web-search-provider-openalex'
   | 'pref-web-search-provider-semantic-scholar';

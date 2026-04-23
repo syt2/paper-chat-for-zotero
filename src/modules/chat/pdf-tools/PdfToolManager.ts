@@ -289,7 +289,7 @@ export class PdfToolManager {
                 type: "string" as const,
                 enum: [...WEB_SEARCH_SOURCES],
                 description:
-                  "Preferred source selector. Specify this explicitly whenever you know the target source. auto only uses lightweight fallback routing. semantic_scholar is best for paper lookup and related work, openalex for broad discovery and author/institution metadata, europe_pmc for biomedical literature, duckduckgo for general web pages.",
+                  "Preferred source selector. Specify this explicitly whenever you know the target source. auto uses lightweight fallback routing with duckduckgo only as the final fallback. google_scholar is useful for broad scholarly lookup and cited-by style discovery, openalex for author/institution metadata, europe_pmc for biomedical literature, duckduckgo for general web pages.",
               },
               intent: {
                 type: "string" as const,

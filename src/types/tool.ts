@@ -308,6 +308,8 @@ export interface SearchItemsArgs {
 export const WEB_SEARCH_SOURCES = [
   "auto",
   "semantic_scholar",
+  "semantic_scholar_web",
+  "google_scholar",
   "openalex",
   "europe_pmc",
   "duckduckgo",
