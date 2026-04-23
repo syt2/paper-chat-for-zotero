@@ -42,6 +42,7 @@ type ExecutionBannerKind =
   | "idle"
   | "running"
   | "waiting_approval"
+  | "approval_resolved"
   | "recovering";
 
 interface ExecutionBannerState {
@@ -59,6 +60,13 @@ interface ExecutionBannerState {
 type ExecutionInsetPanelElement = HTMLElement & {
   __executionInsetResizeObserver?: ResizeObserver;
 };
+
+export interface ApprovalViewTransitionState {
+  phase: "resolved" | "entering";
+  request: ToolApprovalState["pendingRequests"][number];
+  resolution: ToolApprovalResolution;
+  nextPendingCount: number;
+}
 
 function createTopupButton(doc: Document): HTMLElement {
   const btn = createElement(
@@ -654,12 +662,21 @@ export function updateApprovalView(
       resolution: ToolApprovalResolution,
     ) => void | Promise<void>;
   },
+  transitionState?: ApprovalViewTransitionState,
 ): void {
-  const banner = deriveApprovalBannerState(executionPlan, toolApprovalState);
+  const banner =
+    transitionState?.phase === "resolved"
+      ? deriveResolvedApprovalBannerState(
+          transitionState.request,
+          transitionState.resolution,
+          transitionState.nextPendingCount,
+        )
+      : deriveApprovalBannerState(executionPlan, toolApprovalState);
   updateExecutionInsetPanel(panel, theme, banner, {
     placement: "bottom",
     showApprovalActions: true,
     approvalActions,
+    animationPhase: transitionState?.phase,
   });
 }
 
@@ -676,6 +693,7 @@ function updateExecutionInsetPanel(
         resolution: ToolApprovalResolution,
       ) => void | Promise<void>;
     };
+    animationPhase?: ApprovalViewTransitionState["phase"];
   },
 ): void {
   const doc = panel.ownerDocument;
@@ -714,7 +732,67 @@ function updateExecutionInsetPanel(
   attachExecutionInsetResizeObserver(panel, wrapper);
   panel.style.opacity = "1";
   panel.style.transform = "translateY(0)";
+  runExecutionBannerAnimation(wrapper, options.animationPhase);
   syncExecutionInsets(panel);
+}
+
+function runExecutionBannerAnimation(
+  wrapper: HTMLElement,
+  phase?: ApprovalViewTransitionState["phase"],
+): void {
+  if (!phase) {
+    return;
+  }
+
+  const bar = wrapper.firstElementChild as HTMLElement | null;
+  const animate = bar?.animate?.bind(bar);
+  if (!bar || !animate) {
+    return;
+  }
+
+  if (phase === "resolved") {
+    animate(
+      [
+        {
+          opacity: 0.88,
+          transform: "translateY(0) scale(0.985)",
+          filter: "saturate(0.95)",
+        },
+        {
+          opacity: 1,
+          transform: "translateY(0) scale(1.02)",
+          filter: "saturate(1.08)",
+        },
+        {
+          opacity: 1,
+          transform: "translateY(0) scale(1)",
+          filter: "saturate(1)",
+        },
+      ],
+      {
+        duration: 260,
+        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+      },
+    );
+    return;
+  }
+
+  animate(
+    [
+      {
+        opacity: 0,
+        transform: "translateY(12px) scale(0.985)",
+      },
+      {
+        opacity: 1,
+        transform: "translateY(0) scale(1)",
+      },
+    ],
+    {
+      duration: 220,
+      easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+    },
+  );
 }
 
 function syncExecutionInsetHeight(
@@ -923,6 +1001,34 @@ function deriveApprovalBannerState(
     accentColor: "#b45309",
     accentBackground: "rgba(245, 158, 11, 0.16)",
     approvalRequest: activeRequest,
+  };
+}
+
+function deriveResolvedApprovalBannerState(
+  request: ToolApprovalState["pendingRequests"][number],
+  resolution: ToolApprovalResolution,
+  nextPendingCount: number,
+): ExecutionBannerState {
+  const resolvedLabel = formatApprovalResolutionLabel(resolution);
+  const wasAllowed = resolution.verdict === "allow";
+
+  return {
+    kind: "approval_resolved",
+    icon: wasAllowed ? "✓" : "×",
+    title: wasAllowed
+      ? getString("chat-banner-approval-applied")
+      : getString("chat-banner-denial-applied"),
+    detail: `${request.toolName} · ${resolvedLabel}`,
+    subdetail:
+      nextPendingCount > 0 ? getString("chat-banner-next-up") : undefined,
+    statusLabel:
+      nextPendingCount > 0
+        ? formatPendingApprovalLabel(nextPendingCount)
+        : undefined,
+    accentColor: wasAllowed ? "#15803d" : "#b91c1c",
+    accentBackground: wasAllowed
+      ? "rgba(34, 197, 94, 0.16)"
+      : "rgba(239, 68, 68, 0.14)",
   };
 }
 
@@ -1163,6 +1269,30 @@ function resolveExecutionBannerAccent(
             background: "rgba(245, 158, 11, 0.16)",
             borderColor: "rgba(245, 158, 11, 0.24)",
           };
+    case "approval_resolved":
+      return banner.accentColor === "#b91c1c"
+        ? isDark
+          ? {
+              color: "#fca5a5",
+              background: "rgba(239, 68, 68, 0.22)",
+              borderColor: "rgba(248, 113, 113, 0.3)",
+            }
+          : {
+              color: "#b91c1c",
+              background: "rgba(239, 68, 68, 0.12)",
+              borderColor: "rgba(239, 68, 68, 0.2)",
+            }
+        : isDark
+          ? {
+              color: "#86efac",
+              background: "rgba(34, 197, 94, 0.22)",
+              borderColor: "rgba(74, 222, 128, 0.3)",
+            }
+          : {
+              color: "#15803d",
+              background: "rgba(34, 197, 94, 0.14)",
+              borderColor: "rgba(34, 197, 94, 0.2)",
+            };
     default:
       return {
         color: banner.accentColor || theme.textPrimary,
@@ -1298,6 +1428,23 @@ function formatPendingApprovalLabel(count: number): string {
     : getString("chat-banner-pending-many", {
         args: { count },
       });
+}
+
+function formatApprovalResolutionLabel(
+  resolution: ToolApprovalResolution,
+): string {
+  if (resolution.verdict === "deny") {
+    return getString("chat-banner-deny");
+  }
+
+  switch (resolution.scope) {
+    case "always":
+      return getString("chat-banner-always");
+    case "session":
+      return getString("chat-banner-session");
+    default:
+      return getString("chat-banner-allow-once");
+  }
 }
 
 function formatRiskLevel(
