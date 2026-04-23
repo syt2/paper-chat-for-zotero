@@ -62,6 +62,7 @@ const APPROVAL_ENTER_ANIMATION_MS = 220;
 type PendingApprovalRequest = ToolApprovalState["pendingRequests"][number];
 
 type ApprovalPanelTransitionEntry = ApprovalViewTransitionState & {
+  sessionId: string | null;
   timeoutId?: number;
 };
 
@@ -107,7 +108,9 @@ function updateExecutionInsetsForContainer(
   executionPlan?: ExecutionPlan,
 ): void {
   const theme = getCurrentTheme();
-  const toolApprovalState = manager.getActiveSession()?.toolApprovalState;
+  const activeSession = manager.getActiveSession();
+  const activeSessionId = activeSession?.id || null;
+  const toolApprovalState = activeSession?.toolApprovalState;
   const approvalActions = buildApprovalActionsForContainer(manager, container);
   const planPanel = container.querySelector(
     "#chat-execution-plan-panel",
@@ -115,6 +118,17 @@ function updateExecutionInsetsForContainer(
   const approvalPanel = container.querySelector(
     "#chat-execution-approval-panel",
   ) as HTMLElement | null;
+  const transitionState = approvalPanel
+    ? approvalPanelTransitions.get(approvalPanel)
+    : undefined;
+
+  if (
+    approvalPanel &&
+    transitionState &&
+    transitionState.sessionId !== activeSessionId
+  ) {
+    clearApprovalTransition(approvalPanel);
+  }
 
   if (planPanel) {
     updateExecutionPlanView(planPanel, theme, executionPlan, toolApprovalState);
@@ -226,6 +240,7 @@ function startApprovalTransition(
     phase: "resolved",
     request,
     resolution,
+    sessionId: manager.getActiveSession()?.id || null,
     nextPendingCount: 0,
   });
   rerenderApprovalPanel(container, manager);

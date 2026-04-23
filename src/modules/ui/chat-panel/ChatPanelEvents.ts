@@ -499,12 +499,8 @@ export function setupEventHandlers(context: ChatPanelContext): void {
     context.clearAttachments();
     context.updateAttachmentsPreview();
 
-    // Clear chat history display
-    if (chatHistory && emptyState) {
-      chatHistory.textContent = "";
-      chatHistory.appendChild(emptyState);
-      emptyState.style.display = "flex";
-    }
+    context.renderMessages(newSession.messages);
+    context.renderExecutionPlan(newSession.executionPlan);
     updateModelSelectorDisplay(container);
 
     ztoolkit.log("New session created:", newSession.id);
