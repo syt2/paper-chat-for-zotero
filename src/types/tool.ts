@@ -305,17 +305,28 @@ export interface SearchItemsArgs {
 }
 
 // Web 搜索参数
+// WEB_SEARCH_SOURCES lists every id the validator accepts — including
+// `semantic_scholar` / `semantic_scholar_web`, which are kept only as legacy
+// aliases so old prefs or old tool-arg callers keep working. The tool schema
+// exposed to the model uses MODEL_VISIBLE_WEB_SEARCH_SOURCES below so the
+// model never actively picks the hidden aliases.
 export const WEB_SEARCH_SOURCES = [
   "auto",
   "semantic_scholar",
   "semantic_scholar_web",
   "google_scholar",
   "openalex",
-  "europe_pmc",
   "duckduckgo",
 ] as const;
 
 export type WebSearchSource = (typeof WEB_SEARCH_SOURCES)[number];
+
+export const MODEL_VISIBLE_WEB_SEARCH_SOURCES = [
+  "auto",
+  "google_scholar",
+  "openalex",
+  "duckduckgo",
+] as const;
 
 export const WEB_SEARCH_INTENTS = [
   "auto",

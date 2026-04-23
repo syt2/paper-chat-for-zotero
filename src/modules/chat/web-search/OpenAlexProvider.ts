@@ -5,7 +5,11 @@ import type {
   WebSearchResult,
 } from "./WebSearchProvider";
 import { requestJson } from "./WebSearchHttp";
-import { cleanText, postProcessResults } from "./WebSearchUtils";
+import {
+  buildSeedEnrichedQuery,
+  cleanText,
+  postProcessResults,
+} from "./WebSearchUtils";
 
 const SEARCH_URL = "https://api.openalex.org/works";
 
@@ -50,7 +54,7 @@ export class OpenAlexProvider implements WebSearchProvider {
 
   async search(request: WebSearchRequest): Promise<WebSearchResponse> {
     const url = new URL(SEARCH_URL);
-    url.searchParams.set("search", request.query);
+    url.searchParams.set("search", buildSeedEnrichedQuery(request));
     url.searchParams.set(
       "per-page",
       String(Math.min(request.maxResults * 2, 20)),

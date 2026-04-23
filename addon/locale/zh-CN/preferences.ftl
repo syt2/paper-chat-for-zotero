@@ -98,7 +98,6 @@ pref-web-search-provider-auto = Auto（轻量 fallback）
 pref-web-search-provider-semantic-scholar = Semantic Scholar（网页）
 pref-web-search-provider-google-scholar = Google Scholar（网页）
 pref-web-search-provider-openalex = OpenAlex
-pref-web-search-provider-europe-pmc = Europe PMC
 pref-web-search-provider-duckduckgo = DuckDuckGo（HTML 抓取）
 pref-tool-permission-defaults = 默认审批策略
 pref-tool-permission-defaults-desc = 控制高风险工具类别的默认行为；纯读取工具仍保持自动允许。

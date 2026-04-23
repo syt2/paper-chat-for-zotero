@@ -5,7 +5,12 @@ import type {
   WebSearchResult,
 } from "./WebSearchProvider";
 import { requestJson } from "./WebSearchHttp";
-import { cleanText, postProcessResults, toAuthorList } from "./WebSearchUtils";
+import {
+  buildEuropePmcQuery,
+  cleanText,
+  postProcessResults,
+  toAuthorList,
+} from "./WebSearchUtils";
 
 const SEARCH_URL = "https://www.ebi.ac.uk/europepmc/webservices/rest/search";
 
@@ -37,7 +42,7 @@ export class EuropePmcProvider implements WebSearchProvider {
 
   async search(request: WebSearchRequest): Promise<WebSearchResponse> {
     const url = new URL(SEARCH_URL);
-    url.searchParams.set("query", request.query);
+    url.searchParams.set("query", buildEuropePmcQuery(request.query));
     url.searchParams.set("format", "json");
     url.searchParams.set(
       "pageSize",

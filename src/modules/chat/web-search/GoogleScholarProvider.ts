@@ -4,9 +4,13 @@ import type {
   WebSearchResponse,
   WebSearchResult,
 } from "./WebSearchProvider";
-import { requestHttp } from "./WebSearchHttp";
 import { loadPageWithHiddenBrowser } from "./HiddenBrowserSearch";
-import { cleanText, postProcessResults, toAuthorList } from "./WebSearchUtils";
+import {
+  buildSeedEnrichedQuery,
+  cleanText,
+  postProcessResults,
+  toAuthorList,
+} from "./WebSearchUtils";
 
 const SEARCH_URL = "https://scholar.google.com/scholar";
 
@@ -14,7 +18,6 @@ export class GoogleScholarProvider implements WebSearchProvider {
   readonly id = "google_scholar";
   readonly displayName = "Google Scholar";
   private readonly browserTimeoutMs = 20000;
-  private readonly htmlTimeoutMs = 10000;
 
   async search(request: WebSearchRequest): Promise<WebSearchResponse> {
     const url = this.buildUrl(request);
@@ -23,22 +26,15 @@ export class GoogleScholarProvider implements WebSearchProvider {
       timeoutMs: this.browserTimeoutMs,
       settleDelayMs: 1200,
     });
-    this.assertNotBlocked(pageData.title, pageData.bodyText);
+    this.assertNotBlocked(pageData.title, pageData.bodyText, pageData.html);
 
-    const response = await requestHttp(url, {
-      timeoutMs: this.htmlTimeoutMs,
-      accept: "text/html,application/xhtml+xml",
-    });
-
-    if (response.status < 200 || response.status >= 300) {
+    if (!pageData.html) {
       throw new Error(
-        `Google Scholar search failed: ${response.status} ${response.statusText}`,
+        "Google Scholar search returned an empty document from the hidden browser",
       );
     }
 
-    this.assertNotBlocked(pageData.title, pageData.bodyText, response.body);
-
-    const rawResults = this.parseResults(response.body);
+    const rawResults = this.parseResults(pageData.html);
     return {
       providerId: this.id,
       provider: this.displayName,
@@ -48,7 +44,7 @@ export class GoogleScholarProvider implements WebSearchProvider {
 
   private buildUrl(request: WebSearchRequest): string {
     const url = new URL(SEARCH_URL);
-    url.searchParams.set("q", request.query);
+    url.searchParams.set("q", buildSeedEnrichedQuery(request));
     url.searchParams.set("hl", "en");
     url.searchParams.set("as_sdt", "0,5");
     if (typeof request.yearFrom === "number") {

@@ -197,6 +197,7 @@ function queueJsonResponse(payload: unknown): void {
 interface QueuedHiddenBrowserPageData {
   title?: string;
   bodyText?: string;
+  html?: string;
 }
 
 class FakeHiddenBrowser {
@@ -212,6 +213,7 @@ class FakeHiddenBrowser {
     return {
       title: queued.title || "",
       bodyText: queued.bodyText || "",
+      documentHTML: queued.html || "",
     };
   }
 
@@ -358,10 +360,7 @@ describe("web search", function () {
     queueHiddenBrowserPageData({
       title: "Google Scholar",
       bodyText: "Search results page",
-    });
-    FakeXMLHttpRequest.queue.push({
-      mode: "load",
-      responseText: `
+      html: `
         <div class="gs_r gs_or gs_scl">
           <div class="gs_or_ggsm">
             <a href="https://arxiv.org/pdf/2001.08361.pdf">[PDF]</a>
@@ -376,7 +375,6 @@ describe("web search", function () {
           </div>
         </div>
       `,
-      headers: { "Content-Type": "text/html" },
     });
 
     const result = await executeWebSearch({
@@ -395,49 +393,42 @@ describe("web search", function () {
     );
     assert.include(result, "Requested source: auto; intent: auto.");
     assert.include(result, "Routing: auto -> google_scholar");
+    assert.equal(FakeHiddenBrowser.requestedUrls.length, 1);
     assert.match(
-      FakeXMLHttpRequest.requestedUrls[0],
+      FakeHiddenBrowser.requestedUrls[0],
       /^https:\/\/scholar\.google\.com\/scholar\?/,
     );
-    assert.equal(FakeHiddenBrowser.requestedUrls.length, 1);
+    assert.equal(FakeXMLHttpRequest.requestedUrls.length, 0);
   });
 
-  it("routes biomedical queries to Europe PMC in auto mode", async function () {
+  it("routes biomedical intent to Google Scholar without touching Europe PMC", async function () {
     prefStore.set("extensions.zotero.paperchat.webSearchProvider", "auto");
-    queueJsonResponse({
-      resultList: {
-        result: [
-          {
-            title: "Cancer Immunotherapy Review",
-            authorString: "Jane Doe; John Roe",
-            journalTitle: "Nature Reviews Cancer",
-            pubYear: "2023",
-            doi: "10.1000/cancer-review",
-            pmcid: "PMC12345",
-            isOpenAccess: "Y",
-            abstractText: "Immune checkpoint inhibitors continue to expand.",
-          },
-        ],
-      },
+    queueHiddenBrowserPageData({
+      title: "Google Scholar",
+      bodyText: "Search results page",
+      html: `
+        <div class="gs_r gs_or gs_scl">
+          <div class="gs_ri">
+            <h3 class="gs_rt">
+              <a href="https://example.org/biomedical-discovery">Latest Biomedical Discovery Overview</a>
+            </h3>
+            <div class="gs_a">Jane Doe - Example Journal, 2025</div>
+            <div class="gs_rs">A broad overview of recent biomedical research advances.</div>
+          </div>
+        </div>
+      `,
     });
 
     const result = await executeWebSearch({
-      query: "cancer immunotherapy checkpoint inhibitors",
+      query: "biomedical research latest advances 2024 2025",
       intent: "biomedical",
     });
 
-    assert.include(result, "via Europe PMC");
-    assert.include(result, "Cancer Immunotherapy Review");
-    assert.include(result, "Venue: Nature Reviews Cancer");
-    assert.include(
-      result,
-      "Open-access PDF: https://europepmc.org/articles/PMC12345?pdf=render",
-    );
-    assert.include(result, "Routing: auto -> europe_pmc");
-    assert.match(
-      FakeXMLHttpRequest.requestedUrls[0],
-      /^https:\/\/www\.ebi\.ac\.uk\/europepmc\/webservices\/rest\/search\?/,
-    );
+    assert.include(result, "via Google Scholar");
+    assert.include(result, "Latest Biomedical Discovery Overview");
+    assert.include(result, "Routing: auto -> google_scholar");
+    assert.equal(FakeHiddenBrowser.requestedUrls.length, 1);
+    assert.equal(FakeXMLHttpRequest.requestedUrls.length, 0);
   });
 
   it("does not fallback when an explicit scholarly source returns no results", async function () {
@@ -445,11 +436,7 @@ describe("web search", function () {
     queueHiddenBrowserPageData({
       title: "Semantic Scholar",
       bodyText: "Search results",
-    });
-    FakeXMLHttpRequest.queue.push({
-      mode: "load",
-      responseText: `<html><body><main>No results found</main></body></html>`,
-      headers: { "Content-Type": "text/html" },
+      html: `<html><body><main>No results found</main></body></html>`,
     });
 
     const result = await executeWebSearch({
@@ -462,23 +449,20 @@ describe("web search", function () {
       'No web results found for "paperchat pricing roadmap".',
     );
     assert.include(result, "Semantic Scholar: no results");
-    assert.deepEqual(FakeXMLHttpRequest.requestedUrls.length, 1);
+    assert.equal(FakeHiddenBrowser.requestedUrls.length, 1);
     assert.match(
-      FakeXMLHttpRequest.requestedUrls[0],
+      FakeHiddenBrowser.requestedUrls[0],
       /^https:\/\/www\.semanticscholar\.org\/search\?/,
     );
+    assert.equal(FakeXMLHttpRequest.requestedUrls.length, 0);
   });
 
-  it("falls back from empty scholarly providers to DuckDuckGo in auto mode", async function () {
+  it("keeps related-search seed context when auto mode falls back to DuckDuckGo", async function () {
     prefStore.set("extensions.zotero.paperchat.webSearchProvider", "auto");
     queueHiddenBrowserPageData({
       title: "Google Scholar",
       bodyText: "Search results",
-    });
-    FakeXMLHttpRequest.queue.push({
-      mode: "load",
-      responseText: `<html><body><main>No scholar results</main></body></html>`,
-      headers: { "Content-Type": "text/html" },
+      html: `<html><body><main>No scholar results</main></body></html>`,
     });
     queueJsonResponse({ results: [] });
     FakeXMLHttpRequest.queue.push({
@@ -493,7 +477,10 @@ describe("web search", function () {
     });
 
     const result = await executeWebSearch({
-      query: "paperchat pricing roadmap",
+      query: "related work",
+      intent: "related",
+      seed_title: "Attention Is All You Need",
+      seed_doi: "10.48550/arXiv.1706.03762",
     });
 
     assert.include(result, "via DuckDuckGo");
@@ -502,17 +489,18 @@ describe("web search", function () {
       result,
       "attempts: google_scholar -> openalex -> duckduckgo",
     );
+    assert.equal(FakeHiddenBrowser.requestedUrls.length, 1);
     assert.match(
-      FakeXMLHttpRequest.requestedUrls[0],
+      FakeHiddenBrowser.requestedUrls[0],
       /^https:\/\/scholar\.google\.com\/scholar\?/,
     );
     assert.match(
-      FakeXMLHttpRequest.requestedUrls[1],
+      FakeXMLHttpRequest.requestedUrls[0],
       /^https:\/\/api\.openalex\.org\/works\?/,
     );
     assert.equal(
-      FakeXMLHttpRequest.requestedUrls[2],
-      "https://html.duckduckgo.com/html/?q=paperchat%20pricing%20roadmap",
+      FakeXMLHttpRequest.requestedUrls[1],
+      "https://html.duckduckgo.com/html/?q=related%20work%20Attention%20Is%20All%20You%20Need%2010.48550%2FarXiv.1706.03762",
     );
   });
 
@@ -538,10 +526,7 @@ describe("web search", function () {
     queueHiddenBrowserPageData({
       title: "Google Scholar",
       bodyText: "Search results",
-    });
-    FakeXMLHttpRequest.queue.push({
-      mode: "load",
-      responseText: `
+      html: `
         <div class="gs_r gs_or gs_scl">
           <div class="gs_ri">
             <h3 class="gs_rt">
@@ -552,7 +537,6 @@ describe("web search", function () {
           </div>
         </div>
       `,
-      headers: { "Content-Type": "text/html" },
     });
 
     const result = await executeWebSearch({
@@ -575,10 +559,7 @@ describe("web search", function () {
     queueHiddenBrowserPageData({
       title: "Google Scholar",
       bodyText: "Search results",
-    });
-    FakeXMLHttpRequest.queue.push({
-      mode: "load",
-      responseText: `
+      html: `
         <div class="gs_r gs_or gs_scl">
           <div class="gs_ri">
             <h3 class="gs_rt">
@@ -589,7 +570,6 @@ describe("web search", function () {
           </div>
         </div>
       `,
-      headers: { "Content-Type": "text/html" },
     });
 
     const result = await executeWebSearch({
@@ -686,17 +666,93 @@ describe("web search", function () {
     assert.equal(FakeHiddenBrowser.requestedUrls.length, 1);
   });
 
+  it("passes seed_title and seed_doi into the google_scholar query for intent=related", async function () {
+    queueHiddenBrowserPageData({
+      title: "Google Scholar",
+      bodyText: "Search results",
+      html: `
+        <div class="gs_r gs_or gs_scl">
+          <div class="gs_ri">
+            <h3 class="gs_rt">
+              <a href="https://example.org/related-paper">Seeded Related Paper</a>
+            </h3>
+          </div>
+        </div>
+      `,
+    });
+
+    const result = await executeWebSearch({
+      query: "related work",
+      source: "google_scholar",
+      intent: "related",
+      seed_title: "Retrieval Augmented Generation",
+      seed_doi: "10.5555/seed-doi",
+    });
+
+    assert.include(result, "Seeded Related Paper");
+    assert.equal(FakeHiddenBrowser.requestedUrls.length, 1);
+
+    const loadedUrl = FakeHiddenBrowser.requestedUrls[0];
+    const q = new URL(loadedUrl).searchParams.get("q") || "";
+    assert.include(q, "related work");
+    assert.include(q, "Retrieval Augmented Generation");
+    assert.include(q, "10.5555/seed-doi");
+  });
+
+  it("passes seed_doi into the openalex query even when intent is not related", async function () {
+    queueJsonResponse({
+      results: [
+        {
+          id: "https://openalex.org/W-seeded",
+          display_name: "OpenAlex Seeded Hit",
+          publication_year: 2024,
+        },
+      ],
+    });
+
+    const result = await executeWebSearch({
+      query: "anchor paper",
+      source: "openalex",
+      seed_doi: "10.5555/openalex-seed",
+    });
+
+    assert.include(result, "OpenAlex Seeded Hit");
+    assert.equal(FakeXMLHttpRequest.requestedUrls.length, 1);
+
+    const openAlexUrl = FakeXMLHttpRequest.requestedUrls[0];
+    const search = new URL(openAlexUrl).searchParams.get("search") || "";
+    assert.include(search, "anchor paper");
+    assert.include(search, "10.5555/openalex-seed");
+  });
+
+  it("treats a duckduckgo anomaly challenge page as a provider failure", async function () {
+    FakeXMLHttpRequest.queue.push({
+      mode: "load",
+      responseText: `
+        <html><body>
+          <div id="anomaly-modal">
+            <p>Automated queries detected. Please try again later.</p>
+          </div>
+        </body></html>
+      `,
+      headers: { "Content-Type": "text/html" },
+    });
+
+    const result = await executeWebSearch({
+      query: "anything",
+      source: "duckduckgo",
+    });
+
+    assert.include(result, "Error: Web search failed:");
+    assert.include(result, "duckduckgo");
+    assert.include(result, "anomaly challenge");
+  });
+
   it("routes the legacy semantic_scholar source through the web scraper", async function () {
     queueHiddenBrowserPageData({
       title: "Semantic Scholar",
       bodyText: "Search results",
-    });
-    FakeXMLHttpRequest.queue.push({
-      mode: "load",
-      responseText: `
-        <a href="https://www.semanticscholar.org/paper/abc123">Legacy Alias Still Works</a>
-      `,
-      headers: { "Content-Type": "text/html" },
+      html: `<a href="https://www.semanticscholar.org/paper/abc123">Legacy Alias Still Works</a>`,
     });
 
     const result = await executeWebSearch({
@@ -707,11 +763,12 @@ describe("web search", function () {
     assert.include(result, "Legacy Alias Still Works");
     assert.include(result, "via Semantic Scholar");
     assert.notInclude(result, "via Semantic Scholar Web");
+    assert.equal(FakeHiddenBrowser.requestedUrls.length, 1);
     assert.match(
-      FakeXMLHttpRequest.requestedUrls[0],
+      FakeHiddenBrowser.requestedUrls[0],
       /^https:\/\/www\.semanticscholar\.org\/search\?/,
     );
-    assert.equal(FakeHiddenBrowser.requestedUrls.length, 1);
+    assert.equal(FakeXMLHttpRequest.requestedUrls.length, 0);
   });
 
   it("skips downloading bodies for non-html DuckDuckGo results during content fetch", async function () {
@@ -759,6 +816,10 @@ describe("web search", function () {
       query: "invalid source",
       source: "google-scholar",
     });
+    const removedEuropePmc = isValidWebSearchArgs({
+      query: "removed source",
+      source: "europe_pmc" as any,
+    });
     const invalidDomainFilter = isValidWebSearchArgs({
       query: "invalid domain filter",
       domain_filter: [123],
@@ -767,6 +828,7 @@ describe("web search", function () {
     assert.isTrue(validGoogleScholar);
     assert.isTrue(validSemanticScholarWeb);
     assert.isFalse(invalidSource);
+    assert.isFalse(removedEuropePmc);
     assert.isFalse(invalidDomainFilter);
     assert.deepEqual(FakeXMLHttpRequest.requestedMethods, []);
   });

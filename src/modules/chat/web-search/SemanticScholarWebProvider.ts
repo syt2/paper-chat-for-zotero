@@ -4,9 +4,12 @@ import type {
   WebSearchResponse,
   WebSearchResult,
 } from "./WebSearchProvider";
-import { requestHttp } from "./WebSearchHttp";
 import { loadPageWithHiddenBrowser } from "./HiddenBrowserSearch";
-import { cleanText, postProcessResults } from "./WebSearchUtils";
+import {
+  buildSeedEnrichedQuery,
+  cleanText,
+  postProcessResults,
+} from "./WebSearchUtils";
 
 const SEARCH_URL = "https://www.semanticscholar.org/search";
 
@@ -19,7 +22,6 @@ export class SemanticScholarWebProvider implements WebSearchProvider {
   readonly id: string;
   readonly displayName: string;
   private readonly browserTimeoutMs = 20000;
-  private readonly htmlTimeoutMs = 10000;
 
   constructor(options: SemanticScholarWebProviderOptions = {}) {
     this.id = options.id || "semantic_scholar_web";
@@ -33,22 +35,15 @@ export class SemanticScholarWebProvider implements WebSearchProvider {
       timeoutMs: this.browserTimeoutMs,
       settleDelayMs: 1200,
     });
-    this.assertNotBlocked(pageData.title, pageData.bodyText);
+    this.assertNotBlocked(pageData.title, pageData.bodyText, pageData.html);
 
-    const response = await requestHttp(url, {
-      timeoutMs: this.htmlTimeoutMs,
-      accept: "text/html,application/xhtml+xml",
-    });
-
-    if (response.status < 200 || response.status >= 300) {
+    if (!pageData.html) {
       throw new Error(
-        `Semantic Scholar web search failed: ${response.status} ${response.statusText}`,
+        "Semantic Scholar web search returned an empty document from the hidden browser",
       );
     }
 
-    this.assertNotBlocked(pageData.title, pageData.bodyText, response.body);
-
-    const rawResults = this.parseResults(response.body);
+    const rawResults = this.parseResults(pageData.html);
     return {
       providerId: this.id,
       provider: this.displayName,
@@ -58,26 +53,9 @@ export class SemanticScholarWebProvider implements WebSearchProvider {
 
   private buildUrl(request: WebSearchRequest): string {
     const url = new URL(SEARCH_URL);
-    url.searchParams.set("q", this.buildQuery(request));
+    url.searchParams.set("q", buildSeedEnrichedQuery(request));
     url.searchParams.set("sort", "relevance");
     return url.toString();
-  }
-
-  private buildQuery(request: WebSearchRequest): string {
-    const parts = [request.query];
-    if (request.intent === "related" && request.seedTitle) {
-      parts.push(request.seedTitle);
-    }
-    if (request.seedDoi) {
-      parts.push(request.seedDoi);
-    }
-    if (request.seedPaperId) {
-      parts.push(request.seedPaperId);
-    }
-    return parts
-      .map((value) => cleanText(value))
-      .filter(Boolean)
-      .join(" ");
   }
 
   private assertNotBlocked(

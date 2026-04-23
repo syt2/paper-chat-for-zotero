@@ -18,7 +18,10 @@
  * - get_full_text: 获取完整原文（高 token 消耗）
  */
 
-import { WEB_SEARCH_INTENTS, WEB_SEARCH_SOURCES } from "../../../types/tool";
+import {
+  MODEL_VISIBLE_WEB_SEARCH_SOURCES,
+  WEB_SEARCH_INTENTS,
+} from "../../../types/tool";
 import type {
   ToolDefinition,
   ToolParameterProperty,
@@ -287,15 +290,15 @@ export class PdfToolManager {
               },
               source: {
                 type: "string" as const,
-                enum: [...WEB_SEARCH_SOURCES],
+                enum: [...MODEL_VISIBLE_WEB_SEARCH_SOURCES],
                 description:
-                  "Preferred source selector. Specify this explicitly whenever you know the target source. auto uses lightweight fallback routing with duckduckgo only as the final fallback. google_scholar is useful for broad scholarly lookup and cited-by style discovery, openalex for author/institution metadata, europe_pmc for biomedical literature, duckduckgo for general web pages.",
+                  "Preferred source selector. Specify this explicitly whenever you know the target source. auto uses lightweight fallback routing with duckduckgo only as the final fallback. google_scholar is useful for broad scholarly lookup and cited-by style discovery, openalex for author/institution metadata, and duckduckgo is for general web pages.",
               },
               intent: {
                 type: "string" as const,
                 enum: [...WEB_SEARCH_INTENTS],
                 description:
-                  "Optional search intent for auto mode. related finds adjacent papers, discover broadens a topic, biomedical biases toward Europe PMC, web prefers DuckDuckGo, and paper is for direct scholarly lookup.",
+                  "Optional search intent for auto mode. related finds adjacent papers, discover broadens a topic, biomedical prefers broad biomedical scholarly discovery, web prefers DuckDuckGo, and paper is for direct scholarly lookup.",
               },
               max_results: {
                 type: "number" as const,

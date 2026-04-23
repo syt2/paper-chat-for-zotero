@@ -3,6 +3,7 @@ import { cleanText } from "./WebSearchUtils";
 interface HiddenBrowserPageData {
   title: string;
   bodyText: string;
+  html: string;
 }
 
 interface HiddenBrowserInstance {
@@ -106,7 +107,7 @@ export async function loadPageWithHiddenBrowser(
     }
 
     const pageData = await withTimeout(
-      browser.getPageData(["title", "bodyText"]),
+      browser.getPageData(["title", "bodyText", "documentHTML"]),
       timeoutMs,
       `Hidden browser page data for ${url}`,
     );
@@ -114,6 +115,7 @@ export async function loadPageWithHiddenBrowser(
     return {
       title: cleanText(String(pageData.title || "")),
       bodyText: cleanText(String(pageData.bodyText || "")),
+      html: String(pageData.documentHTML || ""),
     };
   } finally {
     try {

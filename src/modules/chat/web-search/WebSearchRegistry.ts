@@ -1,5 +1,4 @@
 import { DuckDuckGoProvider } from "./DuckDuckGoProvider";
-import { EuropePmcProvider } from "./EuropePmcProvider";
 import { GoogleScholarProvider } from "./GoogleScholarProvider";
 import { OpenAlexProvider } from "./OpenAlexProvider";
 import { SemanticScholarWebProvider } from "./SemanticScholarWebProvider";
@@ -49,10 +48,6 @@ const WEB_SEARCH_PROVIDER_DESCRIPTORS: WebSearchProviderDescriptor[] = [
   {
     id: "openalex",
     labelL10nId: "pref-web-search-provider-openalex",
-  },
-  {
-    id: "europe_pmc",
-    labelL10nId: "pref-web-search-provider-europe-pmc",
   },
   {
     id: "duckduckgo",
@@ -112,8 +107,6 @@ export function createWebSearchProvider(
       return new GoogleScholarProvider();
     case "openalex":
       return new OpenAlexProvider();
-    case "europe_pmc":
-      return new EuropePmcProvider();
     case "duckduckgo":
     default:
       return new DuckDuckGoProvider();

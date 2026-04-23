@@ -5,7 +5,12 @@ import type {
   WebSearchResult,
 } from "./WebSearchProvider";
 import { requestHttp } from "./WebSearchHttp";
-import { cleanText, matchesDomainFilter, truncate } from "./WebSearchUtils";
+import {
+  buildSeedEnrichedQuery,
+  cleanText,
+  matchesDomainFilter,
+  truncate,
+} from "./WebSearchUtils";
 
 const SEARCH_URL = "https://html.duckduckgo.com/html/";
 
@@ -20,7 +25,7 @@ export class DuckDuckGoProvider implements WebSearchProvider {
   private readonly maxContentBytes = 1_000_000;
 
   async search(request: WebSearchRequest): Promise<WebSearchResponse> {
-    const url = `${SEARCH_URL}?q=${encodeURIComponent(request.query)}`;
+    const url = `${SEARCH_URL}?q=${encodeURIComponent(buildSeedEnrichedQuery(request))}`;
     const response = await this.requestHtml(url, this.searchTimeoutMs);
 
     if (response.status < 200 || response.status >= 300) {
@@ -29,12 +34,31 @@ export class DuckDuckGoProvider implements WebSearchProvider {
       );
     }
 
+    this.assertNotChallenged(response.body);
+
     const results = await this.parseResults(response.body, request);
     return {
       providerId: this.id,
       provider: this.displayName,
       results,
     };
+  }
+
+  /**
+   * DuckDuckGo sometimes returns a 200 anomaly-challenge page instead of
+   * results. Without this check, `.result` nodes are absent and the caller
+   * treats the run as "no results" instead of a provider failure.
+   */
+  private assertNotChallenged(body: string): void {
+    if (
+      /\banomaly[-_]modal\b/i.test(body) ||
+      /\banomaly\s*detected\b/i.test(body) ||
+      /automated\s+(?:queries|requests)/i.test(body) ||
+      /\bchallenge[-_]error\b/i.test(body) ||
+      /we['’]ve\s+detected\s+unusual/i.test(body)
+    ) {
+      throw new Error("DuckDuckGo returned an anomaly challenge page");
+    }
   }
 
   private async parseResults(

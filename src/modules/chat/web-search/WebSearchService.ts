@@ -107,8 +107,8 @@ function buildProviderOrder(
 
   if (request.intent === "biomedical") {
     return {
-      providerIds: ["europe_pmc", "google_scholar", "openalex", "duckduckgo"],
-      reason: "intent=biomedical prefers Europe PMC first",
+      providerIds: ["google_scholar", "openalex", "duckduckgo"],
+      reason: "intent=biomedical defaults to broad biomedical scholarly discovery",
     };
   }
 
