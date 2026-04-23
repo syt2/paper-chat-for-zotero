@@ -18,6 +18,10 @@
  * - get_full_text: 获取完整原文（高 token 消耗）
  */
 
+import {
+  MODEL_VISIBLE_WEB_SEARCH_SOURCES,
+  WEB_SEARCH_INTENTS,
+} from "../../../types/tool";
 import type {
   ToolDefinition,
   ToolParameterProperty,
@@ -275,14 +279,26 @@ export class PdfToolManager {
         function: {
           name: "web_search",
           description:
-            "Search the public web for current information beyond the local Zotero library. Use this when the user asks about recent developments, external websites, or information not contained in the selected papers.",
+            "Search external sources beyond the local Zotero library. Use this for recent information, related papers, broader literature discovery, biomedical lookup, or general websites. Prefer scholarly sources unless the task is clearly general web browsing.",
           parameters: {
             type: "object" as const,
             properties: {
               query: {
                 type: "string" as const,
                 description:
-                  "The web search query. Be specific and include key entities or phrases.",
+                  "The search query. Be specific and include paper titles, topics, authors, or claims to verify.",
+              },
+              source: {
+                type: "string" as const,
+                enum: [...MODEL_VISIBLE_WEB_SEARCH_SOURCES],
+                description:
+                  "Preferred source selector. Specify this explicitly whenever you know the target source. auto uses lightweight fallback routing with duckduckgo only as the final fallback. google_scholar is useful for broad scholarly lookup and cited-by style discovery, openalex for author/institution metadata, and duckduckgo is for general web pages.",
+              },
+              intent: {
+                type: "string" as const,
+                enum: [...WEB_SEARCH_INTENTS],
+                description:
+                  "Optional search intent for auto mode. related finds adjacent papers, discover broadens a topic, biomedical prefers broad biomedical scholarly discovery, web prefers DuckDuckGo, and paper is for direct scholarly lookup.",
               },
               max_results: {
                 type: "number" as const,
@@ -299,6 +315,36 @@ export class PdfToolManager {
                 type: "boolean" as const,
                 description:
                   "Whether to fetch untrusted page content excerpts for top results. Default: false.",
+              },
+              year_from: {
+                type: "number" as const,
+                description:
+                  "Optional lower bound publication year for scholarly sources.",
+              },
+              year_to: {
+                type: "number" as const,
+                description:
+                  "Optional upper bound publication year for scholarly sources.",
+              },
+              open_access_only: {
+                type: "boolean" as const,
+                description:
+                  "If true, require structured open-access evidence from the selected source.",
+              },
+              seed_title: {
+                type: "string" as const,
+                description:
+                  "Optional seed paper title to anchor related-work searches.",
+              },
+              seed_doi: {
+                type: "string" as const,
+                description:
+                  "Optional seed DOI to anchor related-work or paper lookup searches.",
+              },
+              seed_paper_id: {
+                type: "string" as const,
+                description:
+                  "Optional source-specific paper ID when the model already has one from prior search results.",
               },
             },
             required: ["query"],

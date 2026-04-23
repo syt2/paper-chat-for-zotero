@@ -23,14 +23,20 @@ describe("tool argument preflight", function () {
   });
 
   it("repairs common aliases and scalar types for web_search", async function () {
-    const { preflightToolArguments } = await import(
-      "../src/modules/chat/tool-arguments/ToolArgumentPreflight.ts"
-    );
+    const { preflightToolArguments } =
+      await import("../src/modules/chat/tool-arguments/ToolArgumentPreflight.ts");
     const normalized = preflightToolArguments("web_search", {
       query: "transformer scaling",
       maxResults: "3",
       includeContent: "true",
       domainFilter: "arxiv.org, aclanthology.org",
+      provider: "semantic_scholar",
+      searchIntent: "related",
+      yearFrom: "2020",
+      yearTo: "2024",
+      openAccessOnly: "1",
+      seedTitle: "Scaling Laws for Neural Language Models",
+      seedDoi: "10.1234/example",
     });
 
     assert.deepEqual(normalized, {
@@ -38,13 +44,19 @@ describe("tool argument preflight", function () {
       max_results: 3,
       include_content: true,
       domain_filter: ["arxiv.org", "aclanthology.org"],
+      source: "semantic_scholar",
+      intent: "related",
+      year_from: 2020,
+      year_to: 2024,
+      open_access_only: true,
+      seed_title: "Scaling Laws for Neural Language Models",
+      seed_doi: "10.1234/example",
     });
   });
 
   it("fills create_note content and add_item identifier from common aliases", async function () {
-    const { preflightToolArguments } = await import(
-      "../src/modules/chat/tool-arguments/ToolArgumentPreflight.ts"
-    );
+    const { preflightToolArguments } =
+      await import("../src/modules/chat/tool-arguments/ToolArgumentPreflight.ts");
     const createNoteArgs = preflightToolArguments("create_note", {
       item_key: "ABCD1234",
       text: "A short summary",
@@ -63,9 +75,8 @@ describe("tool argument preflight", function () {
   });
 
   it("normalizes annotation aliases and scalar booleans", async function () {
-    const { ToolScheduler } = await import(
-      "../src/modules/chat/tool-scheduler/ToolScheduler.ts"
-    );
+    const { ToolScheduler } =
+      await import("../src/modules/chat/tool-scheduler/ToolScheduler.ts");
     const calls: Record<string, unknown>[] = [];
     const scheduler = new ToolScheduler(async (_toolCall, _fallback, args) => {
       calls.push(args);

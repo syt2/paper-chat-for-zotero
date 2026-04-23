@@ -101,11 +101,7 @@ export type ToolExecutionClass =
 
 export type ToolConcurrencyMode = "parallel_safe" | "serial";
 
-export type ToolTargetScope =
-  | "paper"
-  | "library"
-  | "memory"
-  | "external";
+export type ToolTargetScope = "paper" | "library" | "memory" | "external";
 
 export interface ToolRuntimeMetadata {
   name: PaperToolName;
@@ -309,11 +305,53 @@ export interface SearchItemsArgs {
 }
 
 // Web 搜索参数
+// WEB_SEARCH_SOURCES lists every id the validator accepts — including
+// `semantic_scholar` / `semantic_scholar_web`, which are kept only as legacy
+// aliases so old prefs or old tool-arg callers keep working. The tool schema
+// exposed to the model uses MODEL_VISIBLE_WEB_SEARCH_SOURCES below so the
+// model never actively picks the hidden aliases.
+export const WEB_SEARCH_SOURCES = [
+  "auto",
+  "semantic_scholar",
+  "semantic_scholar_web",
+  "google_scholar",
+  "openalex",
+  "duckduckgo",
+] as const;
+
+export type WebSearchSource = (typeof WEB_SEARCH_SOURCES)[number];
+
+export const MODEL_VISIBLE_WEB_SEARCH_SOURCES = [
+  "auto",
+  "google_scholar",
+  "openalex",
+  "duckduckgo",
+] as const;
+
+export const WEB_SEARCH_INTENTS = [
+  "auto",
+  "paper",
+  "related",
+  "discover",
+  "biomedical",
+  "web",
+] as const;
+
+export type WebSearchIntent = (typeof WEB_SEARCH_INTENTS)[number];
+
 export interface WebSearchArgs {
   query: string;
+  source?: WebSearchSource;
+  intent?: WebSearchIntent;
   max_results?: number;
   domain_filter?: string[];
   include_content?: boolean;
+  year_from?: number;
+  year_to?: number;
+  open_access_only?: boolean;
+  seed_title?: string;
+  seed_doi?: string;
+  seed_paper_id?: string;
 }
 
 // 获取分类列表的参数

@@ -9,6 +9,7 @@ import type {
   ExecutionPlan,
   ImageAttachment,
   FileAttachment,
+  ToolApprovalState,
 } from "../../../types/chat";
 import type { ToolApprovalResolution } from "../../../types/tool";
 import { getAuthManager } from "../../auth";
@@ -31,6 +32,7 @@ import {
   renderMessages as renderMessageElements,
   updateExecutionPlanView,
   updateApprovalView,
+  type ApprovalViewTransitionState,
 } from "./MessageRenderer";
 import { renderMarkdownToElement } from "./MarkdownRenderer";
 import {
@@ -54,7 +56,24 @@ import { refreshPaperChatNotice } from "../../providers/PaperChatNoticeService";
 export type PanelMode = "sidebar" | "floating";
 export type ChatPanelOpenSource = "menu" | "toolbar" | "unknown";
 
-function buildApprovalActions(manager: ChatManager): {
+const APPROVAL_RESOLVED_ANIMATION_MS = 260;
+const APPROVAL_ENTER_ANIMATION_MS = 220;
+
+type PendingApprovalRequest = ToolApprovalState["pendingRequests"][number];
+
+type ApprovalPanelTransitionEntry = ApprovalViewTransitionState & {
+  timeoutId?: number;
+};
+
+const approvalPanelTransitions = new WeakMap<
+  HTMLElement,
+  ApprovalPanelTransitionEntry
+>();
+
+function buildApprovalActionsForContainer(
+  manager: ChatManager,
+  container: HTMLElement,
+): {
   onResolveApproval: (
     requestId: string,
     resolution: ToolApprovalResolution,
@@ -62,7 +81,22 @@ function buildApprovalActions(manager: ChatManager): {
 } {
   return {
     onResolveApproval: (requestId, resolution) => {
-      manager.resolveToolApprovalRequest(requestId, resolution);
+      const currentRequest = getPendingApprovalRequestSnapshot(
+        container,
+        manager,
+        requestId,
+      );
+      const decision = manager.resolveToolApprovalRequest(requestId, resolution);
+      if (decision && currentRequest) {
+        startApprovalTransition(
+          container,
+          manager,
+          currentRequest,
+          resolution,
+          requestId,
+        );
+        continueApprovalTransition(container, manager, requestId);
+      }
     },
   };
 }
@@ -74,7 +108,7 @@ function updateExecutionInsetsForContainer(
 ): void {
   const theme = getCurrentTheme();
   const toolApprovalState = manager.getActiveSession()?.toolApprovalState;
-  const approvalActions = buildApprovalActions(manager);
+  const approvalActions = buildApprovalActionsForContainer(manager, container);
   const planPanel = container.querySelector(
     "#chat-execution-plan-panel",
   ) as HTMLElement | null;
@@ -92,8 +126,165 @@ function updateExecutionInsetsForContainer(
       executionPlan,
       toolApprovalState,
       approvalActions,
+      approvalPanelTransitions.get(approvalPanel),
     );
   }
+}
+
+function getPendingApprovalRequestSnapshot(
+  container: HTMLElement,
+  manager: ChatManager,
+  requestId: string,
+): PendingApprovalRequest | undefined {
+  const session = manager.getActiveSession();
+  if (!session?.toolApprovalState?.pendingRequests.length) {
+    return undefined;
+  }
+
+  const request = session.toolApprovalState.pendingRequests.find(
+    (entry) => entry.id === requestId,
+  );
+  if (!request) {
+    return undefined;
+  }
+
+  return clonePendingApprovalRequest(request, container.ownerDocument);
+}
+
+function clonePendingApprovalRequest(
+  request: PendingApprovalRequest,
+  doc: Document,
+): PendingApprovalRequest {
+  return structuredCloneIfAvailable(request, doc.defaultView) || {
+    ...request,
+    descriptor: { ...request.descriptor },
+    request: {
+      ...request.request,
+      toolCall: {
+        ...request.request.toolCall,
+        function: { ...request.request.toolCall.function },
+      },
+      args: { ...request.request.args },
+    },
+  };
+}
+
+function structuredCloneIfAvailable<T>(
+  value: T,
+  view?: Window | null,
+): T | null {
+  const clone = view?.structuredClone || globalThis.structuredClone;
+  if (typeof clone !== "function") {
+    return null;
+  }
+  try {
+    return clone(value);
+  } catch {
+    return null;
+  }
+}
+
+function getApprovalPanel(container: HTMLElement): HTMLElement | null {
+  return container.querySelector("#chat-execution-approval-panel") as HTMLElement | null;
+}
+
+function clearApprovalTransition(panel: HTMLElement | null): void {
+  if (!panel) {
+    return;
+  }
+
+  const existing = approvalPanelTransitions.get(panel);
+  if (typeof existing?.timeoutId === "number") {
+    const view = panel.ownerDocument?.defaultView;
+    (view || window).clearTimeout(existing.timeoutId);
+  }
+  approvalPanelTransitions.delete(panel);
+}
+
+function rerenderApprovalPanel(container: HTMLElement, manager: ChatManager): void {
+  updateExecutionInsetsForContainer(
+    container,
+    manager,
+    manager.getActiveSession()?.executionPlan,
+  );
+}
+
+function startApprovalTransition(
+  container: HTMLElement,
+  manager: ChatManager,
+  request: PendingApprovalRequest,
+  resolution: ToolApprovalResolution,
+  requestId: string,
+): void {
+  const panel = getApprovalPanel(container);
+  if (!panel || request.id !== requestId) {
+    return;
+  }
+
+  clearApprovalTransition(panel);
+  approvalPanelTransitions.set(panel, {
+    phase: "resolved",
+    request,
+    resolution,
+    nextPendingCount: 0,
+  });
+  rerenderApprovalPanel(container, manager);
+}
+
+function continueApprovalTransition(
+  container: HTMLElement,
+  manager: ChatManager,
+  requestId: string,
+): void {
+  const panel = getApprovalPanel(container);
+  const state = panel ? approvalPanelTransitions.get(panel) : undefined;
+  if (!panel || !state || state.request.id !== requestId) {
+    return;
+  }
+
+  const nextPendingCount =
+    manager.getActiveSession()?.toolApprovalState?.pendingRequests.length || 0;
+  const view = panel.ownerDocument?.defaultView || window;
+
+  const timeoutId = view.setTimeout(() => {
+    const current = approvalPanelTransitions.get(panel);
+    if (!current || current.request.id !== requestId) {
+      return;
+    }
+
+    if (nextPendingCount > 0) {
+      approvalPanelTransitions.set(panel, {
+        ...current,
+        phase: "entering",
+        nextPendingCount,
+      });
+      rerenderApprovalPanel(container, manager);
+
+      const settleTimeoutId = view.setTimeout(() => {
+        const latest = approvalPanelTransitions.get(panel);
+        if (!latest || latest.request.id !== requestId) {
+          return;
+        }
+        clearApprovalTransition(panel);
+        rerenderApprovalPanel(container, manager);
+      }, APPROVAL_ENTER_ANIMATION_MS);
+
+      approvalPanelTransitions.set(panel, {
+        ...(approvalPanelTransitions.get(panel) || current),
+        timeoutId: settleTimeoutId,
+      });
+      return;
+    }
+
+    clearApprovalTransition(panel);
+    rerenderApprovalPanel(container, manager);
+  }, APPROVAL_RESOLVED_ANIMATION_MS);
+
+  approvalPanelTransitions.set(panel, {
+    ...state,
+    nextPendingCount,
+    timeoutId,
+  });
 }
 
 // Floating window default size

@@ -76,9 +76,12 @@ export type FluentMessageId =
   | 'paperchat-chat-attach-pdf'
   | 'paperchat-chat-banner-allow-once'
   | 'paperchat-chat-banner-always'
+  | 'paperchat-chat-banner-approval-applied'
   | 'paperchat-chat-banner-auto-recovering'
+  | 'paperchat-chat-banner-denial-applied'
   | 'paperchat-chat-banner-deny'
   | 'paperchat-chat-banner-extra-many'
+  | 'paperchat-chat-banner-next-up'
   | 'paperchat-chat-banner-paused-at'
   | 'paperchat-chat-banner-pending-many'
   | 'paperchat-chat-banner-pending-one'
@@ -257,5 +260,9 @@ export type FluentMessageId =
   | 'pref-upload-raw-pdf'
   | 'pref-upload-raw-pdf-desc'
   | 'pref-web-search-provider'
+  | 'pref-web-search-provider-auto'
   | 'pref-web-search-provider-desc'
-  | 'pref-web-search-provider-duckduckgo';
+  | 'pref-web-search-provider-duckduckgo'
+  | 'pref-web-search-provider-google-scholar'
+  | 'pref-web-search-provider-openalex'
+  | 'pref-web-search-provider-semantic-scholar';
