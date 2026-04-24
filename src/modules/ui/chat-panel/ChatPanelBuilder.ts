@@ -501,8 +501,9 @@ export function createChatContainer(
   // Model selector container
   const modelSelectorContainer = createElement(doc, "div", {
     position: "relative",
-    flex: "1",
+    flex: "0 1 auto",
     minWidth: "0",
+    maxWidth: "100%",
   });
 
   // Model selector button
@@ -520,8 +521,8 @@ export function createChatContainer(
       cursor: "pointer",
       fontSize: "12px",
       color: theme.textSecondary,
-      width: "100%",
-      maxWidth: "200px",
+      width: "max-content",
+      maxWidth: "100%",
       minWidth: "0",
       overflow: "hidden",
     },
