@@ -1,4 +1,5 @@
 import { version } from "../../../package.json";
+import { getPref } from "../../utils/prefs";
 import {
   AnalyticsService,
   type AnalyticsEventProps,
@@ -94,6 +95,11 @@ const pluginLogger: AnalyticsLogger = {
   },
 };
 
+function getAnalyticsUserId(): string {
+  const userId = getPref("userId");
+  return typeof userId === "number" && userId > 0 ? String(userId) : "";
+}
+
 let analyticsService: Analytics | null = null;
 
 function buildAnalyticsService(): Analytics {
@@ -125,6 +131,7 @@ function buildAnalyticsService(): Analytics {
     sdkVersion: ANALYTICS_SDK_VERSION,
     http,
     logger: pluginLogger,
+    getUserId: getAnalyticsUserId,
   });
 }
 

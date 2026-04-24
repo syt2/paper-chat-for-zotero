@@ -36,6 +36,7 @@ export interface AnalyticsServiceOptions {
   getOsName?: () => string;
   getZoteroVersion?: () => string;
   getSystemVersion?: () => string;
+  getUserId?: () => string | number | null | undefined;
   now?: () => number;
   randomSessionIdSuffix?: () => string;
   maxBatchSize?: number;
@@ -200,6 +201,7 @@ export class AnalyticsService {
   private readonly getOsName: () => string;
   private readonly getZoteroVersion: () => string;
   private readonly getSystemVersion: () => string;
+  private readonly getUserId: () => string | number | null | undefined;
   private readonly now: () => number;
   private readonly randomSessionIdSuffix: () => string;
   private readonly maxBatchSize: number;
@@ -231,6 +233,7 @@ export class AnalyticsService {
       options.getZoteroVersion ?? defaultGetZoteroVersion;
     this.getSystemVersion =
       options.getSystemVersion ?? defaultGetSystemVersion;
+    this.getUserId = options.getUserId ?? (() => "");
     this.now = options.now ?? Date.now;
     this.randomSessionIdSuffix =
       options.randomSessionIdSuffix ?? defaultRandomSuffix;
@@ -255,6 +258,11 @@ export class AnalyticsService {
       return;
     }
 
+    const eventProps: AnalyticsEventProps = {
+      userId: this.getUserId() ?? "",
+      ...props,
+    };
+
     const event: AnalyticsEvent = {
       timestamp: new Date(this.now()).toISOString(),
       sessionId: this.getCurrentSessionId(),
@@ -268,7 +276,7 @@ export class AnalyticsService {
         appVersion: this.appVersion,
         sdkVersion: this.sdkVersion,
       },
-      props: normalizeEventProps(props),
+      props: normalizeEventProps(eventProps),
     };
 
     if (this.pendingEvents.length >= this.maxQueueSize) {

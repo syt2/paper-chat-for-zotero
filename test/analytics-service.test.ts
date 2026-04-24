@@ -70,6 +70,7 @@ describe("AnalyticsService batching", function () {
       },
       now: () => 1_700_000_000_000,
       randomSessionIdSuffix: () => "00000001",
+      getUserId: () => 42,
     });
 
     service.track("chat_sent", { provider: "paperchat", count: 3, omit: null });
@@ -100,8 +101,33 @@ describe("AnalyticsService batching", function () {
       appVersion: "9.9.9",
       sdkVersion: "paper-chat-analytics/1",
     });
-    assert.deepEqual(body[0].props, { provider: "paperchat", count: 3 });
+    assert.deepEqual(body[0].props, {
+      userId: 42,
+      provider: "paperchat",
+      count: 3,
+    });
+    assert.deepEqual(body[1].props, { userId: 42 });
     assert.equal(body[1].eventName, "chat_completed");
+  });
+
+  it("adds an empty userId prop when no user is available", async function () {
+    const { AnalyticsService } = await loadService();
+
+    const httpCalls: AnalyticsHttpRequest[] = [];
+    const service = new AnalyticsService({
+      ...commonOptions,
+      http: async (request) => {
+        httpCalls.push(request);
+        return { status: 200, responseText: "" };
+      },
+      getUserId: () => null,
+    });
+
+    service.track("chat_completed");
+    await service.flush();
+
+    const body = JSON.parse(httpCalls[0].body);
+    assert.deepEqual(body[0].props, { userId: "" });
   });
 
   it("auto-flushes once the queue reaches maxBatchSize", async function () {
