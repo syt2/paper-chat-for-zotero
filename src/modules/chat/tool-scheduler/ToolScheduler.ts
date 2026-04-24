@@ -172,37 +172,64 @@ export class ToolScheduler {
   }
 
   private parseArguments(toolCall: ToolCall): ParsedArgsResult {
+    let parsed: unknown;
     try {
-      const parsed = JSON.parse(toolCall.function.arguments);
-      if (
-        typeof parsed !== "object" ||
-        parsed === null ||
-        Array.isArray(parsed)
-      ) {
-        const cause = `Invalid arguments JSON: ${toolCall.function.arguments}`;
-        return {
-          ok: false,
-          result: {
+      parsed = JSON.parse(toolCall.function.arguments);
+    } catch {
+      const cause = `Invalid arguments JSON: ${toolCall.function.arguments}`;
+      return {
+        ok: false,
+        result: {
+          toolCall,
+          status: "failed",
+          policyTrace: [
+            {
+              stage: "scheduler",
+              policy: "argument_parse",
+              outcome: "blocked",
+              summary: `Blocked ${toolCall.function.name} because tool arguments were not valid JSON.`,
+              detail: cause,
+            },
+          ],
+          content: formatToolArgumentParseError(
             toolCall,
-            status: "failed",
-            policyTrace: [
-              {
-                stage: "scheduler",
-                policy: "argument_parse",
-                outcome: "blocked",
-                summary: `Blocked ${toolCall.function.name} because tool arguments did not decode to an object.`,
-                detail: cause,
-              },
-            ],
-            content: formatToolArgumentParseError(
-              toolCall,
-              `${cause}. Tool arguments must decode to an object.`,
-            ),
-            error: "Tool arguments must decode to an object.",
-          },
-        };
-      }
+            `${cause}. Tool arguments are not valid JSON.`,
+          ),
+          error: "Tool arguments are not valid JSON.",
+        },
+      };
+    }
 
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
+      const cause = `Invalid arguments JSON: ${toolCall.function.arguments}`;
+      return {
+        ok: false,
+        result: {
+          toolCall,
+          status: "failed",
+          policyTrace: [
+            {
+              stage: "scheduler",
+              policy: "argument_parse",
+              outcome: "blocked",
+              summary: `Blocked ${toolCall.function.name} because tool arguments did not decode to an object.`,
+              detail: cause,
+            },
+          ],
+          content: formatToolArgumentParseError(
+            toolCall,
+            `${cause}. Tool arguments must decode to an object.`,
+          ),
+          error: "Tool arguments must decode to an object.",
+        },
+      };
+    }
+
+    try {
       const preflighted = preflightToolArguments(
         toolCall.function.name,
         parsed as Record<string, unknown>,
@@ -276,8 +303,8 @@ export class ToolScheduler {
               ]
             : undefined,
       };
-    } catch {
-      const cause = `Invalid arguments JSON: ${toolCall.function.arguments}`;
+    } catch (error) {
+      const cause = getErrorMessage(error);
       return {
         ok: false,
         result: {
@@ -286,17 +313,23 @@ export class ToolScheduler {
           policyTrace: [
             {
               stage: "scheduler",
-              policy: "argument_parse",
+              policy: "argument_validation",
               outcome: "blocked",
-              summary: `Blocked ${toolCall.function.name} because tool arguments were not valid JSON.`,
+              summary: `Blocked ${toolCall.function.name} because argument validation failed internally.`,
               detail: cause,
             },
           ],
-          content: formatToolArgumentParseError(
-            toolCall,
-            `${cause}. Tool arguments are not valid JSON.`,
-          ),
-          error: "Tool arguments are not valid JSON.",
+          content: formatToolError({
+            summary: `Tool execution failed for ${toolCall.function.name}.`,
+            category: "execution_failed",
+            retryable: true,
+            cause,
+            suggestedFix:
+              "Retry the tool call unchanged only after the validation pipeline is stable.",
+            saferAlternative:
+              "Continue with other tools if they can answer the request.",
+          }),
+          error: cause,
         },
       };
     }

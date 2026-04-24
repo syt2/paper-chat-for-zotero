@@ -13,6 +13,12 @@ export interface ToolArgumentValidationResult {
 let cachedToolDefinitions: Map<string, ToolDefinition["function"]["parameters"]> | null =
   null;
 
+const CSV_STRING_KEYS = new Set(["tags", "addTags", "removeTags"]);
+
+export function resetToolArgumentValidationCache(): void {
+  cachedToolDefinitions = null;
+}
+
 export function validateAndRepairToolArguments(
   toolName: string,
   args: Record<string, unknown>,
@@ -137,12 +143,10 @@ function repairStringValue(
   let nextValue = value;
   let changed = false;
 
-  if (Array.isArray(nextValue)) {
+  if (CSV_STRING_KEYS.has(key) && Array.isArray(nextValue)) {
     const scalarEntries = nextValue
       .map((entry) =>
-        typeof entry === "string" ||
-        typeof entry === "number" ||
-        typeof entry === "boolean"
+        typeof entry === "string" || typeof entry === "number"
           ? String(entry).trim()
           : "",
       )
@@ -151,11 +155,6 @@ function repairStringValue(
       nextValue = scalarEntries.join(", ");
       changed = true;
     }
-  }
-
-  if (typeof nextValue === "number" || typeof nextValue === "boolean") {
-    nextValue = String(nextValue);
-    changed = true;
   }
 
   const allowedEnum = getAllowedEnum(toolName, key, property);
@@ -356,30 +355,26 @@ function normalizeStringArray(value: unknown): string[] | null {
     return normalized.length > 0 ? normalized : null;
   }
 
-  if (
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-  ) {
-    const trimmed = String(value).trim();
-    if (!trimmed) {
-      return null;
-    }
-    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-      try {
-        const parsed = JSON.parse(trimmed);
-        return normalizeStringArray(parsed);
-      } catch {
-        // Fall through to delimiter split.
-      }
-    }
-    return trimmed
-      .split(/[\n,]/)
-      .map((entry) => entry.trim())
-      .filter(Boolean);
+  if (typeof value !== "string") {
+    return null;
   }
 
-  return null;
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      return normalizeStringArray(parsed);
+    } catch {
+      // Fall through to delimiter split.
+    }
+  }
+  return trimmed
+    .split(/[\n,]/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
 function normalizeKey(value: string): string {

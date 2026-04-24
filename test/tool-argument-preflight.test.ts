@@ -187,4 +187,82 @@ describe("tool argument preflight", function () {
       outcome: "blocked",
     });
   });
+
+  it("blocks singular string fields instead of joining array values", async function () {
+    const { ToolScheduler } =
+      await import("../src/modules/chat/tool-scheduler/ToolScheduler.ts");
+    let invoked = false;
+    const scheduler = new ToolScheduler(async () => {
+      invoked = true;
+      return "ok";
+    });
+
+    const toolCall: ToolCall = {
+      id: "tool-4",
+      type: "function",
+      function: {
+        name: "get_note_content",
+        arguments: JSON.stringify({
+          noteKey: ["NOTE1", "NOTE2"],
+        }),
+      },
+    };
+
+    const result = await scheduler.execute({
+      toolCall,
+      sessionId: "session-1",
+    });
+
+    assert.equal(invoked, false);
+    assert.equal(result.status, "failed");
+    assert.include(result.content, "Category: invalid_arguments");
+    assert.include(result.content, "noteKey: expected string, got array");
+  });
+
+  it("surfaces validator crashes as internal validation failures instead of JSON parse errors", async function () {
+    const { ToolScheduler } =
+      await import("../src/modules/chat/tool-scheduler/ToolScheduler.ts");
+    const { getPdfToolManager } = await import("../src/modules/chat/pdf-tools/index.ts");
+    const { resetToolArgumentValidationCache } = await import(
+      "../src/modules/chat/tool-arguments/ToolArgumentValidation.ts"
+    );
+    const manager = getPdfToolManager();
+    const originalGetToolDefinitions = manager.getToolDefinitions.bind(manager);
+    resetToolArgumentValidationCache();
+    manager.getToolDefinitions = (() => {
+      throw new Error("schema boom");
+    }) as typeof manager.getToolDefinitions;
+
+    try {
+      const scheduler = new ToolScheduler(async () => "ok");
+      const toolCall: ToolCall = {
+        id: "tool-5",
+        type: "function",
+        function: {
+          name: "web_search",
+          arguments: JSON.stringify({
+            query: "tool validation",
+          }),
+        },
+      };
+
+      const result = await scheduler.execute({
+        toolCall,
+        sessionId: "session-1",
+      });
+
+      assert.equal(result.status, "failed");
+      assert.include(result.content, "Category: execution_failed");
+      assert.include(result.content, "Cause: schema boom");
+      assert.notInclude(result.content, "Tool arguments are not valid JSON");
+      assert.deepInclude(result.policyTrace?.[0], {
+        stage: "scheduler",
+        policy: "argument_validation",
+        outcome: "blocked",
+      });
+    } finally {
+      manager.getToolDefinitions = originalGetToolDefinitions;
+      resetToolArgumentValidationCache();
+    }
+  });
 });
