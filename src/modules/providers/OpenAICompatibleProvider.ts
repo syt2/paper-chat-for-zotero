@@ -12,8 +12,17 @@ import type {
 import type { PdfAttachment } from "../../types/provider";
 import type { ToolDefinition, ToolCall } from "../../types/tool";
 import { parseSSEStreamWithToolCalling } from "./SSEParser";
+import { shouldIncludeReasoningContentForRequest } from "./reasoning-content";
 
 export class OpenAICompatibleProvider extends BaseProvider {
+  protected shouldIncludeReasoningContent(): boolean {
+    return shouldIncludeReasoningContentForRequest({
+      providerId: this._config.id,
+      modelId: this._config.defaultModel,
+      baseUrl: this._config.baseUrl,
+    });
+  }
+
   async streamChatCompletion(
     messages: ChatMessage[],
     callbacks: StreamCallbacks,
@@ -160,7 +169,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
     messages: ChatMessage[],
     tools?: ToolDefinition[],
     signal?: AbortSignal,
-  ): Promise<{ content: string; toolCalls?: ToolCall[] }> {
+  ): Promise<{ content: string; reasoning?: string; toolCalls?: ToolCall[] }> {
     if (!this.isReady()) {
       throw new Error("Provider is not configured");
     }
@@ -222,6 +231,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
       choices?: Array<{
         message?: {
           content?: string | null;
+          reasoning_content?: string | null;
           tool_calls?: ToolCall[];
         };
         finish_reason?: string;
@@ -266,12 +276,17 @@ export class OpenAICompatibleProvider extends BaseProvider {
         const cleanContent = (message?.content || "")
           .replace(/<function_calls>[\s\S]*?<\/function_calls>/g, "")
           .trim();
-        return { content: cleanContent, toolCalls: xmlToolCalls };
+        return {
+          content: cleanContent,
+          reasoning: message?.reasoning_content || undefined,
+          toolCalls: xmlToolCalls,
+        };
       }
     }
 
     return {
       content: message?.content || "",
+      reasoning: message?.reasoning_content || undefined,
       toolCalls: message?.tool_calls,
     };
   }
@@ -389,6 +404,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
 
       // 累积状态
       let fullContent = "";
+      let fullReasoning = "";
       const toolCallsMap = new Map<
         number,
         { id: string; name: string; arguments: string }
@@ -404,6 +420,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
               break;
 
             case "reasoning_delta":
+              fullReasoning += event.text;
               if (onReasoningDelta) {
                 onReasoningDelta(event.text);
               }
@@ -457,6 +474,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
 
       onComplete({
         content: fullContent,
+        reasoning: fullReasoning || undefined,
         toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
         stopReason: stopReason as "tool_calls" | "end_turn" | "max_tokens" | "stop",
       });

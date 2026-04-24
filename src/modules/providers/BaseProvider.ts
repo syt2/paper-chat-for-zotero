@@ -160,6 +160,10 @@ export abstract class BaseProvider implements AIProvider {
     });
   }
 
+  protected shouldIncludeReasoningContent(): boolean {
+    return false;
+  }
+
   /**
    * Format messages for OpenAI-compatible API (OpenAI, DeepSeek, Mistral, etc.)
    * Supports Vision API format for images, optional PDF attachment, and tool calling
@@ -187,11 +191,15 @@ export abstract class BaseProvider implements AIProvider {
         msg.tool_calls &&
         msg.tool_calls.length > 0
       ) {
-        return {
+        const assistantMessage: OpenAIMessage = {
           role: "assistant" as const,
           content: msg.content || null,
           tool_calls: msg.tool_calls,
         };
+        if (msg.reasoning && this.shouldIncludeReasoningContent()) {
+          assistantMessage.reasoning_content = msg.reasoning;
+        }
+        return assistantMessage;
       }
 
       const shouldAttachPdf =

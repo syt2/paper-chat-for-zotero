@@ -188,6 +188,26 @@ describe("tool argument preflight", function () {
     });
   });
 
+  it("does not materialize missing optional schema fields during validation", async function () {
+    const { preflightToolArguments } = await import(
+      "../src/modules/chat/tool-arguments/ToolArgumentPreflight.ts"
+    );
+    const { validateAndRepairToolArguments } = await import(
+      "../src/modules/chat/tool-arguments/ToolArgumentValidation.ts"
+    );
+
+    const preflighted = preflightToolArguments("web_search", {
+      query: "attention is all you need",
+    });
+    const result = validateAndRepairToolArguments("web_search", preflighted);
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.args, {
+      query: "attention is all you need",
+    });
+    assert.deepEqual(result.issues, []);
+  });
+
   it("blocks singular string fields instead of joining array values", async function () {
     const { ToolScheduler } =
       await import("../src/modules/chat/tool-scheduler/ToolScheduler.ts");

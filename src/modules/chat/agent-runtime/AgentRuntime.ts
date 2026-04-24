@@ -117,6 +117,7 @@ interface ToolIterationParams {
   paperStructure?: PaperStructure | PaperStructureExtended | null;
   toolCalls: ToolCall[];
   roundContent: string;
+  roundReasoning?: string;
   accumulatedDisplay: string;
   iteration: number;
   logPrefix: string;
@@ -243,6 +244,7 @@ export class AgentRuntime {
             paperStructure,
             toolCalls: result.toolCalls,
             roundContent: result.content || "",
+            roundReasoning: result.reasoning,
             accumulatedDisplay,
             iteration,
             logPrefix,
@@ -392,6 +394,7 @@ export class AgentRuntime {
             paperStructure,
             toolCalls: result.toolCalls,
             roundContent: result.content || "",
+            roundReasoning: result.reasoning,
             accumulatedDisplay,
             iteration,
             logPrefix,
@@ -494,7 +497,12 @@ export class AgentRuntime {
     assistantMessage: ChatMessage,
     displayBeforeThisRound: string,
     iteration: number,
-  ): Promise<{ content: string; toolCalls?: ToolCall[]; stopReason: string }> {
+  ): Promise<{
+    content: string;
+    reasoning?: string;
+    toolCalls?: ToolCall[];
+    stopReason: string;
+  }> {
     const pendingToolCalls = new Map<
       number,
       { id: string; name: string; arguments: string }
@@ -502,6 +510,7 @@ export class AgentRuntime {
 
     return new Promise((resolve, reject) => {
       let roundContent = "";
+      let roundReasoning = "";
       let stopReason = "end_turn";
 
       const buildDraftToolCallDisplay = (): string => {
@@ -568,6 +577,7 @@ export class AgentRuntime {
           }
           assistantMessage.reasoning =
             (assistantMessage.reasoning || "") + text;
+          roundReasoning += text;
           assistantMessage.streamingState = "in_progress";
           this.scheduleAssistantMessageCheckpoint(
             sendingSession,
@@ -621,6 +631,7 @@ export class AgentRuntime {
           }
           resolve({
             content: roundContent,
+            reasoning: roundReasoning || undefined,
             toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
             stopReason,
           });
@@ -658,6 +669,7 @@ export class AgentRuntime {
       paperStructure,
       toolCalls,
       roundContent,
+      roundReasoning,
       iteration,
       logPrefix,
       budgetLimits,
@@ -667,6 +679,7 @@ export class AgentRuntime {
       id: this.callbacks.generateId(),
       role: "assistant",
       content: roundContent,
+      reasoning: roundReasoning,
       tool_calls: toolCalls,
       timestamp: Date.now(),
     };

@@ -337,6 +337,7 @@ export interface ApiConfig {
 export interface OpenAIMessage {
   role: "user" | "assistant" | "system" | "tool";
   content: string | OpenAIMessageContent[] | null;
+  reasoning_content?: string | null;
   tool_calls?: ToolCall[];
   tool_call_id?: string;
 }
@@ -364,6 +365,7 @@ export interface StreamCallbacks {
 // 流式 Tool Calling 完成结果
 export interface StreamToolCallingResult {
   content: string;
+  reasoning?: string;
   toolCalls?: ToolCall[];
   stopReason: "tool_calls" | "end_turn" | "max_tokens" | "stop";
 }

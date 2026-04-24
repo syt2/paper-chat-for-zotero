@@ -290,7 +290,7 @@ export interface ToolCallingProvider extends AIProvider {
     messages: ChatMessage[],
     tools?: ToolDefinition[],
     signal?: AbortSignal,
-  ): Promise<{ content: string; toolCalls?: ToolCall[] }>;
+  ): Promise<{ content: string; reasoning?: string; toolCalls?: ToolCall[] }>;
 
   /** 流式 tool calling（可选，部分 provider 可能不支持） */
   streamChatCompletionWithTools?(

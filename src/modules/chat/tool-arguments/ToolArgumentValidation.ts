@@ -42,6 +42,9 @@ export function validateAndRepairToolArguments(
   dropUnknownKeys(normalized, parameters.properties, droppedKeys);
 
   for (const [key, property] of Object.entries(parameters.properties)) {
+    if (!(key in normalized)) {
+      continue;
+    }
     const repaired = repairPropertyValue(toolName, key, property, normalized[key]);
     if (!repaired.changed) {
       continue;
