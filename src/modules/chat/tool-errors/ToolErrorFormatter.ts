@@ -2,6 +2,7 @@ import type {
   ToolCall,
   ToolPermissionDecision,
 } from "../../../types/tool";
+import { getString } from "../../../utils/locale";
 
 export type ToolErrorCategory =
   | "invalid_arguments"
@@ -32,10 +33,26 @@ interface FormatToolErrorOptions {
   saferAlternative?: string;
 }
 
-const FIX_HINT_LABEL = "Fix hint: ";
+const DEFAULT_FIX_HINT_LABEL = "Fix hint: ";
+const DEFAULT_ALTERNATIVE_LABEL = "Alternative: ";
 const LEGACY_FIX_HINT_LABEL = "Suggested fix: ";
-const ALTERNATIVE_LABEL = "Alternative: ";
 const LEGACY_ALTERNATIVE_LABEL = "Safer alternative: ";
+
+function getFixHintLabel(): string {
+  try {
+    return getString("tool-error-fix-hint-label") || DEFAULT_FIX_HINT_LABEL;
+  } catch {
+    return DEFAULT_FIX_HINT_LABEL;
+  }
+}
+
+function getAlternativeLabel(): string {
+  try {
+    return getString("tool-error-alternative-label") || DEFAULT_ALTERNATIVE_LABEL;
+  } catch {
+    return DEFAULT_ALTERNATIVE_LABEL;
+  }
+}
 
 function stripErrorPrefix(message: string): string {
   return message.replace(/^Error:\s*/i, "").trim();
@@ -205,10 +222,10 @@ export function formatToolError(options: FormatToolErrorOptions): string {
     lines.push(`Cause: ${options.cause}`);
   }
   if (options.suggestedFix) {
-    lines.push(`${FIX_HINT_LABEL}${options.suggestedFix}`);
+    lines.push(`${getFixHintLabel()}${options.suggestedFix}`);
   }
   if (options.saferAlternative) {
-    lines.push(`${ALTERNATIVE_LABEL}${options.saferAlternative}`);
+    lines.push(`${getAlternativeLabel()}${options.saferAlternative}`);
   }
 
   return lines.join("\n");
@@ -228,6 +245,8 @@ export function parseToolError(content: string): ParsedToolError | null {
   const result: ParsedToolError = {
     summary: "",
   };
+  const fixHintLabel = getFixHintLabel();
+  const alternativeLabel = getAlternativeLabel();
 
   for (const line of lines) {
     if (line.startsWith("Error: ")) {
@@ -248,26 +267,32 @@ export function parseToolError(content: string): ParsedToolError | null {
       continue;
     }
     if (
-      line.startsWith(FIX_HINT_LABEL) ||
+      line.startsWith(fixHintLabel) ||
+      line.startsWith(DEFAULT_FIX_HINT_LABEL) ||
       line.startsWith(LEGACY_FIX_HINT_LABEL)
     ) {
       result.suggestedFix = line
         .slice(
-          line.startsWith(FIX_HINT_LABEL)
-            ? FIX_HINT_LABEL.length
+          line.startsWith(fixHintLabel)
+            ? fixHintLabel.length
+            : line.startsWith(DEFAULT_FIX_HINT_LABEL)
+              ? DEFAULT_FIX_HINT_LABEL.length
             : LEGACY_FIX_HINT_LABEL.length,
         )
         .trim();
       continue;
     }
     if (
-      line.startsWith(ALTERNATIVE_LABEL) ||
+      line.startsWith(alternativeLabel) ||
+      line.startsWith(DEFAULT_ALTERNATIVE_LABEL) ||
       line.startsWith(LEGACY_ALTERNATIVE_LABEL)
     ) {
       result.saferAlternative = line
         .slice(
-          line.startsWith(ALTERNATIVE_LABEL)
-            ? ALTERNATIVE_LABEL.length
+          line.startsWith(alternativeLabel)
+            ? alternativeLabel.length
+            : line.startsWith(DEFAULT_ALTERNATIVE_LABEL)
+              ? DEFAULT_ALTERNATIVE_LABEL.length
             : LEGACY_ALTERNATIVE_LABEL.length,
         )
         .trim();

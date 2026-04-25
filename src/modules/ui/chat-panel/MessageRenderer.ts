@@ -431,7 +431,7 @@ function createReasoningContainer(
   arrow.textContent = "\u25B6";
 
   const label = createElement(doc, "span", {});
-  label.textContent = "\uD83D\uDCAD Thinking";
+  label.textContent = `\uD83D\uDCAD ${getString("chat-thinking")}`;
 
   header.appendChild(arrow);
   header.appendChild(label);

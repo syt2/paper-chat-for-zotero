@@ -108,6 +108,8 @@ paperchat-chat-delete = 删除
 paperchat-chat-copy = 复制
 paperchat-chat-interrupted = 已中断
 paperchat-chat-turn-cancelled = 已取消本次请求。
+paperchat-chat-thinking = 思考中
+paperchat-chat-history-title = 对话 { $time }
 
 # Guide
 paperchat-guide-toolbar-title = 开始与 AI 对话
@@ -168,6 +170,8 @@ paperchat-tool-status-calling = 调用中...
 paperchat-tool-status-done = 完成
 paperchat-tool-status-error = 错误
 paperchat-chat-tool-group-earlier = 展开更早的 { $count } 次调用
+paperchat-tool-error-fix-hint-label = 修复建议：
+paperchat-tool-error-alternative-label = 替代方案：
 
 # Chat execution banner
 paperchat-chat-banner-running = 运行中

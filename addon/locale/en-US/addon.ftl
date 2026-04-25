@@ -108,6 +108,8 @@ paperchat-chat-delete = Delete
 paperchat-chat-copy = Copy
 paperchat-chat-interrupted = Interrupted
 paperchat-chat-turn-cancelled = Request cancelled.
+paperchat-chat-thinking = Thinking
+paperchat-chat-history-title = Chat { $time }
 
 # Guide
 paperchat-guide-toolbar-title = Start Chatting with AI
@@ -168,6 +170,8 @@ paperchat-tool-status-calling = Calling...
 paperchat-tool-status-done = Done
 paperchat-tool-status-error = Error
 paperchat-chat-tool-group-earlier = Show { $count } earlier calls
+paperchat-tool-error-fix-hint-label = Fix hint: 
+paperchat-tool-error-alternative-label = Alternative: 
 
 # Chat execution banner
 paperchat-chat-banner-running = Running

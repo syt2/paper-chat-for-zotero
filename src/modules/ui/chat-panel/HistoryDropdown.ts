@@ -107,7 +107,9 @@ export function createSessionItem(
     whiteSpace: "nowrap",
     color: theme.textPrimary,
   });
-  titleEl.textContent = `Chat ${formatTimestamp(session.createdAt)}`;
+  titleEl.textContent = getString("chat-history-title", {
+    args: { time: formatTimestamp(session.createdAt) },
+  });
 
   // Message preview
   const previewEl = createElement(doc, "div", {
