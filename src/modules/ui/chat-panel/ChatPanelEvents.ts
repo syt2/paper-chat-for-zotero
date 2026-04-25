@@ -345,6 +345,13 @@ export function setupEventHandlers(context: ChatPanelContext): void {
         ...(rewardCount !== undefined ? { reward_count: rewardCount } : {}),
       });
 
+      try {
+        await authManager.refreshUserInfo();
+        updateUserBarDisplay(container, authManager);
+      } catch (error) {
+        ztoolkit.log("[ChatPanel] Failed to refresh balance after check-in:", error);
+      }
+
       // Flash "+quota" for 5 s, then settle into the checked-in state
       if (result.quotaAwarded) {
         checkinBtn.textContent = `+${result.quotaAwarded}`;
