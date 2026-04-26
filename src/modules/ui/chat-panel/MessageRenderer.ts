@@ -581,6 +581,41 @@ export function setupCopyButtonHover(
   });
 }
 
+function createChatEmptyState(doc: Document, theme: ThemeColors): HTMLElement {
+  const emptyState = createElement(
+    doc,
+    "div",
+    {
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "center",
+      height: "100%",
+      minHeight: "200px",
+      color: theme.textMuted,
+      textAlign: "center",
+    },
+    { id: "chat-empty-state" },
+  );
+
+  const emptyIcon = createElement(doc, "div", {
+    fontSize: "48px",
+    marginBottom: "16px",
+    opacity: "0.6",
+  });
+  emptyIcon.textContent = "\uD83D\uDCAC";
+
+  const emptyText = createElement(doc, "div", {
+    fontSize: "15px",
+    color: theme.textMuted,
+  });
+  emptyText.textContent = getString("chat-start-conversation");
+
+  emptyState.appendChild(emptyIcon);
+  emptyState.appendChild(emptyText);
+  return emptyState;
+}
+
 /**
  * Render all messages to the chat history element
  */
@@ -599,10 +634,9 @@ export function renderMessages(
   chatHistory.textContent = "";
 
   if (messages.length === 0) {
-    if (emptyState) {
-      chatHistory.appendChild(emptyState);
-      emptyState.style.display = "flex";
-    }
+    const visibleEmptyState = emptyState || createChatEmptyState(doc, theme);
+    chatHistory.appendChild(visibleEmptyState);
+    visibleEmptyState.style.display = "flex";
     return;
   }
 
