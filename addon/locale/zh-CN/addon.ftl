@@ -96,6 +96,7 @@ paperchat-chat-select-model = 选择模型
 paperchat-chat-tier-lite = Lite
 paperchat-chat-tier-standard = Standard
 paperchat-chat-tier-pro = Pro
+paperchat-chat-tier-models = 显示 { $tier } 模型
 paperchat-chat-tier-auto-reroute = 自动档位路由
 paperchat-chat-model-rerouted = 已将 { $tier } 从 { $old } 切换为 { $new }
 paperchat-chat-reroll-model = 尝试同档位其他模型

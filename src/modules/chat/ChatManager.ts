@@ -62,7 +62,6 @@ import {
   rerollTierModel,
   deriveTierPools,
   isPaperChatModelHardFailure,
-  parseTierState,
   type PaperChatTier,
 } from "../providers/paperchat-tier-routing";
 import { isPaperChatQuotaError } from "../providers/paperchat-errors";
@@ -890,7 +889,10 @@ export class ChatManager {
     };
   }
 
-  async switchCurrentSessionPaperChatTier(tier: PaperChatTier): Promise<void> {
+  async switchCurrentSessionPaperChatTier(
+    tier: PaperChatTier,
+    modelOverride?: string | null,
+  ): Promise<void> {
     await this.init();
 
     const session = this.currentSession;
@@ -898,11 +900,16 @@ export class ChatManager {
       return;
     }
 
-    const effectiveSelectedTier =
-      session.selectedTier ||
-      parseTierState(getPref("paperchatTierState") as string | undefined)
-        .selectedTier;
-    if (effectiveSelectedTier === tier) {
+    const nextResolvedModelId =
+      modelOverride === undefined ? undefined : modelOverride || undefined;
+    if (modelOverride === undefined && session.selectedTier === tier) {
+      return;
+    }
+    if (
+      modelOverride !== undefined &&
+      session.selectedTier === tier &&
+      session.resolvedModelId === nextResolvedModelId
+    ) {
       return;
     }
 
@@ -916,7 +923,7 @@ export class ChatManager {
     };
 
     session.selectedTier = tier;
-    session.resolvedModelId = undefined;
+    session.resolvedModelId = nextResolvedModelId;
     clearPaperChatRetryableState(session);
 
     try {
@@ -937,7 +944,7 @@ export class ChatManager {
     const providerManager = getProviderManager();
     const paperchatProvider = providerManager.getProvider("paperchat");
     paperchatProvider?.updateConfig({
-      resolvedModelOverride: undefined,
+      resolvedModelOverride: nextResolvedModelId,
     });
   }
 

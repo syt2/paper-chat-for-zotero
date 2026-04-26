@@ -18,9 +18,13 @@ import { getString } from "../../../utils/locale";
 import { getProviderManager } from "../../providers";
 import type { PaperChatProviderConfig } from "../../../types/provider";
 import { getPref, setPref } from "../../../utils/prefs";
-import { formatModelLabel } from "../../preferences/ModelsFetcher";
+import {
+  formatModelLabel,
+  getModelRatios,
+} from "../../preferences/ModelsFetcher";
 import {
   PAPERCHAT_TIERS,
+  deriveTierPools,
   parseTierState,
   type PaperChatTier,
 } from "../../providers/paperchat-tier-routing";
@@ -1353,6 +1357,8 @@ function populateModelDropdown(
   const doc = container.ownerDocument!;
   const theme = getCurrentTheme();
   dropdown.textContent = "";
+  dropdown.style.overflowX = "hidden";
+  dropdown.style.overflowY = "auto";
 
   const providerManager = getProviderManager();
   const providers = providerManager.getConfiguredProviders();
@@ -1384,20 +1390,251 @@ function populateModelDropdown(
       );
       const session = context.chatManager.getActiveSession();
       const selectedTier = session?.selectedTier || tierState.selectedTier;
-      const tierOptions: Array<{ value: PaperChatTier; label: string }> =
-        PAPERCHAT_TIERS.map((tier) => ({
-          value: tier,
-          label: getPaperChatTierLabel(tier),
-        }));
+      const tierPools = deriveTierPools(models, getModelRatios());
+      type PaperChatSubmenuEntry = {
+        submenu: HTMLElement;
+        arrow: HTMLElement;
+        arrowIcon: HTMLElement;
+        tierItem: HTMLElement;
+        isSelected: boolean;
+      };
+      const submenuEntries: PaperChatSubmenuEntry[] = [];
 
-      for (const opt of tierOptions) {
-        const isSelected = isActiveProvider && selectedTier === opt.value;
-        const item = createElement(doc, "button", {
+      const switchPaperChatSelection = async (
+        tier: PaperChatTier,
+        mode: "tier" | "auto" | "manual",
+        modelId: string | null = null,
+      ) => {
+        const previousTierState = parseTierState(
+          getPref("paperchatTierState") as string | undefined,
+        );
+        const previousActiveProviderId = providerManager.getActiveProviderId();
+        const previousEntry = previousTierState.tiers[tier];
+        const nextTierState = {
+          ...previousTierState,
+          selectedTier: tier,
+          tiers: {
+            ...previousTierState.tiers,
+            [tier]:
+              mode === "manual" && modelId
+                ? { mode: "manual" as const, modelId }
+                : mode === "auto"
+                  ? { mode: "auto" as const, modelId: null }
+                  : previousEntry,
+          },
+        };
+
+        try {
+          if (!isActiveProvider) {
+            await context.chatManager.clearCurrentSessionPaperChatRetryableState();
+            providerManager.setActiveProvider(config.id);
+          }
+
+          setPref("paperchatTierState", JSON.stringify(nextTierState));
+          await context.chatManager.switchCurrentSessionPaperChatTier(
+            tier,
+            mode === "manual" ? modelId : mode === "auto" ? null : undefined,
+          );
+
+          const activeSession = context.chatManager.getActiveSession();
+          if (activeSession) {
+            context.renderMessages(activeSession.messages);
+          }
+
+          trackChatModelSwitched({
+            source: mode === "tier" ? "tier_dropdown" : "tier_model_submenu",
+            previous_provider: previousActiveProviderId || "unknown",
+            provider: "paperchat",
+            previous_tier: previousTierState.selectedTier,
+            tier,
+            selection_mode: mode,
+            previous_model: previousEntry.modelId || "",
+            model: modelId || "",
+          });
+
+          updateModelSelectorDisplay(container);
+          dropdown.style.display = "none";
+          context.updateUserBar();
+        } catch (error) {
+          setPref("paperchatTierState", JSON.stringify(previousTierState));
+          if (
+            previousActiveProviderId &&
+            previousActiveProviderId !== config.id
+          ) {
+            providerManager.setActiveProvider(previousActiveProviderId);
+          }
+          updateModelSelectorDisplay(container);
+          context.updateUserBar();
+          context.appendError(
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      };
+
+      const setPaperChatSubmenuExpanded = (
+        entry: PaperChatSubmenuEntry,
+        expanded: boolean,
+      ) => {
+        entry.submenu.style.display = expanded ? "block" : "none";
+        entry.arrowIcon.style.transform = expanded
+          ? "rotate(180deg)"
+          : "rotate(0deg)";
+        entry.tierItem.style.background =
+          expanded || entry.isSelected
+            ? theme.dropdownItemHoverBg
+            : "transparent";
+      };
+
+      for (const tier of PAPERCHAT_TIERS) {
+        const tierEntry = tierState.tiers[tier];
+        const tierModels = tierPools[tier] || [];
+        const isSelectedTier = isActiveProvider && selectedTier === tier;
+        const isManualSelection =
+          tierEntry.mode === "manual" &&
+          tierEntry.modelId !== null &&
+          tierModels.includes(tierEntry.modelId);
+
+        const tierGroup = createElement(doc, "div", {
+          borderBottom: `1px solid ${theme.borderColor}`,
+        });
+        const tierRow = createElement(doc, "div", {
+          display: "flex",
+          alignItems: "stretch",
+        });
+        const tierItem = createElement(doc, "button", {
           padding: "8px 12px",
           fontSize: "12px",
-          color: isSelected ? theme.inputFocusBorderColor : theme.textPrimary,
+          color: isSelectedTier
+            ? theme.inputFocusBorderColor
+            : theme.textPrimary,
           cursor: "pointer",
-          background: isSelected ? theme.dropdownItemHoverBg : "transparent",
+          background: isSelectedTier
+            ? theme.dropdownItemHoverBg
+            : "transparent",
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+          flex: "1",
+          minWidth: "0",
+          border: "none",
+          textAlign: "left",
+        });
+        tierItem.setAttribute("type", "button");
+        if (isSelectedTier) {
+          const check = createElement(doc, "span", {
+            color: theme.inputFocusBorderColor,
+            fontWeight: "bold",
+          });
+          check.textContent = "✓";
+          tierItem.appendChild(check);
+        }
+        const label = createElement(doc, "span", {
+          flex: "1",
+          minWidth: "0",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        });
+        label.textContent = getPaperChatTierLabel(tier);
+        tierItem.appendChild(label);
+        const arrow = createElement(doc, "button", {
+          fontSize: "10px",
+          opacity: "0.6",
+          color: theme.textSecondary,
+          cursor: "pointer",
+          background: isSelectedTier
+            ? theme.dropdownItemHoverBg
+            : "transparent",
+          border: "none",
+          width: "32px",
+          flex: "0 0 32px",
+          padding: "0",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        });
+        arrow.setAttribute("type", "button");
+        arrow.setAttribute(
+          "aria-label",
+          getString("chat-tier-models", {
+            args: { tier: getPaperChatTierLabel(tier) },
+          }),
+        );
+        const arrowIcon = createElement(doc, "img", {
+          width: "14px",
+          height: "14px",
+          display: "block",
+          pointerEvents: "none",
+          transition: "transform 0.12s ease",
+        });
+        arrowIcon.setAttribute(
+          "src",
+          `chrome://${addon.data.config.addonRef}/content/icons/down.svg`,
+        );
+        arrow.appendChild(arrowIcon);
+
+        const submenu = createElement(doc, "div", {
+          display: "none",
+          maxHeight: "180px",
+          overflowY: "auto",
+          padding: "4px 0 6px 0",
+          background: theme.dropdownBg,
+          borderTop: `1px solid ${theme.borderColor}`,
+        });
+
+        const submenuEntry: PaperChatSubmenuEntry = {
+          submenu,
+          arrow,
+          arrowIcon,
+          tierItem,
+          isSelected: isSelectedTier,
+        };
+        submenuEntries.push(submenuEntry);
+
+        arrow.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const shouldExpand = submenu.style.display === "none";
+          for (const entry of submenuEntries) {
+            setPaperChatSubmenuExpanded(entry, false);
+          }
+          setPaperChatSubmenuExpanded(submenuEntry, shouldExpand);
+        });
+        tierItem.addEventListener("focus", () => {
+          tierItem.style.outline = `2px solid ${theme.inputFocusBorderColor}`;
+          tierItem.style.outlineOffset = "-2px";
+        });
+        tierItem.addEventListener("blur", () => {
+          tierItem.style.outline = "none";
+          tierItem.style.outlineOffset = "0";
+          if (!isSelectedTier) {
+            tierItem.style.background = "transparent";
+          }
+        });
+        tierItem.addEventListener("click", async () => {
+          if (isSelectedTier) {
+            dropdown.style.display = "none";
+            return;
+          }
+          await switchPaperChatSelection(tier, "tier");
+        });
+
+        tierRow.appendChild(tierItem);
+        tierRow.appendChild(arrow);
+        tierGroup.appendChild(tierRow);
+
+        const autoItem = createElement(doc, "button", {
+          padding: "7px 12px 7px 28px",
+          fontSize: "12px",
+          color:
+            isSelectedTier && !isManualSelection
+              ? theme.inputFocusBorderColor
+              : theme.textPrimary,
+          cursor: "pointer",
+          background:
+            isSelectedTier && !isManualSelection
+              ? theme.dropdownItemHoverBg
+              : "transparent",
           display: "flex",
           alignItems: "center",
           gap: "8px",
@@ -1405,94 +1642,108 @@ function populateModelDropdown(
           border: "none",
           textAlign: "left",
         });
-        item.setAttribute("type", "button");
-        if (isSelected) {
+        autoItem.setAttribute("type", "button");
+        if (isSelectedTier && !isManualSelection) {
           const check = createElement(doc, "span", {
             color: theme.inputFocusBorderColor,
             fontWeight: "bold",
           });
           check.textContent = "✓";
-          item.appendChild(check);
+          autoItem.appendChild(check);
         }
-        const label = createElement(doc, "span", {});
-        label.textContent = opt.label;
-        item.appendChild(label);
-        item.addEventListener("mouseenter", () => {
-          if (!isSelected) item.style.background = theme.dropdownItemHoverBg;
-        });
-        item.addEventListener("mouseleave", () => {
-          if (!isSelected) item.style.background = "transparent";
-        });
-        item.addEventListener("focus", () => {
-          item.style.background = theme.dropdownItemHoverBg;
-          item.style.outline = `2px solid ${theme.inputFocusBorderColor}`;
-          item.style.outlineOffset = "-2px";
-        });
-        item.addEventListener("blur", () => {
-          item.style.outline = "none";
-          item.style.outlineOffset = "0";
-          if (!isSelected) {
-            item.style.background = "transparent";
+        const autoLabel = createElement(doc, "span", {});
+        autoLabel.textContent = getString("pref-paperchat-model-auto");
+        autoItem.appendChild(autoLabel);
+        autoItem.addEventListener("mouseenter", () => {
+          if (!isSelectedTier || isManualSelection) {
+            autoItem.style.background = theme.dropdownItemHoverBg;
           }
         });
-        item.addEventListener("click", async () => {
-          if (isSelected) {
+        autoItem.addEventListener("mouseleave", () => {
+          if (!isSelectedTier || isManualSelection) {
+            autoItem.style.background = "transparent";
+          }
+        });
+        autoItem.addEventListener("click", async () => {
+          if (isSelectedTier && !isManualSelection) {
             dropdown.style.display = "none";
             return;
           }
-
-          const previousTierState = parseTierState(
-            getPref("paperchatTierState") as string | undefined,
-          );
-          const previousActiveProviderId =
-            providerManager.getActiveProviderId();
-
-          try {
-            if (!isActiveProvider) {
-              await context.chatManager.clearCurrentSessionPaperChatRetryableState();
-              providerManager.setActiveProvider(config.id);
-            }
-            const nextTierState = {
-              ...previousTierState,
-              selectedTier: opt.value,
-            };
-            setPref("paperchatTierState", JSON.stringify(nextTierState));
-
-            await context.chatManager.switchCurrentSessionPaperChatTier(
-              opt.value,
-            );
-            const activeSession = context.chatManager.getActiveSession();
-            if (activeSession) {
-              context.renderMessages(activeSession.messages);
-            }
-
-            trackChatModelSwitched({
-              source: "tier_dropdown",
-              previous_provider: previousActiveProviderId || "unknown",
-              provider: "paperchat",
-              previous_tier: previousTierState.selectedTier,
-              tier: opt.value,
-            });
-
-            updateModelSelectorDisplay(container);
-            dropdown.style.display = "none";
-            context.updateUserBar();
-          } catch (error) {
-            setPref("paperchatTierState", JSON.stringify(previousTierState));
-            if (
-              previousActiveProviderId &&
-              previousActiveProviderId !== config.id
-            ) {
-              providerManager.setActiveProvider(previousActiveProviderId);
-            }
-            updateModelSelectorDisplay(container);
-            context.updateUserBar();
-            context.appendError(
-              error instanceof Error ? error.message : String(error),
-            );
-          }
+          await switchPaperChatSelection(tier, "auto");
         });
-        dropdown.appendChild(item);
+        submenu.appendChild(autoItem);
+
+        if (tierModels.length === 0) {
+          const noModels = createElement(doc, "div", {
+            padding: "7px 12px 7px 28px",
+            fontSize: "12px",
+            color: theme.textMuted,
+            fontStyle: "italic",
+          });
+          noModels.textContent = getString("chat-no-models");
+          submenu.appendChild(noModels);
+        } else {
+          for (const model of tierModels) {
+            const isCurrentModel =
+              isSelectedTier &&
+              tierEntry.mode === "manual" &&
+              tierEntry.modelId === model;
+            const modelItem = createElement(doc, "button", {
+              padding: "7px 12px 7px 28px",
+              fontSize: "12px",
+              color: isCurrentModel
+                ? theme.inputFocusBorderColor
+                : theme.textPrimary,
+              cursor: "pointer",
+              background: isCurrentModel
+                ? theme.dropdownItemHoverBg
+                : "transparent",
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              width: "100%",
+              border: "none",
+              textAlign: "left",
+            });
+            modelItem.setAttribute("type", "button");
+            if (isCurrentModel) {
+              const check = createElement(doc, "span", {
+                color: theme.inputFocusBorderColor,
+                fontWeight: "bold",
+              });
+              check.textContent = "✓";
+              modelItem.appendChild(check);
+            }
+            const modelName = createElement(doc, "span", {
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            });
+            modelName.textContent = formatModelLabel(model, config.id);
+            modelItem.appendChild(modelName);
+            modelItem.addEventListener("mouseenter", () => {
+              if (!isCurrentModel) {
+                modelItem.style.background = theme.dropdownItemHoverBg;
+              }
+            });
+            modelItem.addEventListener("mouseleave", () => {
+              if (!isCurrentModel) {
+                modelItem.style.background = "transparent";
+              }
+            });
+            modelItem.addEventListener("click", async () => {
+              if (isCurrentModel) {
+                dropdown.style.display = "none";
+                return;
+              }
+              await switchPaperChatSelection(tier, "manual", model);
+            });
+            submenu.appendChild(modelItem);
+          }
+        }
+
+        tierGroup.appendChild(submenu);
+        dropdown.appendChild(tierGroup);
       }
       continue;
     }

@@ -127,6 +127,7 @@ export type FluentMessageId =
   | 'paperchat-chat-thinking'
   | 'paperchat-chat-tier-auto-reroute'
   | 'paperchat-chat-tier-lite'
+  | 'paperchat-chat-tier-models'
   | 'paperchat-chat-tier-pro'
   | 'paperchat-chat-tier-standard'
   | 'paperchat-chat-toggle-panel-mode'
