@@ -32,6 +32,7 @@ import {
 } from "./MentionSelector";
 import { ANALYTICS_EVENTS, getAnalyticsService } from "../../analytics";
 import { buildErrorProps } from "../../analytics/errorProps";
+import { LOW_BALANCE_WARNING_THRESHOLD } from "../../preferences/UserAuthUI";
 import {
   extractStatusCode,
   isNetworkErrorMessage,
@@ -49,6 +50,30 @@ const sessionSendLocks = new Map<string, symbol>();
 
 // Duration (ms) to show the "+quota" flash on the check-in button after a successful check-in
 const CHECKIN_FLASH_DURATION_MS = 5000;
+
+function resetUserBalanceLowBalanceStyles(userBalanceEl: HTMLElement): void {
+  userBalanceEl.style.color = "";
+  userBalanceEl.style.fontWeight = "";
+  userBalanceEl.style.textDecoration = "";
+  userBalanceEl.style.textUnderlineOffset = "";
+  userBalanceEl.style.cursor = "";
+  userBalanceEl.style.opacity = "0.9";
+  userBalanceEl.removeAttribute("role");
+  userBalanceEl.removeAttribute("tabindex");
+  userBalanceEl.removeAttribute("data-low-balance-clickable");
+}
+
+function applyUserBalanceLowBalanceStyles(userBalanceEl: HTMLElement): void {
+  userBalanceEl.style.color = "#dc2626";
+  userBalanceEl.style.fontWeight = "700";
+  userBalanceEl.style.textDecoration = "underline";
+  userBalanceEl.style.textUnderlineOffset = "2px";
+  userBalanceEl.style.cursor = "pointer";
+  userBalanceEl.style.opacity = "1";
+  userBalanceEl.setAttribute("role", "button");
+  userBalanceEl.setAttribute("tabindex", "0");
+  userBalanceEl.setAttribute("data-low-balance-clickable", "true");
+}
 const MESSAGE_INPUT_MIN_HEIGHT = 60;
 const MESSAGE_INPUT_MAX_HEIGHT = 140;
 const CHAT_HISTORY_BOTTOM_STICKY_THRESHOLD = 24;
@@ -760,6 +785,38 @@ export function setupEventHandlers(context: ChatPanelContext): void {
     });
   }
 
+  const userBalanceEl = container.querySelector(
+    "#chat-user-balance",
+  ) as HTMLElement;
+  if (userBalanceEl) {
+    const openLowBalanceTopup = () => {
+      if (userBalanceEl.getAttribute("data-low-balance-clickable") !== "true") {
+        return;
+      }
+      getAnalyticsService().track(ANALYTICS_EVENTS.paperChatLowBalanceClicked, {
+        source: "chat_user_bar_balance",
+        low_balance: true,
+      });
+      void import("../../preferences/UserAuthUI")
+        .then((module) => module.openPaperChatSettingsForTopup())
+        .catch((error) => {
+          ztoolkit.log(
+            "[Chat] Failed to open PaperChat settings for low balance:",
+            error,
+          );
+          Zotero.Utilities.Internal.openPreferences("paperchat-prefpane");
+        });
+    };
+    userBalanceEl.addEventListener("click", openLowBalanceTopup);
+    userBalanceEl.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+      event.preventDefault();
+      openLowBalanceTopup();
+    });
+  }
+
   // Panel mode toggle button - switch between sidebar and floating mode
   const panelModeBtn = container.querySelector(
     "#chat-panel-mode-btn",
@@ -1138,6 +1195,7 @@ export function updateUserBarDisplay(
   authManager: {
     isLoggedIn(): boolean;
     getUser(): { username: string } | null;
+    getBalance(): { quota: number; usedQuota: number };
     formatBalance(): string;
   },
 ): void {
@@ -1171,8 +1229,15 @@ export function updateUserBarDisplay(
 
   if (authManager.isLoggedIn()) {
     const user = authManager.getUser();
+    const isLowBalance =
+      authManager.getBalance().quota < LOW_BALANCE_WARNING_THRESHOLD;
     userNameEl.textContent = user?.username || "";
     userBalanceEl.textContent = `${getString("user-panel-balance")}: ${authManager.formatBalance()}`;
+    if (isLowBalance) {
+      applyUserBalanceLowBalanceStyles(userBalanceEl);
+    } else {
+      resetUserBalanceLowBalanceStyles(userBalanceEl);
+    }
     userActionBtn.textContent = getString("user-panel-logout-btn");
     // Hide settings button when logged in
     if (userBarSettingsBtn) {
@@ -1183,6 +1248,7 @@ export function updateUserBarDisplay(
   } else {
     userNameEl.textContent = getString("user-panel-not-logged-in");
     userBalanceEl.textContent = "";
+    resetUserBalanceLowBalanceStyles(userBalanceEl);
     userActionBtn.textContent = getString("user-panel-login-btn");
     // Show settings button when not logged in
     if (userBarSettingsBtn) {

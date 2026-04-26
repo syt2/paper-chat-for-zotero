@@ -10,6 +10,7 @@ export const ANALYTICS_EVENTS = {
   chatSent: "chat_sent",
   paperChatModelRerouted: "paperchat_model_rerouted",
   paperChatQuotaError: "paperchat_quota_error",
+  paperChatLowBalanceClicked: "paperchat_low_balance_clicked",
   paperChatQuotaTopupClicked: "paperchat_quota_topup_clicked",
   paperChatRedeemCodeClicked: "paperchat_redeem_code_clicked",
   pluginStarted: "plugin_started",
