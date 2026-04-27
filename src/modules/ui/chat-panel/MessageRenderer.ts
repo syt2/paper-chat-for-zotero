@@ -490,6 +490,8 @@ function createRerollButton(
       borderRadius: "4px",
       padding: "4px 8px",
       fontSize: "12px",
+      lineHeight: "1.2",
+      whiteSpace: "nowrap",
       cursor: "pointer",
       opacity: "1",
       transition: "background 0.2s, box-shadow 0.2s",
@@ -497,7 +499,7 @@ function createRerollButton(
     { class: "reroll-btn", title: getString("chat-reroll-model") },
   );
   btn.setAttribute("type", "button");
-  btn.textContent = "🎲";
+  btn.textContent = `${getString("chat-reroll-model")} 🎲`;
   btn.addEventListener("focus", () => {
     btn.style.boxShadow = `0 0 0 2px ${theme.borderColor}`;
   });
