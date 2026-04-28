@@ -190,7 +190,6 @@ export async function showAuthDialog(
       confirmPassword: "",
       email: "",
       verificationCode: "",
-      affCode: "",
       isLoading: false,
       errorMessage: "",
       successMessage: "",
@@ -438,32 +437,6 @@ export async function showAuthDialog(
               },
             ],
           },
-          // 邀请码 (仅注册)
-          {
-            tag: "div",
-            id: "aff-code-field",
-            styles: { display: "none", flexDirection: "column", gap: "4px" },
-            children: [
-              {
-                tag: "label",
-                properties: { textContent: getString("auth-aff-code") },
-              },
-              {
-                tag: "input",
-                id: "auth-aff-code",
-                attributes: {
-                  type: "text",
-                  "data-bind": "affCode",
-                  placeholder: getString("auth-aff-code-placeholder"),
-                },
-                styles: {
-                  padding: "8px",
-                  borderRadius: "4px",
-                  border: `1px solid ${authColors.inputBorder}`,
-                },
-              },
-            ],
-          },
           // 按钮区域 (不使用addButton，避免自动关闭)
           {
             tag: "div",
@@ -550,7 +523,6 @@ export async function showAuthDialog(
       const confirmPasswordField = doc.getElementById(
         "confirm-password-field",
       ) as HTMLElement;
-      const affCodeField = doc.getElementById("aff-code-field") as HTMLElement;
       const forgotPasswordField = doc.getElementById(
         "forgot-password-field",
       ) as HTMLElement;
@@ -582,9 +554,6 @@ export async function showAuthDialog(
       ) as HTMLInputElement;
       const confirmPasswordInput = doc.getElementById(
         "auth-confirm-password",
-      ) as HTMLInputElement;
-      const affCodeInput = doc.getElementById(
-        "auth-aff-code",
       ) as HTMLInputElement;
 
       let currentMode: DialogMode = initialMode;
@@ -618,13 +587,12 @@ export async function showAuthDialog(
         emailField.style.display = isRegister ? "flex" : "none";
         verificationField.style.display = isRegister ? "flex" : "none";
         confirmPasswordField.style.display = isRegister ? "flex" : "none";
-        affCodeField.style.display = isRegister ? "flex" : "none";
 
         // 调整窗口高度
         setTimeout(() => {
           if (dialogWin) {
             const loginHeight = 360;
-            const registerHeight = 620;
+            const registerHeight = 570;
             const targetHeight = isRegister ? registerHeight : loginHeight;
             dialogWin.resizeTo(dialogWin.outerWidth, targetHeight);
           }
@@ -774,7 +742,6 @@ export async function showAuthDialog(
         const email = emailInput?.value?.trim();
         const verificationCode = verificationInput?.value?.trim();
         const confirmPassword = confirmPasswordInput?.value;
-        const affCode = affCodeInput?.value?.trim();
 
         // 验证
         if (currentMode === "login") {
@@ -832,7 +799,6 @@ export async function showAuthDialog(
               password,
               email,
               verificationCode,
-              affCode,
             );
           }
 

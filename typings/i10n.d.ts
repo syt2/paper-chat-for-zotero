@@ -41,8 +41,6 @@ export type FluentMessageId =
   | 'paperchat-api-error-request-failed'
   | 'paperchat-api-success-login'
   | 'paperchat-api-success-redeem'
-  | 'paperchat-auth-aff-code'
-  | 'paperchat-auth-aff-code-placeholder'
   | 'paperchat-auth-cancel'
   | 'paperchat-auth-code-sent'
   | 'paperchat-auth-confirm-password'
