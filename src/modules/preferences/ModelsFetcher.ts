@@ -7,14 +7,21 @@ import { getPref, setPref } from "../../utils/prefs";
 import { BUILTIN_PROVIDERS } from "../providers";
 import { getAuthManager } from "../auth";
 import { showMessage } from "./utils";
+import {
+  parseModelRoutingConfig,
+  type PaperChatModelRoutingMeta,
+} from "../providers/paperchat-routing-metadata";
 
 // Store model ratios for PaperChat
 let paperchatModelRatios: Record<string, number> = {};
+let paperchatModelRoutingMeta: Record<string, PaperChatModelRoutingMeta> = {};
 
 /** Special value stored in pref("model") to indicate auto-selection (cheapest) */
 export const AUTO_MODEL = "auto";
 /** Special value stored in pref("model") to indicate auto-selection (smartest) */
 export const AUTO_MODEL_SMART = "auto-smart";
+const DEFAULT_ROUTING_META_URL =
+  "https://paperchat.zotero.store/paperchat/model-routing.json";
 
 /** Check if a model value is any auto mode */
 export function isAutoModel(model: string): boolean {
@@ -26,6 +33,10 @@ export function isAutoModel(model: string): boolean {
  */
 export function getModelRatios(): Record<string, number> {
   return paperchatModelRatios;
+}
+
+export function getModelRoutingMeta(): Record<string, PaperChatModelRoutingMeta> {
+  return paperchatModelRoutingMeta;
 }
 
 /**
@@ -97,6 +108,42 @@ export function loadCachedRatios(): void {
       // ignore parse error
     }
   }
+
+  const cachedRoutingMeta = getPref("paperchatRoutingConfigCache") as string;
+  if (cachedRoutingMeta) {
+    try {
+      paperchatModelRoutingMeta = JSON.parse(cachedRoutingMeta);
+      ztoolkit.log(
+        "[Preferences] Loaded cached routing metadata for",
+        Object.keys(paperchatModelRoutingMeta).length,
+        "models",
+      );
+    } catch {
+      // ignore parse error
+    }
+  }
+}
+
+function getPricingModelName(item: Record<string, unknown>): string | undefined {
+  if (typeof item.model_name === "string" && item.model_name.length > 0) {
+    return item.model_name;
+  }
+  if (typeof item.ModelName === "string" && item.ModelName.length > 0) {
+    return item.ModelName;
+  }
+  return undefined;
+}
+
+function getPricingModelRatio(item: Record<string, unknown>): number | undefined {
+  const value = item.model_ratio ?? item.ModelRatio;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
 }
 
 /**
@@ -121,21 +168,23 @@ export async function fetchPaperchatRatios(apiKey: string): Promise<void> {
     }
 
     const result = (await response.json()) as {
-      data?: Array<{
-        model_name: string;
-        model_ratio: number;
-      }>;
+      data?: Array<Record<string, unknown>>;
     };
 
     if (result.data && Array.isArray(result.data)) {
-      // Build model_name -> model_ratio mapping
+      // Build model_name -> model_ratio mapping. Routing metadata is fetched
+      // from a separate static JSON endpoint so newapi can stay unmodified.
       paperchatModelRatios = {};
       for (const item of result.data) {
-        if (item.model_name && typeof item.model_ratio === "number") {
-          paperchatModelRatios[item.model_name] = item.model_ratio;
+        const modelName = getPricingModelName(item);
+        const ratio = getPricingModelRatio(item);
+        if (!modelName || ratio === undefined) {
+          continue;
         }
+
+        paperchatModelRatios[modelName] = ratio;
       }
-      // Cache ratios to prefs
+      // Cache ratios to prefs.
       setPref("paperchatRatiosCache", JSON.stringify(paperchatModelRatios));
       ztoolkit.log(
         "[Preferences] Loaded ratios for",
@@ -145,6 +194,42 @@ export async function fetchPaperchatRatios(apiKey: string): Promise<void> {
     }
   } catch (e) {
     ztoolkit.log("[Preferences] Failed to fetch ratios:", e);
+  }
+}
+
+export async function fetchPaperchatRoutingMeta(): Promise<void> {
+  ztoolkit.log(
+    "[Preferences] Fetching routing metadata from:",
+    DEFAULT_ROUTING_META_URL,
+  );
+
+  try {
+    const response = await fetch(DEFAULT_ROUTING_META_URL, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      ztoolkit.log(
+        "[Preferences] Failed to fetch routing metadata:",
+        response.status,
+      );
+      return;
+    }
+
+    const result = await response.json();
+    const parsed = parseModelRoutingConfig(result);
+    paperchatModelRoutingMeta = parsed;
+    setPref("paperchatRoutingConfigCache", JSON.stringify(parsed));
+    ztoolkit.log(
+      "[Preferences] Loaded routing metadata for",
+      Object.keys(parsed).length,
+      "models",
+    );
+  } catch (e) {
+    ztoolkit.log("[Preferences] Failed to fetch routing metadata:", e);
   }
 }
 
@@ -169,8 +254,9 @@ export async function fetchPaperchatModels(
 
   showMessage(doc, getString("pref-fetching-models"), false);
 
-  // Fetch ratios first (in parallel with models)
+  // Fetch ratios and routing metadata in parallel with models.
   const ratiosPromise = fetchPaperchatRatios(apiKey);
+  const routingMetaPromise = fetchPaperchatRoutingMeta();
 
   const url = `${BUILTIN_PROVIDERS.paperchat.defaultBaseUrl}/models`;
   ztoolkit.log("[Preferences] Fetching models from:", url);
@@ -195,8 +281,8 @@ export async function fetchPaperchatModels(
       JSON.stringify(result).substring(0, 200),
     );
 
-    // Wait for ratios to complete
-    await ratiosPromise;
+    // Wait for ratios and routing metadata to complete
+    await Promise.all([ratiosPromise, routingMetaPromise]);
 
     if (result.data && Array.isArray(result.data)) {
       const models = result.data.map((m) => m.id).sort();

@@ -21,10 +21,12 @@ import { getPref, setPref } from "../../../utils/prefs";
 import {
   formatModelLabel,
   getModelRatios,
+  getModelRoutingMeta,
 } from "../../preferences/ModelsFetcher";
 import {
   PAPERCHAT_TIERS,
   deriveTierPools,
+  getAvailablePaperChatTiers,
   parseTierState,
   type PaperChatTier,
 } from "../../providers/paperchat-tier-routing";
@@ -132,6 +134,10 @@ function getPaperChatTierLabel(tier: PaperChatTier): string {
 
   if (tier === "paperchat-pro") {
     return getString("chat-tier-pro");
+  }
+
+  if (tier === "paperchat-ultra") {
+    return getString("chat-tier-ultra");
   }
 
   return getString("chat-tier-standard");
@@ -1325,12 +1331,21 @@ export function updateModelSelectorDisplay(container: HTMLElement): void {
     getPref("paperchatTierState") as string | undefined,
   );
   const session = getChatManager().getActiveSession();
-  const tier = session?.selectedTier || tierState.selectedTier;
-  const tierEntry = tierState.tiers[tier];
   const paperchatConfig = providerManager.getProviderConfig(
     "paperchat",
   ) as PaperChatProviderConfig | null;
   const availableModels = paperchatConfig?.availableModels ?? [];
+  const tierPools = deriveTierPools(
+    availableModels,
+    getModelRatios(),
+    getModelRoutingMeta(),
+  );
+  const requestedTier = session?.selectedTier || tierState.selectedTier;
+  const visibleTiers = getAvailablePaperChatTiers(tierPools);
+  const tier = visibleTiers.includes(requestedTier)
+    ? requestedTier
+    : (visibleTiers[0] ?? requestedTier);
+  const tierEntry = tierState.tiers[tier];
   // Mirror the availability check in paperchat-session-routing.ts so the
   // displayed model stays in sync with what the next request will actually use.
   const effectiveModel =
@@ -1390,7 +1405,11 @@ function populateModelDropdown(
       );
       const session = context.chatManager.getActiveSession();
       const selectedTier = session?.selectedTier || tierState.selectedTier;
-      const tierPools = deriveTierPools(models, getModelRatios());
+      const tierPools = deriveTierPools(
+        models,
+        getModelRatios(),
+        getModelRoutingMeta(),
+      );
       type PaperChatSubmenuEntry = {
         submenu: HTMLElement;
         arrow: HTMLElement;
@@ -1488,6 +1507,9 @@ function populateModelDropdown(
       for (const tier of PAPERCHAT_TIERS) {
         const tierEntry = tierState.tiers[tier];
         const tierModels = tierPools[tier] || [];
+        if (tierModels.length === 0) {
+          continue;
+        }
         const isSelectedTier = isActiveProvider && selectedTier === tier;
         const isManualSelection =
           tierEntry.mode === "manual" &&
@@ -1673,73 +1695,60 @@ function populateModelDropdown(
         });
         submenu.appendChild(autoItem);
 
-        if (tierModels.length === 0) {
-          const noModels = createElement(doc, "div", {
+        for (const model of tierModels) {
+          const isCurrentModel =
+            isSelectedTier &&
+            tierEntry.mode === "manual" &&
+            tierEntry.modelId === model;
+          const modelItem = createElement(doc, "button", {
             padding: "7px 12px 7px 28px",
             fontSize: "12px",
-            color: theme.textMuted,
-            fontStyle: "italic",
+            color: isCurrentModel
+              ? theme.inputFocusBorderColor
+              : theme.textPrimary,
+            cursor: "pointer",
+            background: isCurrentModel ? theme.dropdownItemHoverBg : "transparent",
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            width: "100%",
+            border: "none",
+            textAlign: "left",
           });
-          noModels.textContent = getString("chat-no-models");
-          submenu.appendChild(noModels);
-        } else {
-          for (const model of tierModels) {
-            const isCurrentModel =
-              isSelectedTier &&
-              tierEntry.mode === "manual" &&
-              tierEntry.modelId === model;
-            const modelItem = createElement(doc, "button", {
-              padding: "7px 12px 7px 28px",
-              fontSize: "12px",
-              color: isCurrentModel
-                ? theme.inputFocusBorderColor
-                : theme.textPrimary,
-              cursor: "pointer",
-              background: isCurrentModel
-                ? theme.dropdownItemHoverBg
-                : "transparent",
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
-              width: "100%",
-              border: "none",
-              textAlign: "left",
+          modelItem.setAttribute("type", "button");
+          if (isCurrentModel) {
+            const check = createElement(doc, "span", {
+              color: theme.inputFocusBorderColor,
+              fontWeight: "bold",
             });
-            modelItem.setAttribute("type", "button");
-            if (isCurrentModel) {
-              const check = createElement(doc, "span", {
-                color: theme.inputFocusBorderColor,
-                fontWeight: "bold",
-              });
-              check.textContent = "✓";
-              modelItem.appendChild(check);
-            }
-            const modelName = createElement(doc, "span", {
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            });
-            modelName.textContent = formatModelLabel(model, config.id);
-            modelItem.appendChild(modelName);
-            modelItem.addEventListener("mouseenter", () => {
-              if (!isCurrentModel) {
-                modelItem.style.background = theme.dropdownItemHoverBg;
-              }
-            });
-            modelItem.addEventListener("mouseleave", () => {
-              if (!isCurrentModel) {
-                modelItem.style.background = "transparent";
-              }
-            });
-            modelItem.addEventListener("click", async () => {
-              if (isCurrentModel) {
-                dropdown.style.display = "none";
-                return;
-              }
-              await switchPaperChatSelection(tier, "manual", model);
-            });
-            submenu.appendChild(modelItem);
+            check.textContent = "✓";
+            modelItem.appendChild(check);
           }
+          const modelName = createElement(doc, "span", {
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          });
+          modelName.textContent = formatModelLabel(model, config.id);
+          modelItem.appendChild(modelName);
+          modelItem.addEventListener("mouseenter", () => {
+            if (!isCurrentModel) {
+              modelItem.style.background = theme.dropdownItemHoverBg;
+            }
+          });
+          modelItem.addEventListener("mouseleave", () => {
+            if (!isCurrentModel) {
+              modelItem.style.background = "transparent";
+            }
+          });
+          modelItem.addEventListener("click", async () => {
+            if (isCurrentModel) {
+              dropdown.style.display = "none";
+              return;
+            }
+            await switchPaperChatSelection(tier, "manual", model);
+          });
+          submenu.appendChild(modelItem);
         }
 
         tierGroup.appendChild(submenu);

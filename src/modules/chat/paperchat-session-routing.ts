@@ -5,6 +5,7 @@ import {
   type PaperChatTier,
   type PaperChatTierPools,
 } from "../providers/paperchat-tier-routing";
+import type { PaperChatModelRoutingMetaMap } from "../providers/paperchat-routing-metadata";
 
 function createFastPathPools(
   selectedTier: PaperChatTier,
@@ -14,6 +15,7 @@ function createFastPathPools(
     "paperchat-lite": selectedTier === "paperchat-lite" ? [modelId] : [],
     "paperchat-standard": selectedTier === "paperchat-standard" ? [modelId] : [],
     "paperchat-pro": selectedTier === "paperchat-pro" ? [modelId] : [],
+    "paperchat-ultra": selectedTier === "paperchat-ultra" ? [modelId] : [],
   };
 }
 
@@ -23,6 +25,7 @@ export function resolveSessionPaperChatModel(
   availableModels: string[],
   ratios: Record<string, number>,
   pickRandom?: (candidates: string[]) => string | null | undefined,
+  routingMeta: PaperChatModelRoutingMetaMap = {},
 ): {
   selectedTier: PaperChatTier;
   state: ReturnType<typeof parseTierState>;
@@ -72,10 +75,11 @@ export function resolveSessionPaperChatModel(
     availableModels,
     ratios,
     pickRandom,
+    routingMeta,
   );
 
   return {
-    selectedTier,
+    selectedTier: resolved.state.selectedTier,
     state: resolved.state,
     modelId: resolved.modelId,
     pools: resolved.pools,

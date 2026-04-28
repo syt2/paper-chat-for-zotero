@@ -17,6 +17,7 @@ pref("userQuotaJson", "");
 // Cache
 pref("paperchatModelsCache", "");
 pref("paperchatRatiosCache", "");
+pref("paperchatRoutingConfigCache", "");
 pref("paperchatTierState", "");
 
 // PDF Settings

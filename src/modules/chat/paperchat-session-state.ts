@@ -5,6 +5,7 @@ import {
   rerollTierModel,
   type PaperChatTierState,
 } from "../providers/paperchat-tier-routing";
+import type { PaperChatModelRoutingMetaMap } from "../providers/paperchat-routing-metadata";
 import { resolveSessionPaperChatModel } from "./paperchat-session-routing";
 
 type ResolvePaperChatSessionBindingResult = {
@@ -24,6 +25,7 @@ export function resolvePaperChatSessionBinding(
   availableModels: string[],
   ratios: Record<string, number>,
   pickRandom?: (candidates: string[]) => string | null | undefined,
+  routingMeta: PaperChatModelRoutingMetaMap = {},
 ): ResolvePaperChatSessionBindingResult {
   const resolution = resolveSessionPaperChatModel(
     session,
@@ -31,6 +33,7 @@ export function resolvePaperChatSessionBinding(
     availableModels,
     ratios,
     pickRandom,
+    routingMeta,
   );
 
   if (!resolution.modelId) {
@@ -70,22 +73,26 @@ export function repairPaperChatSessionBindingAfterHardFailure(
   ratios: Record<string, number>,
   failedModelId: string | null,
   pickRandom?: (candidates: string[]) => string | null | undefined,
+  routingMeta: PaperChatModelRoutingMetaMap = {},
 ): RepairPaperChatSessionBindingResult | null {
   const globalState = parseTierState(tierStateRaw);
-  const selectedTier = session.selectedTier || globalState.selectedTier;
+  const requestedTier = session.selectedTier || globalState.selectedTier;
   const resolution = resolveTierModel(
     globalState,
-    selectedTier,
+    requestedTier,
     availableModels,
     ratios,
     pickRandom,
+    routingMeta,
   );
+  const selectedTier = resolution.state.selectedTier;
 
   const previousModelId = failedModelId ?? session.resolvedModelId ?? null;
   const reroutedModelId = rerollTierModel(
     resolution.pools[selectedTier],
     previousModelId,
     pickRandom ?? ((candidates) => candidates[0] ?? null),
+    routingMeta,
   );
   const modelId =
     reroutedModelId

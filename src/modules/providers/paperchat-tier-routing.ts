@@ -1,9 +1,18 @@
 import { parsePaperChatError } from "./paperchat-errors";
+import {
+  buildRoutingWeights,
+  deriveRoutingMetaTierPools,
+  getRoutingTier,
+  hasAnyRoutingTierCoverage,
+  hasCompleteRoutingTierCoverage,
+  type PaperChatModelRoutingMetaMap,
+} from "./paperchat-routing-metadata";
 
 export const PAPERCHAT_TIERS = [
   "paperchat-lite",
   "paperchat-standard",
   "paperchat-pro",
+  "paperchat-ultra",
 ] as const;
 
 export type PaperChatTier = (typeof PAPERCHAT_TIERS)[number];
@@ -21,7 +30,10 @@ export interface PaperChatTierState {
 
 export type PaperChatTierPools = Record<PaperChatTier, string[]>;
 
-export type PickRandom = (candidates: string[]) => string | null | undefined;
+export type PickRandom = (
+  candidates: string[],
+  weights?: Record<string, number>,
+) => string | null | undefined;
 
 const DEFAULT_SELECTED_TIER: PaperChatTier = "paperchat-pro";
 const STANDARD_MIN_RATIO = 0.51;
@@ -38,23 +50,67 @@ function normalizeModelId(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-function defaultPickRandom(candidates: string[]): string | null {
-  if (candidates.length === 0) {
-    return null;
-  }
-  const index = Math.floor(Math.random() * candidates.length);
-  return candidates[index] ?? null;
+export function getAvailablePaperChatTiers(
+  pools: PaperChatTierPools,
+): PaperChatTier[] {
+  return PAPERCHAT_TIERS.filter((tier) => pools[tier].length > 0);
 }
 
-function pickCandidate(
+function getFirstAvailablePaperChatTier(
+  pools: PaperChatTierPools,
+): PaperChatTier | null {
+  return getAvailablePaperChatTiers(pools)[0] ?? null;
+}
+
+function defaultPickRandom(
   candidates: string[],
-  pickRandom: PickRandom,
+  weights: Record<string, number> = {},
 ): string | null {
   if (candidates.length === 0) {
     return null;
   }
 
-  const picked = pickRandom(candidates);
+  let totalWeight = 0;
+  for (const candidate of candidates) {
+    const weight = weights[candidate] ?? 1;
+    if (Number.isFinite(weight) && weight > 0) {
+      totalWeight += weight;
+    }
+  }
+
+  if (totalWeight <= 0) {
+    const index = Math.floor(Math.random() * candidates.length);
+    return candidates[index] ?? null;
+  }
+
+  let cursor = Math.random() * totalWeight;
+  for (const candidate of candidates) {
+    const weight = weights[candidate] ?? 1;
+    if (!Number.isFinite(weight) || weight <= 0) {
+      continue;
+    }
+    cursor -= weight;
+    if (cursor < 0) {
+      return candidate;
+    }
+  }
+
+  return candidates[candidates.length - 1] ?? null;
+}
+
+function pickCandidate(
+  candidates: string[],
+  pickRandom: PickRandom,
+  routingMeta: PaperChatModelRoutingMetaMap = {},
+): string | null {
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  const picked = pickRandom(
+    candidates,
+    buildRoutingWeights(candidates, routingMeta),
+  );
   if (typeof picked === "string" && candidates.includes(picked)) {
     return picked;
   }
@@ -84,7 +140,10 @@ function hasCompleteRatioCoverage(
   return models.every((model) => Number.isFinite(ratios[model]));
 }
 
-function sortModelsByRatio(models: string[], ratios: Record<string, number>): string[] {
+function sortModelsByRatio(
+  models: string[],
+  ratios: Record<string, number>,
+): string[] {
   return [...models].sort((a, b) => {
     const ratioA = ratios[a] ?? 0;
     const ratioB = ratios[b] ?? 0;
@@ -97,37 +156,21 @@ function sortModelsByRatio(models: string[], ratios: Record<string, number>): st
   });
 }
 
-function createDefaultEntry(): PaperChatTierEntry {
+function createEmptyTierPools(): PaperChatTierPools {
   return {
-    mode: "auto",
-    modelId: null,
+    "paperchat-lite": [],
+    "paperchat-standard": [],
+    "paperchat-pro": [],
+    "paperchat-ultra": [],
   };
 }
 
-function createDefaultState(): PaperChatTierState {
-  return {
-    selectedTier: DEFAULT_SELECTED_TIER,
-    tiers: {
-      "paperchat-lite": createDefaultEntry(),
-      "paperchat-standard": createDefaultEntry(),
-      "paperchat-pro": createDefaultEntry(),
-    },
-  };
-}
-
-export function deriveTierPools(
-  models: string[],
+function deriveRatioTierPools(
+  availableModels: string[],
   ratios: Record<string, number>,
 ): PaperChatTierPools {
-  const availableModels = dedupeModels(models);
-  const count = availableModels.length;
-
-  if (count === 0) {
-    return {
-      "paperchat-lite": [],
-      "paperchat-standard": [],
-      "paperchat-pro": [],
-    };
+  if (availableModels.length === 0) {
+    return createEmptyTierPools();
   }
 
   if (!hasCompleteRatioCoverage(availableModels, ratios)) {
@@ -135,6 +178,7 @@ export function deriveTierPools(
       "paperchat-lite": [...availableModels],
       "paperchat-standard": [...availableModels],
       "paperchat-pro": [...availableModels],
+      "paperchat-ultra": [...availableModels],
     };
   }
 
@@ -153,7 +197,101 @@ export function deriveTierPools(
     "paperchat-lite": liteModels.length > 0 ? liteModels : [fallbackModel],
     "paperchat-standard": standardModels.length > 0 ? standardModels : [fallbackModel],
     "paperchat-pro": proModels.length > 0 ? proModels : [fallbackModel],
+    "paperchat-ultra": [],
   };
+}
+
+function deriveMixedTierPools(
+  availableModels: string[],
+  ratios: Record<string, number>,
+  routingMeta: PaperChatModelRoutingMetaMap,
+): PaperChatTierPools {
+  const metadataModels = availableModels.filter(
+    (model) => getRoutingTier(model, routingMeta) !== undefined,
+  );
+  const legacyModels = availableModels.filter(
+    (model) => getRoutingTier(model, routingMeta) === undefined,
+  );
+
+  const pools = createEmptyTierPools();
+  const addModel = (tier: PaperChatTier, model: string) => {
+    if (!pools[tier].includes(model)) {
+      pools[tier].push(model);
+    }
+  };
+
+  if (legacyModels.length > 0) {
+    const legacyPools = deriveRatioTierPools(legacyModels, ratios);
+    for (const tier of PAPERCHAT_TIERS) {
+      for (const model of legacyPools[tier]) {
+        addModel(tier, model);
+      }
+    }
+  }
+
+  const weights = buildRoutingWeights(metadataModels, routingMeta);
+  const sortedMetadataModels = [...metadataModels].sort((a, b) => {
+    const priorityDelta = (weights[b] ?? 1) - (weights[a] ?? 1);
+    if (priorityDelta !== 0) {
+      return priorityDelta;
+    }
+    return a.localeCompare(b);
+  });
+  for (const model of sortedMetadataModels) {
+    const tier = getRoutingTier(model, routingMeta);
+    if (tier) {
+      addModel(tier, model);
+    }
+  }
+
+  return pools;
+}
+
+function createDefaultEntry(): PaperChatTierEntry {
+  return {
+    mode: "auto",
+    modelId: null,
+  };
+}
+
+function createDefaultState(): PaperChatTierState {
+  return {
+    selectedTier: DEFAULT_SELECTED_TIER,
+    tiers: {
+      "paperchat-lite": createDefaultEntry(),
+      "paperchat-standard": createDefaultEntry(),
+      "paperchat-pro": createDefaultEntry(),
+      "paperchat-ultra": createDefaultEntry(),
+    },
+  };
+}
+
+export function deriveTierPools(
+  models: string[],
+  ratios: Record<string, number>,
+  routingMeta: PaperChatModelRoutingMetaMap = {},
+): PaperChatTierPools {
+  const availableModels = dedupeModels(models);
+  const count = availableModels.length;
+
+  if (count === 0) {
+    return {
+      "paperchat-lite": [],
+      "paperchat-standard": [],
+      "paperchat-pro": [],
+      "paperchat-ultra": [],
+    };
+  }
+
+  if (hasCompleteRoutingTierCoverage(availableModels, routingMeta)) {
+    return deriveRoutingMetaTierPools(availableModels, routingMeta);
+  }
+
+  if (hasAnyRoutingTierCoverage(availableModels, routingMeta)) {
+    return deriveMixedTierPools(availableModels, ratios, routingMeta);
+  }
+
+  return deriveRatioTierPools(availableModels, ratios);
 }
 
 export function parseTierState(raw: unknown): PaperChatTierState {
@@ -205,12 +343,13 @@ export function rerollTierModel(
   candidates: string[],
   excludedModelId: string | null,
   pickRandom: PickRandom,
+  routingMeta: PaperChatModelRoutingMetaMap = {},
 ): string | null {
   const uniqueCandidates = dedupeModels(candidates).filter(
     (candidate) => candidate !== excludedModelId,
   );
 
-  return pickCandidate(uniqueCandidates, pickRandom);
+  return pickCandidate(uniqueCandidates, pickRandom, routingMeta);
 }
 
 export function isPaperChatModelHardFailure(error: Error): boolean {
@@ -231,11 +370,12 @@ export function validateTierState(
   models: string[],
   ratios: Record<string, number>,
   pickRandom: PickRandom = defaultPickRandom,
+  routingMeta: PaperChatModelRoutingMetaMap = {},
 ): PaperChatTierState {
   const parsedState = parseTierState(state);
   const availableModels = dedupeModels(models);
   const availableSet = new Set(availableModels);
-  const pools = deriveTierPools(availableModels, ratios);
+  const pools = deriveTierPools(availableModels, ratios, routingMeta);
 
   const normalizedTiers = {} as Record<PaperChatTier, PaperChatTierEntry>;
 
@@ -265,7 +405,7 @@ export function validateTierState(
     normalizedTiers[tier] = {
       mode: "auto",
       modelId:
-        stickyAutoModel ?? pickCandidate(pools[tier], pickRandom),
+        stickyAutoModel ?? pickCandidate(pools[tier], pickRandom, routingMeta),
     };
   }
 
@@ -279,10 +419,11 @@ function deriveEffectiveTierPools(
   state: PaperChatTierState,
   models: string[],
   ratios: Record<string, number>,
+  routingMeta: PaperChatModelRoutingMetaMap = {},
 ): PaperChatTierPools {
   const availableModels = dedupeModels(models);
   const availableSet = new Set(availableModels);
-  const basePools = deriveTierPools(availableModels, ratios);
+  const basePools = deriveTierPools(availableModels, ratios, routingMeta);
 
   const effectivePools = {} as PaperChatTierPools;
 
@@ -311,17 +452,36 @@ export function resolveTierModel(
   models: string[],
   ratios: Record<string, number>,
   pickRandom: PickRandom = defaultPickRandom,
+  routingMeta: PaperChatModelRoutingMetaMap = {},
 ): {
   state: PaperChatTierState;
   modelId: string | null;
   pools: PaperChatTierPools;
 } {
-  const validatedState = validateTierState(state, models, ratios, pickRandom);
-  const pools = deriveEffectiveTierPools(validatedState, models, ratios);
+  const validatedState = validateTierState(
+    state,
+    models,
+    ratios,
+    pickRandom,
+    routingMeta,
+  );
+  const pools = deriveEffectiveTierPools(
+    validatedState,
+    models,
+    ratios,
+    routingMeta,
+  );
+  const effectiveTier =
+    pools[tier]?.length > 0
+      ? tier
+      : (getFirstAvailablePaperChatTier(pools) ?? tier);
 
   return {
-    state: validatedState,
-    modelId: validatedState.tiers[tier].modelId,
+    state: {
+      ...validatedState,
+      selectedTier: effectiveTier,
+    },
+    modelId: validatedState.tiers[effectiveTier].modelId,
     pools,
   };
 }
@@ -331,6 +491,7 @@ export function resolveSelectedTierModel(
   models: string[],
   ratios: Record<string, number>,
   pickRandom: PickRandom = defaultPickRandom,
+  routingMeta: PaperChatModelRoutingMetaMap = {},
 ): {
   state: PaperChatTierState;
   selectedTier: PaperChatTier;
@@ -338,18 +499,18 @@ export function resolveSelectedTierModel(
   pools: PaperChatTierPools;
 } {
   const parsedState = parseTierState(state);
-  const selectedTier = parsedState.selectedTier;
   const resolved = resolveTierModel(
     parsedState,
-    selectedTier,
+    parsedState.selectedTier,
     models,
     ratios,
     pickRandom,
+    routingMeta,
   );
 
   return {
     state: resolved.state,
-    selectedTier,
+    selectedTier: resolved.state.selectedTier,
     modelId: resolved.modelId,
     pools: resolved.pools,
   };

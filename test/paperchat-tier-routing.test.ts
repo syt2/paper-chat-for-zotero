@@ -17,6 +17,7 @@ import {
   repairPaperChatSessionBindingAfterHardFailure,
   resolvePaperChatSessionBinding,
 } from "../src/modules/chat/paperchat-session-state.ts";
+import { parseModelRoutingConfig } from "../src/modules/providers/paperchat-routing-metadata.ts";
 
 describe("paperchat tier routing", function () {
   it("defaults undefined state to paperchat-pro with auto tier entries", function () {
@@ -27,6 +28,7 @@ describe("paperchat tier routing", function () {
       "paperchat-lite": { mode: "auto", modelId: null },
       "paperchat-standard": { mode: "auto", modelId: null },
       "paperchat-pro": { mode: "auto", modelId: null },
+      "paperchat-ultra": { mode: "auto", modelId: null },
     });
   });
 
@@ -47,6 +49,7 @@ describe("paperchat tier routing", function () {
         "paperchat-lite": { mode: "auto", modelId: null },
         "paperchat-standard": { mode: "auto", modelId: null },
         "paperchat-pro": { mode: "auto", modelId: null },
+        "paperchat-ultra": { mode: "auto", modelId: null },
       },
     });
     assert.deepEqual(invalidShape, {
@@ -55,6 +58,7 @@ describe("paperchat tier routing", function () {
         "paperchat-lite": { mode: "manual", modelId: "m1" },
         "paperchat-standard": { mode: "auto", modelId: null },
         "paperchat-pro": { mode: "auto", modelId: null },
+        "paperchat-ultra": { mode: "auto", modelId: null },
       },
     });
   });
@@ -66,26 +70,29 @@ describe("paperchat tier routing", function () {
       "paperchat-lite": [],
       "paperchat-standard": [],
       "paperchat-pro": [],
+      "paperchat-ultra": [],
     });
   });
 
-  it("shares a single model across all tiers", function () {
+  it("shares a single model across legacy tiers and hides ultra", function () {
     const pools = deriveTierPools(["m1"], { m1: 0.2 });
 
     assert.deepEqual(pools, {
       "paperchat-lite": ["m1"],
       "paperchat-standard": ["m1"],
       "paperchat-pro": ["m1"],
+      "paperchat-ultra": [],
     });
   });
 
-  it("assigns low-ratio models to lite and falls back upper tiers to the max ratio", function () {
+  it("assigns low-ratio models to lite and hides ultra without metadata", function () {
     const pools = deriveTierPools(["m2", "m1"], { m1: 0.2, m2: 0.4 });
 
     assert.deepEqual(pools, {
       "paperchat-lite": ["m1", "m2"],
       "paperchat-standard": ["m2"],
       "paperchat-pro": ["m2"],
+      "paperchat-ultra": [],
     });
   });
 
@@ -100,6 +107,7 @@ describe("paperchat tier routing", function () {
       "paperchat-lite": ["m1", "m2"],
       "paperchat-standard": ["m3"],
       "paperchat-pro": ["m3"],
+      "paperchat-ultra": [],
     });
   });
 
@@ -121,6 +129,134 @@ describe("paperchat tier routing", function () {
     assert.deepEqual(pools["paperchat-pro"], ["m6"]);
   });
 
+  it("uses routing config metadata for tier pools when every model has a tier code", function () {
+    const pools = deriveTierPools(
+      ["pro-low", "lite", "standard", "pro-high"],
+      {
+        "pro-low": 0.1,
+        lite: 9,
+        standard: 9,
+        "pro-high": 0.2,
+      },
+      {
+        lite: { tierCode: 1, priority: 3 },
+        standard: { tierCode: 2, priority: 2 },
+        "pro-low": { tierCode: 3, priority: 1 },
+        "pro-high": { tierCode: 3, priority: 4 },
+      },
+    );
+
+    assert.deepEqual(pools["paperchat-lite"], ["lite"]);
+    assert.deepEqual(pools["paperchat-standard"], ["standard"]);
+    assert.deepEqual(pools["paperchat-pro"], ["pro-high", "pro-low"]);
+    assert.deepEqual(pools["paperchat-ultra"], []);
+  });
+
+  it("uses old ratio buckets only for models missing routing tier metadata", function () {
+    const pools = deriveTierPools(
+      ["legacy-lite", "metadata-standard", "legacy-standard", "legacy-pro"],
+      {
+        "legacy-lite": 0.2,
+        "metadata-standard": 9,
+        "legacy-standard": 0.7,
+        "legacy-pro": 1.2,
+      },
+      {
+        "metadata-standard": { tierCode: 2, priority: 3 },
+      },
+    );
+
+    assert.deepEqual(pools["paperchat-lite"], ["legacy-lite"]);
+    assert.deepEqual(pools["paperchat-standard"], [
+      "legacy-standard",
+      "metadata-standard",
+    ]);
+    assert.deepEqual(pools["paperchat-pro"], ["legacy-pro"]);
+    assert.deepEqual(pools["paperchat-ultra"], []);
+  });
+
+  it("decodes tier and priority from routing metadata json", function () {
+    const decoded = parseModelRoutingConfig({
+      version: 1,
+      models: {
+        m1: {
+          tier: "standard",
+          priority: 4,
+        },
+        m2: {
+          tier: "ultra",
+          priority: "3",
+        },
+      },
+    });
+
+    assert.deepEqual(decoded, {
+      m1: {
+        tierCode: 2,
+        priority: 4,
+      },
+      m2: {
+        tierCode: 4,
+        priority: 3,
+      },
+    });
+  });
+
+  it("passes routing priorities as weights when auto-selecting a tier model", function () {
+    const state = {
+      selectedTier: "paperchat-standard",
+      tiers: {
+        "paperchat-lite": { mode: "auto", modelId: null },
+        "paperchat-standard": { mode: "auto", modelId: null },
+        "paperchat-pro": { mode: "auto", modelId: null },
+        "paperchat-ultra": { mode: "auto", modelId: null },
+      },
+    };
+
+    const validated = validateTierState(
+      state,
+      ["standard-a", "standard-b", "lite", "pro"],
+      {},
+      (candidates, weights) => {
+        if (candidates.includes("standard-a")) {
+          assert.deepEqual(weights, {
+            "standard-a": 3,
+            "standard-b": 2,
+          });
+          return "standard-a";
+        }
+        return candidates[0] ?? null;
+      },
+      {
+        lite: { tierCode: 1, priority: 1 },
+        "standard-a": { tierCode: 2, priority: 3 },
+        "standard-b": { tierCode: 2, priority: 2 },
+        pro: { tierCode: 3, priority: 4 },
+      },
+    );
+
+    assert.equal(validated.tiers["paperchat-standard"].modelId, "standard-a");
+  });
+
+  it("rerolls within a tier using remaining model priorities as weights", function () {
+    const rerolled = rerollTierModel(
+      ["m1", "m2", "m3"],
+      "m2",
+      (candidates, weights) => {
+        assert.deepEqual(candidates, ["m1", "m3"]);
+        assert.deepEqual(weights, { m1: 3, m3: 4 });
+        return "m3";
+      },
+      {
+        m1: { tierCode: 2, priority: 3 },
+        m2: { tierCode: 2, priority: 2 },
+        m3: { tierCode: 2, priority: 4 },
+      },
+    );
+
+    assert.equal(rerolled, "m3");
+  });
+
   it("treats 0.51x and 1.01x as standard boundaries", function () {
     const pools = deriveTierPools(["m4", "m1", "m3", "m2"], {
       m1: 0.5,
@@ -133,10 +269,11 @@ describe("paperchat tier routing", function () {
       "paperchat-lite": ["m1"],
       "paperchat-standard": ["m2", "m3"],
       "paperchat-pro": ["m4"],
+      "paperchat-ultra": [],
     });
   });
 
-  it("falls back empty buckets to the max-ratio model", function () {
+  it("falls back empty ratio buckets to the max-ratio model except ultra", function () {
     const pools = deriveTierPools(["m3", "m1", "m2"], {
       m1: 0.1,
       m2: 0.2,
@@ -147,6 +284,7 @@ describe("paperchat tier routing", function () {
       "paperchat-lite": ["m1", "m2", "m3"],
       "paperchat-standard": ["m3"],
       "paperchat-pro": ["m3"],
+      "paperchat-ultra": [],
     });
   });
 
@@ -222,6 +360,7 @@ describe("paperchat tier routing", function () {
       "paperchat-lite": ["m3", "m1", "m2"],
       "paperchat-standard": ["m3", "m1", "m2"],
       "paperchat-pro": ["m3", "m1", "m2"],
+      "paperchat-ultra": ["m3", "m1", "m2"],
     });
   });
 
@@ -249,6 +388,7 @@ describe("paperchat tier routing", function () {
       "paperchat-lite": { mode: "auto", modelId: "m1" },
       "paperchat-standard": { mode: "manual", modelId: "m3" },
       "paperchat-pro": { mode: "auto", modelId: "m2" },
+      "paperchat-ultra": { mode: "auto", modelId: "m2" },
     });
   });
 
@@ -339,6 +479,7 @@ describe("paperchat tier routing", function () {
           "paperchat-lite": { mode: "manual", modelId: "m4" },
           "paperchat-standard": { mode: "auto", modelId: "m3" },
           "paperchat-pro": { mode: "auto", modelId: "m4" },
+          "paperchat-ultra": { mode: "auto", modelId: null },
         },
       },
       modelId: "m4",
@@ -346,6 +487,7 @@ describe("paperchat tier routing", function () {
         "paperchat-lite": ["m1", "m2"],
         "paperchat-standard": ["m3"],
         "paperchat-pro": ["m4"],
+        "paperchat-ultra": [],
       },
     });
   });
@@ -469,6 +611,7 @@ describe("paperchat tier routing", function () {
       "paperchat-lite": [],
       "paperchat-standard": ["m4"],
       "paperchat-pro": [],
+      "paperchat-ultra": [],
     });
   });
 
@@ -541,6 +684,7 @@ describe("paperchat tier routing", function () {
       "paperchat-lite": [],
       "paperchat-standard": ["m3"],
       "paperchat-pro": [],
+      "paperchat-ultra": [],
     });
   });
 
@@ -595,6 +739,7 @@ describe("paperchat tier routing", function () {
           "paperchat-lite": { mode: "auto", modelId: "m1" },
           "paperchat-standard": { mode: "auto", modelId: "m3" },
           "paperchat-pro": { mode: "auto", modelId: "m5" },
+          "paperchat-ultra": { mode: "auto", modelId: "m5" },
         },
       },
       ["m1", "m2", "m3", "m4", "m5"],
@@ -613,6 +758,7 @@ describe("paperchat tier routing", function () {
           "paperchat-lite": { mode: "auto", modelId: "m1" },
           "paperchat-standard": { mode: "auto", modelId: "m3" },
           "paperchat-pro": { mode: "auto", modelId: "m5" },
+          "paperchat-ultra": { mode: "auto", modelId: "m5" },
         },
       },
     });

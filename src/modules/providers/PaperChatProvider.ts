@@ -23,6 +23,7 @@ import {
   AUTO_MODEL,
   AUTO_MODEL_SMART,
   getModelRatios,
+  getModelRoutingMeta,
   resolveAutoModel,
   resolveAutoModelSmart,
 } from "../preferences/ModelsFetcher";
@@ -51,6 +52,8 @@ export class PaperChatProvider implements AIProvider {
         getPref("paperchatTierState") as string | undefined,
         availableModels,
         getModelRatios(),
+        undefined,
+        getModelRoutingMeta(),
       ).modelId;
       model = resolvedDefault || this._config.defaultModel;
     }

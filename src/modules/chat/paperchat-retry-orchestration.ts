@@ -1,5 +1,6 @@
 import type { ChatSession, ImageAttachment } from "../../types/chat";
 import type { PaperChatTier } from "../providers/paperchat-tier-routing";
+import type { PaperChatModelRoutingMetaMap } from "../providers/paperchat-routing-metadata";
 import {
   applyPaperChatSessionBinding,
   repairPaperChatSessionBindingAfterHardFailure,
@@ -17,6 +18,7 @@ type RepairPaperChatSessionAfterHardFailureOptions = {
   previousTierStateRaw: string;
   availableModels: string[];
   ratios: Record<string, number>;
+  routingMeta?: PaperChatModelRoutingMetaMap;
   persistSessionMeta: (session: ChatSession) => Promise<void>;
   setTierStateRaw: (raw: string) => void;
   updateProviderOverride: (modelId: string | undefined) => void;
@@ -32,6 +34,7 @@ export async function repairPaperChatSessionAfterHardFailureWithRollback(
     previousTierStateRaw,
     availableModels,
     ratios,
+    routingMeta,
     persistSessionMeta,
     setTierStateRaw,
     updateProviderOverride,
@@ -49,6 +52,7 @@ export async function repairPaperChatSessionAfterHardFailureWithRollback(
     ratios,
     failedModelId,
     pickRandom,
+    routingMeta,
   );
 
   if (!repair || !repair.previousModelId) {

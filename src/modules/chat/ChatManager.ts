@@ -56,7 +56,10 @@ import {
   getItemTitleSmart,
   generateTimestampId,
 } from "../../utils/common";
-import { getModelRatios } from "../preferences/ModelsFetcher";
+import {
+  getModelRatios,
+  getModelRoutingMeta,
+} from "../preferences/ModelsFetcher";
 import { isEmbeddingModel } from "../embedding/providers/PaperChatEmbedding";
 import {
   rerollTierModel,
@@ -118,13 +121,40 @@ function providerSupportsStreamingToolCalling(
   );
 }
 
-function pickRandomCandidate(candidates: string[]): string | null {
+function pickRandomCandidate(
+  candidates: string[],
+  weights: Record<string, number> = {},
+): string | null {
   if (candidates.length === 0) {
     return null;
   }
 
-  const index = Math.floor(Math.random() * candidates.length);
-  return candidates[index] ?? null;
+  let totalWeight = 0;
+  for (const candidate of candidates) {
+    const weight = weights[candidate] ?? 1;
+    if (Number.isFinite(weight) && weight > 0) {
+      totalWeight += weight;
+    }
+  }
+
+  if (totalWeight <= 0) {
+    const index = Math.floor(Math.random() * candidates.length);
+    return candidates[index] ?? null;
+  }
+
+  let cursor = Math.random() * totalWeight;
+  for (const candidate of candidates) {
+    const weight = weights[candidate] ?? 1;
+    if (!Number.isFinite(weight) || weight <= 0) {
+      continue;
+    }
+    cursor -= weight;
+    if (cursor < 0) {
+      return candidate;
+    }
+  }
+
+  return candidates[candidates.length - 1] ?? null;
 }
 
 function getPaperChatChatModels(): string[] {
@@ -390,6 +420,8 @@ export class ChatManager {
       getPref("paperchatTierState") as string | undefined,
       paperchatConfig.availableModels || [],
       getModelRatios(),
+      undefined,
+      getModelRoutingMeta(),
     );
 
     const didChange = persist
@@ -415,9 +447,11 @@ export class ChatManager {
     const tierLabel =
       tier === "paperchat-lite"
         ? getString("chat-tier-lite")
-        : tier === "paperchat-pro"
-          ? getString("chat-tier-pro")
-          : getString("chat-tier-standard");
+        : tier === "paperchat-ultra"
+          ? getString("chat-tier-ultra")
+          : tier === "paperchat-pro"
+            ? getString("chat-tier-pro")
+            : getString("chat-tier-standard");
 
     return getString("chat-model-rerouted", {
       args: {
@@ -467,6 +501,7 @@ export class ChatManager {
         getModelRatios(),
         failedModelId,
         pickRandomCandidate,
+        getModelRoutingMeta(),
       );
 
       if (!repair || !repair.previousModelId) {
@@ -490,6 +525,7 @@ export class ChatManager {
       previousTierStateRaw,
       availableModels: getPaperChatChatModels(),
       ratios: getModelRatios(),
+      routingMeta: getModelRoutingMeta(),
       persistSessionMeta: (updatedSession) =>
         this.sessionStorage.updateSessionMeta(updatedSession),
       setTierStateRaw: (raw) => {
@@ -841,11 +877,13 @@ export class ChatManager {
     }
 
     const availableModels = getPaperChatChatModels();
-    const pools = deriveTierPools(availableModels, getModelRatios());
+    const routingMeta = getModelRoutingMeta();
+    const pools = deriveTierPools(availableModels, getModelRatios(), routingMeta);
     const nextModel = rerollTierModel(
       pools[session.selectedTier],
       session.resolvedModelId,
       pickRandomCandidate,
+      routingMeta,
     );
 
     if (!nextModel) {

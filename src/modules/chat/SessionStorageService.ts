@@ -65,7 +65,8 @@ function toValidSelectedTier(
   if (
     value === "paperchat-lite" ||
     value === "paperchat-standard" ||
-    value === "paperchat-pro"
+    value === "paperchat-pro" ||
+    value === "paperchat-ultra"
   ) {
     return value;
   }

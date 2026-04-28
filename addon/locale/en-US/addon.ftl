@@ -96,6 +96,7 @@ paperchat-chat-select-model = Select Model
 paperchat-chat-tier-lite = Lite
 paperchat-chat-tier-standard = Standard
 paperchat-chat-tier-pro = Pro
+paperchat-chat-tier-ultra = Ultra
 paperchat-chat-tier-models = Show { $tier } models
 paperchat-chat-tier-auto-reroute = Auto tier routing
 paperchat-chat-model-rerouted = Switched { $tier } from { $old } to { $new }

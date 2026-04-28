@@ -19,6 +19,7 @@ declare namespace _ZoteroTypes {
       "userQuotaJson": string;
       "paperchatModelsCache": string;
       "paperchatRatiosCache": string;
+      "paperchatRoutingConfigCache": string;
       "paperchatTierState": string;
       "uploadRawPdfOnFailure": boolean;
       "panelMode": string;

@@ -314,7 +314,11 @@ export interface ChatSession {
   // Memory extraction tracking (persisted to DB)
   memoryExtractedAt?: number; // timestamp of last extraction
   memoryExtractedMsgCount?: number; // conversational msg count at last extraction
-  selectedTier?: "paperchat-lite" | "paperchat-standard" | "paperchat-pro";
+  selectedTier?:
+    | "paperchat-lite"
+    | "paperchat-standard"
+    | "paperchat-pro"
+    | "paperchat-ultra";
   resolvedModelId?: string;
   lastRetryableUserMessageId?: string;
   lastRetryableErrorMessageId?: string;

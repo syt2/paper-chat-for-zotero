@@ -10,7 +10,11 @@ import type { UserInfo, TokenInfo, AuthState } from "../../types/auth";
 import { getPref, setPref } from "../../utils/prefs";
 import { getString } from "../../utils/locale";
 import { BUILTIN_PROVIDERS, getProviderManager } from "../providers";
-import { getModelRatios, fetchPaperchatRatios } from "../preferences/ModelsFetcher";
+import {
+  fetchPaperchatRatios,
+  getModelRatios,
+  getModelRoutingMeta,
+} from "../preferences/ModelsFetcher";
 import {
   parseTierState,
   resolveSelectedTierModel,
@@ -842,13 +846,8 @@ export class AuthManager {
             tierState,
             chatModels,
             getModelRatios(),
-            (candidates) => {
-              if (candidates.length === 0) {
-                return null;
-              }
-              const index = Math.floor(Math.random() * candidates.length);
-              return candidates[index] ?? null;
-            },
+            undefined,
+            getModelRoutingMeta(),
           );
 
           setPref("paperchatTierState", JSON.stringify(repaired));
@@ -856,6 +855,8 @@ export class AuthManager {
             repaired,
             chatModels,
             getModelRatios(),
+            undefined,
+            getModelRoutingMeta(),
           ).modelId;
           providerManager.updateProviderConfig("paperchat", {
             defaultModel: resolvedDefaultModel || undefined,
