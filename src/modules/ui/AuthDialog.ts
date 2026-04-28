@@ -16,6 +16,15 @@ import {
 
 type DialogMode = "login" | "register";
 
+function createRandomUsername(length = 10): string {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+  let username = "";
+  for (let i = 0; i < length; i++) {
+    username += alphabet[Math.floor(Math.random() * alphabet.length)] ?? "0";
+  }
+  return username;
+}
+
 function mapAuthCompletedReason(mode: DialogMode, error: unknown): string {
   const message = error instanceof Error ? error.message : String(error || "");
   const normalized = message.toLowerCase();
@@ -516,6 +525,9 @@ export async function showAuthDialog(
         "tab-register",
       ) as HTMLButtonElement;
       const usernameField = doc.getElementById("username-field") as HTMLElement;
+      const usernameLabel = doc.getElementById(
+        "username-label",
+      ) as HTMLLabelElement;
       const emailField = doc.getElementById("email-field") as HTMLElement;
       const verificationField = doc.getElementById(
         "verification-field",
@@ -558,11 +570,25 @@ export async function showAuthDialog(
 
       let currentMode: DialogMode = initialMode;
       let countdownTimer: ReturnType<typeof setInterval> | null = null;
+      let generatedRegisterUsername = "";
       const trackAuthPageViewed = (mode: DialogMode) => {
         getAnalyticsService().track(ANALYTICS_EVENTS.authPageViewed, {
           mode,
         });
       };
+
+      function fillRandomRegisterUsername(force = false) {
+        if (
+          !force &&
+          usernameInput.value.trim() &&
+          usernameInput.value !== generatedRegisterUsername
+        ) {
+          return;
+        }
+
+        generatedRegisterUsername = createRandomUsername();
+        usernameInput.value = generatedRegisterUsername;
+      }
 
       // 更新UI状态
       function updateUI() {
@@ -583,6 +609,20 @@ export async function showAuthDialog(
         // 字段显示
         usernameField.style.display = "flex";
         passwordField.style.display = "flex";
+        usernameLabel.textContent = getString(
+          isRegister ? "auth-username" : "auth-login-identity",
+        );
+        usernameInput.placeholder = getString(
+          isRegister
+            ? "auth-username-placeholder"
+            : "auth-login-identity-placeholder",
+        );
+        if (isRegister) {
+          usernameInput.maxLength = 20;
+          fillRandomRegisterUsername();
+        } else {
+          usernameInput.removeAttribute("maxlength");
+        }
         forgotPasswordField.style.display = isRegister ? "none" : "flex";
         emailField.style.display = isRegister ? "flex" : "none";
         verificationField.style.display = isRegister ? "flex" : "none";
@@ -623,6 +663,9 @@ export async function showAuthDialog(
           return;
         }
         currentMode = "login";
+        if (usernameInput.value === generatedRegisterUsername) {
+          usernameInput.value = "";
+        }
         updateUI();
         hideMessage();
         trackAuthPageViewed("login");
@@ -634,6 +677,7 @@ export async function showAuthDialog(
           return;
         }
         currentMode = "register";
+        fillRandomRegisterUsername(true);
         updateUI();
         hideMessage();
         trackAuthPageViewed("register");

@@ -58,6 +58,8 @@ export type FluentMessageId =
   | 'paperchat-auth-error-unknown'
   | 'paperchat-auth-error-username-required'
   | 'paperchat-auth-forgot-password'
+  | 'paperchat-auth-login-identity'
+  | 'paperchat-auth-login-identity-placeholder'
   | 'paperchat-auth-login-tab'
   | 'paperchat-auth-password'
   | 'paperchat-auth-password-placeholder'
