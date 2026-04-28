@@ -24,6 +24,7 @@ import {
   type SSEFormat,
   type SSEParserCallbacks,
 } from "./SSEParser";
+import { sanitizeOpenAIToolCallMessages } from "./openai-tool-call-messages";
 
 export abstract class BaseProvider implements AIProvider {
   protected _config: ApiKeyProviderConfig;
@@ -172,7 +173,9 @@ export abstract class BaseProvider implements AIProvider {
     messages: ChatMessage[],
     pdfAttachment?: PdfAttachment,
   ): OpenAIMessage[] {
-    const filtered = this.filterMessages(messages);
+    const filtered = sanitizeOpenAIToolCallMessages(
+      this.filterMessages(messages),
+    );
     const firstUserIndex = filtered.findIndex((m) => m.role === "user");
 
     return filtered.map((msg, index) => {
