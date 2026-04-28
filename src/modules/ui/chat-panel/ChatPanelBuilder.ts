@@ -498,6 +498,103 @@ export function createChatContainer(
     minWidth: "0",
   });
 
+  const modelSelectorLabel = createElement(
+    doc,
+    "div",
+    {
+      display: "flex",
+      alignItems: "center",
+      gap: "4px",
+      flexShrink: "0",
+      fontSize: "12px",
+      lineHeight: "16px",
+      color: theme.textSecondary,
+      whiteSpace: "nowrap",
+    },
+    { id: "chat-model-selector-label" },
+  );
+  modelSelectorLabel.textContent = getString("chat-switch-model-label");
+
+  const modelHelpText = getString("chat-switch-model-help");
+  const modelSelectorHelp = createElement(
+    doc,
+    "span",
+    {
+      position: "relative",
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+      width: "14px",
+      height: "14px",
+      borderRadius: "50%",
+      border: `1px solid ${theme.inputBorderColor}`,
+      color: theme.textSecondary,
+      fontSize: "10px",
+      lineHeight: "14px",
+      cursor: "help",
+      opacity: "0.75",
+      userSelect: "none",
+    },
+    {
+      id: "chat-model-selector-help",
+      "aria-label": modelHelpText,
+    },
+  );
+  modelSelectorHelp.textContent = "?";
+
+  const modelSelectorTooltip = createElement(
+    doc,
+    "div",
+    {
+      display: "none",
+      position: "fixed",
+      left: "0",
+      top: "0",
+      width: "240px",
+      padding: "8px 10px",
+      border: `1px solid ${theme.borderColor}`,
+      borderRadius: "8px",
+      background: theme.dropdownBg,
+      color: theme.textPrimary,
+      boxShadow: "0 6px 18px rgba(0,0,0,0.22)",
+      fontSize: "12px",
+      lineHeight: "17px",
+      whiteSpace: "normal",
+      textAlign: "left",
+      zIndex: "10003",
+      pointerEvents: "none",
+    },
+    { id: "chat-model-selector-tooltip", role: "tooltip" },
+  );
+  modelSelectorTooltip.textContent = modelHelpText;
+  modelSelectorHelp.appendChild(modelSelectorTooltip);
+
+  const showModelHelp = () => {
+    modelSelectorTooltip.style.display = "block";
+    modelSelectorTooltip.style.visibility = "hidden";
+    const rect = modelSelectorHelp.getBoundingClientRect();
+    const win = doc.defaultView;
+    const viewportWidth = win?.innerWidth ?? 320;
+    const tooltipWidth = modelSelectorTooltip.offsetWidth || 240;
+    const tooltipHeight = modelSelectorTooltip.offsetHeight || 64;
+    const left = Math.max(
+      8,
+      Math.min(rect.left, viewportWidth - tooltipWidth - 8),
+    );
+    const top = Math.max(8, rect.top - tooltipHeight - 8);
+    modelSelectorTooltip.style.left = `${left}px`;
+    modelSelectorTooltip.style.top = `${top}px`;
+    modelSelectorTooltip.style.visibility = "visible";
+  };
+  const hideModelHelp = () => {
+    modelSelectorTooltip.style.display = "none";
+  };
+
+  modelSelectorHelp.addEventListener("mouseenter", showModelHelp);
+  modelSelectorHelp.addEventListener("mouseleave", hideModelHelp);
+
+  modelSelectorLabel.appendChild(modelSelectorHelp);
+
   // Model selector container
   const modelSelectorContainer = createElement(doc, "div", {
     position: "relative",
@@ -645,6 +742,7 @@ export function createChatContainer(
     `chrome://${config.addonRef}/content/icons/split.svg`;
   panelModeBtn.appendChild(panelModeIcon);
 
+  leftContainer.appendChild(modelSelectorLabel);
   leftContainer.appendChild(modelSelectorContainer);
   leftContainer.appendChild(settingsBtn);
   leftContainer.appendChild(panelModeBtn);

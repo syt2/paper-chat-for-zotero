@@ -191,6 +191,34 @@ export function applyThemeToContainer(container: HTMLElement): void {
   }
 
   // Model selector button
+  const modelSelectorLabel = container.querySelector(
+    "#chat-model-selector-label",
+  ) as HTMLElement;
+  if (modelSelectorLabel) {
+    modelSelectorLabel.style.color = theme.textSecondary;
+  }
+
+  const modelSelectorHelp = container.querySelector(
+    "#chat-model-selector-help",
+  ) as HTMLElement;
+  if (modelSelectorHelp) {
+    modelSelectorHelp.style.borderColor = theme.inputBorderColor;
+    modelSelectorHelp.style.color = theme.textSecondary;
+  }
+
+  const modelSelectorTooltip = container.querySelector(
+    "#chat-model-selector-tooltip",
+  ) as HTMLElement;
+  if (modelSelectorTooltip) {
+    modelSelectorTooltip.style.background = theme.dropdownBg;
+    modelSelectorTooltip.style.borderColor = theme.borderColor;
+    modelSelectorTooltip.style.color = theme.textPrimary;
+    modelSelectorTooltip.style.boxShadow =
+      theme === darkTheme
+        ? "0 8px 22px rgba(0,0,0,0.45)"
+        : "0 6px 18px rgba(0,0,0,0.22)";
+  }
+
   const modelSelectorBtn = container.querySelector(
     "#chat-model-selector-btn",
   ) as HTMLElement;

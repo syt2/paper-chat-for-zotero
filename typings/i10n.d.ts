@@ -122,6 +122,8 @@ export type FluentMessageId =
   | 'paperchat-chat-show-more'
   | 'paperchat-chat-start-conversation'
   | 'paperchat-chat-stop-generating'
+  | 'paperchat-chat-switch-model-help'
+  | 'paperchat-chat-switch-model-label'
   | 'paperchat-chat-switch-to-floating'
   | 'paperchat-chat-switch-to-sidebar'
   | 'paperchat-chat-thinking'
