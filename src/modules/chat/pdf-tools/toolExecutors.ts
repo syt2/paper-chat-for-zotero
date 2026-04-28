@@ -4,6 +4,7 @@
 
 import type {
   PaperStructureExtended,
+  NativeOutlineItem,
   GetPaperSectionArgs,
   SearchPaperContentArgs,
   GetPagesArgs,
@@ -556,17 +557,41 @@ export function executeSearchWithRegex(
 
 /**
  * 执行 get_outline - 获取文档大纲
+ *
+ * 优先使用 PDF 原生大纲（如果有），提供真实页码和层级结构。
+ * 回退到基于文本的启发式章节检测。
  */
 export function executeGetOutline(
   paperStructure: PaperStructureExtended,
 ): string {
-  const { sections, pageCount } = paperStructure;
+  const { sections, pageCount, nativeOutline, nativePageCount } =
+    paperStructure;
+
+  if (nativeOutline && nativeOutline.length > 0) {
+    const { itemCount, pages } = collectNativeOutlineStats(nativeOutline);
+    const pageCountLabel = nativePageCount
+      ? `, ${nativePageCount} PDF pages total`
+      : "";
+    const lines = [
+      `${formatSourceReferences(pages)}Document Outline (from PDF bookmarks${pageCountLabel}):`,
+      formatNativeOutlineItems(nativeOutline),
+      `(${itemCount} bookmark items)`,
+      "PDF Page values are reader navigation indices; extracted-text page ranges used by get_pages may differ.",
+    ];
+
+    if (!sections.some((s) => s.normalizedName !== "full_text")) {
+      lines.push(
+        "Note: No heuristic section breakdown is available; the PDF bookmark outline above is for navigation.",
+      );
+    }
+    return lines.join("\n\n");
+  }
 
   if (
     sections.length === 0 ||
     (sections.length === 1 && sections[0].normalizedName === "full_text")
   ) {
-    return `${HEURISTIC_SECTION_NOTE}\n\nNo structured outline detected. The paper may not have clear section headings.`;
+    return `${HEURISTIC_SECTION_NOTE}\n\nNo structured outline detected. If the PDF has bookmarks, open it in the Zotero reader and try again.`;
   }
 
   const outlineEntries = sections
@@ -588,15 +613,66 @@ export function executeGetOutline(
 }
 
 /**
+ * 递归格式化原生大纲条目为文本（带缩进层次）
+ */
+function formatNativeOutlineItems(
+  items: NativeOutlineItem[],
+  indent: string = "",
+): string {
+  return items
+    .map((item, index) => {
+      const pageStr =
+        item.pageNumber > 0 ? `(PDF Page ${item.pageNumber})` : "";
+      const line = `${indent}${index + 1}. ${item.title}${pageStr ? ` ${pageStr}` : ""}`;
+      const childrenStr =
+        item.children.length > 0
+          ? `\n${formatNativeOutlineItems(item.children, indent + "  ")}`
+          : "";
+      return `${line}${childrenStr}`;
+    })
+    .join("\n");
+}
+
+function collectNativeOutlineStats(items: NativeOutlineItem[]): {
+  itemCount: number;
+  pages: number[];
+} {
+  let itemCount = 0;
+  const pages: number[] = [];
+  const visit = (entries: NativeOutlineItem[]) => {
+    for (const entry of entries) {
+      itemCount += 1;
+      if (entry.pageNumber > 0) pages.push(entry.pageNumber);
+      visit(entry.children);
+    }
+  };
+  visit(items);
+  return { itemCount, pages };
+}
+
+/**
  * 执行 list_sections - 列出所有章节
+ *
+ * 保留可供 get_paper_section 使用的解析章节 ID，并在可用时附加
+ * 仅供导航的 PDF 原生书签。
  */
 export function executeListSections(
   paperStructure: PaperStructureExtended,
 ): string {
-  const { sections } = paperStructure;
+  const { sections, nativeOutline } = paperStructure;
+  let nativeBookmarkBlock = "";
+  if (nativeOutline?.length) {
+    const { pages } = collectNativeOutlineStats(nativeOutline);
+    nativeBookmarkBlock = `${formatSourceReferences(pages)}PDF bookmark outline (navigation only; these titles are not get_paper_section IDs):\n\n${formatNativeOutlineItems(nativeOutline)}`;
+  }
 
   if (sections.length === 0) {
-    return `${HEURISTIC_SECTION_NOTE}\n\nNo sections detected.`;
+    return [
+      nativeBookmarkBlock,
+      `${HEURISTIC_SECTION_NOTE}\n\nNo parsed sections detected.`,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
   }
 
   const sectionList = sections.map((s) => ({
@@ -613,7 +689,12 @@ export function executeListSections(
     )
     .join("\n\n");
 
-  return `${HEURISTIC_SECTION_NOTE}\n\nAvailable sections (${sections.length} total):\n\n${formatted}`;
+  return [
+    nativeBookmarkBlock,
+    `${HEURISTIC_SECTION_NOTE}\n\nAvailable parsed sections (${sections.length} total; use the IDs below with get_paper_section):\n\n${formatted}`,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 /**

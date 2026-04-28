@@ -59,6 +59,10 @@ import { getMemoryService } from "../memory/MemoryService";
 import { executeWebSearch, isValidWebSearchArgs } from "../web-search";
 import { preflightToolArguments } from "../tool-arguments/ToolArgumentPreflight";
 import { parsePaperStructure, parsePages } from "./paperParser";
+import {
+  extractNativeOutline,
+  type NativeOutlineExtraction,
+} from "./nativeOutlineExtractor";
 import type { AgentPromptContext } from "./promptGenerator";
 import { generatePaperContextPrompt as generatePaperContextPromptFn } from "./promptGenerator";
 import {
@@ -99,6 +103,7 @@ import { getErrorMessage } from "../../../utils/common";
 interface CacheEntry {
   structure: PaperStructureExtended;
   timestamp: number;
+  attachmentItemID: number;
 }
 
 export class PdfToolManager {
@@ -107,6 +112,10 @@ export class PdfToolManager {
 
   // PDF 解析缓存（避免重复解析同一个 PDF）
   private paperCache: Map<string, CacheEntry> = new Map();
+  private nativeOutlineRequests = new Map<
+    number,
+    Promise<NativeOutlineExtraction | null>
+  >();
   private readonly CACHE_TTL = 5 * 60 * 1000; // 5分钟缓存过期
   private readonly MAX_CACHE_SIZE = 10; // 最多缓存10个文档
 
@@ -134,15 +143,54 @@ export class PdfToolManager {
   }
 
   /**
+   * 解析 itemKey 对应的 PDF 附件 ID（item 本身是 PDF 附件或其第一个 PDF 附件）。
+   * 用于文本提取失败但 reader 可能仍打开着该附件的场景（原生大纲提取）。
+   */
+  private findPdfAttachmentItemID(itemKey: string): number | null {
+    const item = this.getItemByKey(itemKey);
+    if (!item) return null;
+
+    if (item.isAttachment && item.isAttachment()) {
+      return item.isPDFAttachment && item.isPDFAttachment() ? item.id : null;
+    }
+
+    try {
+      for (const attachmentID of item.getAttachments()) {
+        const attachment = Zotero.Items.get(attachmentID);
+        if (
+          attachment &&
+          attachment.isPDFAttachment &&
+          attachment.isPDFAttachment()
+        ) {
+          return attachment.id;
+        }
+      }
+    } catch (error) {
+      ztoolkit.log(
+        `[PdfToolManager] Error resolving PDF attachment for ${itemKey}:`,
+        getErrorMessage(error),
+      );
+    }
+    return null;
+  }
+
+  /**
    * 根据 itemKey 提取 PDF 文本并解析结构（带缓存）
    */
   async extractAndParsePaper(
     itemKey: string,
+    includeNativeOutline: boolean = false,
   ): Promise<PaperStructureExtended | null> {
     // 检查缓存
     const cached = this.paperCache.get(itemKey);
     if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
       ztoolkit.log(`[PdfToolManager] Cache hit for item: ${itemKey}`);
+      if (includeNativeOutline) {
+        await this.enrichWithNativeOutline(
+          cached.structure,
+          cached.attachmentItemID,
+        );
+      }
       return cached.structure;
     }
 
@@ -152,6 +200,7 @@ export class PdfToolManager {
     }
 
     let structure: PaperStructureExtended | null = null;
+    let attachmentItemID: number | null = null;
 
     // 如果 item 本身就是 PDF 附件，直接提取
     if (
@@ -160,9 +209,17 @@ export class PdfToolManager {
       item.isPDFAttachment &&
       item.isPDFAttachment()
     ) {
-      const pdfText = await item.attachmentText;
-      if (pdfText) {
-        structure = this.parsePaperStructure(pdfText);
+      try {
+        const pdfText = await item.attachmentText;
+        if (pdfText) {
+          structure = this.parsePaperStructure(pdfText);
+          attachmentItemID = item.id;
+        }
+      } catch (error) {
+        ztoolkit.log(
+          `[PdfToolManager] Error extracting PDF text for ${itemKey}:`,
+          getErrorMessage(error),
+        );
       }
     } else if (item.isAttachment && item.isAttachment()) {
       // 非 PDF 附件，无法提取
@@ -185,6 +242,7 @@ export class PdfToolManager {
             const pdfText = await attachment.attachmentText;
             if (pdfText) {
               structure = this.parsePaperStructure(pdfText);
+              attachmentItemID = attachment.id;
               break;
             }
           }
@@ -198,8 +256,11 @@ export class PdfToolManager {
     }
 
     // 缓存结果
-    if (structure) {
-      this.addToCache(itemKey, structure);
+    if (structure && attachmentItemID !== null) {
+      if (includeNativeOutline) {
+        await this.enrichWithNativeOutline(structure, attachmentItemID);
+      }
+      this.addToCache(itemKey, attachmentItemID, structure);
     }
 
     return structure;
@@ -208,7 +269,40 @@ export class PdfToolManager {
   /**
    * 添加到缓存（带大小限制）
    */
-  private addToCache(itemKey: string, structure: PaperStructureExtended): void {
+  private async enrichWithNativeOutline(
+    structure: PaperStructureExtended,
+    attachmentItemID: number,
+  ): Promise<void> {
+    if (structure.nativeOutline?.length) return;
+
+    let request = this.nativeOutlineRequests.get(attachmentItemID);
+    if (!request) {
+      request = extractNativeOutline(attachmentItemID);
+      this.nativeOutlineRequests.set(attachmentItemID, request);
+    }
+
+    let extraction: NativeOutlineExtraction | null;
+    try {
+      extraction = await request;
+    } finally {
+      if (this.nativeOutlineRequests.get(attachmentItemID) === request) {
+        this.nativeOutlineRequests.delete(attachmentItemID);
+      }
+    }
+    if (!extraction) return;
+
+    structure.nativeOutline = extraction.outline;
+    structure.nativePageCount = extraction.pageCount;
+    ztoolkit.log(
+      `[PdfToolManager] Native outline extracted for attachment item: ${attachmentItemID} (${extraction.outline.length} top-level items)`,
+    );
+  }
+
+  private addToCache(
+    itemKey: string,
+    attachmentItemID: number,
+    structure: PaperStructureExtended,
+  ): void {
     // 如果缓存已满，删除最旧的条目
     if (this.paperCache.size >= this.MAX_CACHE_SIZE) {
       let oldestKey: string | null = null;
@@ -228,6 +322,7 @@ export class PdfToolManager {
     this.paperCache.set(itemKey, {
       structure,
       timestamp: Date.now(),
+      attachmentItemID,
     });
     ztoolkit.log(`[PdfToolManager] Cached structure for: ${itemKey}`);
   }
@@ -237,6 +332,7 @@ export class PdfToolManager {
    */
   clearCache(): void {
     this.paperCache.clear();
+    this.nativeOutlineRequests.clear();
     ztoolkit.log("[PdfToolManager] Cache cleared");
   }
 
@@ -1130,7 +1226,7 @@ export class PdfToolManager {
         function: {
           name: "get_outline",
           description:
-            "Get a heuristic outline/table of contents for quick navigation only. Do not treat missing headings as proof that the paper lacks those sections: PDF text extraction may miss numbered sections, subsections, or non-standard headings. For comprehensive analysis, verify with search_paper_content, get_pages, or get_full_text as needed.",
+            "Get the paper outline for navigation. When the matching PDF is open in Zotero and contains bookmarks, returns the native hierarchical bookmark outline with PDF viewer page numbers; otherwise falls back to heuristic text parsing. PDF viewer page numbers may not match get_pages when extracted text lacks page breaks. Do not treat missing headings as proof that the paper lacks those sections.",
           parameters: {
             type: "object",
             properties: {
@@ -1144,7 +1240,7 @@ export class PdfToolManager {
         function: {
           name: "list_sections",
           description:
-            "List heuristically detected sections with IDs, character counts, and previews for navigation/debugging only. Do not assume this list is complete: PDF text extraction may merge or miss numbered sections, subsections, or non-standard headings. For comprehensive analysis, verify with search_paper_content, get_pages, or get_full_text as needed.",
+            "List parsed sections with IDs accepted by get_paper_section, plus a navigation-only PDF bookmark outline when available. Do not use bookmark titles as section IDs. Text parsing may still merge or miss numbered or non-standard sections.",
           parameters: {
             type: "object",
             properties: {
@@ -1520,7 +1616,10 @@ export class PdfToolManager {
 
     if (targetItemKey) {
       // 按 itemKey 提取 PDF
-      paperStructure = await this.extractAndParsePaper(targetItemKey);
+      paperStructure = await this.extractAndParsePaper(
+        targetItemKey,
+        name === "get_outline" || name === "list_sections",
+      );
       if (paperStructure) {
         resolvedSourceItemKey = targetItemKey;
       }
@@ -1536,6 +1635,19 @@ export class PdfToolManager {
         (!requestedItemKey || requestedItemKey === effectiveCurrentItemKey)
       ) {
         resolvedSourceItemKey = effectiveCurrentItemKey;
+        // 后备结构对应当前 reader 中的论文，reader 通常是打开的，
+        // 因此这里同样尝试补充原生大纲。
+        if (name === "get_outline" || name === "list_sections") {
+          const attachmentItemID = this.findPdfAttachmentItemID(
+            effectiveCurrentItemKey,
+          );
+          if (attachmentItemID !== null) {
+            await this.enrichWithNativeOutline(
+              paperStructure,
+              attachmentItemID,
+            );
+          }
+        }
       }
     }
 

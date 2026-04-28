@@ -18,6 +18,7 @@ const PAGE_BEARING_TOOLS = new Set([
   "search_paper_content",
   "search_with_regex",
   "get_outline",
+  "list_sections",
   "get_annotations",
 ]);
 const ITEM_LIST_TOOLS = new Set([

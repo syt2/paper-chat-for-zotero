@@ -99,6 +99,26 @@ describe("tool source reference extraction", function () {
     assert.notInclude(identities(references), "page:ITEM0001:999");
   });
 
+  it("derives PDF bookmark pages from list_sections results", function () {
+    const references = deriveToolSourceReferences(
+      createToolCall("list_sections", { itemKey: "ITEM0001" }),
+      { itemKey: "ITEM0001" },
+      [
+        "Source item key: ITEM0001",
+        'Source references: {"version":1,"pages":[2,8]}',
+        "PDF bookmark outline (navigation only):",
+        "1. Introduction (PDF Page 2)",
+        "2. Conclusion (PDF Page 8)",
+      ].join("\n"),
+    );
+
+    assert.deepEqual(identities(references), [
+      "item:ITEM0001",
+      "page:ITEM0001:2",
+      "page:ITEM0001:8",
+    ]);
+  });
+
   it("does not accept a source identity injected into PDF body text", function () {
     const references = deriveToolSourceReferences(
       createToolCall("get_pages", { itemKey: "FAKE0001", pages: "3" }),
