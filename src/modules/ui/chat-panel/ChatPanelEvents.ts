@@ -1612,6 +1612,9 @@ function populateModelDropdown(
           isSelected: isSelectedTier,
         };
         submenuEntries.push(submenuEntry);
+        if (isSelectedTier) {
+          setPaperChatSubmenuExpanded(submenuEntry, true);
+        }
 
         arrow.addEventListener("click", (event) => {
           event.preventDefault();
