@@ -20,6 +20,7 @@ import {
 } from "./EmbeddingProviderFactory";
 import { getVectorStore, VectorStore } from "./VectorStore";
 import { splitText } from "./ChunkSplitter";
+import { tryNormalizeEmbeddingInput } from "./EmbeddingInput";
 
 /** Number of items to delete when quota is exceeded */
 const ITEMS_TO_DELETE_ON_QUOTA = 5;
@@ -302,6 +303,11 @@ export class RAGService {
     itemKey: string,
     topK = 5,
   ): Promise<SemanticSearchResult[]> {
+    const normalizedQuery = tryNormalizeEmbeddingInput(query);
+    if (!normalizedQuery) {
+      return [];
+    }
+
     if (!(await this.isAvailable())) {
       return [];
     }
@@ -314,7 +320,7 @@ export class RAGService {
       }
 
       const modelId = provider.modelId;
-      const queryVector = await provider.embed(query);
+      const queryVector = await provider.embed(normalizedQuery);
 
       // Search in vector store with modelId filter
       const results = await this.vectorStore.search(queryVector, {
@@ -350,6 +356,11 @@ export class RAGService {
     itemKeys: string[],
     options: SemanticSearchOptions = {},
   ): Promise<SemanticSearchResult[]> {
+    const normalizedQuery = tryNormalizeEmbeddingInput(query);
+    if (!normalizedQuery) {
+      return [];
+    }
+
     if (!(await this.isAvailable())) {
       return [];
     }
@@ -361,7 +372,7 @@ export class RAGService {
       }
 
       const modelId = provider.modelId;
-      const queryVector = await provider.embed(query);
+      const queryVector = await provider.embed(normalizedQuery);
 
       const results = await this.vectorStore.search(queryVector, {
         ...options,

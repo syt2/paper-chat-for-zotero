@@ -1,6 +1,7 @@
 import { getStorageDatabase } from "../db/StorageDatabase";
 import { getErrorMessage } from "../../../utils/common";
 import { getMemoryEmbeddingProvider } from "./MemoryEmbedding";
+import { tryNormalizeEmbeddingInput } from "../../embedding/EmbeddingInput";
 
 const REINDEX_BATCH_SIZE = 20;
 const SETTING_EMBEDDING_MODEL_PREFIX = "memory_embedding_model_";
@@ -69,13 +70,25 @@ export class MemoryIndexer {
 
     for (let i = 0; i < items.length; i += REINDEX_BATCH_SIZE) {
       const batch = items.slice(i, i + REINDEX_BATCH_SIZE);
+      const normalizedBatch = batch
+        .map((row) => ({
+          ...row,
+          text: tryNormalizeEmbeddingInput(row.text),
+        }))
+        .filter((row): row is { id: string; text: string } => row.text !== null);
+      if (normalizedBatch.length === 0) {
+        continue;
+      }
+
       try {
-        const vectors = await provider.embedBatch(batch.map((row) => row.text));
-        for (let j = 0; j < batch.length; j++) {
+        const vectors = await provider.embedBatch(
+          normalizedBatch.map((row) => row.text),
+        );
+        for (let j = 0; j < normalizedBatch.length; j++) {
           if (!vectors[j]) continue;
           await db.queryAsync(
             "UPDATE memories SET embedding = ?, embedding_model = ? WHERE id = ?",
-            [JSON.stringify(vectors[j]), provider.modelId, batch[j].id],
+            [JSON.stringify(vectors[j]), provider.modelId, normalizedBatch[j].id],
           );
           indexed++;
         }

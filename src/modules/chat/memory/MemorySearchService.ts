@@ -9,6 +9,7 @@ import {
   scoreJaccard,
   tokenise,
 } from "./MemoryScoring";
+import { tryNormalizeEmbeddingInput } from "../../embedding/EmbeddingInput";
 
 const DEDUP_THRESHOLD = 0.9;
 const EMBEDDING_DEDUP_THRESHOLD = 0.92;
@@ -28,11 +29,14 @@ export class MemorySearchService {
     embedding?: number[];
     embeddingModel?: string | null;
   }> {
+    const normalizedText = tryNormalizeEmbeddingInput(text);
+    if (!normalizedText) return {};
+
     const provider = await this.getEmbeddingProvider();
     if (!provider) return {};
 
     try {
-      const embedding = await provider.embed(text);
+      const embedding = await provider.embed(normalizedText);
       return { embedding, embeddingModel: provider.modelId };
     } catch {
       return {};

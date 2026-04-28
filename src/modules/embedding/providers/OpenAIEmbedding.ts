@@ -7,6 +7,7 @@
 import type { EmbeddingProvider } from "../../../types/embedding";
 import { EMBEDDING_MODELS } from "../../../types/embedding";
 import { getErrorMessage } from "../../../utils/common";
+import { normalizeEmbeddingBatch } from "../EmbeddingInput";
 
 const MODEL_INFO = EMBEDDING_MODELS.openai;
 const BATCH_SIZE = 2048; // OpenAI supports up to 2048 texts per batch
@@ -37,19 +38,20 @@ export class OpenAIEmbedding implements EmbeddingProvider {
     if (texts.length === 0) {
       return [];
     }
+    const normalizedTexts = normalizeEmbeddingBatch(texts);
 
     // Split into batches if needed
-    if (texts.length > BATCH_SIZE) {
+    if (normalizedTexts.length > BATCH_SIZE) {
       const results: number[][] = [];
-      for (let i = 0; i < texts.length; i += BATCH_SIZE) {
-        const batch = texts.slice(i, i + BATCH_SIZE);
+      for (let i = 0; i < normalizedTexts.length; i += BATCH_SIZE) {
+        const batch = normalizedTexts.slice(i, i + BATCH_SIZE);
         const batchResults = await this.embedBatchInternal(batch);
         results.push(...batchResults);
       }
       return results;
     }
 
-    return this.embedBatchInternal(texts);
+    return this.embedBatchInternal(normalizedTexts);
   }
 
   private async embedBatchInternal(texts: string[]): Promise<number[][]> {

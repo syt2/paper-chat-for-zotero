@@ -11,6 +11,7 @@ import { getAuthManager } from "../../auth";
 import { getPref } from "../../../utils/prefs";
 import { getErrorMessage } from "../../../utils/common";
 import { BUILTIN_PROVIDERS } from "../../providers/ProviderManager";
+import { normalizeEmbeddingBatch } from "../EmbeddingInput";
 
 // Preferred embedding models in priority order
 const PREFERRED_MODELS = [
@@ -124,13 +125,14 @@ export class PaperChatEmbedding implements EmbeddingProvider {
     if (texts.length === 0) {
       return [];
     }
+    const normalizedTexts = normalizeEmbeddingBatch(texts);
 
     // Split into batches and run with limited concurrency
-    if (texts.length > BATCH_SIZE) {
+    if (normalizedTexts.length > BATCH_SIZE) {
       const limit = pLimit(MAX_CONCURRENCY);
       const batches: string[][] = [];
-      for (let i = 0; i < texts.length; i += BATCH_SIZE) {
-        batches.push(texts.slice(i, i + BATCH_SIZE));
+      for (let i = 0; i < normalizedTexts.length; i += BATCH_SIZE) {
+        batches.push(normalizedTexts.slice(i, i + BATCH_SIZE));
       }
       try {
         const batchResults = await Promise.all(
@@ -143,7 +145,7 @@ export class PaperChatEmbedding implements EmbeddingProvider {
       }
     }
 
-    return this.embedWithRetry(texts);
+    return this.embedWithRetry(normalizedTexts);
   }
 
   private async embedWithRetry(texts: string[], retries = 2): Promise<number[][]> {

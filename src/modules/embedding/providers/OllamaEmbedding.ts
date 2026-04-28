@@ -8,6 +8,10 @@
 import type { EmbeddingProvider } from "../../../types/embedding";
 import { EMBEDDING_MODELS } from "../../../types/embedding";
 import { getErrorMessage } from "../../../utils/common";
+import {
+  normalizeEmbeddingBatch,
+  normalizeEmbeddingInput,
+} from "../EmbeddingInput";
 
 const MODEL_INFO = EMBEDDING_MODELS.ollama;
 
@@ -30,6 +34,7 @@ export class OllamaEmbedding implements EmbeddingProvider {
 
   async embed(text: string): Promise<number[]> {
     const url = `${this.baseUrl}/api/embed`;
+    const input = normalizeEmbeddingInput(text);
 
     const response = await fetch(url, {
       method: "POST",
@@ -38,7 +43,7 @@ export class OllamaEmbedding implements EmbeddingProvider {
       },
       body: JSON.stringify({
         model: this.model,
-        input: text,
+        input,
       }),
     });
 
@@ -64,6 +69,7 @@ export class OllamaEmbedding implements EmbeddingProvider {
     if (texts.length === 0) {
       return [];
     }
+    const normalizedTexts = normalizeEmbeddingBatch(texts);
 
     // Ollama supports batch embedding via array input
     const url = `${this.baseUrl}/api/embed`;
@@ -75,7 +81,7 @@ export class OllamaEmbedding implements EmbeddingProvider {
       },
       body: JSON.stringify({
         model: this.model,
-        input: texts,
+        input: normalizedTexts,
       }),
     });
 
@@ -90,7 +96,7 @@ export class OllamaEmbedding implements EmbeddingProvider {
       embeddings?: number[][];
     };
 
-    if (!data.embeddings || data.embeddings.length !== texts.length) {
+    if (!data.embeddings || data.embeddings.length !== normalizedTexts.length) {
       throw new Error("Invalid response from Ollama Embedding API");
     }
 
