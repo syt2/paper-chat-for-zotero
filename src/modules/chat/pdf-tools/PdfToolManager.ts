@@ -58,6 +58,7 @@ import { getMemoryService } from "../memory/MemoryService";
 import { executeWebSearch, isValidWebSearchArgs } from "../web-search";
 import { preflightToolArguments } from "../tool-arguments/ToolArgumentPreflight";
 import { parsePaperStructure, parsePages } from "./paperParser";
+import { extractNativeOutline } from "./nativeOutlineExtractor";
 import type { AgentPromptContext } from "./promptGenerator";
 import { generatePaperContextPrompt as generatePaperContextPromptFn } from "./promptGenerator";
 import {
@@ -192,6 +193,28 @@ export class PdfToolManager {
           `[PdfToolManager] Error getting attachments for ${itemKey}:`,
           getErrorMessage(error),
         );
+      }
+    }
+
+    // 如果 PDF 文本解析成功，尝试提取 PDF 原生大纲（增强结构信息）
+    if (structure) {
+      // 优先尝试从打开的 PDF.js reader 获取原生大纲
+      // 仅当缓存中没有 already-resolved nativeOutline 时尝试
+      if (!structure.nativeOutline) {
+        try {
+          const nativeOutline = await extractNativeOutline(itemKey);
+          if (nativeOutline && nativeOutline.length > 0) {
+            structure.nativeOutline = nativeOutline;
+            ztoolkit.log(
+              `[PdfToolManager] Native outline extracted for item: ${itemKey} (${nativeOutline.length} items)`,
+            );
+          }
+        } catch (outlineError) {
+          // 非关键——如果取不到 natives outline，现有 heuristic 结构仍然可用
+          ztoolkit.log(
+            `[PdfToolManager] Native outline extraction skipped (reader may not be open): ${getErrorMessage(outlineError)}`,
+          );
+        }
       }
     }
 

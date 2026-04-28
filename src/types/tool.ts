@@ -182,6 +182,14 @@ export interface PaperSection {
   endIndex: number;
 }
 
+// PDF 原生大纲条目（pdf.js getOutline 结果）
+export interface NativeOutlineItem {
+  title: string;
+  level: number; // 层级深度(0=顶层)
+  pageNumber: number; // PDF 真实页码（从 pdf.js 解析得到）
+  children: NativeOutlineItem[];
+}
+
 // 工具名称枚举
 export type PaperToolName =
   | "web_search"
@@ -279,10 +287,11 @@ export interface PageInfo {
   content: string;
 }
 
-// 扩展 PaperStructure 包含页面信息
+// 扩展 PaperStructure 包含页面信息和大纲
 export interface PaperStructureExtended extends PaperStructure {
   pages: PageInfo[];
   pageCount: number;
+  nativeOutline?: NativeOutlineItem[]; // PDF 原生大纲（如果可用）
 }
 
 // ========== 新增工具参数类型 ==========
