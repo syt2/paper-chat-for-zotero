@@ -13,6 +13,9 @@ import { SECTION_ALIASES } from "./constants";
 import { parsePageRange } from "./paperParser";
 import { getErrorMessage } from "../../../utils/common";
 
+const HEURISTIC_SECTION_NOTE =
+  "Note: This structure is detected heuristically from extracted PDF text and may be incomplete. Missing headings are not evidence that the paper lacks those sections. For comprehensive analysis, verify with search_paper_content, get_pages, or get_full_text as needed.";
+
 /**
  * 执行 get_paper_section
  */
@@ -435,7 +438,7 @@ export function executeGetOutline(
     sections.length === 0 ||
     (sections.length === 1 && sections[0].normalizedName === "full_text")
   ) {
-    return "No structured outline detected. The paper may not have clear section headings.";
+    return `${HEURISTIC_SECTION_NOTE}\n\nNo structured outline detected. The paper may not have clear section headings.`;
   }
 
   const outline = sections
@@ -450,7 +453,7 @@ export function executeGetOutline(
     })
     .join("\n");
 
-  return `Document Outline (${pageCount} pages total):\n\n${outline}`;
+  return `${HEURISTIC_SECTION_NOTE}\n\nDocument Outline (${pageCount} pages total):\n\n${outline}`;
 }
 
 /**
@@ -462,7 +465,7 @@ export function executeListSections(
   const { sections } = paperStructure;
 
   if (sections.length === 0) {
-    return "No sections detected.";
+    return `${HEURISTIC_SECTION_NOTE}\n\nNo sections detected.`;
   }
 
   const sectionList = sections.map((s) => ({
@@ -479,7 +482,7 @@ export function executeListSections(
     )
     .join("\n\n");
 
-  return `Available sections (${sections.length} total):\n\n${formatted}`;
+  return `${HEURISTIC_SECTION_NOTE}\n\nAvailable sections (${sections.length} total):\n\n${formatted}`;
 }
 
 /**

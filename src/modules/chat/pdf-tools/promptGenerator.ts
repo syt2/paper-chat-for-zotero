@@ -157,8 +157,8 @@ The "key" is the Zotero item key - use it directly when referring to prior evide
 - get_pages: Get content by page range (e.g., "1-5,10")
 - get_page_count: Get total page count and statistics
 - search_with_regex: Advanced search with regex and context
-- get_outline: Get document outline/TOC
-- list_sections: List all available sections
+- get_outline: Heuristic outline/TOC for quick navigation only; it may miss or merge numbered sections, so do not treat missing headings as absent content
+- list_sections: Heuristic detected section IDs for navigation/debugging only; verify coverage with search_paper_content, get_pages, or get_full_text when completeness matters
 - get_full_text: [HIGH TOKEN COST] Full paper text when full-document evidence is necessary; after the first full-text fetch in a turn, further full-text fetches require narrower evidence for that target
 
 === ZOTERO LIBRARY TOOLS ===

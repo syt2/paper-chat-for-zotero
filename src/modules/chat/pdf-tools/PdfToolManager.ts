@@ -915,7 +915,7 @@ export class PdfToolManager {
         function: {
           name: "get_outline",
           description:
-            "Get a paper's outline/table of contents showing the document structure with section headings. NOTE: Outline detection works best for English papers with standard academic headings. For non-English papers, the outline may be incomplete or missing - use search_paper_content to find specific content instead.",
+            "Get a heuristic outline/table of contents for quick navigation only. Do not treat missing headings as proof that the paper lacks those sections: PDF text extraction may miss numbered sections, subsections, or non-standard headings. For comprehensive analysis, verify with search_paper_content, get_pages, or get_full_text as needed.",
           parameters: {
             type: "object",
             properties: {
@@ -929,7 +929,7 @@ export class PdfToolManager {
         function: {
           name: "list_sections",
           description:
-            "List all detected sections in a paper with their character counts. NOTE: Section detection works best for English papers with standard academic headings. For non-English papers, sections may not be detected properly - use search_paper_content with relevant keywords as a more reliable alternative.",
+            "List heuristically detected sections with IDs, character counts, and previews for navigation/debugging only. Do not assume this list is complete: PDF text extraction may merge or miss numbered sections, subsections, or non-standard headings. For comprehensive analysis, verify with search_paper_content, get_pages, or get_full_text as needed.",
           parameters: {
             type: "object",
             properties: {
