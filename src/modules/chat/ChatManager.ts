@@ -79,6 +79,7 @@ import {
   rerollPaperChatFailureAndReplay,
 } from "./paperchat-retry-orchestration";
 import { MemoryManager } from "./memory/MemoryManager";
+import { SessionTitleService } from "./SessionTitleService";
 import { AgentRuntime } from "./agent-runtime/AgentRuntime";
 import { normalizeAgentMaxPlanningIterations } from "./agent-runtime/IterationLimitConfig";
 import {
@@ -191,6 +192,7 @@ export class ChatManager {
   >();
 
   private memoryManager: MemoryManager;
+  private sessionTitleService: SessionTitleService;
   private agentRuntime: AgentRuntime;
 
   // UI回调
@@ -201,6 +203,7 @@ export class ChatManager {
   private onPdfAttached?: () => void;
   private onMessageComplete?: () => void;
   private onExecutionPlanUpdate?: (plan?: ExecutionPlan) => void;
+  private onSessionListUpdate?: () => void | Promise<void>;
   private onRuntimeEvent?: (event: AgentRuntimeEvent) => void;
   private onFallbackNotice?: (fromProvider: string, toProvider: string) => void; // 降级通知回调
   private approvalObserver: ToolApprovalObserver;
@@ -209,6 +212,7 @@ export class ChatManager {
     this.sessionStorage = new SessionStorageService();
     this.pdfExtractor = new PdfExtractor();
     this.memoryManager = new MemoryManager(this.sessionStorage);
+    this.sessionTitleService = new SessionTitleService();
     this.agentRuntime = new AgentRuntime(
       this.sessionStorage,
       {
@@ -682,6 +686,24 @@ export class ChatManager {
     });
   }
 
+  setSessionListUpdateCallback(
+    callback?: () => void | Promise<void>,
+  ): void {
+    this.onSessionListUpdate = callback;
+  }
+
+  private notifySessionListUpdated(): void {
+    if (!this.onSessionListUpdate) {
+      return;
+    }
+    Promise.resolve(this.onSessionListUpdate()).catch((error) => {
+      ztoolkit.log(
+        "[ChatManager] Failed to handle session list update:",
+        getErrorMessage(error),
+      );
+    });
+  }
+
   /**
    * 设置当前活动的 Item Key (单文档模式，向后兼容)
    */
@@ -725,6 +747,9 @@ export class ChatManager {
    */
   async createNewSession(): Promise<ChatSession> {
     await this.init();
+    const previousSession = this.currentSession;
+    this.memoryManager.onBeforeSessionSwitch(previousSession, "");
+    this.maybeGenerateSessionTitle(previousSession);
     this.currentSession = await this.sessionStorage.createSession();
     this.applySessionItemContext(this.currentSession);
     this.reconcileApprovalState(this.currentSession);
@@ -737,8 +762,10 @@ export class ChatManager {
   async switchSession(sessionId: string): Promise<ChatSession | null> {
     await this.init();
 
+    const previousSession = this.currentSession;
     // Trigger memory extraction for the session we're leaving
-    this.memoryManager.onBeforeSessionSwitch(this.currentSession, sessionId);
+    this.memoryManager.onBeforeSessionSwitch(previousSession, sessionId);
+    this.maybeGenerateSessionTitle(previousSession, sessionId);
 
     try {
       // If the target session is currently streaming, reuse its in-memory
@@ -834,6 +861,68 @@ export class ChatManager {
   async getAllSessions(): Promise<SessionMeta[]> {
     await this.init();
     return this.sessionStorage.listSessions();
+  }
+
+  async updateSessionTitle(
+    sessionId: string,
+    title: string | null,
+    source: "generated" | "user" = "user",
+  ): Promise<void> {
+    await this.init();
+    const normalizedTitle = title?.trim() || null;
+    await this.sessionStorage.updateSessionTitle(
+      sessionId,
+      normalizedTitle,
+      source,
+    );
+
+    const session = this.getTrackedSessionById(sessionId);
+    if (session) {
+      session.title = normalizedTitle || undefined;
+      session.titleSource =
+        normalizedTitle || source === "user" ? source : undefined;
+      const now = Date.now();
+      session.titleGeneratedAt =
+        normalizedTitle && source === "generated" ? now : undefined;
+      session.titleEditedAt = source === "user" ? now : undefined;
+    }
+  }
+
+  private maybeGenerateSessionTitle(
+    session: ChatSession | null,
+    nextSessionId?: string,
+  ): void {
+    if (!session || session.id === nextSessionId) {
+      return;
+    }
+    if (!this.sessionTitleService.isEligible(session)) {
+      return;
+    }
+
+    void this.sessionTitleService
+      .generateTitle(session)
+      .then(async (title) => {
+        if (!title) {
+          return;
+        }
+        const latestSession =
+          this.getTrackedSessionById(session.id) ??
+          (await this.sessionStorage.loadSession(session.id));
+        if (!latestSession || latestSession.titleSource === "user") {
+          return;
+        }
+        if (latestSession.title?.trim()) {
+          return;
+        }
+        await this.updateSessionTitle(session.id, title, "generated");
+        this.notifySessionListUpdated();
+      })
+      .catch((error) => {
+        ztoolkit.log(
+          "[ChatManager] Failed to persist generated session title:",
+          getErrorMessage(error),
+        );
+      });
   }
 
   /**

@@ -51,6 +51,10 @@ export interface SessionInfo {
   messageCount: number;
   lastMessagePreview: string;
   lastMessageTime: number;
+  title?: string;
+  titleSource?: "generated" | "user";
+  titleGeneratedAt?: number;
+  titleEditedAt?: number;
 }
 
 // Attachment state for pending uploads

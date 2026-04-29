@@ -99,6 +99,7 @@ export type FluentMessageId =
   | 'paperchat-chat-configure-provider'
   | 'paperchat-chat-copy'
   | 'paperchat-chat-delete'
+  | 'paperchat-chat-edit-title'
   | 'paperchat-chat-error-no-provider'
   | 'paperchat-chat-error-paperchat-insufficient-quota'
   | 'paperchat-chat-error-paperchat-topup-action'

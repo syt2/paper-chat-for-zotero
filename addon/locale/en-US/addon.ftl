@@ -109,6 +109,7 @@ paperchat-chat-switch-to-sidebar = Switch to sidebar mode
 paperchat-chat-no-models = No models available
 paperchat-chat-configure-provider = Please configure a provider in Settings first
 paperchat-chat-delete = Delete
+paperchat-chat-edit-title = Edit title
 paperchat-chat-copy = Copy
 paperchat-chat-interrupted = Interrupted
 paperchat-chat-turn-cancelled = Request cancelled.

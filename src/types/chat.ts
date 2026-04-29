@@ -296,6 +296,10 @@ export interface SessionMeta {
   messageCount: number;
   lastMessagePreview: string;
   lastMessageTime: number;
+  title?: string;
+  titleSource?: "generated" | "user";
+  titleGeneratedAt?: number;
+  titleEditedAt?: number;
 }
 
 // 聊天会话 (独立于 item，支持跨 item 对话)
@@ -305,6 +309,10 @@ export interface ChatSession {
   updatedAt: number;
   lastActiveItemKey: string | null; // 上次活动的 item key (向后兼容)
   messages: ChatMessage[];
+  title?: string;
+  titleSource?: "generated" | "user";
+  titleGeneratedAt?: number;
+  titleEditedAt?: number;
   // 上下文管理相关
   contextSummary?: ContextSummary;
   contextState?: ContextState;

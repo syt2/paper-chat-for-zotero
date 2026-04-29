@@ -714,8 +714,14 @@ export function setupEventHandlers(context: ChatPanelContext): void {
         // Refresh the dropdown to reflect the deletion
         await refreshHistoryDropdown();
       },
+      async (session: SessionInfo, title: string | null) => {
+        await chatManager.updateSessionTitle(session.id, title, "user");
+        await refreshHistoryDropdown();
+      },
     );
   };
+
+  chatManager.setSessionListUpdateCallback(refreshHistoryDropdown);
 
   // Close dropdown when clicking outside
   if (historyDropdown && historyBtn) {

@@ -11,7 +11,7 @@ import { getErrorMessage } from "../../../utils/common";
 
 const DB_DIR = "paper-chat";
 const DB_FILE = "storage";
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 /** Build absolute DB path so Zotero.DBConnection doesn't parse subdirectory names */
 function getDBPath(): string {
@@ -132,7 +132,11 @@ export class StorageDatabase {
         resolved_model_id TEXT,
         last_retryable_user_message_id TEXT,
         last_retryable_error_message_id TEXT,
-        last_retryable_failed_model_id TEXT
+        last_retryable_failed_model_id TEXT,
+        title TEXT,
+        title_source TEXT,
+        title_generated_at INTEGER,
+        title_edited_at INTEGER
       )
     `);
 
@@ -162,6 +166,10 @@ export class StorageDatabase {
         message_count INTEGER NOT NULL DEFAULT 0,
         last_message_preview TEXT NOT NULL DEFAULT '',
         last_message_time INTEGER NOT NULL,
+        title TEXT,
+        title_source TEXT,
+        title_generated_at INTEGER,
+        title_edited_at INTEGER,
         FOREIGN KEY (id) REFERENCES sessions(id) ON DELETE CASCADE
       )
     `);
@@ -319,6 +327,10 @@ export class StorageDatabase {
       if (currentVersion < 5) {
         await this.upgradeToV5(db);
         currentVersion = 5;
+      }
+      if (currentVersion < 6) {
+        await this.upgradeToV6(db);
+        currentVersion = 6;
       }
     }
   }
@@ -724,6 +736,66 @@ export class StorageDatabase {
       }
       ztoolkit.log(
         "[StorageDatabase] Failed to upgrade to v5:",
+        getErrorMessage(error),
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Upgrade schema v5 -> v6: add optional session titles.
+   */
+  private async upgradeToV6(db: ZoteroDBConnection): Promise<void> {
+    ztoolkit.log("[StorageDatabase] Upgrading schema v5 -> v6...");
+
+    await db.queryAsync("BEGIN TRANSACTION");
+    try {
+      const titleColumns = [
+        "title TEXT",
+        "title_source TEXT",
+        "title_generated_at INTEGER",
+        "title_edited_at INTEGER",
+      ];
+
+      const sessionCols = new Set(
+        ((await db.queryAsync("PRAGMA table_info(sessions)")) || []).map(
+          (c: any) => String(c.name),
+        ),
+      );
+      for (const col of titleColumns) {
+        const columnName = parseColumnName(col);
+        if (!sessionCols.has(columnName)) {
+          await db.queryAsync(`ALTER TABLE sessions ADD COLUMN ${col}`);
+        }
+      }
+
+      const metaCols = new Set(
+        ((await db.queryAsync("PRAGMA table_info(session_meta)")) || []).map(
+          (c: any) => String(c.name),
+        ),
+      );
+      for (const col of titleColumns) {
+        const columnName = parseColumnName(col);
+        if (!metaCols.has(columnName)) {
+          await db.queryAsync(`ALTER TABLE session_meta ADD COLUMN ${col}`);
+        }
+      }
+
+      await db.queryAsync(
+        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
+        [6, Date.now()],
+      );
+
+      await db.queryAsync("COMMIT");
+      ztoolkit.log("[StorageDatabase] Schema upgraded to v6");
+    } catch (error) {
+      try {
+        await db.queryAsync("ROLLBACK");
+      } catch {
+        /* ignore */
+      }
+      ztoolkit.log(
+        "[StorageDatabase] Failed to upgrade to v6:",
         getErrorMessage(error),
       );
       throw error;

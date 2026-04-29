@@ -35,6 +35,7 @@ export function createSessionItem(
   theme: ThemeColors,
   onSelect: (session: SessionInfo) => void,
   onDelete?: (session: SessionInfo) => void,
+  onEditTitle?: (session: SessionInfo, title: string | null) => Promise<void>,
 ): HTMLElement {
   const sessionItem = createElement(doc, "div", {
     padding: "12px 14px",
@@ -43,6 +44,28 @@ export function createSessionItem(
     transition: "background 0.2s",
     position: "relative",
   });
+
+  // Edit button (hidden by default, shown on hover)
+  const editBtn = createElement(doc, "button", {
+    position: "absolute",
+    right: "36px",
+    top: "50%",
+    transform: "translateY(-50%)",
+    width: "24px",
+    height: "24px",
+    background: "transparent",
+    border: "none",
+    borderRadius: "4px",
+    cursor: "pointer",
+    display: "none",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: "13px",
+    color: theme.textMuted,
+    padding: "0",
+  });
+  editBtn.textContent = "✎";
+  editBtn.title = getString("chat-edit-title");
 
   // Delete button (hidden by default, shown on hover)
   const deleteBtn = createElement(doc, "button", {
@@ -69,10 +92,12 @@ export function createSessionItem(
   // Hover effects
   sessionItem.addEventListener("mouseenter", () => {
     sessionItem.style.background = theme.dropdownItemHoverBg;
+    editBtn.style.display = onEditTitle ? "flex" : "none";
     deleteBtn.style.display = "flex";
   });
   sessionItem.addEventListener("mouseleave", () => {
     sessionItem.style.background = "transparent";
+    editBtn.style.display = "none";
     deleteBtn.style.display = "none";
   });
 
@@ -94,10 +119,14 @@ export function createSessionItem(
 
   // Content wrapper (to keep content away from delete button)
   const contentWrapper = createElement(doc, "div", {
-    paddingRight: "30px",
+    paddingRight: onEditTitle ? "58px" : "30px",
   });
 
-  // Session title (based on creation time)
+  const fallbackTitle = getString("chat-history-title", {
+    args: { time: formatTimestamp(session.createdAt) },
+  });
+
+  // Session title
   const titleEl = createElement(doc, "div", {
     fontWeight: "600",
     fontSize: "13px",
@@ -107,8 +136,62 @@ export function createSessionItem(
     whiteSpace: "nowrap",
     color: theme.textPrimary,
   });
-  titleEl.textContent = getString("chat-history-title", {
-    args: { time: formatTimestamp(session.createdAt) },
+  titleEl.textContent = session.title || fallbackTitle;
+
+  editBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!onEditTitle) return;
+
+    const input = createElement(doc, "input", {
+      width: "100%",
+      boxSizing: "border-box",
+      fontSize: "13px",
+      fontWeight: "600",
+      color: theme.textPrimary,
+      background: theme.inputBg,
+      border: `1px solid ${theme.inputBorderColor}`,
+      borderRadius: "4px",
+      padding: "2px 4px",
+      outline: "none",
+    }) as HTMLInputElement;
+    input.value = session.title || "";
+    titleEl.replaceWith(input);
+    editBtn.style.display = "none";
+    deleteBtn.style.display = "none";
+    input.focus();
+    input.select();
+
+    let cancelled = false;
+    let saved = false;
+    const finish = async () => {
+      if (saved || cancelled) return;
+      saved = true;
+      const nextTitle = input.value.trim() || null;
+      try {
+        await onEditTitle(session, nextTitle);
+        session.title = nextTitle || undefined;
+        titleEl.textContent = session.title || fallbackTitle;
+      } catch (error) {
+        ztoolkit.log("[HistoryDropdown] Failed to update session title:", error);
+      } finally {
+        input.replaceWith(titleEl);
+      }
+    };
+
+    input.addEventListener("click", (event) => event.stopPropagation());
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void finish();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        cancelled = true;
+        input.replaceWith(titleEl);
+      }
+    });
+    input.addEventListener("blur", () => {
+      void finish();
+    });
   });
 
   // Message preview
@@ -147,6 +230,7 @@ export function createSessionItem(
   contentWrapper.appendChild(metaEl);
 
   sessionItem.appendChild(contentWrapper);
+  sessionItem.appendChild(editBtn);
   sessionItem.appendChild(deleteBtn);
 
   // Click handler
@@ -185,6 +269,7 @@ export function renderMoreSessions(
   theme: ThemeColors,
   onSelect: (session: SessionInfo) => void,
   onDelete?: (session: SessionInfo) => void,
+  onEditTitle?: (session: SessionInfo, title: string | null) => Promise<void>,
 ): void {
   const endIndex = Math.min(
     state.displayedCount + SESSIONS_PER_PAGE,
@@ -200,7 +285,14 @@ export function renderMoreSessions(
   // Add session items
   for (let i = state.displayedCount; i < endIndex; i++) {
     container.appendChild(
-      createSessionItem(doc, state.allSessions[i], theme, onSelect, onDelete),
+      createSessionItem(
+        doc,
+        state.allSessions[i],
+        theme,
+        onSelect,
+        onDelete,
+        onEditTitle,
+      ),
     );
   }
   state.displayedCount = endIndex;
@@ -222,7 +314,15 @@ export function renderMoreSessions(
 
     loadMoreBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      renderMoreSessions(container, doc, state, theme, onSelect, onDelete);
+      renderMoreSessions(
+        container,
+        doc,
+        state,
+        theme,
+        onSelect,
+        onDelete,
+        onEditTitle,
+      );
     });
     loadMoreBtn.addEventListener("mouseenter", () => {
       loadMoreBtn.style.background = chatColors.loadMoreBg;
@@ -246,6 +346,7 @@ export function populateHistoryDropdown(
   theme: ThemeColors,
   onSelect: (session: SessionInfo) => void,
   onDelete?: (session: SessionInfo) => void,
+  onEditTitle?: (session: SessionInfo, title: string | null) => Promise<void>,
 ): void {
   // Reset state
   state.allSessions = sessions;
@@ -264,7 +365,15 @@ export function populateHistoryDropdown(
     dropdown.appendChild(emptyMsg);
   } else {
     // Render first page
-    renderMoreSessions(dropdown, doc, state, theme, onSelect, onDelete);
+    renderMoreSessions(
+      dropdown,
+      doc,
+      state,
+      theme,
+      onSelect,
+      onDelete,
+      onEditTitle,
+    );
   }
 }
 

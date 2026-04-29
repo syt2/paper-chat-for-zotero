@@ -40,6 +40,10 @@ type SessionRow = {
   last_retryable_user_message_id: string | null;
   last_retryable_error_message_id: string | null;
   last_retryable_failed_model_id: string | null;
+  title: string | null;
+  title_source: string | null;
+  title_generated_at: number | null;
+  title_edited_at: number | null;
 };
 
 export class SessionLoadError extends Error {
@@ -73,6 +77,13 @@ function toValidSelectedTier(
   return undefined;
 }
 
+function toValidTitleSource(value: string | null): ChatSession["titleSource"] {
+  if (value === "generated" || value === "user") {
+    return value;
+  }
+  return undefined;
+}
+
 export function mapSessionRowToChatSession(
   row: SessionRow,
   messages: ChatMessage[],
@@ -83,6 +94,14 @@ export function mapSessionRowToChatSession(
     updatedAt: row.updated_at,
     lastActiveItemKey: row.last_active_item_key || null,
     messages: filterValidMessages(messages),
+    title: row.title || undefined,
+    titleSource: toValidTitleSource(row.title_source),
+    titleGeneratedAt:
+      row.title_generated_at != null
+        ? (row.title_generated_at as number)
+        : undefined,
+    titleEditedAt:
+      row.title_edited_at != null ? (row.title_edited_at as number) : undefined,
     contextSummary: row.context_summary
       ? JSON.parse(row.context_summary)
       : undefined,
@@ -169,6 +188,10 @@ export class SessionStorageService {
       messageCount: session.messages?.length || 0,
       lastMessagePreview,
       lastMessageTime,
+      title: session.title,
+      titleSource: session.titleSource,
+      titleGeneratedAt: session.titleGeneratedAt,
+      titleEditedAt: session.titleEditedAt,
     };
   }
 
@@ -396,6 +419,10 @@ export class SessionStorageService {
           `UPDATE sessions SET
             updated_at = ?,
             last_active_item_key = ?,
+            title = ?,
+            title_source = ?,
+            title_generated_at = ?,
+            title_edited_at = ?,
             context_summary = ?,
             context_state = ?,
             execution_plan = ?,
@@ -405,6 +432,10 @@ export class SessionStorageService {
           [
             nextUpdatedAt,
             session.lastActiveItemKey || null,
+            session.title || null,
+            session.titleSource || null,
+            session.titleGeneratedAt ?? null,
+            session.titleEditedAt ?? null,
             session.contextSummary
               ? JSON.stringify(session.contextSummary)
               : null,
@@ -443,8 +474,21 @@ export class SessionStorageService {
 
         // Also keep session_meta.updated_at in sync
         await db.queryAsync(
-          "UPDATE session_meta SET updated_at = ? WHERE id = ?",
-          [nextUpdatedAt, session.id],
+          `UPDATE session_meta SET
+            updated_at = ?,
+            title = ?,
+            title_source = ?,
+            title_generated_at = ?,
+            title_edited_at = ?
+          WHERE id = ?`,
+          [
+            nextUpdatedAt,
+            session.title || null,
+            session.titleSource || null,
+            session.titleGeneratedAt ?? null,
+            session.titleEditedAt ?? null,
+            session.id,
+          ],
         );
 
         await db.queryAsync("COMMIT");
@@ -580,12 +624,16 @@ export class SessionStorageService {
         // Upsert session (no messages column)
         await db.queryAsync(
           `INSERT INTO sessions
-           (id, created_at, updated_at, last_active_item_key, context_summary, context_state, execution_plan, tool_execution_state, tool_approval_state, memory_extracted_at, memory_extracted_msg_count)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           (id, created_at, updated_at, last_active_item_key, title, title_source, title_generated_at, title_edited_at, context_summary, context_state, execution_plan, tool_execution_state, tool_approval_state, memory_extracted_at, memory_extracted_msg_count)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              created_at = excluded.created_at,
              updated_at = excluded.updated_at,
              last_active_item_key = excluded.last_active_item_key,
+             title = excluded.title,
+             title_source = excluded.title_source,
+             title_generated_at = excluded.title_generated_at,
+             title_edited_at = excluded.title_edited_at,
              context_summary = excluded.context_summary,
              context_state = excluded.context_state,
              execution_plan = excluded.execution_plan,
@@ -598,6 +646,10 @@ export class SessionStorageService {
             session.createdAt,
             nextUpdatedAt,
             session.lastActiveItemKey || null,
+            session.title || null,
+            session.titleSource || null,
+            session.titleGeneratedAt ?? null,
+            session.titleEditedAt ?? null,
             session.contextSummary
               ? JSON.stringify(session.contextSummary)
               : null,
@@ -671,8 +723,8 @@ export class SessionStorageService {
         // Upsert session_meta
         await db.queryAsync(
           `INSERT OR REPLACE INTO session_meta
-           (id, created_at, updated_at, message_count, last_message_preview, last_message_time)
-           VALUES (?, ?, ?, ?, ?, ?)`,
+           (id, created_at, updated_at, message_count, last_message_preview, last_message_time, title, title_source, title_generated_at, title_edited_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             meta.id,
             meta.createdAt,
@@ -680,6 +732,10 @@ export class SessionStorageService {
             meta.messageCount,
             meta.lastMessagePreview,
             meta.lastMessageTime,
+            meta.title || null,
+            meta.titleSource || null,
+            meta.titleGeneratedAt ?? null,
+            meta.titleEditedAt ?? null,
           ],
         );
 
@@ -782,6 +838,19 @@ export class SessionStorageService {
         last_retryable_failed_model_id:
           typeof baseRowRaw.last_retryable_failed_model_id === "string"
             ? baseRowRaw.last_retryable_failed_model_id
+            : null,
+        title: typeof baseRowRaw.title === "string" ? baseRowRaw.title : null,
+        title_source:
+          typeof baseRowRaw.title_source === "string"
+            ? baseRowRaw.title_source
+            : null,
+        title_generated_at:
+          typeof baseRowRaw.title_generated_at === "number"
+            ? baseRowRaw.title_generated_at
+            : null,
+        title_edited_at:
+          typeof baseRowRaw.title_edited_at === "number"
+            ? baseRowRaw.title_edited_at
             : null,
       };
       const paperchatStateRows =
@@ -894,10 +963,80 @@ export class SessionStorageService {
         messageCount: row.message_count,
         lastMessagePreview: row.last_message_preview,
         lastMessageTime: row.last_message_time,
+        title: row.title || undefined,
+        titleSource: toValidTitleSource(row.title_source),
+        titleGeneratedAt:
+          row.title_generated_at != null ? row.title_generated_at : undefined,
+        titleEditedAt:
+          row.title_edited_at != null ? row.title_edited_at : undefined,
       }));
     } catch (error) {
       ztoolkit.log("[SessionStorageService] List sessions error:", error);
       return [];
+    }
+  }
+
+  async updateSessionTitle(
+    sessionId: string,
+    title: string | null,
+    source: "generated" | "user",
+    timestamp: number = Date.now(),
+  ): Promise<void> {
+    await this.init();
+
+    try {
+      const db = await getStorageDatabase().ensureInit();
+      const normalizedTitle = title?.trim() || null;
+      const titleSource =
+        normalizedTitle || source === "user" ? source : null;
+      const titleGeneratedAt =
+        normalizedTitle && source === "generated" ? timestamp : null;
+      const titleEditedAt = source === "user" ? timestamp : null;
+
+      await db.queryAsync("BEGIN TRANSACTION");
+      try {
+        await db.queryAsync(
+          `UPDATE sessions SET
+            title = ?,
+            title_source = ?,
+            title_generated_at = ?,
+            title_edited_at = ?
+          WHERE id = ?`,
+          [
+            normalizedTitle,
+            titleSource,
+            titleGeneratedAt,
+            titleEditedAt,
+            sessionId,
+          ],
+        );
+        await db.queryAsync(
+          `UPDATE session_meta SET
+            title = ?,
+            title_source = ?,
+            title_generated_at = ?,
+            title_edited_at = ?
+          WHERE id = ?`,
+          [
+            normalizedTitle,
+            titleSource,
+            titleGeneratedAt,
+            titleEditedAt,
+            sessionId,
+          ],
+        );
+        await db.queryAsync("COMMIT");
+      } catch (error) {
+        try {
+          await db.queryAsync("ROLLBACK");
+        } catch {
+          /* ignore */
+        }
+        throw error;
+      }
+    } catch (error) {
+      ztoolkit.log("[SessionStorageService] Update session title error:", error);
+      throw error;
     }
   }
 

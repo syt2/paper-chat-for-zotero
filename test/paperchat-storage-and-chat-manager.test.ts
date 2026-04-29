@@ -328,6 +328,74 @@ describe("paperchat storage and chat manager", function () {
     );
   });
 
+  it("persists and lists editable session titles", async function () {
+    const recorded: RecordedQuery[] = [];
+    const fakeDb = {
+      async queryAsync(sql: string, params?: unknown[]) {
+        const normalized = normalizeSql(sql);
+        recorded.push({ sql: normalized, params });
+
+        if (normalized === "SELECT value FROM settings WHERE key = ?") {
+          return [];
+        }
+        if (normalized === "SELECT * FROM session_meta ORDER BY updated_at DESC") {
+          return [
+            {
+              id: "session-title-1",
+              created_at: 100,
+              updated_at: 200,
+              message_count: 2,
+              last_message_preview: "hello",
+              last_message_time: 190,
+              title: "Custom title",
+              title_source: "user",
+              title_generated_at: null,
+              title_edited_at: 201,
+            },
+          ];
+        }
+
+        return [];
+      },
+    };
+
+    const storage = getStorageDatabase() as any;
+    storage.ensureInit = async () => fakeDb;
+
+    const service = new SessionStorageService();
+    await service.updateSessionTitle(
+      "session-title-1",
+      "Custom title",
+      "user",
+      201,
+    );
+    const sessions = await service.listSessions();
+
+    assert.deepInclude(sessions[0], {
+      id: "session-title-1",
+      title: "Custom title",
+      titleSource: "user",
+      titleEditedAt: 201,
+    });
+    assert.include(
+      recorded.map((entry) => entry.sql),
+      "UPDATE sessions SET title = ?, title_source = ?, title_generated_at = ?, title_edited_at = ? WHERE id = ?",
+    );
+    assert.include(
+      recorded.map((entry) => entry.sql),
+      "UPDATE session_meta SET title = ?, title_source = ?, title_generated_at = ?, title_edited_at = ? WHERE id = ?",
+    );
+
+    await service.updateSessionTitle("session-title-1", null, "user", 202);
+    assert.deepInclude(recorded.map((entry) => entry.params), [
+      null,
+      "user",
+      null,
+      202,
+      "session-title-1",
+    ]);
+  });
+
   it("excludes interrupted assistant messages from future context windows", function () {
     prefStore.set(`${PREFS_PREFIX}.contextMaxRecentPairs`, 10);
     prefStore.set(`${PREFS_PREFIX}.contextEnableSummary`, false);
@@ -629,9 +697,9 @@ describe("paperchat storage and chat manager", function () {
       [
         "SELECT value FROM settings WHERE key = ?",
         "BEGIN TRANSACTION",
-        "UPDATE sessions SET updated_at = ?, last_active_item_key = ?, context_summary = ?, context_state = ?, execution_plan = ?, tool_execution_state = ?, tool_approval_state = ? WHERE id = ?",
+        "UPDATE sessions SET updated_at = ?, last_active_item_key = ?, title = ?, title_source = ?, title_generated_at = ?, title_edited_at = ?, context_summary = ?, context_state = ?, execution_plan = ?, tool_execution_state = ?, tool_approval_state = ? WHERE id = ?",
         "INSERT INTO paperchat_session_state (session_id, selected_tier, resolved_model_id, last_retryable_user_message_id, last_retryable_error_message_id, last_retryable_failed_model_id) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET selected_tier = excluded.selected_tier, resolved_model_id = excluded.resolved_model_id, last_retryable_user_message_id = excluded.last_retryable_user_message_id, last_retryable_error_message_id = excluded.last_retryable_error_message_id, last_retryable_failed_model_id = excluded.last_retryable_failed_model_id",
-        "UPDATE session_meta SET updated_at = ? WHERE id = ?",
+        "UPDATE session_meta SET updated_at = ?, title = ?, title_source = ?, title_generated_at = ?, title_edited_at = ? WHERE id = ?",
         "COMMIT",
       ],
     );

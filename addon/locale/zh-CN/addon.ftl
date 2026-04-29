@@ -109,6 +109,7 @@ paperchat-chat-switch-to-sidebar = 切换为侧边栏模式
 paperchat-chat-no-models = 暂无可用模型
 paperchat-chat-configure-provider = 请先在设置中配置服务商
 paperchat-chat-delete = 删除
+paperchat-chat-edit-title = 编辑标题
 paperchat-chat-copy = 复制
 paperchat-chat-interrupted = 已中断
 paperchat-chat-turn-cancelled = 已取消本次请求。
