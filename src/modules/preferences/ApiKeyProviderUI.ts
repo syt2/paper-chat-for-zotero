@@ -14,9 +14,10 @@ type ProviderMetadata = ReturnType<
   ? R
   : never;
 
-const EXTRA_REQUEST_BODY_PLACEHOLDER = '{\n  "reasoning_effort": "medium" \n}';
+const EXTRA_REQUEST_BODY_PLACEHOLDER =
+  '{\n  "thinking": { "type": "disabled" }\n}';
 const MODEL_EXTRA_REQUEST_BODY_PLACEHOLDER =
-  '{\n  "gpt-5": {\n    "reasoning": { "effort": "high" }\n  }\n}';
+  '{\n  "deepseek-v4-flash": {\n    "thinking": { "type": "enabled" },\n    "reasoning_effort": "max"\n  }\n}';
 
 function isPlainJsonObject(value: unknown): value is Record<string, unknown> {
   return (
