@@ -24,6 +24,11 @@ pref-temperature = 温度
 pref-system-prompt = 系统提示词
 pref-system-prompt-placeholder =
     .placeholder = 您是一个有帮助的研究助手...
+pref-extra-request-body = 额外请求体
+pref-model-extra-request-body = 模型额外请求体
+pref-extra-request-body-invalid = 额外请求体必须是 JSON 对象
+pref-model-extra-request-body-invalid = 模型额外请求体必须是对象，且每个模型的值都必须是 JSON 对象
+pref-invalid-json = JSON 格式无效
 
 # Provider Settings
 pref-providers = 服务提供商

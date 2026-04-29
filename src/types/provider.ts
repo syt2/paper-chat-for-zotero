@@ -92,6 +92,8 @@ export interface ApiKeyProviderConfig extends BaseProviderConfig {
   maxTokens?: number;
   temperature?: number;
   systemPrompt?: string;
+  extraRequestBody?: Record<string, unknown>;
+  modelExtraRequestBody?: Record<string, Record<string, unknown>>;
 }
 
 /**

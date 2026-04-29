@@ -14,6 +14,79 @@ type ProviderMetadata = ReturnType<
   ? R
   : never;
 
+const EXTRA_REQUEST_BODY_PLACEHOLDER = '{\n  "reasoning_effort": "medium" \n}';
+const MODEL_EXTRA_REQUEST_BODY_PLACEHOLDER =
+  '{\n  "gpt-5": {\n    "reasoning": { "effort": "high" }\n  }\n}';
+
+function isPlainJsonObject(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value)
+  );
+}
+
+function formatJsonObject(value: Record<string, unknown> | undefined): string {
+  return value ? JSON.stringify(value, null, 2) : "";
+}
+
+function parseJsonObjectTextarea(
+  value: string,
+  errorMessage: string,
+): Record<string, unknown> | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    throw new Error(errorMessage);
+  }
+
+  if (!isPlainJsonObject(parsed)) {
+    throw new Error(errorMessage);
+  }
+  return parsed;
+}
+
+function parseModelExtraRequestBody(
+  value: string,
+): Record<string, Record<string, unknown>> | undefined {
+  const parsed = parseJsonObjectTextarea(
+    value,
+    getString("pref-model-extra-request-body-invalid"),
+  );
+  if (!parsed) {
+    return undefined;
+  }
+
+  for (const modelConfig of Object.values(parsed)) {
+    if (!isPlainJsonObject(modelConfig)) {
+      throw new Error(getString("pref-model-extra-request-body-invalid"));
+    }
+  }
+
+  return parsed as Record<string, Record<string, unknown>>;
+}
+
+function clearExtraRequestBodyError(doc: Document): void {
+  const testResult = doc.getElementById("pref-test-result");
+  if (!testResult) {
+    return;
+  }
+  const invalidMessages = new Set([
+    getString("pref-extra-request-body-invalid"),
+    getString("pref-model-extra-request-body-invalid"),
+    getString("pref-invalid-json"),
+  ]);
+  if (invalidMessages.has(testResult.textContent || "")) {
+    testResult.textContent = "";
+  }
+}
+
 /**
  * Populate API key panel with provider data
  */
@@ -42,6 +115,12 @@ export function populateApiKeyPanel(
   const systemPromptEl = doc.getElementById(
     "pref-provider-systemprompt",
   ) as HTMLTextAreaElement;
+  const extraRequestBodyEl = doc.getElementById(
+    "pref-provider-extra-request-body",
+  ) as HTMLTextAreaElement;
+  const modelExtraRequestBodyEl = doc.getElementById(
+    "pref-provider-model-extra-request-body",
+  ) as HTMLTextAreaElement;
   const deleteBtn = doc.getElementById("pref-delete-provider");
 
   if (titleEl) titleEl.textContent = config.name;
@@ -52,6 +131,16 @@ export function populateApiKeyPanel(
   if (maxTokensEl) maxTokensEl.value = String(config.maxTokens || 8192);
   if (temperatureEl) temperatureEl.value = String(config.temperature ?? 0.7);
   if (systemPromptEl) systemPromptEl.value = config.systemPrompt || "";
+  if (extraRequestBodyEl) {
+    extraRequestBodyEl.placeholder = EXTRA_REQUEST_BODY_PLACEHOLDER;
+    extraRequestBodyEl.value = formatJsonObject(config.extraRequestBody);
+  }
+  if (modelExtraRequestBodyEl) {
+    modelExtraRequestBodyEl.placeholder = MODEL_EXTRA_REQUEST_BODY_PLACEHOLDER;
+    modelExtraRequestBodyEl.value = formatJsonObject(
+      config.modelExtraRequestBody,
+    );
+  }
 
   // Populate model dropdown
   const modelPopup = doc.getElementById("pref-provider-model-popup");
@@ -249,12 +338,39 @@ export function saveCurrentProviderConfig(
   const systemPromptEl = doc.getElementById(
     "pref-provider-systemprompt",
   ) as HTMLTextAreaElement;
+  const extraRequestBodyEl = doc.getElementById(
+    "pref-provider-extra-request-body",
+  ) as HTMLTextAreaElement;
+  const modelExtraRequestBodyEl = doc.getElementById(
+    "pref-provider-model-extra-request-body",
+  ) as HTMLTextAreaElement;
 
   const apiKey = apikeyEl?.value || "";
   const wasEnabled = (
     providerManager.getProviderConfig(currentProviderId) as ApiKeyProviderConfig
   )?.enabled;
   const isNowEnabled = !!apiKey.trim();
+
+  let extraRequestBody: Record<string, unknown> | undefined;
+  let modelExtraRequestBody:
+    | Record<string, Record<string, unknown>>
+    | undefined;
+  try {
+    extraRequestBody = parseJsonObjectTextarea(
+      extraRequestBodyEl?.value || "",
+      getString("pref-extra-request-body-invalid"),
+    );
+    modelExtraRequestBody = parseModelExtraRequestBody(
+      modelExtraRequestBodyEl?.value || "",
+    );
+  } catch (error) {
+    showTestResult(
+      doc,
+      error instanceof Error ? error.message : getString("pref-invalid-json"),
+      true,
+    );
+    return;
+  }
 
   const updates: Partial<ApiKeyProviderConfig> = {
     enabled: isNowEnabled, // Auto-enable when API key is filled
@@ -264,9 +380,12 @@ export function saveCurrentProviderConfig(
     maxTokens: parseInt(maxTokensEl?.value) || 8192,
     temperature: parseFloat(temperatureEl?.value) || 0.7,
     systemPrompt: systemPromptEl?.value || "",
+    extraRequestBody,
+    modelExtraRequestBody,
   };
 
   providerManager.updateProviderConfig(currentProviderId, updates);
+  clearExtraRequestBodyError(doc);
 
   return wasEnabled !== isNowEnabled ? undefined : undefined; // Type placeholder, actual logic in caller
 }
@@ -406,6 +525,20 @@ export function bindApiKeyEvents(
     "pref-provider-systemprompt",
   ) as HTMLTextAreaElement;
   systemPromptInput?.addEventListener("blur", () =>
+    saveCurrentProviderConfig(doc, getCurrentProviderId()),
+  );
+
+  const extraRequestBodyInput = doc.getElementById(
+    "pref-provider-extra-request-body",
+  ) as HTMLTextAreaElement;
+  extraRequestBodyInput?.addEventListener("blur", () =>
+    saveCurrentProviderConfig(doc, getCurrentProviderId()),
+  );
+
+  const modelExtraRequestBodyInput = doc.getElementById(
+    "pref-provider-model-extra-request-body",
+  ) as HTMLTextAreaElement;
+  modelExtraRequestBodyInput?.addEventListener("blur", () =>
     saveCurrentProviderConfig(doc, getCurrentProviderId()),
   );
 

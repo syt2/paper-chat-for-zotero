@@ -512,6 +512,44 @@
               style="flex: 1; height: 60px; margin-left: 8px; min-width: 200px"
             ></html:textarea>
           </hbox>
+
+          <!-- Extra Request Body -->
+          <hbox align="start" style="margin-bottom: 8px; margin-left: 12px">
+            <label
+              for="pref-provider-extra-request-body"
+              data-l10n-id="pref-extra-request-body"
+              style="width: 70px; text-align: right; margin-top: 4px"
+            ></label>
+            <html:textarea
+              id="pref-provider-extra-request-body"
+              style="
+                flex: 1;
+                height: 80px;
+                margin-left: 8px;
+                min-width: 200px;
+                font-family: monospace;
+              "
+            ></html:textarea>
+          </hbox>
+
+          <!-- Per-Model Extra Request Body -->
+          <hbox align="start" style="margin-bottom: 8px; margin-left: 12px">
+            <label
+              for="pref-provider-model-extra-request-body"
+              data-l10n-id="pref-model-extra-request-body"
+              style="width: 70px; text-align: right; margin-top: 4px"
+            ></label>
+            <html:textarea
+              id="pref-provider-model-extra-request-body"
+              style="
+                flex: 1;
+                height: 100px;
+                margin-left: 8px;
+                min-width: 200px;
+                font-family: monospace;
+              "
+            ></html:textarea>
+          </hbox>
         </html:details>
 
         <!-- Test Connection & Delete -->

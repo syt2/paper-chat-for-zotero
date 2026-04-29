@@ -24,6 +24,11 @@ pref-temperature = Temperature
 pref-system-prompt = System Prompt
 pref-system-prompt-placeholder =
     .placeholder = You are a helpful research assistant...
+pref-extra-request-body = Extra Body
+pref-model-extra-request-body = Model Extra Body
+pref-extra-request-body-invalid = Extra request body must be a JSON object
+pref-model-extra-request-body-invalid = Per-model extra request body must be an object whose values are JSON objects
+pref-invalid-json = Invalid JSON
 
 # Provider Settings
 pref-providers = Providers

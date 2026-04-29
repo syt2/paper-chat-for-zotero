@@ -14,6 +14,46 @@ import type { ToolDefinition, ToolCall } from "../../types/tool";
 import { parseSSEStreamWithToolCalling } from "./SSEParser";
 import { shouldIncludeReasoningContentForRequest } from "./reasoning-content";
 
+const EXTRA_REQUEST_BODY_PROTECTED_KEYS = new Set([
+  "model",
+  "messages",
+  "stream",
+  "tools",
+  "tool_choice",
+  "temperature",
+  "max_tokens",
+]);
+
+function mergeExtraRequestBody(
+  requestBody: Record<string, unknown>,
+  extra: Record<string, unknown> | undefined,
+): void {
+  if (!extra) {
+    return;
+  }
+  for (const [key, value] of Object.entries(extra)) {
+    if (EXTRA_REQUEST_BODY_PROTECTED_KEYS.has(key)) {
+      continue;
+    }
+    requestBody[key] = value;
+  }
+}
+
+export function applyExtraRequestBody(
+  requestBody: Record<string, unknown>,
+  config: {
+    defaultModel: string;
+    extraRequestBody?: Record<string, unknown>;
+    modelExtraRequestBody?: Record<string, Record<string, unknown>>;
+  },
+): void {
+  mergeExtraRequestBody(requestBody, config.extraRequestBody);
+  mergeExtraRequestBody(
+    requestBody,
+    config.modelExtraRequestBody?.[config.defaultModel],
+  );
+}
+
 export class OpenAICompatibleProvider extends BaseProvider {
   protected shouldIncludeReasoningContent(): boolean {
     return shouldIncludeReasoningContentForRequest({
@@ -55,6 +95,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
       if (this._config.maxTokens && this._config.maxTokens > 0) {
         requestBody.max_tokens = this._config.maxTokens;
       }
+      applyExtraRequestBody(requestBody, this._config);
 
       const response = await fetch(`${this._config.baseUrl}/chat/completions`, {
         method: "POST",
@@ -99,6 +140,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
     if (this._config.maxTokens && this._config.maxTokens > 0) {
       requestBody.max_tokens = this._config.maxTokens;
     }
+    applyExtraRequestBody(requestBody, this._config);
 
     const response = await fetch(`${this._config.baseUrl}/chat/completions`, {
       method: "POST",
@@ -193,6 +235,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
     if (this._config.maxTokens && this._config.maxTokens > 0) {
       requestBody.max_tokens = this._config.maxTokens;
     }
+    applyExtraRequestBody(requestBody, this._config);
 
     // Add tools if provided
     if (tools && tools.length > 0) {
@@ -382,6 +425,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
       if (this._config.maxTokens && this._config.maxTokens > 0) {
         requestBody.max_tokens = this._config.maxTokens;
       }
+      applyExtraRequestBody(requestBody, this._config);
 
       ztoolkit.log(
         "[streamChatCompletionWithTools] Sending streaming request with",
