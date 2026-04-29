@@ -208,6 +208,79 @@ describe("tool argument preflight", function () {
     assert.deepEqual(result.issues, []);
   });
 
+  it("accepts empty argument encodings for tools without required fields", async function () {
+    const { ToolScheduler } =
+      await import("../src/modules/chat/tool-scheduler/ToolScheduler.ts");
+    const calls: Record<string, unknown>[] = [];
+    const scheduler = new ToolScheduler(async (_toolCall, _fallback, args) => {
+      calls.push(args);
+      return "ok";
+    });
+
+    for (const [index, toolCall] of [
+      {
+        id: "tool-empty-string",
+        type: "function",
+        function: {
+          name: "get_paper_metadata",
+          arguments: "",
+        },
+      },
+      {
+        id: "tool-null",
+        type: "function",
+        function: {
+          name: "get_outline",
+          arguments: "null",
+        },
+      },
+      {
+        id: "tool-empty-array",
+        type: "function",
+        function: {
+          name: "get_page_count",
+          arguments: "[]",
+        },
+      },
+    ].entries()) {
+      const result = await scheduler.execute({
+        toolCall: toolCall as ToolCall,
+        sessionId: `session-empty-${index}`,
+      });
+
+      assert.equal(result.status, "completed");
+    }
+
+    assert.deepEqual(calls, [{}, {}, {}]);
+  });
+
+  it("still blocks empty arguments for tools with required fields", async function () {
+    const { ToolScheduler } =
+      await import("../src/modules/chat/tool-scheduler/ToolScheduler.ts");
+    let invoked = false;
+    const scheduler = new ToolScheduler(async () => {
+      invoked = true;
+      return "ok";
+    });
+
+    const result = await scheduler.execute({
+      toolCall: {
+        id: "tool-required-empty",
+        type: "function",
+        function: {
+          name: "get_paper_section",
+          arguments: "{}",
+        },
+      },
+      sessionId: "session-required-empty",
+    });
+
+    assert.equal(invoked, false);
+    assert.equal(result.status, "failed");
+    assert.include(result.content, "Category: invalid_arguments");
+    assert.include(result.content, "Missing required field: section");
+  });
+
   it("blocks singular string fields instead of joining array values", async function () {
     const { ToolScheduler } =
       await import("../src/modules/chat/tool-scheduler/ToolScheduler.ts");

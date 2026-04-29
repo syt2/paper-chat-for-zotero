@@ -11,7 +11,10 @@ import { config } from "../../../../package.json";
 import { getErrorMessage } from "../../../utils/common";
 import { getPdfToolManager } from "../pdf-tools";
 import { preflightToolArguments } from "../tool-arguments/ToolArgumentPreflight";
-import { validateAndRepairToolArguments } from "../tool-arguments/ToolArgumentValidation";
+import {
+  canUseEmptyObjectArguments,
+  validateAndRepairToolArguments,
+} from "../tool-arguments/ToolArgumentValidation";
 import {
   formatDeniedToolResult,
   formatToolArgumentParseError,
@@ -68,6 +71,18 @@ interface ToolFaultInjectionConfig {
 }
 
 const FAULT_INJECTION_PREF = `${config.prefsPrefix}.devToolFaultInjection`;
+
+function isEmptyArray(value: unknown): value is [] {
+  return Array.isArray(value) && value.length === 0;
+}
+
+function safelyCanUseEmptyObjectArguments(toolName: string): boolean {
+  try {
+    return canUseEmptyObjectArguments(toolName);
+  } catch {
+    return false;
+  }
+}
 
 export class ToolScheduler {
   private readonly executor: ToolExecutor;
@@ -172,32 +187,45 @@ export class ToolScheduler {
   }
 
   private parseArguments(toolCall: ToolCall): ParsedArgsResult {
+    const acceptsEmptyObject = safelyCanUseEmptyObjectArguments(
+      toolCall.function.name,
+    );
     let parsed: unknown;
-    try {
-      parsed = JSON.parse(toolCall.function.arguments);
-    } catch {
-      const cause = `Invalid arguments JSON: ${toolCall.function.arguments}`;
-      return {
-        ok: false,
-        result: {
-          toolCall,
-          status: "failed",
-          policyTrace: [
-            {
-              stage: "scheduler",
-              policy: "argument_parse",
-              outcome: "blocked",
-              summary: `Blocked ${toolCall.function.name} because tool arguments were not valid JSON.`,
-              detail: cause,
-            },
-          ],
-          content: formatToolArgumentParseError(
+    const rawArguments = toolCall.function.arguments;
+
+    if (acceptsEmptyObject && !String(rawArguments ?? "").trim()) {
+      parsed = {};
+    } else {
+      try {
+        parsed = JSON.parse(rawArguments);
+      } catch {
+        const cause = `Invalid arguments JSON: ${rawArguments}`;
+        return {
+          ok: false,
+          result: {
             toolCall,
-            `${cause}. Tool arguments are not valid JSON.`,
-          ),
-          error: "Tool arguments are not valid JSON.",
-        },
-      };
+            status: "failed",
+            policyTrace: [
+              {
+                stage: "scheduler",
+                policy: "argument_parse",
+                outcome: "blocked",
+                summary: `Blocked ${toolCall.function.name} because tool arguments were not valid JSON.`,
+                detail: cause,
+              },
+            ],
+            content: formatToolArgumentParseError(
+              toolCall,
+              `${cause}. Tool arguments are not valid JSON.`,
+            ),
+            error: "Tool arguments are not valid JSON.",
+          },
+        };
+      }
+    }
+
+    if (acceptsEmptyObject && (parsed === null || isEmptyArray(parsed))) {
+      parsed = {};
     }
 
     if (

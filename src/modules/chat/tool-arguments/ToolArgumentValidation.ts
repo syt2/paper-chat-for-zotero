@@ -19,6 +19,11 @@ export function resetToolArgumentValidationCache(): void {
   cachedToolDefinitions = null;
 }
 
+export function canUseEmptyObjectArguments(toolName: string): boolean {
+  const parameters = getToolParameters(toolName);
+  return Boolean(parameters && (parameters.required || []).length === 0);
+}
+
 export function validateAndRepairToolArguments(
   toolName: string,
   args: Record<string, unknown>,
@@ -67,13 +72,17 @@ function getToolParameters(
   toolName: string,
 ): ToolDefinition["function"]["parameters"] | null {
   if (!cachedToolDefinitions) {
-    cachedToolDefinitions = new Map();
+    const toolDefinitions = new Map<
+      string,
+      ToolDefinition["function"]["parameters"]
+    >();
     for (const definition of getPdfToolManager().getToolDefinitions(true)) {
-      cachedToolDefinitions.set(
+      toolDefinitions.set(
         definition.function.name,
         definition.function.parameters,
       );
     }
+    cachedToolDefinitions = toolDefinitions;
   }
 
   return cachedToolDefinitions.get(toolName) || null;
