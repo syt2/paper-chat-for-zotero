@@ -1128,6 +1128,37 @@ export class ChatManager {
       : undefined;
   }
 
+  private clearFailedTurnRuntimeState(session: ChatSession): void {
+    session.executionPlan = undefined;
+    session.toolExecutionState = undefined;
+    session.toolApprovalState = undefined;
+  }
+
+  private async applyFailureStateSafely(
+    session: ChatSession,
+    userMessageId: string,
+    errorMessage: ChatMessage,
+    error: unknown,
+    failedProviderId: string,
+    failedModelId: string | null,
+  ): Promise<void> {
+    try {
+      await this.applyPaperChatFailureState(
+        session,
+        userMessageId,
+        errorMessage,
+        error,
+        failedProviderId,
+        failedModelId,
+      );
+    } catch (stateError) {
+      ztoolkit.log(
+        "[ChatManager] Failed to apply provider failure state:",
+        getErrorMessage(stateError),
+      );
+    }
+  }
+
   /**
    * 插入降级通知消息到聊天界面
    */
@@ -1811,6 +1842,7 @@ export class ChatManager {
             assistantMessage.id,
           );
         }
+        this.clearFailedTurnRuntimeState(sendingSession);
 
         const errorMessage: ChatMessage = {
           id: this.generateId(),
@@ -1819,7 +1851,7 @@ export class ChatManager {
           timestamp: Date.now(),
         };
 
-        await this.applyPaperChatFailureState(
+        await this.applyFailureStateSafely(
           sendingSession,
           userMessage.id,
           errorMessage,
@@ -2120,6 +2152,7 @@ export class ChatManager {
           assistantMessage.id,
         );
       }
+      this.clearFailedTurnRuntimeState(sendingSession);
 
       const errorMessage: ChatMessage = {
         id: this.generateId(),
@@ -2127,7 +2160,7 @@ export class ChatManager {
         content: getErrorMessage(error),
         timestamp: Date.now(),
       };
-      await this.applyPaperChatFailureState(
+      await this.applyFailureStateSafely(
         sendingSession,
         messagesForApi.filter((m) => m.role === "user").at(-1)?.id || "",
         errorMessage,

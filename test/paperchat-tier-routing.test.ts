@@ -17,6 +17,7 @@ import {
   repairPaperChatSessionBindingAfterHardFailure,
   resolvePaperChatSessionBinding,
 } from "../src/modules/chat/paperchat-session-state.ts";
+import { parsePaperChatError } from "../src/modules/providers/paperchat-errors.ts";
 import { parseModelRoutingConfig } from "../src/modules/providers/paperchat-routing-metadata.ts";
 
 describe("paperchat tier routing", function () {
@@ -433,6 +434,22 @@ describe("paperchat tier routing", function () {
     );
     assert.isFalse(
       isPaperChatModelHardFailure(new Error("API Error: 429 - rate limit exceeded")),
+    );
+  });
+
+  it("parses non-string PaperChat error codes without masking the original error", function () {
+    const parsed = parsePaperChatError(
+      'API Error: 400 - {"error":{"code":123,"message":"tool calls unsupported"}}',
+    );
+
+    assert.equal(parsed.code, "123");
+    assert.equal(parsed.message, "tool calls unsupported");
+    assert.isFalse(
+      isPaperChatModelHardFailure(
+        new Error(
+          'API Error: 400 - {"error":{"code":123,"message":"tool calls unsupported"}}',
+        ),
+      ),
     );
   });
 

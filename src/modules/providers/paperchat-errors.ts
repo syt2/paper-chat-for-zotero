@@ -12,9 +12,20 @@ export interface PaperChatParsedError {
 
 interface PaperChatErrorPayload {
   error?: {
-    message?: string;
-    code?: string;
+    message?: unknown;
+    code?: unknown;
   };
+}
+
+function normalizeErrorField(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || undefined;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return undefined;
 }
 
 function extractErrorPayload(raw: string): PaperChatErrorPayload | null {
@@ -32,10 +43,10 @@ function extractErrorPayload(raw: string): PaperChatErrorPayload | null {
 
 export function parsePaperChatError(raw: string): PaperChatParsedError {
   const payload = extractErrorPayload(raw);
-  const message = payload?.error?.message?.trim();
+  const message = normalizeErrorField(payload?.error?.message);
   return {
     message: message || raw,
-    code: payload?.error?.code?.trim(),
+    code: normalizeErrorField(payload?.error?.code),
   };
 }
 
