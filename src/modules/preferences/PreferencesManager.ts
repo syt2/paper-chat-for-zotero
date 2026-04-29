@@ -261,6 +261,18 @@ export function bindPrefEvents(): void {
     getCurrentProviderId,
     refreshProviderList,
     refreshActiveProvider,
+    (providerId) => {
+      selectProvider(doc, providerId, setCurrentProviderId, {
+        trackAnalytics: true,
+        analyticsSource: "provider_added",
+      });
+    },
+    () => {
+      const fallbackProviderId = getProviderManager().getActiveProviderId();
+      selectProvider(doc, fallbackProviderId, setCurrentProviderId, {
+        trackAnalytics: false,
+      });
+    },
   );
 
   // Bind provider list click events

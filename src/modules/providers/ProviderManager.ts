@@ -458,10 +458,13 @@ export class ProviderManager {
   private fallbackConfig: FallbackConfig = { ...DEFAULT_FALLBACK_CONFIG };
   private onProviderChangeCallback?: (providerId: string) => void;
   private onFallbackCallback?: (fromProvider: string, toProvider: string, error: Error) => void;
+  private prefsObserver: symbol | null = null;
+  private isSavingPrefs = false;
 
   constructor() {
     this.loadFromPrefs();
     this.initializeProviders();
+    this.registerPrefsObserver();
   }
 
   /**
@@ -476,6 +479,30 @@ export class ProviderManager {
    */
   setOnFallback(callback: (fromProvider: string, toProvider: string, error: Error) => void): void {
     this.onFallbackCallback = callback;
+  }
+
+  private notifyProviderChange(providerId: string = this.activeProviderId): void {
+    this.onProviderChangeCallback?.(providerId);
+  }
+
+  private registerPrefsObserver(): void {
+    if (
+      typeof Zotero?.Prefs?.registerObserver !== "function" ||
+      this.prefsObserver
+    ) {
+      return;
+    }
+
+    this.prefsObserver = Zotero.Prefs.registerObserver(
+      PREFS_KEY,
+      () => {
+        if (this.isSavingPrefs) {
+          return;
+        }
+        this.refresh(true);
+      },
+      true,
+    );
   }
 
   /**
@@ -551,7 +578,12 @@ export class ProviderManager {
       providers: this.configs,
       fallbackConfig: this.fallbackConfig,
     };
-    Zotero.Prefs.set(PREFS_KEY, JSON.stringify(data), true);
+    this.isSavingPrefs = true;
+    try {
+      Zotero.Prefs.set(PREFS_KEY, JSON.stringify(data), true);
+    } finally {
+      this.isSavingPrefs = false;
+    }
   }
 
   /**
@@ -688,7 +720,7 @@ export class ProviderManager {
       this.activeProviderId = providerId;
       this.saveToPrefs();
       // Notify listeners about the provider change
-      this.onProviderChangeCallback?.(providerId);
+      this.notifyProviderChange(providerId);
     }
   }
 
@@ -736,7 +768,7 @@ export class ProviderManager {
       this.saveToPrefs();
       this.initializeProviders();
       // Notify listeners (model or config changed)
-      this.onProviderChangeCallback?.(providerId);
+      this.notifyProviderChange(providerId);
     }
   }
 
@@ -760,6 +792,7 @@ export class ProviderManager {
     this.configs.push(config);
     this.saveToPrefs();
     this.initializeProviders();
+    this.notifyProviderChange(id);
     return id;
   }
 
@@ -777,6 +810,7 @@ export class ProviderManager {
       }
       this.saveToPrefs();
       this.initializeProviders();
+      this.notifyProviderChange(this.activeProviderId);
       return true;
     }
     return false;
@@ -1164,15 +1198,25 @@ export class ProviderManager {
   /**
    * Refresh providers (reload from prefs)
    */
-  refresh(): void {
+  refresh(notify: boolean = false): void {
     this.loadFromPrefs();
     this.initializeProviders();
+    if (notify) {
+      this.notifyProviderChange(this.activeProviderId);
+    }
   }
 
   /**
    * Destroy all providers
    */
   destroy(): void {
+    if (
+      this.prefsObserver &&
+      typeof Zotero?.Prefs?.unregisterObserver === "function"
+    ) {
+      Zotero.Prefs.unregisterObserver(this.prefsObserver);
+      this.prefsObserver = null;
+    }
     this.providers.clear();
   }
 }

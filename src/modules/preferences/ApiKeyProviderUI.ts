@@ -320,6 +320,8 @@ export function bindApiKeyEvents(
   getCurrentProviderId: () => string,
   onProviderListRefresh: () => void,
   onActiveProviderRefresh: () => void,
+  onProviderAdded?: (providerId: string) => void,
+  onProviderRemoved?: () => void,
 ): void {
   const providerManager = getProviderManager();
 
@@ -443,7 +445,7 @@ export function bindApiKeyEvents(
     if (providerManager.removeCustomProvider(currentProviderId)) {
       onProviderListRefresh();
       onActiveProviderRefresh();
-      // Will need to select a different provider - handled by caller
+      onProviderRemoved?.();
     }
   });
 
@@ -457,7 +459,7 @@ export function bindApiKeyEvents(
       const newId = providerManager.addCustomProvider(name.trim());
       onProviderListRefresh();
       onActiveProviderRefresh();
-      // Return newId for caller to select
+      onProviderAdded?.(newId);
     }
   });
 
