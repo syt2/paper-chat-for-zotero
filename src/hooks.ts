@@ -21,6 +21,7 @@ import {
   destroyEmbeddingProviderFactory,
 } from "./modules/embedding";
 import { getStorageDatabase, destroyStorageDatabase } from "./modules/chat/db/StorageDatabase";
+import { destroyPdfToolManager } from "./modules/chat/pdf-tools";
 import { checkAndMigrateToV3 } from "./modules/chat/migration/migrateToSQLite";
 import { destroyMemoryStores } from "./modules/chat/memory/MemoryStore";
 import { destroyMemoryIndexers, getMemoryIndexer } from "./modules/chat/memory/MemoryIndexer";
@@ -160,6 +161,8 @@ async function onShutdown(): Promise<void> {
   destroyMemoryIndexers();
   // Destroy StorageDatabase
   destroyStorageDatabase();
+  // Destroy PdfToolManager (clears in-memory paper structure cache)
+  destroyPdfToolManager();
   await destroyAnalyticsService();
   addon.data.dialog?.window?.close();
   addon.data.alive = false;

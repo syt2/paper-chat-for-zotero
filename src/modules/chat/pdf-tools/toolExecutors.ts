@@ -4,6 +4,7 @@
 
 import type {
   PaperStructureExtended,
+  NativeOutlineItem,
   GetPaperSectionArgs,
   SearchPaperContentArgs,
   GetPagesArgs,
@@ -425,17 +426,48 @@ export function executeSearchWithRegex(
 
 /**
  * 执行 get_outline - 获取文档大纲
+ *
+ * 优先使用 PDF 原生大纲（如果有），提供真实页码和层级结构。
+ * 回退到基于文本的启发式章节检测。
  */
 export function executeGetOutline(
   paperStructure: PaperStructureExtended,
 ): string {
-  const { sections, pageCount } = paperStructure;
+  const { sections, pageCount, nativeOutline } = paperStructure;
 
+  // 优先使用 PDF 原生大纲
+  if (nativeOutline && nativeOutline.length > 0) {
+    const lines: string[] = [];
+    lines.push(`Document Outline (from PDF bookmarks, ${pageCount} pages total):\n`);
+
+    // 计算扁平化后的条目总数
+    let totalItems = 0;
+    const countItems = (items: NativeOutlineItem[]) => {
+      for (const item of items) {
+        totalItems++;
+        countItems(item.children);
+      }
+    };
+    countItems(nativeOutline);
+
+    lines.push(formatNativeOutlineItems(nativeOutline, ""));
+    lines.push(`\n(${totalItems} outline items, ${pageCount} pages)`);
+
+    if (!paperStructure.sections.some((s) => s.normalizedName !== "full_text")) {
+      lines.push(
+        "\nNote: No heuristic section breakdown available — the native PDF outline above was used.",
+      );
+    }
+
+    return lines.join("\n");
+  }
+
+  // 回退：启发式章节检测
   if (
     sections.length === 0 ||
     (sections.length === 1 && sections[0].normalizedName === "full_text")
   ) {
-    return "No structured outline detected. The paper may not have clear section headings.";
+    return "No structured outline detected. The paper may not have clear section headings. Try opening the PDF in the Zotero reader for a more accurate outline from native PDF bookmarks.";
   }
 
   const outline = sections
@@ -450,17 +482,45 @@ export function executeGetOutline(
     })
     .join("\n");
 
-  return `Document Outline (${pageCount} pages total):\n\n${outline}`;
+  return `Document Outline (estimated from text, ${pageCount} pages total):\n\n${outline}`;
+}
+
+/**
+ * 递归格式化原生大纲条目为文本（带缩进层次）
+ */
+function formatNativeOutlineItems(
+  items: NativeOutlineItem[],
+  indent: string,
+): string {
+  return items
+    .map((item, index) => {
+      const pageStr = item.pageNumber > 0 ? `(Page ${item.pageNumber})` : "";
+      const line = `${indent}${index + 1}. ${item.title} ${pageStr}`.trim();
+      const childrenStr = item.children.length > 0
+        ? `\n${formatNativeOutlineItems(item.children, indent + "  ")}`
+        : "";
+      return `${line}${childrenStr}`;
+    })
+    .join("\n");
 }
 
 /**
  * 执行 list_sections - 列出所有章节
+ *
+ * 优先使用 PDF 原生大纲（如果有），提供层级和真实页码。
+ * 回退到启发式检测的章节列表。
  */
 export function executeListSections(
   paperStructure: PaperStructureExtended,
 ): string {
-  const { sections } = paperStructure;
+  const { sections, nativeOutline } = paperStructure;
 
+  // 优先使用 PDF 原生大纲
+  if (nativeOutline && nativeOutline.length > 0) {
+    return formatNativeSectionsList(nativeOutline);
+  }
+
+  // 回退到启发式检测
   if (sections.length === 0) {
     return "No sections detected.";
   }
@@ -480,6 +540,27 @@ export function executeListSections(
     .join("\n\n");
 
   return `Available sections (${sections.length} total):\n\n${formatted}`;
+}
+
+/**
+ * 格式化原生大纲为章节列表（递归处理层级）
+ */
+function formatNativeSectionsList(
+  items: NativeOutlineItem[],
+  indent: string = "",
+): string {
+  const lines: string[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const pageStr = item.pageNumber > 0 ? ` Page ${item.pageNumber}` : "";
+    const childCount = item.children.length;
+    const extra = childCount > 0 ? ` (${childCount} sub-items)` : "";
+    lines.push(`${indent}${i + 1}. ${item.title}${pageStr}${extra}`);
+    if (item.children.length > 0) {
+      lines.push(formatNativeSectionsList(item.children, indent + "  "));
+    }
+  }
+  return lines.join("\n");
 }
 
 /**
