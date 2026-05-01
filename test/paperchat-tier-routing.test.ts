@@ -21,10 +21,10 @@ import { parsePaperChatError } from "../src/modules/providers/paperchat-errors.t
 import { parseModelRoutingConfig } from "../src/modules/providers/paperchat-routing-metadata.ts";
 
 describe("paperchat tier routing", function () {
-  it("defaults undefined state to paperchat-pro with auto tier entries", function () {
+  it("defaults undefined state to paperchat-standard with auto tier entries", function () {
     const parsed = parseTierState(undefined);
 
-    assert.equal(parsed.selectedTier, "paperchat-pro");
+    assert.equal(parsed.selectedTier, "paperchat-standard");
     assert.deepEqual(parsed.tiers, {
       "paperchat-lite": { mode: "auto", modelId: null },
       "paperchat-standard": { mode: "auto", modelId: null },
@@ -45,7 +45,7 @@ describe("paperchat tier routing", function () {
     });
 
     assert.deepEqual(invalidJson, {
-      selectedTier: "paperchat-pro",
+      selectedTier: "paperchat-standard",
       tiers: {
         "paperchat-lite": { mode: "auto", modelId: null },
         "paperchat-standard": { mode: "auto", modelId: null },
@@ -54,7 +54,7 @@ describe("paperchat tier routing", function () {
       },
     });
     assert.deepEqual(invalidShape, {
-      selectedTier: "paperchat-pro",
+      selectedTier: "paperchat-standard",
       tiers: {
         "paperchat-lite": { mode: "manual", modelId: "m1" },
         "paperchat-standard": { mode: "auto", modelId: null },

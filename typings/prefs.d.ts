@@ -21,6 +21,7 @@ declare namespace _ZoteroTypes {
       "paperchatRatiosCache": string;
       "paperchatRoutingConfigCache": string;
       "paperchatTierState": string;
+      "paperchatSuppressHighTierWarning": boolean;
       "uploadRawPdfOnFailure": boolean;
       "panelMode": string;
       "firstInstalledVersion": string;

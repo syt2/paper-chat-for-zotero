@@ -19,6 +19,7 @@ pref("paperchatModelsCache", "");
 pref("paperchatRatiosCache", "");
 pref("paperchatRoutingConfigCache", "");
 pref("paperchatTierState", "");
+pref("paperchatSuppressHighTierWarning", false);
 
 // PDF Settings
 pref("uploadRawPdfOnFailure", false);

@@ -35,7 +35,7 @@ export type PickRandom = (
   weights?: Record<string, number>,
 ) => string | null | undefined;
 
-const DEFAULT_SELECTED_TIER: PaperChatTier = "paperchat-pro";
+const DEFAULT_SELECTED_TIER: PaperChatTier = "paperchat-standard";
 const STANDARD_MIN_RATIO = 0.51;
 const PRO_MIN_RATIO = 1.01;
 

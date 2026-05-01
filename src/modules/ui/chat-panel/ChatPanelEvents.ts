@@ -143,6 +143,188 @@ function getPaperChatTierLabel(tier: PaperChatTier): string {
   return getString("chat-tier-standard");
 }
 
+function isHighConsumptionPaperChatTier(tier: PaperChatTier): boolean {
+  return tier === "paperchat-pro" || tier === "paperchat-ultra";
+}
+
+function getPaperChatTierRank(tier: PaperChatTier): number {
+  return PAPERCHAT_TIERS.indexOf(tier);
+}
+
+function getPaperChatTierDropdownLabel(tier: PaperChatTier): string {
+  const label = getPaperChatTierLabel(tier);
+  if (tier === "paperchat-pro") {
+    return `${label} · ${getString("chat-tier-high-consumption")}`;
+  }
+  if (tier === "paperchat-ultra") {
+    return `${label} · ${getString("chat-tier-very-high-consumption")}`;
+  }
+  return label;
+}
+
+function shouldWarnForPaperChatTierSwitch(
+  currentTier: PaperChatTier,
+  nextTier: PaperChatTier,
+): boolean {
+  return (
+    getPaperChatTierRank(nextTier) > getPaperChatTierRank(currentTier) &&
+    isHighConsumptionPaperChatTier(nextTier) &&
+    getPref("paperchatSuppressHighTierWarning") !== true
+  );
+}
+
+function confirmHighConsumptionTierSwitch(
+  doc: Document,
+  tier: PaperChatTier,
+): Promise<boolean> {
+  const theme = getCurrentTheme();
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (confirmed: boolean, dontShowAgain = checkbox.checked) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (dontShowAgain) {
+        setPref("paperchatSuppressHighTierWarning", true);
+      }
+      overlay.remove();
+      resolve(confirmed);
+    };
+
+    const overlay = createElement(doc, "div", {
+      position: "fixed",
+      inset: "0",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: "20px",
+      background: "rgba(0,0,0,0.38)",
+      zIndex: "10020",
+      boxSizing: "border-box",
+    });
+
+    const dialog = createElement(doc, "div", {
+      width: "min(360px, 100%)",
+      padding: "18px",
+      borderRadius: "8px",
+      border: `1px solid ${theme.borderColor}`,
+      background: theme.dropdownBg,
+      color: theme.textPrimary,
+      boxShadow: "0 16px 44px rgba(0,0,0,0.3)",
+      boxSizing: "border-box",
+    });
+
+    const title = createElement(doc, "div", {
+      fontSize: "15px",
+      fontWeight: "700",
+      lineHeight: "20px",
+      marginBottom: "8px",
+    });
+    title.textContent =
+      tier === "paperchat-ultra"
+        ? getString("chat-very-high-tier-warning-title")
+        : getString("chat-high-tier-warning-title");
+
+    const message = createElement(doc, "div", {
+      fontSize: "13px",
+      lineHeight: "20px",
+      color: theme.textSecondary,
+      marginBottom: "14px",
+    });
+    message.textContent = getString("chat-high-tier-warning-message");
+
+    const checkboxRow = createElement(doc, "label", {
+      display: "flex",
+      alignItems: "center",
+      gap: "8px",
+      fontSize: "12px",
+      lineHeight: "16px",
+      color: theme.textSecondary,
+      marginBottom: "16px",
+      cursor: "pointer",
+      userSelect: "none",
+    });
+    const checkbox = createElement(doc, "input", {
+      margin: "0",
+    }) as HTMLInputElement;
+    checkbox.type = "checkbox";
+    checkboxRow.appendChild(checkbox);
+    const checkboxLabel = createElement(doc, "span", {});
+    checkboxLabel.textContent = getString("chat-high-tier-warning-dont-show");
+    checkboxRow.appendChild(checkboxLabel);
+
+    const actions = createElement(doc, "div", {
+      display: "flex",
+      justifyContent: "flex-end",
+      gap: "8px",
+    });
+
+    const cancelBtn = createElement(doc, "button", {
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+      minWidth: "72px",
+      height: "32px",
+      padding: "0 12px",
+      borderRadius: "6px",
+      border: `1px solid ${theme.inputBorderColor}`,
+      background: theme.buttonBg,
+      color: theme.textPrimary,
+      cursor: "pointer",
+      fontSize: "12px",
+      lineHeight: "16px",
+      boxSizing: "border-box",
+    }) as HTMLButtonElement;
+    cancelBtn.type = "button";
+    cancelBtn.textContent = getString("chat-high-tier-warning-cancel");
+
+    const confirmBtn = createElement(doc, "button", {
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+      minWidth: "88px",
+      height: "32px",
+      padding: "0 12px",
+      borderRadius: "6px",
+      border: "none",
+      background: theme.userBubbleBg,
+      color: theme.userBubbleText,
+      cursor: "pointer",
+      fontSize: "12px",
+      lineHeight: "16px",
+      fontWeight: "600",
+      boxSizing: "border-box",
+    }) as HTMLButtonElement;
+    confirmBtn.type = "button";
+    confirmBtn.textContent = getString("chat-high-tier-warning-confirm");
+
+    cancelBtn.addEventListener("click", () => finish(false));
+    confirmBtn.addEventListener("click", () => finish(true));
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) {
+        finish(false);
+      }
+    });
+
+    actions.appendChild(cancelBtn);
+    actions.appendChild(confirmBtn);
+    dialog.appendChild(title);
+    dialog.appendChild(message);
+    dialog.appendChild(checkboxRow);
+    dialog.appendChild(actions);
+    overlay.appendChild(dialog);
+    const mountNode = doc.body ?? doc.documentElement;
+    if (!mountNode) {
+      resolve(false);
+      return;
+    }
+    mountNode.appendChild(overlay);
+    confirmBtn.focus();
+  });
+}
+
 function setCheckinButtonReadyState(button: HTMLButtonElement): void {
   button.textContent = getString("user-checkin-btn");
   button.disabled = false;
@@ -1434,6 +1616,11 @@ function populateModelDropdown(
           getPref("paperchatTierState") as string | undefined,
         );
         const previousActiveProviderId = providerManager.getActiveProviderId();
+        const currentTier =
+          previousActiveProviderId === "paperchat"
+            ? context.chatManager.getActiveSession()?.selectedTier ||
+              previousTierState.selectedTier
+            : "paperchat-standard";
         const previousEntry = previousTierState.tiers[tier];
         const nextTierState = {
           ...previousTierState,
@@ -1448,6 +1635,14 @@ function populateModelDropdown(
                   : previousEntry,
           },
         };
+
+        if (shouldWarnForPaperChatTierSwitch(currentTier, tier)) {
+          const confirmed = await confirmHighConsumptionTierSwitch(doc, tier);
+          if (!confirmed) {
+            dropdown.style.display = "none";
+            return;
+          }
+        }
 
         try {
           if (!isActiveProvider) {
@@ -1563,7 +1758,7 @@ function populateModelDropdown(
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
         });
-        label.textContent = getPaperChatTierLabel(tier);
+        label.textContent = getPaperChatTierDropdownLabel(tier);
         tierItem.appendChild(label);
         const arrow = createElement(doc, "button", {
           fontSize: "10px",
