@@ -21,7 +21,7 @@ export const AUTO_MODEL = "auto";
 /** Special value stored in pref("model") to indicate auto-selection (smartest) */
 export const AUTO_MODEL_SMART = "auto-smart";
 const DEFAULT_ROUTING_META_URL =
-  "https://paperchat.zotero.store/paperchat/model-routing.json";
+  "https://paperchat.zotero.store/ext/paperchat/model-routing.json";
 
 /** Check if a model value is any auto mode */
 export function isAutoModel(model: string): boolean {
@@ -35,7 +35,10 @@ export function getModelRatios(): Record<string, number> {
   return paperchatModelRatios;
 }
 
-export function getModelRoutingMeta(): Record<string, PaperChatModelRoutingMeta> {
+export function getModelRoutingMeta(): Record<
+  string,
+  PaperChatModelRoutingMeta
+> {
   return paperchatModelRoutingMeta;
 }
 
@@ -62,7 +65,9 @@ export function resolveAutoModel(availableModels: string[]): string | null {
  * Resolve "auto-smart" to the most capable (most expensive) available model by ratio.
  * If ratios are unavailable, returns the last model in the list.
  */
-export function resolveAutoModelSmart(availableModels: string[]): string | null {
+export function resolveAutoModelSmart(
+  availableModels: string[],
+): string | null {
   if (availableModels.length === 0) return null;
 
   // Sort by ratio descending (most expensive first), models without ratio go last
@@ -124,7 +129,9 @@ export function loadCachedRatios(): void {
   }
 }
 
-function getPricingModelName(item: Record<string, unknown>): string | undefined {
+function getPricingModelName(
+  item: Record<string, unknown>,
+): string | undefined {
   if (typeof item.model_name === "string" && item.model_name.length > 0) {
     return item.model_name;
   }
@@ -134,7 +141,9 @@ function getPricingModelName(item: Record<string, unknown>): string | undefined 
   return undefined;
 }
 
-function getPricingModelRatio(item: Record<string, unknown>): number | undefined {
+function getPricingModelRatio(
+  item: Record<string, unknown>,
+): number | undefined {
   const value = item.model_ratio ?? item.ModelRatio;
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;

@@ -506,7 +506,11 @@ export class AuthService {
     };
   }
 
-  async doCheckin(): Promise<{ success: boolean; message?: string; quotaAwarded?: number }> {
+  async doCheckin(): Promise<{
+    success: boolean;
+    message?: string;
+    quotaAwarded?: number;
+  }> {
     const url = `${this.baseUrl}/api/user/checkin`;
     const result = await this.request<{
       success: boolean;
@@ -526,7 +530,10 @@ export class AuthService {
 
   async getTokenKey(id: number): Promise<ApiResponse<{ key: string }>> {
     const url = `${this.baseUrl}/api/token/${id}/key`;
-    const result = await this.request<ApiResponse<{ key: string }>>("POST", url);
+    const result = await this.request<ApiResponse<{ key: string }>>(
+      "POST",
+      url,
+    );
 
     if (result.error) {
       return { success: false, message: result.error };
@@ -645,7 +652,27 @@ export class AuthService {
       };
     }
 
+    await this.syncCurrentUserEntitlement();
+
     return result.data;
+  }
+
+  private async syncCurrentUserEntitlement(): Promise<void> {
+    try {
+      const url = `${this.baseUrl}/ext/entitlements/sync-current-user`;
+      const result = await this.request<ApiResponse>("POST", url, {
+        skipAccessToken: true,
+      });
+
+      if (result.error || result.status >= 400) {
+        ztoolkit.log(
+          "[AuthService] Entitlement sync after topup failed:",
+          result.error || result.status,
+        );
+      }
+    } catch (error) {
+      ztoolkit.log("[AuthService] Entitlement sync after topup failed:", error);
+    }
   }
 
   static formatQuota(quota: number): string {

@@ -638,7 +638,11 @@ export class AuthManager {
   /**
    * 执行签到
    */
-  async doCheckin(): Promise<{ success: boolean; message?: string; quotaAwarded?: number }> {
+  async doCheckin(): Promise<{
+    success: boolean;
+    message?: string;
+    quotaAwarded?: number;
+  }> {
     return this.withSessionRetry(
       () => this.authService.doCheckin(),
       "doCheckin",
@@ -774,12 +778,16 @@ export class AuthManager {
             "getTokenKey",
           );
           if (!keyResult.success || !keyResult.data?.key) {
-            ztoolkit.log("[AuthManager] getTokenKey failed, retrying after 2s...");
+            ztoolkit.log(
+              "[AuthManager] getTokenKey failed, retrying after 2s...",
+            );
             await new Promise((r) => setTimeout(r, 2000));
             keyResult = await this.authService.getTokenKey(newToken.id);
           }
           if (!keyResult.success || !keyResult.data?.key) {
-            ztoolkit.log("[AuthManager] getTokenKey failed after retry, token key unavailable");
+            ztoolkit.log(
+              "[AuthManager] getTokenKey failed after retry, token key unavailable",
+            );
             return;
           }
           this.state.token = newToken;
@@ -835,7 +843,12 @@ export class AuthManager {
         setPref("paperchatModelsCache", JSON.stringify(allModels));
         // Filter out embedding models for chat model selection
         const chatModels = allModels.filter((m) => !isEmbeddingModel(m));
-        ztoolkit.log("[AuthManager] Chat models:", chatModels.length, "/ total:", allModels.length);
+        ztoolkit.log(
+          "[AuthManager] Chat models:",
+          chatModels.length,
+          "/ total:",
+          allModels.length,
+        );
 
         if (chatModels.length > 0) {
           const providerManager = getProviderManager();
@@ -908,8 +921,10 @@ export class AuthManager {
     );
 
     if (result.success) {
-      // 刷新用户信息以获取新余额
+      // 刷新用户信息以获取新余额和可能变更的 group。
       await this.refreshUserInfo();
+      // 兑换后可能被扩展服务升级 group；重新拉模型列表让新权限立即生效。
+      await this.fetchAndSetDefaultModel();
 
       const afterQuota = this.state.user?.quota || 0;
       const addedQuota = afterQuota - beforeQuota;
