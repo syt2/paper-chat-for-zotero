@@ -6,7 +6,12 @@
  */
 
 import { AuthService } from "./AuthService";
-import type { UserInfo, TokenInfo, AuthState } from "../../types/auth";
+import type {
+  UserInfo,
+  TokenInfo,
+  AuthState,
+  ApiResponse,
+} from "../../types/auth";
 import { getPref, setPref } from "../../utils/prefs";
 import { getString } from "../../utils/locale";
 import { BUILTIN_PROVIDERS, getProviderManager } from "../providers";
@@ -690,6 +695,13 @@ export class AuthManager {
     }
   }
 
+  async getPricing(): Promise<ApiResponse<Array<Record<string, unknown>>>> {
+    return this.withSessionRetry(
+      () => this.authService.getPricing(),
+      "getPricing",
+    );
+  }
+
   /**
    * 确保存在插件专用Token
    * 公开方法，允许在 API key 失效时刷新
@@ -825,7 +837,7 @@ export class AuthManager {
           method: "GET",
           headers: { Authorization: `Bearer ${apiKey}` },
         }),
-        fetchPaperchatRatios(apiKey),
+        fetchPaperchatRatios(),
       ]);
 
       if (!response.ok) {

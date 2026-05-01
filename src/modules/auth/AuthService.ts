@@ -459,6 +459,29 @@ export class AuthService {
     return result.data;
   }
 
+  async getPricing(): Promise<ApiResponse<Array<Record<string, unknown>>>> {
+    const url = `${this.baseUrl}/api/pricing`;
+    const result = await this.request<
+      ApiResponse<Array<Record<string, unknown>>>
+    >("GET", url);
+
+    if (result.error) {
+      return { success: false, message: result.error };
+    }
+
+    if (result.status >= 400 || !result.data?.success) {
+      return {
+        success: false,
+        message: this.parseErrorMessage(
+          result.data,
+          `Failed to fetch pricing: HTTP ${result.status}`,
+        ),
+      };
+    }
+
+    return result.data;
+  }
+
   async getCheckinStatus(month: string): Promise<{
     success: boolean;
     enabled: boolean;

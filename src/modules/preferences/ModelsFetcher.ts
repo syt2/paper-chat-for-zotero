@@ -158,27 +158,18 @@ function getPricingModelRatio(
 /**
  * Fetch model ratios from PaperChat pricing API
  */
-export async function fetchPaperchatRatios(apiKey: string): Promise<void> {
+export async function fetchPaperchatRatios(): Promise<void> {
   const baseUrl = BUILTIN_PROVIDERS.paperchat.defaultBaseUrl.replace("/v1", "");
   const url = `${baseUrl}/api/pricing`;
   ztoolkit.log("[Preferences] Fetching ratios from:", url);
 
   try {
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-      },
-    });
+    const result = await getAuthManager().getPricing();
 
-    if (!response.ok) {
-      ztoolkit.log("[Preferences] Failed to fetch ratios:", response.status);
+    if (!result.success) {
+      ztoolkit.log("[Preferences] Failed to fetch ratios:", result.message);
       return;
     }
-
-    const result = (await response.json()) as {
-      data?: Array<Record<string, unknown>>;
-    };
 
     if (result.data && Array.isArray(result.data)) {
       // Build model_name -> model_ratio mapping. Routing metadata is fetched
@@ -264,7 +255,7 @@ export async function fetchPaperchatModels(
   showMessage(doc, getString("pref-fetching-models"), false);
 
   // Fetch ratios and routing metadata in parallel with models.
-  const ratiosPromise = fetchPaperchatRatios(apiKey);
+  const ratiosPromise = fetchPaperchatRatios();
   const routingMetaPromise = fetchPaperchatRoutingMeta();
 
   const url = `${BUILTIN_PROVIDERS.paperchat.defaultBaseUrl}/models`;
