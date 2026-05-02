@@ -1,5 +1,13 @@
 name: Release
 
+# This workflow is intentionally inlined instead of using
+# zotero-plugin-dev/workflows/.github/workflows/release-plugin.yml because that
+# reusable workflow checks out submodules recursively through setup-js. The api
+# submodule is deployment-only and should not be required for plugin releases.
+# When updating this workflow, compare against:
+# https://github.com/zotero-plugin-dev/workflows/blob/main/.github/workflows/release-plugin.yml
+# https://github.com/zotero-plugin-dev/workflows/blob/main/setup-js/action.yml
+
 on:
   push:
     tags:
@@ -12,10 +20,29 @@ permissions:
 
 jobs:
   create-release:
-    uses: zotero-plugin-dev/workflows/.github/workflows/release-plugin.yml@main
-    # You can customize any of the inputs here.
-    # If you omit an input, its default value will be used.
-    with:
-      build: "npm run build"
-      release: "npm run release"
-    secrets: inherit
+    name: release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Release
+        run: npm run release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
