@@ -684,6 +684,7 @@ export class AgentRuntime {
       logPrefix,
       budgetLimits,
     } = params;
+    const contextStrategy = getToolContextStrategy(provider);
 
     const assistantToolMessage: ChatMessage = {
       id: this.callbacks.generateId(),
@@ -694,7 +695,7 @@ export class AgentRuntime {
       timestamp: Date.now(),
     };
     currentMessages.push(assistantToolMessage);
-    if (shouldPersistApiOnlyToolTranscript(provider)) {
+    if (contextStrategy.persistApiOnlyTranscript) {
       insertApiOnlyModelContextMessage(
         sendingSession,
         assistantMessage,
@@ -790,10 +791,10 @@ export class AgentRuntime {
           `[${logPrefix}] Result (truncated): ${toolResult.substring(0, 200)}...`,
         );
 
-        const modelToolResult = shouldPersistApiOnlyToolTranscript(provider)
+        const modelToolResult = contextStrategy.compactToolResultOnCreate
           ? compactToolResultContent(
               toolResult,
-              DEEPSEEK_TOOL_RESULT_COMPACTION_POLICY,
+              contextStrategy.compactionPolicy,
             )
           : toolResult;
         const toolResultMessage: ChatMessage = {
@@ -804,7 +805,7 @@ export class AgentRuntime {
           timestamp: Date.now(),
         };
         currentMessages.push(toolResultMessage);
-        if (shouldPersistApiOnlyToolTranscript(provider)) {
+        if (contextStrategy.persistApiOnlyTranscript) {
           insertApiOnlyModelContextMessage(
             sendingSession,
             assistantMessage,
@@ -1427,9 +1428,10 @@ export class AgentRuntime {
     currentMessages: ChatMessage[],
     provider: ToolCallingProvider,
   ): void {
+    const strategy = getToolContextStrategy(provider);
     compactOlderToolResultMessages(
       currentMessages,
-      getToolResultCompactionPolicy(provider),
+      strategy.compactionPolicy,
     );
   }
 
@@ -1509,11 +1511,17 @@ interface ToolResultCompactionPolicy {
   stripAssistantToolCards: boolean;
 }
 
+interface ToolContextStrategy {
+  compactionPolicy: ToolResultCompactionPolicy;
+  persistApiOnlyTranscript: boolean;
+  compactToolResultOnCreate: boolean;
+}
+
 const DEFAULT_TOOL_RESULT_COMPACTION_POLICY: ToolResultCompactionPolicy = {
   keepFullCount: TOOL_RESULT_FULL_KEEP_COUNT,
   compactCharLimit: TOOL_RESULT_COMPACT_CHAR_LIMIT,
   summaryCharLimit: TOOL_RESULT_SUMMARY_CHAR_LIMIT,
-  stripAssistantToolCards: false,
+  stripAssistantToolCards: true,
 };
 
 const DEEPSEEK_TOOL_RESULT_COMPACTION_POLICY: ToolResultCompactionPolicy = {
@@ -1523,9 +1531,29 @@ const DEEPSEEK_TOOL_RESULT_COMPACTION_POLICY: ToolResultCompactionPolicy = {
   stripAssistantToolCards: true,
 };
 
-function getToolResultCompactionPolicy(
+const DEFAULT_TOOL_CONTEXT_STRATEGY: ToolContextStrategy = {
+  compactionPolicy: DEFAULT_TOOL_RESULT_COMPACTION_POLICY,
+  persistApiOnlyTranscript: false,
+  compactToolResultOnCreate: false,
+};
+
+// GPT/OpenAI-style models can keep the model transcript closer to the raw
+// tool exchange without needing DeepSeek's aggressive cache-stability path.
+const OPENAI_TOOL_CONTEXT_STRATEGY: ToolContextStrategy = {
+  compactionPolicy: DEFAULT_TOOL_RESULT_COMPACTION_POLICY,
+  persistApiOnlyTranscript: true,
+  compactToolResultOnCreate: false,
+};
+
+const DEEPSEEK_TOOL_CONTEXT_STRATEGY: ToolContextStrategy = {
+  compactionPolicy: DEEPSEEK_TOOL_RESULT_COMPACTION_POLICY,
+  persistApiOnlyTranscript: true,
+  compactToolResultOnCreate: true,
+};
+
+function getToolContextStrategy(
   provider: ToolCallingProvider,
-): ToolResultCompactionPolicy {
+): ToolContextStrategy {
   const providerId = provider.config.id.toLowerCase();
   const resolvedPaperChatModel = (
     "resolvedModelOverride" in provider.config
@@ -1544,17 +1572,23 @@ function getToolResultCompactionPolicy(
     providerId === "deepseek" ||
     (providerId === "paperchat" && modelId.includes("deepseek"))
   ) {
-    return DEEPSEEK_TOOL_RESULT_COMPACTION_POLICY;
+    return DEEPSEEK_TOOL_CONTEXT_STRATEGY;
   }
-  return DEFAULT_TOOL_RESULT_COMPACTION_POLICY;
+  if (
+    provider.config.type === "openai" ||
+    providerId === "openai" ||
+    isOpenAIStyleModelId(modelId)
+  ) {
+    return OPENAI_TOOL_CONTEXT_STRATEGY;
+  }
+  return DEFAULT_TOOL_CONTEXT_STRATEGY;
 }
 
-function shouldPersistApiOnlyToolTranscript(
-  provider: ToolCallingProvider,
-): boolean {
+function isOpenAIStyleModelId(modelId: string): boolean {
   return (
-    getToolResultCompactionPolicy(provider) ===
-    DEEPSEEK_TOOL_RESULT_COMPACTION_POLICY
+    modelId.includes("gpt") ||
+    modelId.includes("openai") ||
+    /^o\d/.test(modelId)
   );
 }
 
