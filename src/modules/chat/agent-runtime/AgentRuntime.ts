@@ -1446,8 +1446,10 @@ function truncateToolDetail(text: string): string {
   return text.slice(0, 157) + "...";
 }
 
-const TOOL_RESULT_FULL_KEEP_COUNT = 2;
-const TOOL_RESULT_COMPACT_CHAR_LIMIT = 2000;
+const TOOL_RESULT_COMPACTED_PREFIX =
+  "[Tool result compacted to preserve prompt cache and context budget]";
+const TOOL_RESULT_FULL_KEEP_COUNT = 6;
+const TOOL_RESULT_COMPACT_CHAR_LIMIT = 10000;
 const TOOL_RESULT_SUMMARY_CHAR_LIMIT = 700;
 
 function compactOlderToolResultMessages(messages: ChatMessage[]): void {
@@ -1464,6 +1466,9 @@ function compactOlderToolResultMessages(messages: ChatMessage[]): void {
       continue;
     }
     const message = messages[index];
+    if (message.content.startsWith(TOOL_RESULT_COMPACTED_PREFIX)) {
+      continue;
+    }
     if (message.content.length <= TOOL_RESULT_COMPACT_CHAR_LIMIT) {
       continue;
     }
@@ -1477,7 +1482,7 @@ function buildCompactedToolResultContent(content: string): string {
     .trim()
     .slice(0, TOOL_RESULT_SUMMARY_CHAR_LIMIT);
   return [
-    "[Tool result compacted to preserve prompt cache and context budget]",
+    TOOL_RESULT_COMPACTED_PREFIX,
     `Original characters: ${content.length}`,
     `Preview: ${compacted}${content.length > TOOL_RESULT_SUMMARY_CHAR_LIMIT ? "..." : ""}`,
   ].join("\n");

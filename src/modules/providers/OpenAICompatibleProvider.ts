@@ -13,6 +13,13 @@ import type { PdfAttachment } from "../../types/provider";
 import type { ToolDefinition, ToolCall } from "../../types/tool";
 import { parseSSEStreamWithToolCalling } from "./SSEParser";
 import { shouldIncludeReasoningContentForRequest } from "./reasoning-content";
+import {
+  canonicalizeForPromptCache,
+  logPromptCacheUsage,
+  normalizePromptCacheTools,
+  recordPromptCacheRequestShape,
+  stablePromptCacheStringify,
+} from "./prompt-cache-diagnostics";
 
 const EXTRA_REQUEST_BODY_PROTECTED_KEYS = new Set([
   "model",
@@ -35,7 +42,7 @@ function mergeExtraRequestBody(
     if (EXTRA_REQUEST_BODY_PROTECTED_KEYS.has(key)) {
       continue;
     }
-    requestBody[key] = value;
+    requestBody[key] = canonicalizeForPromptCache(value);
   }
 }
 
@@ -55,6 +62,28 @@ export function applyExtraRequestBody(
 }
 
 export class OpenAICompatibleProvider extends BaseProvider {
+  private prepareOpenAIRequestBody(
+    requestKind: string,
+    requestBody: Record<string, unknown>,
+  ): string {
+    recordPromptCacheRequestShape({
+      providerId: this._config.id,
+      model: this._config.defaultModel,
+      requestKind,
+      requestBody,
+    });
+    return stablePromptCacheStringify(requestBody);
+  }
+
+  private logUsage(requestKind: string, usage: unknown): void {
+    logPromptCacheUsage({
+      providerId: this._config.id,
+      model: this._config.defaultModel,
+      requestKind,
+      usage,
+    });
+  }
+
   protected shouldIncludeReasoningContent(): boolean {
     return shouldIncludeReasoningContentForRequest({
       providerId: this._config.id,
@@ -103,7 +132,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
           Authorization: `Bearer ${this._config.apiKey}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(requestBody),
+        body: this.prepareOpenAIRequestBody("stream", requestBody),
         signal,
       });
 
@@ -148,7 +177,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
         Authorization: `Bearer ${this._config.apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(requestBody),
+      body: this.prepareOpenAIRequestBody("completion", requestBody),
       signal,
     });
 
@@ -156,7 +185,9 @@ export class OpenAICompatibleProvider extends BaseProvider {
 
     const data = (await response.json()) as {
       choices?: Array<{ message?: { content?: string } }>;
+      usage?: unknown;
     };
+    this.logUsage("completion", data.usage);
     return data.choices?.[0]?.message?.content || "";
   }
 
@@ -239,7 +270,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
 
     // Add tools if provided
     if (tools && tools.length > 0) {
-      requestBody.tools = tools;
+      requestBody.tools = normalizePromptCacheTools(tools);
       requestBody.tool_choice = "auto";
       ztoolkit.log(
         "[chatCompletionWithTools] Sending request with",
@@ -264,7 +295,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
         Authorization: `Bearer ${this._config.apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(requestBody),
+      body: this.prepareOpenAIRequestBody("tools", requestBody),
       signal,
     });
 
@@ -279,7 +310,9 @@ export class OpenAICompatibleProvider extends BaseProvider {
         };
         finish_reason?: string;
       }>;
+      usage?: unknown;
     };
+    this.logUsage("tools", data.usage);
 
     const message = data.choices?.[0]?.message;
     const finishReason = data.choices?.[0]?.finish_reason;
@@ -418,7 +451,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
       };
 
       if (tools.length > 0) {
-        requestBody.tools = tools;
+        requestBody.tools = normalizePromptCacheTools(tools);
         requestBody.tool_choice = "auto";
       }
 
@@ -439,7 +472,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
           Authorization: `Bearer ${this._config.apiKey}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(requestBody),
+        body: this.prepareOpenAIRequestBody("tools-stream", requestBody),
         signal,
       });
 
