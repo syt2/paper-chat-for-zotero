@@ -30,6 +30,7 @@ import {
   destroyAnalyticsService,
   getAnalyticsService,
 } from "./modules/analytics";
+import { updateSelfIfNeed } from "./utils/selfUpdate";
 
 async function onStartup() {
   await Promise.all([
@@ -91,6 +92,9 @@ async function onStartup() {
   addon.data.initialized = true;
   getAnalyticsService().track(ANALYTICS_EVENTS.pluginStarted, {
     startup_mode: "normal",
+  });
+  updateSelfIfNeed().catch((error) => {
+    ztoolkit.log("[Startup] Auto update check failed:", error);
   });
 }
 

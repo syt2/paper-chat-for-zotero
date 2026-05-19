@@ -1,5 +1,9 @@
 import { defineConfig } from "zotero-plugin-scaffold";
 import pkg from "./package.json";
+import {
+  getUpdateURLTemplate,
+  XPI_DOWNLOAD_LINK_TEMPLATE,
+} from "./src/utils/updateUrls";
 
 export default defineConfig({
   source: ["src", "addon"],
@@ -7,11 +11,8 @@ export default defineConfig({
   name: pkg.config.addonName,
   id: pkg.config.addonID,
   namespace: pkg.config.addonRef,
-  updateURL: `https://github.com/{{owner}}/{{repo}}/releases/download/release/${
-    pkg.version.includes("-") ? "update-beta.json" : "update.json"
-  }`,
-  xpiDownloadLink:
-    "https://github.com/{{owner}}/{{repo}}/releases/download/V{{version}}/{{xpiName}}.xpi",
+  updateURL: getUpdateURLTemplate(pkg.version),
+  xpiDownloadLink: XPI_DOWNLOAD_LINK_TEMPLATE,
 
   build: {
     assets: ["addon/**/*.*"],
