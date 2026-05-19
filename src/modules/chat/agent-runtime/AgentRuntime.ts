@@ -1357,7 +1357,6 @@ export class AgentRuntime {
         message.id = "runtime-context-history";
       }
     }
-    this.pruneRuntimeContextHistory(currentMessages);
 
     currentMessages.push({
       id: "cache-checkpoint",
@@ -1376,11 +1375,6 @@ export class AgentRuntime {
 
   private prepareMessagesForModel(currentMessages: ChatMessage[]): void {
     compactOlderToolResultMessages(currentMessages);
-  }
-
-  private pruneRuntimeContextHistory(currentMessages: ChatMessage[]): void {
-    keepLastMessagesById(currentMessages, "cache-checkpoint-history", 1);
-    keepLastMessagesById(currentMessages, "runtime-context-history", 1);
   }
 
   private emitRuntimeEvent<T extends AgentRuntimeEventType>(
@@ -1486,27 +1480,6 @@ function buildCompactedToolResultContent(content: string): string {
     `Original characters: ${content.length}`,
     `Preview: ${compacted}${content.length > TOOL_RESULT_SUMMARY_CHAR_LIMIT ? "..." : ""}`,
   ].join("\n");
-}
-
-function keepLastMessagesById(
-  messages: ChatMessage[],
-  id: string,
-  keepCount: number,
-): void {
-  let remaining =
-    messages.filter((message) => message.id === id).length - keepCount;
-  if (remaining <= 0) {
-    return;
-  }
-
-  for (let i = 0; i < messages.length && remaining > 0; i++) {
-    if (messages[i].id !== id) {
-      continue;
-    }
-    messages.splice(i, 1);
-    i--;
-    remaining--;
-  }
 }
 
 function getPrimaryPolicyTrace(

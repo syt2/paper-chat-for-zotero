@@ -94,7 +94,7 @@ export function recordPromptCacheRequestShape(params: {
     `stable=${ratio}%`,
     `commonChars=${commonPrefixChars}/${current.length}`,
     `commonTokens~${commonPrefixTokens}/${estimatedTokens}`,
-    `firstDiff=${findFirstDifferencePath(previous, current)}`,
+    `firstDiff=${findFirstDifferenceDetails(previous, current)}`,
   );
 }
 
@@ -157,6 +157,7 @@ export function normalizePromptCacheUsage(
     cacheReadTokens: readNumber(
       usage.cache_read_input_tokens,
       usage.cached_tokens,
+      usage.prompt_cache_hit_tokens,
       promptDetails.cached_tokens,
       inputDetails.cached_tokens,
       inputDetails.cache_read_tokens,
@@ -200,17 +201,70 @@ function estimatePromptCacheTokens(text: string): number {
   return Math.ceil(cjkChars / 1.5 + otherChars / 4);
 }
 
-function findFirstDifferencePath(
+function findFirstDifferenceDetails(
   previousJson: string,
   currentJson: string,
 ): string {
   try {
     const previous = JSON.parse(previousJson);
     const current = JSON.parse(currentJson);
-    return findFirstDifferencePathInValue(previous, current) || "<none>";
+    const path = findFirstDifferencePathInValue(previous, current) || "<none>";
+    if (path === "<none>") {
+      return path;
+    }
+    return [
+      path,
+      `prev=${summarizeMessageAtPath(previous, path)}`,
+      `curr=${summarizeMessageAtPath(current, path)}`,
+    ].join(" ");
   } catch {
     return `char:${countCommonPrefixChars(previousJson, currentJson)}`;
   }
+}
+
+function summarizeMessageAtPath(root: unknown, path: string): string {
+  if (!isPlainObject(root) || !Array.isArray(root.messages)) {
+    return "<unknown>";
+  }
+  const match = path.match(/^\$\.messages\[(\d+)\]/);
+  if (!match) {
+    return "<not-message>";
+  }
+  const index = Number.parseInt(match[1], 10);
+  const message = root.messages[index];
+  if (!isPlainObject(message)) {
+    return `<missing:${index}>`;
+  }
+  return `{index=${index},role=${String(message.role)},content=${summarizeContent(
+    message.content,
+  )}}`;
+}
+
+function summarizeContent(content: unknown): string {
+  if (typeof content === "string") {
+    return `string:${summarizeText(content)}`;
+  }
+  if (Array.isArray(content)) {
+    const textBlocks = content
+      .filter(isPlainObject)
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .filter((text): text is string => typeof text === "string");
+    const cacheControlled = content
+      .filter(isPlainObject)
+      .some((block) => isPlainObject(block.cache_control));
+    return `array:${cacheControlled ? "cache," : ""}${summarizeText(
+      textBlocks.join(" "),
+    )}`;
+  }
+  return typeof content;
+}
+
+function summarizeText(text: string): string {
+  const compact = text.replace(/\s+/g, " ").trim();
+  return JSON.stringify(
+    compact.length > 80 ? `${compact.slice(0, 77)}...` : compact,
+  );
 }
 
 function findFirstDifferencePathInValue(

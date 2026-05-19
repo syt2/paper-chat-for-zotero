@@ -169,6 +169,12 @@ export abstract class BaseProvider implements AIProvider {
     return this._config.id === "paperchat";
   }
 
+  private isPromptCacheCheckpointMessage(msg: ChatMessage): boolean {
+    return (
+      msg.id === "cache-checkpoint" || msg.id === "cache-checkpoint-history"
+    );
+  }
+
   /**
    * Format messages for OpenAI-compatible API (OpenAI, DeepSeek, Mistral, etc.)
    * Supports Vision API format for images, optional PDF attachment, and tool calling
@@ -214,7 +220,7 @@ export abstract class BaseProvider implements AIProvider {
       const hasImages = msg.images && msg.images.length > 0;
       const shouldMarkCacheCheckpoint =
         this.shouldMarkPromptCacheCheckpoint() &&
-        msg.id === "cache-checkpoint";
+        this.isPromptCacheCheckpointMessage(msg);
 
       // Use multimodal format if has images or PDF
       if (hasImages || shouldAttachPdf || shouldMarkCacheCheckpoint) {

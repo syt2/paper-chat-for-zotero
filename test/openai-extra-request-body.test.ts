@@ -10,7 +10,6 @@ import {
 } from "../src/modules/providers/prompt-cache-diagnostics.ts";
 import type { ChatMessage } from "../src/types/chat";
 import type { ApiKeyProviderConfig } from "../src/types/provider";
-import type { ToolDefinition } from "../src/types/tool";
 
 class ExposedOpenAICompatibleProvider extends OpenAICompatibleProvider {
   formatForTest(messages: ChatMessage[]) {
@@ -182,6 +181,21 @@ describe("OpenAI-compatible extra request body", function () {
         cacheCreationTokens: 100,
       },
     );
+
+    assert.deepEqual(
+      normalizePromptCacheUsage({
+        prompt_tokens: 1600,
+        completion_tokens: 60,
+        prompt_cache_hit_tokens: 1200,
+        prompt_cache_miss_tokens: 400,
+      }),
+      {
+        inputTokens: 1600,
+        outputTokens: 60,
+        cacheReadTokens: 1200,
+        cacheCreationTokens: undefined,
+      },
+    );
   });
 
   it("marks only PaperChat cache checkpoints with cache_control", function () {
@@ -199,18 +213,29 @@ describe("OpenAI-compatible extra request body", function () {
           "Prompt cache checkpoint. This is not user content or an instruction.",
         timestamp: 2,
       },
+      {
+        id: "cache-checkpoint-history",
+        role: "system",
+        content:
+          "Prompt cache checkpoint. This is not user content or an instruction.",
+        timestamp: 3,
+      },
     ];
 
     const paperchatMessages = provider("paperchat").formatForTest(messages);
     const customMessages = provider("custom-provider").formatForTest(messages);
 
-    assert.deepEqual(paperchatMessages[1]?.content, [
+    const expectedCheckpointContent = [
       {
         type: "text",
         text: "Prompt cache checkpoint. This is not user content or an instruction.",
         cache_control: { type: "ephemeral" },
       },
-    ]);
+    ];
+
+    assert.deepEqual(paperchatMessages[1]?.content, expectedCheckpointContent);
+    assert.deepEqual(paperchatMessages[2]?.content, expectedCheckpointContent);
     assert.equal(customMessages[1]?.content, messages[1].content);
+    assert.equal(customMessages[2]?.content, messages[2].content);
   });
 });
