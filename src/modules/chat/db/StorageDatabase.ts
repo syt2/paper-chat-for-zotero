@@ -11,7 +11,7 @@ import { getErrorMessage } from "../../../utils/common";
 
 const DB_DIR = "paper-chat";
 const DB_FILE = "storage";
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 
 /** Build absolute DB path so Zotero.DBConnection doesn't parse subdirectory names */
 function getDBPath(): string {
@@ -196,6 +196,7 @@ export class StorageDatabase {
         tool_calls TEXT,
         tool_call_id TEXT,
         streaming_state TEXT,
+        api_only INTEGER,
         is_system_notice INTEGER,
         FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
       )
@@ -331,6 +332,10 @@ export class StorageDatabase {
       if (currentVersion < 6) {
         await this.upgradeToV6(db);
         currentVersion = 6;
+      }
+      if (currentVersion < 7) {
+        await this.upgradeToV7(db);
+        currentVersion = 7;
       }
     }
   }
@@ -796,6 +801,37 @@ export class StorageDatabase {
       }
       ztoolkit.log(
         "[StorageDatabase] Failed to upgrade to v6:",
+        getErrorMessage(error),
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Upgrade schema v6 -> v7: add hidden API-only messages for model context.
+   */
+  private async upgradeToV7(db: ZoteroDBConnection): Promise<void> {
+    ztoolkit.log("[StorageDatabase] Upgrading schema v6 -> v7...");
+
+    try {
+      const msgCols = new Set(
+        ((await db.queryAsync("PRAGMA table_info(messages)")) || []).map(
+          (c: any) => String(c.name),
+        ),
+      );
+      if (!msgCols.has("api_only")) {
+        await db.queryAsync("ALTER TABLE messages ADD COLUMN api_only INTEGER");
+      }
+
+      await db.queryAsync(
+        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
+        [7, Date.now()],
+      );
+
+      ztoolkit.log("[StorageDatabase] Schema upgraded to v7");
+    } catch (error) {
+      ztoolkit.log(
+        "[StorageDatabase] Failed to upgrade to v7:",
         getErrorMessage(error),
       );
       throw error;

@@ -30,6 +30,7 @@ function getConversationalMessages(session: ChatSession): ChatMessage[] {
   return session.messages.filter(
     (message) =>
       (message.role === "user" || message.role === "assistant") &&
+      !message.apiOnly &&
       !message.isSystemNotice &&
       message.streamingState !== "interrupted" &&
       message.content.trim().length > 0,

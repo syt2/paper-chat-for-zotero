@@ -7,7 +7,9 @@ export function buildMemoryExtractionConversationText(
   maxInputChars: number = DEFAULT_MAX_INPUT_CHARS,
 ): string {
   const turns = messages.filter(
-    (message) => message.role === "user" || message.role === "assistant",
+    (message) =>
+      !message.apiOnly &&
+      (message.role === "user" || message.role === "assistant"),
   );
 
   const lines: string[] = [];

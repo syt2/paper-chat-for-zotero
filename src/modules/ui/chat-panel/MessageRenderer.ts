@@ -647,7 +647,7 @@ export function renderMessages(
   // Find the last assistant message index for streaming content ID
   let lastAssistantIndex = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === "assistant") {
+    if (!messages[i].apiOnly && messages[i].role === "assistant") {
       lastAssistantIndex = i;
       break;
     }
@@ -656,6 +656,9 @@ export function renderMessages(
   // Render each message
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
+    if (msg.apiOnly) {
+      continue;
+    }
     const isLastAssistant = i === lastAssistantIndex;
     chatHistory.appendChild(
       createMessageElement(

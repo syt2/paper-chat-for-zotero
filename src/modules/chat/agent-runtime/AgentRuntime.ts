@@ -114,6 +114,7 @@ interface ToolIterationParams {
   sessionRunId?: number;
   currentMessages: ChatMessage[];
   assistantMessage: ChatMessage;
+  provider: ToolCallingProvider;
   paperStructure?: PaperStructure | PaperStructureExtended | null;
   toolCalls: ToolCall[];
   roundContent: string;
@@ -198,7 +199,7 @@ export class AgentRuntime {
           refreshSystemPrompt,
           iterationControl,
         );
-        this.prepareMessagesForModel(currentMessages);
+        this.prepareMessagesForModel(currentMessages, provider);
         ztoolkit.log(
           `[${logPrefix}] Iteration ${iteration}, messages: ${currentMessages.length}`,
         );
@@ -242,6 +243,7 @@ export class AgentRuntime {
             sessionRunId,
             currentMessages,
             assistantMessage,
+            provider,
             paperStructure,
             toolCalls: result.toolCalls,
             roundContent: result.content || "",
@@ -360,7 +362,7 @@ export class AgentRuntime {
           refreshSystemPrompt,
           iterationControl,
         );
-        this.prepareMessagesForModel(currentMessages);
+        this.prepareMessagesForModel(currentMessages, provider);
         ztoolkit.log(
           `[${logPrefix}] Iteration ${iteration}, messages: ${currentMessages.length}`,
         );
@@ -395,6 +397,7 @@ export class AgentRuntime {
             sessionRunId,
             currentMessages,
             assistantMessage,
+            provider,
             paperStructure,
             toolCalls: result.toolCalls,
             roundContent: result.content || "",
@@ -672,6 +675,7 @@ export class AgentRuntime {
       sessionRunId,
       currentMessages,
       assistantMessage,
+      provider,
       paperStructure,
       toolCalls,
       roundContent,
@@ -690,6 +694,20 @@ export class AgentRuntime {
       timestamp: Date.now(),
     };
     currentMessages.push(assistantToolMessage);
+    if (shouldPersistApiOnlyToolTranscript(provider)) {
+      insertApiOnlyModelContextMessage(
+        sendingSession,
+        assistantMessage,
+        {
+          ...assistantToolMessage,
+          id: buildApiOnlyModelContextMessageId(
+            assistantMessage.id,
+            this.callbacks.generateId(),
+          ),
+          apiOnly: true,
+        },
+      );
+    }
 
     let accumulatedDisplay = params.accumulatedDisplay;
     if (roundContent) {
@@ -772,14 +790,34 @@ export class AgentRuntime {
           `[${logPrefix}] Result (truncated): ${toolResult.substring(0, 200)}...`,
         );
 
+        const modelToolResult = shouldPersistApiOnlyToolTranscript(provider)
+          ? compactToolResultContent(
+              toolResult,
+              DEEPSEEK_TOOL_RESULT_COMPACTION_POLICY,
+            )
+          : toolResult;
         const toolResultMessage: ChatMessage = {
           id: this.callbacks.generateId(),
           role: "tool",
-          content: toolResult,
+          content: modelToolResult,
           tool_call_id: toolCall.id,
           timestamp: Date.now(),
         };
         currentMessages.push(toolResultMessage);
+        if (shouldPersistApiOnlyToolTranscript(provider)) {
+          insertApiOnlyModelContextMessage(
+            sendingSession,
+            assistantMessage,
+            {
+              ...toolResultMessage,
+              id: buildApiOnlyModelContextMessageId(
+                assistantMessage.id,
+                this.callbacks.generateId(),
+              ),
+              apiOnly: true,
+            },
+          );
+        }
 
         const toolSucceeded = executionResult.status === "completed";
         const toolDisplayStatus = toolSucceeded ? "completed" : "error";
@@ -1027,7 +1065,11 @@ export class AgentRuntime {
     );
     this.ensureSessionTracked(sendingSession, sessionRunId);
     this.touchToolExecutionState(sendingSession);
-    await this.sessionStorage.updateSessionMeta(sendingSession);
+    if (hasApiOnlyModelContextMessages(sendingSession)) {
+      await this.sessionStorage.saveSession(sendingSession);
+    } else {
+      await this.sessionStorage.updateSessionMeta(sendingSession);
+    }
     this.emitPlanUpdate(sendingSession, sessionRunId);
     this.emitRuntimeEvent<"turn_completed">(
       sendingSession,
@@ -1082,6 +1124,10 @@ export class AgentRuntime {
       delete assistantMessage.reasoning;
     }
     assistantMessage.streamingState = undefined;
+    removeApiOnlyModelContextMessagesForTurn(
+      sendingSession,
+      assistantMessage.id,
+    );
     await this.flushAssistantMessageCheckpoint(
       sendingSession,
       sessionRunId,
@@ -1126,6 +1172,10 @@ export class AgentRuntime {
     // this turn is done, so the on-disk snapshot should match. markInterrupted
     // on next load would fix it, but only if another session is loaded — if
     // the user re-opens this exact session we want an accurate state.
+    removeApiOnlyModelContextMessagesForTurn(
+      sendingSession,
+      assistantMessage.id,
+    );
     await this.flushAssistantMessageCheckpoint(
       sendingSession,
       sessionRunId,
@@ -1373,8 +1423,14 @@ export class AgentRuntime {
     });
   }
 
-  private prepareMessagesForModel(currentMessages: ChatMessage[]): void {
-    compactOlderToolResultMessages(currentMessages);
+  private prepareMessagesForModel(
+    currentMessages: ChatMessage[],
+    provider: ToolCallingProvider,
+  ): void {
+    compactOlderToolResultMessages(
+      currentMessages,
+      getToolResultCompactionPolicy(provider),
+    );
   }
 
   private emitRuntimeEvent<T extends AgentRuntimeEventType>(
@@ -1446,13 +1502,114 @@ const TOOL_RESULT_FULL_KEEP_COUNT = 6;
 const TOOL_RESULT_COMPACT_CHAR_LIMIT = 10000;
 const TOOL_RESULT_SUMMARY_CHAR_LIMIT = 700;
 
-function compactOlderToolResultMessages(messages: ChatMessage[]): void {
+interface ToolResultCompactionPolicy {
+  keepFullCount: number;
+  compactCharLimit: number;
+  summaryCharLimit: number;
+  stripAssistantToolCards: boolean;
+}
+
+const DEFAULT_TOOL_RESULT_COMPACTION_POLICY: ToolResultCompactionPolicy = {
+  keepFullCount: TOOL_RESULT_FULL_KEEP_COUNT,
+  compactCharLimit: TOOL_RESULT_COMPACT_CHAR_LIMIT,
+  summaryCharLimit: TOOL_RESULT_SUMMARY_CHAR_LIMIT,
+  stripAssistantToolCards: false,
+};
+
+const DEEPSEEK_TOOL_RESULT_COMPACTION_POLICY: ToolResultCompactionPolicy = {
+  keepFullCount: 0,
+  compactCharLimit: 0,
+  summaryCharLimit: 180,
+  stripAssistantToolCards: true,
+};
+
+function getToolResultCompactionPolicy(
+  provider: ToolCallingProvider,
+): ToolResultCompactionPolicy {
+  const providerId = provider.config.id.toLowerCase();
+  const resolvedPaperChatModel = (
+    "resolvedModelOverride" in provider.config
+      ? provider.config.resolvedModelOverride
+      : undefined
+  ) as string | undefined;
+  const modelId =
+    providerId === "paperchat"
+      ? (
+          resolvedPaperChatModel ||
+          provider.config.defaultModel ||
+          ""
+        ).toLowerCase()
+      : (provider.config.defaultModel || "").toLowerCase();
+  if (
+    providerId === "deepseek" ||
+    (providerId === "paperchat" && modelId.includes("deepseek"))
+  ) {
+    return DEEPSEEK_TOOL_RESULT_COMPACTION_POLICY;
+  }
+  return DEFAULT_TOOL_RESULT_COMPACTION_POLICY;
+}
+
+function shouldPersistApiOnlyToolTranscript(
+  provider: ToolCallingProvider,
+): boolean {
+  return (
+    getToolResultCompactionPolicy(provider) ===
+    DEEPSEEK_TOOL_RESULT_COMPACTION_POLICY
+  );
+}
+
+function insertApiOnlyModelContextMessage(
+  session: ChatSession,
+  assistantMessage: ChatMessage,
+  message: ChatMessage,
+): void {
+  const insertIndex = session.messages.findIndex(
+    (candidate) => candidate.id === assistantMessage.id,
+  );
+  if (insertIndex >= 0) {
+    session.messages.splice(insertIndex, 0, message);
+    return;
+  }
+  session.messages.push(message);
+}
+
+function buildApiOnlyModelContextMessageId(
+  assistantMessageId: string,
+  messageId: string,
+): string {
+  return `${assistantMessageId}-api-context-${messageId}`;
+}
+
+export function removeApiOnlyModelContextMessagesForTurn(
+  session: ChatSession,
+  assistantMessageId: string,
+): void {
+  const prefix = `${assistantMessageId}-api-context-`;
+  session.messages = session.messages.filter(
+    (message) => !(message.apiOnly && message.id.startsWith(prefix)),
+  );
+}
+
+function hasApiOnlyModelContextMessages(session: ChatSession): boolean {
+  return session.messages.some((message) => message.apiOnly);
+}
+
+function compactOlderToolResultMessages(
+  messages: ChatMessage[],
+  policy: ToolResultCompactionPolicy,
+): void {
+  if (policy.stripAssistantToolCards) {
+    stripAssistantToolCallCards(messages);
+  }
+
   const toolMessageIndexes = messages
     .map((message, index) => ({ message, index }))
     .filter(({ message }) => message.role === "tool")
     .map(({ index }) => index);
   const keepFull = new Set(
-    toolMessageIndexes.slice(-TOOL_RESULT_FULL_KEEP_COUNT),
+    policy.keepFullCount > 0
+      ? toolMessageIndexes.slice(-policy.keepFullCount)
+      : [],
   );
 
   for (const index of toolMessageIndexes) {
@@ -1463,23 +1620,59 @@ function compactOlderToolResultMessages(messages: ChatMessage[]): void {
     if (message.content.startsWith(TOOL_RESULT_COMPACTED_PREFIX)) {
       continue;
     }
-    if (message.content.length <= TOOL_RESULT_COMPACT_CHAR_LIMIT) {
+    if (message.content.length <= policy.compactCharLimit) {
       continue;
     }
-    message.content = buildCompactedToolResultContent(message.content);
+    message.content = compactToolResultContent(message.content, policy);
   }
 }
 
-function buildCompactedToolResultContent(content: string): string {
+function stripAssistantToolCallCards(messages: ChatMessage[]): void {
+  for (const message of messages) {
+    if (
+      message.role !== "assistant" ||
+      message.tool_calls ||
+      !message.content.includes("<tool-call")
+    ) {
+      continue;
+    }
+    const stripped = message.content
+      .replace(
+        /\n?<tool-call status="(calling|completed|error)">[\s\S]*?<\/tool-call>\n?/g,
+        "\n",
+      )
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    message.content = stripped || "[Tool call details omitted from model context.]";
+  }
+}
+
+function buildCompactedToolResultContent(
+  content: string,
+  summaryCharLimit: number,
+): string {
   const compacted = content
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, TOOL_RESULT_SUMMARY_CHAR_LIMIT);
+    .slice(0, summaryCharLimit);
   return [
     TOOL_RESULT_COMPACTED_PREFIX,
     `Original characters: ${content.length}`,
-    `Preview: ${compacted}${content.length > TOOL_RESULT_SUMMARY_CHAR_LIMIT ? "..." : ""}`,
+    `Preview: ${compacted}${content.length > summaryCharLimit ? "..." : ""}`,
   ].join("\n");
+}
+
+function compactToolResultContent(
+  content: string,
+  policy: ToolResultCompactionPolicy,
+): string {
+  if (
+    content.startsWith(TOOL_RESULT_COMPACTED_PREFIX) ||
+    content.length <= policy.compactCharLimit
+  ) {
+    return content;
+  }
+  return buildCompactedToolResultContent(content, policy.summaryCharLimit);
 }
 
 function getPrimaryPolicyTrace(

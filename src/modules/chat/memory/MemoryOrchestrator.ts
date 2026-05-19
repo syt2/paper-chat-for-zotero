@@ -46,7 +46,9 @@ export class MemoryOrchestrator {
     options: ExtractionOptions = {},
   ): Promise<void> | null {
     const conversational = session.messages.filter(
-      (message) => message.role === "user" || message.role === "assistant",
+      (message) =>
+        !message.apiOnly &&
+        (message.role === "user" || message.role === "assistant"),
     );
     const count = conversational.length;
     if (count < 8) return null;

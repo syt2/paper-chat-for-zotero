@@ -209,7 +209,7 @@ export class SessionStorageService {
     if (session.messages && session.messages.length > 0) {
       for (let i = session.messages.length - 1; i >= 0; i--) {
         const msg = session.messages[i];
-        if (msg.content && msg.role !== "tool") {
+        if (msg.content && msg.role !== "tool" && !msg.apiOnly) {
           lastMessagePreview =
             msg.content.substring(0, 50) +
             (msg.content.length > 50 ? "..." : "");
@@ -223,7 +223,7 @@ export class SessionStorageService {
       id: session.id,
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
-      messageCount: session.messages?.length || 0,
+      messageCount: session.messages?.filter((msg) => !msg.apiOnly).length || 0,
       lastMessagePreview,
       lastMessageTime,
       title: session.title,
@@ -262,8 +262,8 @@ export class SessionStorageService {
       const nextSeq = (seqRows[0]?.max_seq ?? -1) + 1;
 
       await db.queryAsync(
-        `INSERT INTO messages (id, session_id, seq, role, content, reasoning, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, streaming_state, is_system_notice)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO messages (id, session_id, seq, role, content, reasoning, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, streaming_state, api_only, is_system_notice)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           message.id,
           sessionId,
@@ -279,6 +279,7 @@ export class SessionStorageService {
           message.tool_calls ? JSON.stringify(message.tool_calls) : null,
           message.tool_call_id || null,
           message.streamingState || null,
+          message.apiOnly ? 1 : null,
           message.isSystemNotice ? 1 : null,
         ],
       );
@@ -724,8 +725,8 @@ export class SessionStorageService {
           for (let seq = 0; seq < session.messages.length; seq++) {
             const msg = session.messages[seq];
             await db.queryAsync(
-              `INSERT INTO messages (id, session_id, seq, role, content, reasoning, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, streaming_state, is_system_notice)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              `INSERT INTO messages (id, session_id, seq, role, content, reasoning, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, streaming_state, api_only, is_system_notice)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               [
                 msg.id,
                 session.id,
@@ -741,6 +742,7 @@ export class SessionStorageService {
                 msg.tool_calls ? JSON.stringify(msg.tool_calls) : null,
                 msg.tool_call_id || null,
                 msg.streamingState || null,
+                msg.apiOnly ? 1 : null,
                 msg.isSystemNotice ? 1 : null,
               ],
             );
@@ -917,6 +919,7 @@ export class SessionStorageService {
         if (m.tool_calls) msg.tool_calls = JSON.parse(m.tool_calls);
         if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
         if (m.streaming_state) msg.streamingState = m.streaming_state;
+        if (m.api_only) msg.apiOnly = true;
         if (m.is_system_notice) msg.isSystemNotice = true;
         return msg;
       });

@@ -46,6 +46,7 @@ export interface ChatMessage {
   tool_calls?: ToolCall[]; // AI 请求调用的工具
   tool_call_id?: string; // tool 角色消息的工具调用ID
   streamingState?: ChatMessageStreamingState;
+  apiOnly?: boolean; // Hidden from chat UI; retained only for model context.
   // 系统通知标记 (用于显示 item 切换提示等)
   isSystemNotice?: boolean;
 }

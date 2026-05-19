@@ -172,7 +172,7 @@ class ContextManager {
 
     // 1. 提取所有 system 消息 (不包括 system-notice)
     const systemMessages = messages.filter(
-      (m) => m.role === "system" && !m.isSystemNotice,
+      (m) => m.role === "system" && !m.isSystemNotice && !m.apiOnly,
     );
 
     // 2. 提取对话消息 (user/assistant/tool) 和 system-notice，过滤掉 error 消息
@@ -181,6 +181,7 @@ class ContextManager {
         m.role === "user" ||
         (m.role === "assistant" && m.streamingState !== "interrupted") ||
         m.role === "tool" ||
+        (m.apiOnly && m.role !== "system") ||
         m.isSystemNotice,
     );
 
@@ -303,8 +304,9 @@ class ContextManager {
       // 构建要摘要的消息 (只包含 user/assistant，排除 system/error)
       const conversationMessages = session.messages.filter(
         (m) =>
-          m.role === "user" ||
-          (m.role === "assistant" && m.streamingState !== "interrupted"),
+          !m.apiOnly &&
+          (m.role === "user" ||
+            (m.role === "assistant" && m.streamingState !== "interrupted")),
       );
 
       // 压缩时保留最近的消息；平时 filterMessages 不再滑动裁剪。

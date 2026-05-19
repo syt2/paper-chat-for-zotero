@@ -83,7 +83,10 @@ import {
 } from "./paperchat-retry-orchestration";
 import { MemoryManager } from "./memory/MemoryManager";
 import { SessionTitleService } from "./SessionTitleService";
-import { AgentRuntime } from "./agent-runtime/AgentRuntime";
+import {
+  AgentRuntime,
+  removeApiOnlyModelContextMessagesForTurn,
+} from "./agent-runtime/AgentRuntime";
 import { normalizeAgentMaxPlanningIterations } from "./agent-runtime/IterationLimitConfig";
 import {
   createToolBudgetState,
@@ -122,6 +125,71 @@ function providerSupportsStreamingToolCalling(
     providerSupportsToolCalling(provider) &&
     "streamChatCompletionWithTools" in provider &&
     typeof provider.streamChatCompletionWithTools === "function"
+  );
+}
+
+function isDeepSeekToolPromptCacheTarget(
+  provider: AIProvider,
+  resolvedPaperChatModelId?: string | null,
+): boolean {
+  const providerId = provider.config.id.toLowerCase();
+  const modelId =
+    providerId === "paperchat"
+      ? (
+          resolvedPaperChatModelId ||
+          provider.config.defaultModel ||
+          ""
+        ).toLowerCase()
+      : (provider.config.defaultModel || "").toLowerCase();
+  return (
+    providerId === "deepseek" ||
+    (providerId === "paperchat" && modelId.includes("deepseek"))
+  );
+}
+
+function buildStableToolCatalogForPromptCache(
+  tools: ToolDefinition[],
+): string {
+  const lines = [
+    "=== STABLE TOOL CATALOG FOR PROMPT CACHE ===",
+    "The structured tools field remains authoritative. This stable catalog duplicates tool schemas so providers with prefix-only prompt caches can reuse the large, unchanged tool context before dynamic conversation messages.",
+  ];
+  for (const tool of tools) {
+    const fn = tool.function;
+    lines.push(`\nTool: ${fn.name}`);
+    lines.push(`Description: ${fn.description}`);
+    lines.push(`Parameters: ${JSON.stringify(fn.parameters)}`);
+  }
+  return lines.join("\n");
+}
+
+function withDeepSeekStableToolCatalogPrefix(
+  messages: ChatMessage[],
+  tools: ToolDefinition[],
+): ChatMessage[] {
+  if (messages.length === 0 || tools.length === 0) {
+    return messages;
+  }
+
+  return messages.map((message, index) => {
+    if (index !== 0 || message.role !== "system") {
+      return message;
+    }
+    return {
+      ...message,
+      content: `${message.content}\n\n${buildStableToolCatalogForPromptCache(
+        tools,
+      )}`,
+    };
+  });
+}
+
+function withoutRuntimePromptCacheBoundary(
+  messages: ChatMessage[],
+): ChatMessage[] {
+  return messages.filter(
+    (message) =>
+      message.id !== "cache-checkpoint" && message.id !== "runtime-context",
   );
 }
 
@@ -2186,6 +2254,19 @@ export class ChatManager {
 
         const toolProvider = currentProvider as AIProvider &
           ToolCallingProvider;
+        const isDeepSeekPromptCacheTarget = isDeepSeekToolPromptCacheTarget(
+          currentProvider,
+          failedPaperChatModelId || sendingSession.resolvedModelId,
+        );
+        const attemptMessagesWithContext = isDeepSeekPromptCacheTarget
+          ? withDeepSeekStableToolCatalogPrefix(
+              withoutRuntimePromptCacheBoundary(messagesWithContext),
+              tools,
+            )
+          : messagesWithContext;
+        const runtimePromptBuilder = isDeepSeekPromptCacheTarget
+          ? undefined
+          : buildRuntimeSystemPrompt;
 
         // 重置 assistant 消息内容（降级时需要清空之前的部分内容）
         assistantMessage.content = "";
@@ -2203,7 +2284,7 @@ export class ChatManager {
                     ToolCallingProvider["streamChatCompletionWithTools"]
                   >;
                 },
-              messagesWithContext,
+              attemptMessagesWithContext,
               assistantMessage,
               pdfWasAttached,
               summaryTriggered,
@@ -2211,7 +2292,7 @@ export class ChatManager {
               paperStructure,
               sendingSession,
               sessionRunId,
-              buildRuntimeSystemPrompt,
+              runtimePromptBuilder,
               abortSignal,
             );
             return;
@@ -2222,7 +2303,7 @@ export class ChatManager {
           );
           await this.sendMessageWithNonStreamingToolCalling(
             toolProvider,
-            messagesWithContext,
+            attemptMessagesWithContext,
             assistantMessage,
             pdfWasAttached,
             summaryTriggered,
@@ -2230,7 +2311,7 @@ export class ChatManager {
             paperStructure,
             sendingSession,
             sessionRunId,
-            buildRuntimeSystemPrompt,
+            runtimePromptBuilder,
             abortSignal,
           );
         };
@@ -2297,6 +2378,10 @@ export class ChatManager {
       );
       if (assistantIndex !== -1) {
         sendingSession.messages.splice(assistantIndex, 1);
+        removeApiOnlyModelContextMessagesForTurn(
+          sendingSession,
+          assistantMessage.id,
+        );
         await this.sessionStorage.deleteMessage(
           sendingSession.id,
           assistantMessage.id,
@@ -2439,7 +2524,7 @@ export class ChatManager {
     >,
     sendingSession: ChatSession,
     sessionRunId: number,
-    buildSystemPrompt: (
+    buildSystemPrompt: ((
       currentMessages: ChatMessage[],
       session: ChatSession,
       runtimeState?: {
@@ -2448,7 +2533,7 @@ export class ChatManager {
         maxIterations: number;
         forceFinalAnswer: boolean;
       },
-    ) => string,
+    ) => string) | undefined,
     abortSignal?: AbortSignal,
   ): Promise<void> {
     await this.agentRuntime.executeStreamingToolLoop({
@@ -2484,7 +2569,7 @@ export class ChatManager {
     >,
     sendingSession: ChatSession,
     sessionRunId: number,
-    buildSystemPrompt: (
+    buildSystemPrompt: ((
       currentMessages: ChatMessage[],
       session: ChatSession,
       runtimeState?: {
@@ -2493,7 +2578,7 @@ export class ChatManager {
         maxIterations: number;
         forceFinalAnswer: boolean;
       },
-    ) => string,
+    ) => string) | undefined,
     abortSignal?: AbortSignal,
   ): Promise<void> {
     await this.agentRuntime.executeNonStreamingToolLoop({
@@ -2552,6 +2637,7 @@ export class ChatManager {
 
     const now = Date.now();
     for (const message of interruptedMessages) {
+      removeApiOnlyModelContextMessagesForTurn(session, message.id);
       const cleanedContent = this.stripPendingToolCallCards(message.content);
       if (cleanedContent) {
         message.content = cleanedContent;
