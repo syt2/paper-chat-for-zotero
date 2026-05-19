@@ -37,7 +37,10 @@ import {
 } from "./SessionStorageService";
 import { PdfExtractor } from "./PdfExtractor";
 import { getContextManager } from "./ContextManager";
-import { getPdfToolManager } from "./pdf-tools";
+import {
+  generateAgentRuntimeContextPrompt,
+  getPdfToolManager,
+} from "./pdf-tools";
 import {
   getToolPermissionManager,
   type ToolApprovalObserver,
@@ -298,13 +301,25 @@ export class ChatManager {
     return getProviderManager().getActiveProvider();
   }
 
-  private buildToolCallingSystemPrompt(params: {
-    currentMessages: ChatMessage[];
+  private buildToolCallingStableSystemPrompt(params: {
     paperStructure?: Awaited<
       ReturnType<typeof getPdfToolManager.prototype.extractAndParsePaper>
     >;
     hasCurrentItem: boolean;
     item?: Zotero.Item;
+  }): string {
+    const { paperStructure, hasCurrentItem, item } = params;
+    const pdfToolManager = getPdfToolManager();
+
+    return pdfToolManager.generatePaperContextPrompt(
+      paperStructure || undefined,
+      hasCurrentItem ? item?.key : undefined,
+      hasCurrentItem && item ? getItemTitleSmart(item) : undefined,
+      hasCurrentItem,
+    );
+  }
+
+  private buildToolCallingRuntimeSystemPrompt(params: {
     memoryContext?: string;
     sendingSession: ChatSession;
     runtimeState?: {
@@ -314,16 +329,7 @@ export class ChatManager {
       forceFinalAnswer: boolean;
     };
   }): string {
-    const {
-      currentMessages,
-      paperStructure,
-      hasCurrentItem,
-      item,
-      memoryContext,
-      sendingSession,
-      runtimeState,
-    } = params;
-    const pdfToolManager = getPdfToolManager();
+    const { memoryContext, sendingSession, runtimeState } = params;
     const allToolResults = sendingSession.toolExecutionState?.results || [];
     const recentToolResults = allToolResults.slice(-5);
     const hardIterationLimit =
@@ -334,39 +340,32 @@ export class ChatManager {
     const toolBudgetLimits = getToolBudgetLimits(hardIterationLimit);
     const toolBudgetState = createToolBudgetState(allToolResults);
 
-    return pdfToolManager.generatePaperContextPrompt(
-      paperStructure || undefined,
-      hasCurrentItem ? item?.key : undefined,
-      hasCurrentItem && item ? getItemTitleSmart(item) : undefined,
-      hasCurrentItem,
-      memoryContext,
-      {
-        executionPlan: sendingSession.executionPlan,
-        recentToolResults,
-        runtimeLimits: {
-          hardIterationLimit,
-          currentIteration: runtimeState?.currentIteration,
-          remainingIterations: runtimeState?.remainingIterations,
-          forceFinalAnswer: runtimeState?.forceFinalAnswer,
-        },
-        toolBudget: {
-          webSearchUsed: toolBudgetState.webSearchCalls,
-          webSearchRemaining: Math.max(
-            0,
-            toolBudgetLimits.maxWebSearchCallsPerTurn -
-              toolBudgetState.webSearchCalls,
-          ),
-          webSearchLimit: toolBudgetLimits.maxWebSearchCallsPerTurn,
-          getFullTextUsed: toolBudgetState.getFullTextCalls,
-          getFullTextRemaining: Math.max(
-            0,
-            toolBudgetLimits.maxFullTextCallsPerTurn -
-              toolBudgetState.getFullTextCalls,
-          ),
-          getFullTextLimit: toolBudgetLimits.maxFullTextCallsPerTurn,
-        },
+    return generateAgentRuntimeContextPrompt(memoryContext, {
+      executionPlan: sendingSession.executionPlan,
+      recentToolResults,
+      runtimeLimits: {
+        hardIterationLimit,
+        currentIteration: runtimeState?.currentIteration,
+        remainingIterations: runtimeState?.remainingIterations,
+        forceFinalAnswer: runtimeState?.forceFinalAnswer,
       },
-    );
+      toolBudget: {
+        webSearchUsed: toolBudgetState.webSearchCalls,
+        webSearchRemaining: Math.max(
+          0,
+          toolBudgetLimits.maxWebSearchCallsPerTurn -
+            toolBudgetState.webSearchCalls,
+        ),
+        webSearchLimit: toolBudgetLimits.maxWebSearchCallsPerTurn,
+        getFullTextUsed: toolBudgetState.getFullTextCalls,
+        getFullTextRemaining: Math.max(
+          0,
+          toolBudgetLimits.maxFullTextCallsPerTurn -
+            toolBudgetState.getFullTextCalls,
+        ),
+        getFullTextLimit: toolBudgetLimits.maxFullTextCallsPerTurn,
+      },
+    });
   }
 
   /**
@@ -549,6 +548,7 @@ export class ChatManager {
   private async insertSystemNotice(
     session: ChatSession,
     content: string,
+    options?: { notify?: boolean },
   ): Promise<void> {
     const notice: ChatMessage = {
       id: this.generateId(),
@@ -560,7 +560,7 @@ export class ChatManager {
 
     session.messages.push(notice);
     await this.sessionStorage.insertMessage(session.id, notice);
-    if (this.isSessionActive(session)) {
+    if (options?.notify !== false && this.isSessionActive(session)) {
       this.onMessageUpdate?.(session.messages);
     }
   }
@@ -686,9 +686,7 @@ export class ChatManager {
     });
   }
 
-  setSessionListUpdateCallback(
-    callback?: () => void | Promise<void>,
-  ): void {
+  setSessionListUpdateCallback(callback?: () => void | Promise<void>): void {
     this.onSessionListUpdate = callback;
   }
 
@@ -967,7 +965,11 @@ export class ChatManager {
 
     const availableModels = getPaperChatChatModels();
     const routingMeta = getModelRoutingMeta();
-    const pools = deriveTierPools(availableModels, getModelRatios(), routingMeta);
+    const pools = deriveTierPools(
+      availableModels,
+      getModelRatios(),
+      routingMeta,
+    );
     const nextModel = rerollTierModel(
       pools[session.selectedTier],
       session.resolvedModelId,
@@ -1552,6 +1554,43 @@ export class ChatManager {
         this.onMessageUpdate?.(sendingSession.messages);
       }
 
+      const preRequestLoadingMessage: ChatMessage = {
+        id: this.generateId(),
+        role: "assistant",
+        content: "",
+        streamingState: "in_progress",
+        timestamp: Date.now(),
+      };
+      sendingSession.messages.push(preRequestLoadingMessage);
+      if (this.isSessionActive(sendingSession)) {
+        this.onMessageUpdate?.(sendingSession.messages);
+      }
+
+      const contextManager = getContextManager();
+      let contextCompacted = false;
+      try {
+        contextCompacted = await contextManager.compactBeforeSendIfNeeded(
+          sendingSession,
+          async () => {
+            await this.sessionStorage.updateSessionMeta(sendingSession);
+          },
+        );
+      } finally {
+        const loadingIndex = sendingSession.messages.findIndex(
+          (message) => message.id === preRequestLoadingMessage.id,
+        );
+        if (loadingIndex >= 0) {
+          sendingSession.messages.splice(loadingIndex, 1);
+        }
+      }
+      if (contextCompacted) {
+        await this.insertSystemNotice(
+          sendingSession,
+          "上下文已自动压缩，较早的聊天内容已合并为摘要。",
+          { notify: false },
+        );
+      }
+
       // 创建 AI 消息占位
       const assistantMessage: ChatMessage = {
         id: this.generateId(),
@@ -1580,8 +1619,6 @@ export class ChatManager {
         return true;
       }
 
-      // 获取上下文管理器并过滤消息
-      const contextManager = getContextManager();
       const { messages: filteredMessages, summaryTriggered } =
         contextManager.filterMessages(sendingSession);
 
@@ -2004,7 +2041,12 @@ export class ChatManager {
     };
 
     // 获取动态工具列表
-    const tools = pdfToolManager.getToolDefinitions(hasCurrentItem);
+    const tools = pdfToolManager
+      .getToolDefinitions(hasCurrentItem)
+      .slice()
+      .sort((left, right) =>
+        left.function.name.localeCompare(right.function.name),
+      );
 
     // 实时提取论文结构
     const paperStructure = hasCurrentItem
@@ -2021,9 +2063,10 @@ export class ChatManager {
     );
     ensureSendingSessionTracked();
 
-    // 添加论文上下文系统提示
-    const buildSystemPrompt = (
-      currentMessages: ChatMessage[],
+    // Keep the large stable paper/tool instructions at the start of the request,
+    // and keep changing runtime state at the end so prompt-cache prefixes survive.
+    const buildRuntimeSystemPrompt = (
+      _currentMessages: ChatMessage[],
       _session?: ChatSession,
       runtimeState?: {
         currentIteration?: number;
@@ -2032,22 +2075,27 @@ export class ChatManager {
         forceFinalAnswer: boolean;
       },
     ) =>
-      this.buildToolCallingSystemPrompt({
-        currentMessages,
-        paperStructure,
-        hasCurrentItem,
-        item: hasCurrentItem ? item : undefined,
+      this.buildToolCallingRuntimeSystemPrompt({
         memoryContext,
         sendingSession,
         runtimeState,
       });
 
-    const paperContextPrompt = buildSystemPrompt(messagesForApi, sendingSession, {
-      maxIterations: normalizeAgentMaxPlanningIterations(
-        getPref("agentMaxPlanningIterations") as number | undefined,
-      ),
-      forceFinalAnswer: false,
+    const paperContextPrompt = this.buildToolCallingStableSystemPrompt({
+      paperStructure,
+      hasCurrentItem,
+      item: hasCurrentItem ? item : undefined,
     });
+    const runtimeContextPrompt = buildRuntimeSystemPrompt(
+      messagesForApi,
+      sendingSession,
+      {
+        maxIterations: normalizeAgentMaxPlanningIterations(
+          getPref("agentMaxPlanningIterations") as number | undefined,
+        ),
+        forceFinalAnswer: false,
+      },
+    );
 
     const messagesWithContext: ChatMessage[] = [
       {
@@ -2057,6 +2105,19 @@ export class ChatManager {
         timestamp: Date.now(),
       },
       ...messagesForApi,
+      {
+        id: "cache-checkpoint",
+        role: "system",
+        content:
+          "Prompt cache checkpoint. This is not user content or an instruction.",
+        timestamp: Date.now(),
+      },
+      {
+        id: "runtime-context",
+        role: "system",
+        content: runtimeContextPrompt,
+        timestamp: Date.now(),
+      },
     ];
 
     // 使用 executeWithFallback 找到第一个可用的支持 tool calling 的 provider
@@ -2150,7 +2211,7 @@ export class ChatManager {
               paperStructure,
               sendingSession,
               sessionRunId,
-              buildSystemPrompt,
+              buildRuntimeSystemPrompt,
               abortSignal,
             );
             return;
@@ -2169,7 +2230,7 @@ export class ChatManager {
             paperStructure,
             sendingSession,
             sessionRunId,
-            buildSystemPrompt,
+            buildRuntimeSystemPrompt,
             abortSignal,
           );
         };
@@ -2349,10 +2410,7 @@ export class ChatManager {
 
   private stripPendingToolCallCards(content: string): string {
     return content
-      .replace(
-        /\n?<tool-call status="calling">[\s\S]*?<\/tool-call>\n?/g,
-        "\n",
-      )
+      .replace(/\n?<tool-call status="calling">[\s\S]*?<\/tool-call>\n?/g, "\n")
       .replace(/\n{3,}/g, "\n\n")
       .trim();
   }

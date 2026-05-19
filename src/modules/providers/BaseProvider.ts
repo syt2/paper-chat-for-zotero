@@ -165,6 +165,10 @@ export abstract class BaseProvider implements AIProvider {
     return false;
   }
 
+  protected shouldMarkPromptCacheCheckpoint(): boolean {
+    return this._config.id === "paperchat";
+  }
+
   /**
    * Format messages for OpenAI-compatible API (OpenAI, DeepSeek, Mistral, etc.)
    * Supports Vision API format for images, optional PDF attachment, and tool calling
@@ -208,9 +212,12 @@ export abstract class BaseProvider implements AIProvider {
       const shouldAttachPdf =
         pdfAttachment && msg.role === "user" && index === firstUserIndex;
       const hasImages = msg.images && msg.images.length > 0;
+      const shouldMarkCacheCheckpoint =
+        this.shouldMarkPromptCacheCheckpoint() &&
+        msg.id === "cache-checkpoint";
 
       // Use multimodal format if has images or PDF
-      if (hasImages || shouldAttachPdf) {
+      if (hasImages || shouldAttachPdf || shouldMarkCacheCheckpoint) {
         const content: OpenAIMessageContent[] = [];
 
         // Add PDF as document (Anthropic format, supported by new-api)
@@ -226,7 +233,13 @@ export abstract class BaseProvider implements AIProvider {
         }
 
         // Add text
-        content.push({ type: "text", text: msg.content });
+        content.push({
+          type: "text",
+          text: msg.content,
+          ...(shouldMarkCacheCheckpoint && {
+            cache_control: { type: "ephemeral" as const },
+          }),
+        });
 
         // Add images
         if (msg.images) {

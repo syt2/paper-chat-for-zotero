@@ -197,6 +197,19 @@ ${importantNotesTail}`;
   return prompt;
 }
 
+export function generateAgentRuntimeContextPrompt(
+  memoryContext?: string,
+  agentContext?: AgentPromptContext,
+): string {
+  let prompt =
+    "This runtime context supersedes any earlier runtime context blocks in this request.\n\n";
+  if (memoryContext) {
+    prompt += memoryContext;
+  }
+  prompt += formatAgentPromptContext(agentContext);
+  return prompt;
+}
+
 function formatAgentPromptContext(agentContext?: AgentPromptContext): string {
   if (!agentContext) return "";
 

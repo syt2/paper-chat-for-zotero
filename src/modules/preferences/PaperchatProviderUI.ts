@@ -73,7 +73,9 @@ function syncTierSelectorLabels(doc: Document): void {
   }
 
   for (const tier of PAPERCHAT_TIERS) {
-    const item = popup.querySelector(`menuitem[value="${tier}"]`) as Element | null;
+    const item = popup.querySelector(
+      `menuitem[value="${tier}"]`,
+    ) as Element | null;
     if (!item) {
       continue;
     }
@@ -139,7 +141,11 @@ function getAvailableChatModels(
   models?: string[],
 ): string[] {
   let modelList = models;
-  if (!modelList && config?.availableModels && config.availableModels.length > 0) {
+  if (
+    !modelList &&
+    config?.availableModels &&
+    config.availableModels.length > 0
+  ) {
     modelList = config.availableModels;
   }
   if (!modelList) {
@@ -192,7 +198,8 @@ function populateTierOverridePopup(
   }
 
   const entry = state.tiers[tier];
-  select.value = entry.mode === "manual" && entry.modelId ? entry.modelId : "auto";
+  select.value =
+    entry.mode === "manual" && entry.modelId ? entry.modelId : "auto";
 }
 
 /**
@@ -335,7 +342,9 @@ export function bindPaperchatEvents(
   onRefreshModels: () => Promise<void>,
 ): void {
   for (const id of TIER_SELECTOR_IDS) {
-    const select = doc.getElementById(id) as unknown as XULMenuListElement | null;
+    const select = doc.getElementById(
+      id,
+    ) as unknown as XULMenuListElement | null;
     select?.addEventListener("command", function () {
       savePaperchatConfig(doc);
     });

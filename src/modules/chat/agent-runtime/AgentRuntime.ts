@@ -198,6 +198,7 @@ export class AgentRuntime {
           refreshSystemPrompt,
           iterationControl,
         );
+        this.prepareMessagesForModel(currentMessages);
         ztoolkit.log(
           `[${logPrefix}] Iteration ${iteration}, messages: ${currentMessages.length}`,
         );
@@ -284,7 +285,9 @@ export class AgentRuntime {
         return;
       }
 
-      ztoolkit.log(`[${logPrefix}] Max iterations reached without a terminal response`);
+      ztoolkit.log(
+        `[${logPrefix}] Max iterations reached without a terminal response`,
+      );
       await this.finalizeMaxIterationsTurn(
         sendingSession,
         sessionRunId,
@@ -357,6 +360,7 @@ export class AgentRuntime {
           refreshSystemPrompt,
           iterationControl,
         );
+        this.prepareMessagesForModel(currentMessages);
         ztoolkit.log(
           `[${logPrefix}] Iteration ${iteration}, messages: ${currentMessages.length}`,
         );
@@ -434,7 +438,9 @@ export class AgentRuntime {
         return;
       }
 
-      ztoolkit.log(`[${logPrefix}] Max iterations reached without a terminal response`);
+      ztoolkit.log(
+        `[${logPrefix}] Max iterations reached without a terminal response`,
+      );
       await this.finalizeMaxIterationsTurn(
         sendingSession,
         sessionRunId,
@@ -869,10 +875,7 @@ export class AgentRuntime {
     );
     this.ensureSessionTracked(sendingSession, sessionRunId);
     if (this.callbacks.isSessionActive(sendingSession)) {
-      this.callbacks.onStreamingUpdate?.(
-        thinkingDisplay,
-        assistantMessage.id,
-      );
+      this.callbacks.onStreamingUpdate?.(thinkingDisplay, assistantMessage.id);
     }
 
     return accumulatedDisplay;
@@ -1331,21 +1334,53 @@ export class AgentRuntime {
     if (!promptBuilder) return;
 
     const content = promptBuilder(currentMessages, session, runtimeState);
-    const existing = currentMessages.find(
-      (message) => message.id === "paper-context",
+    const currentCheckpointIndex = currentMessages.findIndex(
+      (message) => message.id === "cache-checkpoint",
     );
-    if (existing) {
-      existing.content = content;
-      existing.timestamp = Date.now();
+    const currentRuntimeIndex = currentMessages.findIndex(
+      (message) => message.id === "runtime-context",
+    );
+    if (
+      currentCheckpointIndex >= 0 &&
+      currentRuntimeIndex === currentCheckpointIndex + 1 &&
+      currentRuntimeIndex === currentMessages.length - 1
+    ) {
+      currentMessages[currentRuntimeIndex].content = content;
+      currentMessages[currentRuntimeIndex].timestamp = Date.now();
       return;
     }
 
-    currentMessages.unshift({
-      id: "paper-context",
+    for (const message of currentMessages) {
+      if (message.id === "cache-checkpoint") {
+        message.id = "cache-checkpoint-history";
+      } else if (message.id === "runtime-context") {
+        message.id = "runtime-context-history";
+      }
+    }
+    this.pruneRuntimeContextHistory(currentMessages);
+
+    currentMessages.push({
+      id: "cache-checkpoint",
+      role: "system",
+      content:
+        "Prompt cache checkpoint. This is not user content or an instruction.",
+      timestamp: Date.now(),
+    });
+    currentMessages.push({
+      id: "runtime-context",
       role: "system",
       content,
       timestamp: Date.now(),
     });
+  }
+
+  private prepareMessagesForModel(currentMessages: ChatMessage[]): void {
+    compactOlderToolResultMessages(currentMessages);
+  }
+
+  private pruneRuntimeContextHistory(currentMessages: ChatMessage[]): void {
+    keepLastMessagesById(currentMessages, "cache-checkpoint-history", 1);
+    keepLastMessagesById(currentMessages, "runtime-context-history", 1);
   }
 
   private emitRuntimeEvent<T extends AgentRuntimeEventType>(
@@ -1409,6 +1444,64 @@ function truncateToolDetail(text: string): string {
     return text;
   }
   return text.slice(0, 157) + "...";
+}
+
+const TOOL_RESULT_FULL_KEEP_COUNT = 2;
+const TOOL_RESULT_COMPACT_CHAR_LIMIT = 2000;
+const TOOL_RESULT_SUMMARY_CHAR_LIMIT = 700;
+
+function compactOlderToolResultMessages(messages: ChatMessage[]): void {
+  const toolMessageIndexes = messages
+    .map((message, index) => ({ message, index }))
+    .filter(({ message }) => message.role === "tool")
+    .map(({ index }) => index);
+  const keepFull = new Set(
+    toolMessageIndexes.slice(-TOOL_RESULT_FULL_KEEP_COUNT),
+  );
+
+  for (const index of toolMessageIndexes) {
+    if (keepFull.has(index)) {
+      continue;
+    }
+    const message = messages[index];
+    if (message.content.length <= TOOL_RESULT_COMPACT_CHAR_LIMIT) {
+      continue;
+    }
+    message.content = buildCompactedToolResultContent(message.content);
+  }
+}
+
+function buildCompactedToolResultContent(content: string): string {
+  const compacted = content
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, TOOL_RESULT_SUMMARY_CHAR_LIMIT);
+  return [
+    "[Tool result compacted to preserve prompt cache and context budget]",
+    `Original characters: ${content.length}`,
+    `Preview: ${compacted}${content.length > TOOL_RESULT_SUMMARY_CHAR_LIMIT ? "..." : ""}`,
+  ].join("\n");
+}
+
+function keepLastMessagesById(
+  messages: ChatMessage[],
+  id: string,
+  keepCount: number,
+): void {
+  let remaining =
+    messages.filter((message) => message.id === id).length - keepCount;
+  if (remaining <= 0) {
+    return;
+  }
+
+  for (let i = 0; i < messages.length && remaining > 0; i++) {
+    if (messages[i].id !== id) {
+      continue;
+    }
+    messages.splice(i, 1);
+    i--;
+    remaining--;
+  }
 }
 
 function getPrimaryPolicyTrace(

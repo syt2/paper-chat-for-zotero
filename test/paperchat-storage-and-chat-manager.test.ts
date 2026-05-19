@@ -21,6 +21,7 @@ import {
   destroyProviderManager,
   getProviderManager,
 } from "../src/modules/providers/ProviderManager.ts";
+import { loadCachedRatios } from "../src/modules/preferences/ModelsFetcher.ts";
 import type { ChatMessage, ChatSession } from "../src/types/chat";
 import type { ManagedAbortController } from "../src/utils/abort.ts";
 import { getString } from "../src/utils/locale.ts";
@@ -338,7 +339,9 @@ describe("paperchat storage and chat manager", function () {
         if (normalized === "SELECT value FROM settings WHERE key = ?") {
           return [];
         }
-        if (normalized === "SELECT * FROM session_meta ORDER BY updated_at DESC") {
+        if (
+          normalized === "SELECT * FROM session_meta ORDER BY updated_at DESC"
+        ) {
           return [
             {
               id: "session-title-1",
@@ -387,13 +390,10 @@ describe("paperchat storage and chat manager", function () {
     );
 
     await service.updateSessionTitle("session-title-1", null, "user", 202);
-    assert.deepInclude(recorded.map((entry) => entry.params), [
-      null,
-      "user",
-      null,
-      202,
-      "session-title-1",
-    ]);
+    assert.deepInclude(
+      recorded.map((entry) => entry.params),
+      [null, "user", null, 202, "session-title-1"],
+    );
   });
 
   it("excludes interrupted assistant messages from future context windows", function () {
@@ -442,6 +442,266 @@ describe("paperchat storage and chat manager", function () {
       filtered.messages.map((message) => message.id),
       ["user-1", "system-notice-1", "user-2"],
     );
+  });
+
+  it("keeps the full unsummarized context instead of sliding the prompt prefix", function () {
+    prefStore.set(`${PREFS_PREFIX}.contextMaxRecentPairs`, 2);
+    prefStore.set(`${PREFS_PREFIX}.contextEnableSummary`, false);
+
+    const contextManager = getContextManager();
+    const session: ChatSession = {
+      id: "session-context-full-prefix",
+      createdAt: 1,
+      updatedAt: 10,
+      lastActiveItemKey: null,
+      messages: Array.from({ length: 6 }, (_, index) => ({
+        id: `user-${index + 1}`,
+        role: "user" as const,
+        content: `message ${index + 1}`,
+        timestamp: index + 1,
+      })),
+    };
+
+    const filtered = contextManager.filterMessages(session);
+
+    assert.deepEqual(
+      filtered.messages.map((message) => message.id),
+      ["user-1", "user-2", "user-3", "user-4", "user-5", "user-6"],
+    );
+    assert.isFalse(filtered.summaryTriggered);
+  });
+
+  it("uses a stable summary boundary instead of a moving recent-message window", function () {
+    prefStore.set(`${PREFS_PREFIX}.contextMaxRecentPairs`, 2);
+    prefStore.set(`${PREFS_PREFIX}.contextEnableSummary`, true);
+
+    const contextManager = getContextManager();
+    const session: ChatSession = {
+      id: "session-context-summary-boundary",
+      createdAt: 1,
+      updatedAt: 10,
+      lastActiveItemKey: null,
+      contextSummary: {
+        id: "summary-1",
+        content: "Earlier discussion summary.",
+        coveredMessageIds: ["user-1", "assistant-1", "user-2"],
+        createdAt: 4,
+        messageCountAtCreation: 3,
+      },
+      contextState: {
+        summaryInProgress: false,
+        lastSummaryMessageCount: 3,
+      },
+      messages: [
+        {
+          id: "user-1",
+          role: "user",
+          content: "old user",
+          timestamp: 1,
+        },
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: "old assistant",
+          timestamp: 2,
+        },
+        {
+          id: "user-2",
+          role: "user",
+          content: "old user 2",
+          timestamp: 3,
+        },
+        {
+          id: "assistant-2",
+          role: "assistant",
+          content: "kept assistant",
+          timestamp: 4,
+        },
+        {
+          id: "user-3",
+          role: "user",
+          content: "kept user",
+          timestamp: 5,
+        },
+      ],
+    };
+
+    const filtered = contextManager.filterMessages(session);
+
+    assert.deepEqual(
+      filtered.messages.map((message) => message.id),
+      ["context-summary", "assistant-2", "user-3"],
+    );
+    assert.isFalse(filtered.summaryTriggered);
+  });
+
+  it("uses legacy summary message counts when covered ids are missing", function () {
+    prefStore.set(`${PREFS_PREFIX}.contextEnableSummary`, true);
+
+    const contextManager = getContextManager();
+    const session: ChatSession = {
+      id: "session-context-legacy-summary-boundary",
+      createdAt: 1,
+      updatedAt: 10,
+      lastActiveItemKey: null,
+      contextSummary: {
+        id: "summary-legacy",
+        content: "Legacy summary.",
+        coveredMessageIds: [],
+        createdAt: 3,
+        messageCountAtCreation: 2,
+      },
+      messages: [
+        {
+          id: "user-1",
+          role: "user",
+          content: "old user",
+          timestamp: 1,
+        },
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: "old assistant",
+          timestamp: 2,
+        },
+        {
+          id: "user-2",
+          role: "user",
+          content: "new user",
+          timestamp: 3,
+        },
+      ],
+    };
+
+    const filtered = contextManager.filterMessages(session);
+
+    assert.deepEqual(
+      filtered.messages.map((message) => message.id),
+      ["context-summary", "user-2"],
+    );
+  });
+
+  it("triggers summary from the context-window token budget", function () {
+    prefStore.set(`${PREFS_PREFIX}.contextEnableSummary`, true);
+    prefStore.set(`${PREFS_PREFIX}.contextAutoCompactWindowTokens`, 40000);
+    prefStore.set(
+      `${PREFS_PREFIX}.paperchatRoutingConfigCache`,
+      JSON.stringify({
+        "tiny-context-model": {
+          contextWindow: 128000,
+          maxOutput: 1000,
+        },
+      }),
+    );
+    loadCachedRatios();
+
+    const contextManager = getContextManager();
+    const session: ChatSession = {
+      id: "session-context-token-threshold",
+      createdAt: 1,
+      updatedAt: 10,
+      lastActiveItemKey: null,
+      resolvedModelId: "tiny-context-model",
+      contextState: {
+        summaryInProgress: false,
+        lastSummaryMessageCount: 0,
+      },
+      messages: [
+        {
+          id: "user-short",
+          role: "user",
+          content: "short message",
+          timestamp: 1,
+        },
+      ],
+    };
+
+    assert.isFalse(contextManager.filterMessages(session).summaryTriggered);
+
+    session.messages.push({
+      id: "user-long",
+      role: "user",
+      content: "x".repeat(220000),
+      timestamp: 2,
+    });
+
+    assert.isTrue(contextManager.filterMessages(session).summaryTriggered);
+  });
+
+  it("applies the auto compact window before reserves", function () {
+    prefStore.set(`${PREFS_PREFIX}.contextEnableSummary`, true);
+    prefStore.set(`${PREFS_PREFIX}.contextAutoCompactWindowTokens`, 60000);
+    prefStore.set(
+      `${PREFS_PREFIX}.paperchatRoutingConfigCache`,
+      JSON.stringify({
+        "percent-context-model": {
+          contextWindow: 128000,
+          maxOutput: 8000,
+        },
+      }),
+    );
+    loadCachedRatios();
+
+    const contextManager = getContextManager();
+    const session: ChatSession = {
+      id: "session-context-percent-threshold",
+      createdAt: 1,
+      updatedAt: 10,
+      lastActiveItemKey: null,
+      resolvedModelId: "percent-context-model",
+      messages: [
+        {
+          id: "user-under",
+          role: "user",
+          content: "x".repeat(150000),
+          timestamp: 1,
+        },
+      ],
+    };
+
+    assert.isFalse(contextManager.filterMessages(session).summaryTriggered);
+
+    session.messages[0].content = "x".repeat(160000);
+
+    assert.isTrue(contextManager.filterMessages(session).summaryTriggered);
+  });
+
+  it("caps the auto compact window to PaperChat routing context windows", function () {
+    prefStore.set(`${PREFS_PREFIX}.contextEnableSummary`, true);
+    prefStore.set(`${PREFS_PREFIX}.contextAutoCompactWindowTokens`, 200000);
+    prefStore.set(
+      `${PREFS_PREFIX}.paperchatRoutingConfigCache`,
+      JSON.stringify({
+        "capped-context-model": {
+          contextWindow: 60000,
+          maxOutput: 8000,
+        },
+      }),
+    );
+    loadCachedRatios();
+
+    const contextManager = getContextManager();
+    const session: ChatSession = {
+      id: "session-context-capped-threshold",
+      createdAt: 1,
+      updatedAt: 10,
+      lastActiveItemKey: null,
+      resolvedModelId: "capped-context-model",
+      messages: [
+        {
+          id: "user-under-cap",
+          role: "user",
+          content: "x".repeat(150000),
+          timestamp: 1,
+        },
+      ],
+    };
+
+    assert.isFalse(contextManager.filterMessages(session).summaryTriggered);
+
+    session.messages[0].content = "x".repeat(160000);
+
+    assert.isTrue(contextManager.filterMessages(session).summaryTriggered);
   });
 
   it("clears stale turn state when loading an interrupted assistant session", async function () {
@@ -1254,7 +1514,7 @@ describe("paperchat storage and chat manager", function () {
             "Working on it.",
             '<tool-call status="calling">',
             "<tool-name>⏳ create_note</tool-name>",
-            "<tool-args>title=\"test\"</tool-args>",
+            '<tool-args>title="test"</tool-args>',
             "<tool-status>tool-status-calling</tool-status>",
             "</tool-call>",
           ].join("\n"),
@@ -1370,7 +1630,7 @@ describe("paperchat storage and chat manager", function () {
           content: [
             '<tool-call status="calling">',
             "<tool-name>⏳ create_note</tool-name>",
-            "<tool-args>title=\"test\"</tool-args>",
+            '<tool-args>title="test"</tool-args>',
             "<tool-status>tool-status-calling</tool-status>",
             "</tool-call>",
           ].join("\n"),
@@ -1486,7 +1746,7 @@ describe("paperchat storage and chat manager", function () {
             "Working on it.",
             '<tool-call status="calling">',
             "<tool-name>⏳ create_note</tool-name>",
-            "<tool-args>title=\"test\"</tool-args>",
+            '<tool-args>title="test"</tool-args>',
             "<tool-status>tool-status-calling</tool-status>",
             "</tool-call>",
           ].join("\n"),
@@ -1644,6 +1904,115 @@ describe("paperchat storage and chat manager", function () {
     }
   });
 
+  it("inserts a system notice when context compaction runs before send", async function () {
+    const providerManager = getProviderManager() as any;
+    const originalGetActiveProviderId = providerManager.getActiveProviderId;
+    const contextManager = getContextManager() as any;
+    const originalCompactBeforeSendIfNeeded =
+      contextManager.compactBeforeSendIfNeeded;
+    const session: ChatSession = {
+      id: "session-context-compaction-notice",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      messages: [],
+    };
+    const insertedMessages: ChatMessage[] = [];
+    const renderedSnapshots: ChatMessage[][] = [];
+    const provider = {
+      getName: () => "OpenAI",
+      isReady: () => true,
+      supportsPdfUpload: () => false,
+    };
+
+    providerManager.getActiveProviderId = () => "openai";
+    contextManager.compactBeforeSendIfNeeded = async (
+      targetSession: ChatSession,
+      onComplete?: () => Promise<void>,
+    ) => {
+      targetSession.contextSummary = {
+        id: "summary-test",
+        content: "Earlier context summary.",
+        coveredMessageIds: [],
+        createdAt: Date.now(),
+        messageCountAtCreation: 0,
+      };
+      await onComplete?.();
+      return true;
+    };
+
+    try {
+      const manager = Object.create(ChatManager.prototype) as ChatManager & {
+        currentSession: ChatSession;
+        activeSessionRunIds: Map<string, number>;
+        sessionRunCounters: Map<string, number>;
+        activeSessionAbortControllers: Map<string, ManagedAbortController>;
+        sessionStorage: {
+          insertMessage: (
+            sessionId: string,
+            message: ChatMessage,
+          ) => Promise<void>;
+          updateSessionMeta: (targetSession: ChatSession) => Promise<void>;
+        };
+        streamingSessions: Map<string, ChatSession>;
+        currentItemKey: string | null;
+        init: () => Promise<void>;
+        getActiveProvider: () => typeof provider;
+        isSessionTracked: (targetSession: ChatSession) => boolean;
+        onMessageUpdate?: (messages: ChatMessage[]) => void;
+      };
+
+      manager.currentSession = session;
+      manager.activeSessionRunIds = new Map();
+      manager.sessionRunCounters = new Map();
+      manager.activeSessionAbortControllers = new Map();
+      manager.sessionStorage = {
+        insertMessage: async (_sessionId: string, message: ChatMessage) => {
+          insertedMessages.push(message);
+        },
+        updateSessionMeta: async () => undefined,
+      };
+      manager.streamingSessions = new Map();
+      manager.currentItemKey = null;
+      manager.init = async () => undefined;
+      manager.getActiveProvider = () => provider as any;
+      manager.isSessionTracked = () => false;
+      manager.onMessageUpdate = (messages) => {
+        renderedSnapshots.push(messages.map((message) => ({ ...message })));
+      };
+
+      const accepted = await manager.sendMessage("trigger compaction");
+
+      assert.isTrue(accepted);
+      assert.deepEqual(
+        insertedMessages.map((message) => ({
+          role: message.role,
+          isSystemNotice: message.isSystemNotice,
+        })),
+        [
+          { role: "user", isSystemNotice: undefined },
+          { role: "system", isSystemNotice: true },
+          { role: "assistant", isSystemNotice: undefined },
+        ],
+      );
+      assert.include(insertedMessages[1].content, "上下文已自动压缩");
+      assert.deepEqual(
+        renderedSnapshots[1].map((message) => ({
+          role: message.role,
+          streamingState: message.streamingState,
+        })),
+        [
+          { role: "user", streamingState: undefined },
+          { role: "assistant", streamingState: "in_progress" },
+        ],
+      );
+    } finally {
+      providerManager.getActiveProviderId = originalGetActiveProviderId;
+      contextManager.compactBeforeSendIfNeeded =
+        originalCompactBeforeSendIfNeeded;
+    }
+  });
+
   it("aborts the in-flight provider request when cancelling the current turn", async function () {
     const providerManager = getProviderManager() as any;
     const originalGetActiveProviderId = providerManager.getActiveProviderId;
@@ -1747,7 +2116,10 @@ describe("paperchat storage and chat manager", function () {
           insertedMessages.push(message);
         },
         updateSessionMeta: async (targetSession: ChatSession) => {
-          updatedSessions.push({ ...targetSession, messages: [...targetSession.messages] });
+          updatedSessions.push({
+            ...targetSession,
+            messages: [...targetSession.messages],
+          });
         },
         updateMessageContent: async (
           sessionId,

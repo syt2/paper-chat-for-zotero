@@ -2,7 +2,7 @@
  * ContextManager - 上下文管理服务
  *
  * 职责:
- * 1. 滑动窗口 + 保留首轮对话策略
+ * 1. 稳定前缀 + 摘要压缩策略
  * 2. 异步摘要生成机制
  */
 
@@ -11,8 +11,10 @@ import type {
   ChatSession,
   ContextSummary,
 } from "../../types/chat";
+import type { ModelInfo, ProviderConfig } from "../../types/provider";
 import { getPref } from "../../utils/prefs";
 import { getProviderManager } from "../providers";
+import { getModelRoutingMeta } from "../preferences/ModelsFetcher";
 
 // 过滤后的消息结果
 export interface FilteredMessagesResult {
@@ -27,18 +29,142 @@ const SUMMARY_SYSTEM_PROMPT = `You are a conversation summarizer. Summarize the 
 3. Any decisions or conclusions reached
 Keep the summary under 500 words.`;
 
+const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
+const MAX_SUMMARY_OUTPUT_RESERVE_TOKENS = 20000;
+const DEFAULT_AUTO_COMPACT_CONTEXT_WINDOW_TOKENS = 100000;
+export const CONTEXT_AUTO_COMPACT_WINDOW_TOKEN_STEPS = [
+  40000, 50000, 60000, 80000, 100000, 120000, 150000, 180000, 200000, 300000,
+  400000, 500000, 600000, 800000, 1000000,
+] as const;
+
+function estimateTextTokens(text: string): number {
+  if (!text) return 0;
+  const cjkMatches = text.match(/[\u3400-\u9fff\uf900-\ufaff]/g);
+  const cjkChars = cjkMatches?.length ?? 0;
+  const otherChars = text.length - cjkChars;
+  return Math.ceil(cjkChars / 1.5 + otherChars / 4);
+}
+
+function estimateMessageTokens(message: ChatMessage): number {
+  let tokens = 8 + estimateTextTokens(message.content);
+  if (message.reasoning) {
+    tokens += estimateTextTokens(message.reasoning);
+  }
+  if (message.images?.length) {
+    tokens += message.images.length * 256;
+  }
+  if (message.files?.length) {
+    tokens += message.files.reduce(
+      (sum, file) => sum + estimateTextTokens(file.content) + 16,
+      0,
+    );
+  }
+  if (message.tool_calls?.length) {
+    tokens += estimateTextTokens(JSON.stringify(message.tool_calls));
+  }
+  return tokens;
+}
+
+function estimateMessagesTokens(messages: ChatMessage[]): number {
+  return messages.reduce(
+    (sum, message) => sum + estimateMessageTokens(message),
+    0,
+  );
+}
+
+function getProviderModelId(
+  config: ProviderConfig,
+  session?: Pick<ChatSession, "resolvedModelId">,
+): string | undefined {
+  if (session?.resolvedModelId) {
+    return session.resolvedModelId;
+  }
+  if (config.type === "paperchat") {
+    return config.resolvedModelOverride || config.defaultModel;
+  }
+  return config.defaultModel;
+}
+
+function getPaperChatRoutingModelInfo(
+  config: ProviderConfig | undefined,
+  modelId: string | undefined,
+): Pick<ModelInfo, "contextWindow" | "maxOutput"> {
+  if (!config || config.type !== "paperchat" || !modelId) {
+    return {};
+  }
+  const meta = getModelRoutingMeta()[modelId];
+  return {
+    contextWindow: meta?.contextWindow,
+    maxOutput: meta?.maxOutput,
+  };
+}
+
+export function normalizeContextAutoCompactWindowTokens(
+  value: unknown,
+): number {
+  const numeric =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number.parseInt(value, 10)
+        : Number.NaN;
+  if (!Number.isFinite(numeric)) {
+    return DEFAULT_AUTO_COMPACT_CONTEXT_WINDOW_TOKENS;
+  }
+  const requested = Math.trunc(numeric);
+  return CONTEXT_AUTO_COMPACT_WINDOW_TOKEN_STEPS.reduce(
+    (nearest, candidate) => {
+      const nearestDistance = Math.abs(nearest - requested);
+      const candidateDistance = Math.abs(candidate - requested);
+      return candidateDistance < nearestDistance ? candidate : nearest;
+    },
+    CONTEXT_AUTO_COMPACT_WINDOW_TOKEN_STEPS[0],
+  );
+}
+
+export function getContextAutoCompactTokenLimit(
+  session?: Pick<ChatSession, "resolvedModelId">,
+): number {
+  const providerManager = getProviderManager();
+  const provider = providerManager.getActiveProvider();
+  const config = provider?.config;
+  const modelId = config ? getProviderModelId(config, session) : undefined;
+  const modelInfo =
+    config && modelId ? providerManager.getModelInfo(config.id, modelId) : null;
+  const routingModelInfo = getPaperChatRoutingModelInfo(config, modelId);
+  const configuredContextWindow = normalizeContextAutoCompactWindowTokens(
+    getPref("contextAutoCompactWindowTokens"),
+  );
+  const contextWindow =
+    routingModelInfo.contextWindow && routingModelInfo.contextWindow > 0
+      ? Math.min(configuredContextWindow, routingModelInfo.contextWindow)
+      : configuredContextWindow;
+  const maxOutput =
+    config?.type !== "paperchat" &&
+    typeof config?.maxTokens === "number" &&
+    config.maxTokens > 0
+      ? config.maxTokens
+      : routingModelInfo.maxOutput ||
+        modelInfo?.maxOutput ||
+        DEFAULT_MAX_OUTPUT_TOKENS;
+  const summaryReserve = Math.min(maxOutput, MAX_SUMMARY_OUTPUT_RESERVE_TOKENS);
+  const buffer = getPref("contextAutoCompactBufferTokens") ?? 13000;
+  return contextWindow - summaryReserve - buffer;
+}
+
 class ContextManager {
   // 追踪正在进行的摘要任务
   private summaryInProgress: Map<string, boolean> = new Map();
 
   /**
    * 过滤消息，返回用于 API 调用的消息列表
-   * 策略: [system 消息] + [摘要(如有)] + [最近 N 轮对话(包含 system-notice)]
+   * 策略: [system 消息] + [摘要(如有)] + [摘要之后的完整对话]
+   *
+   * 不再每轮滑动裁剪最近 N 轮。滑动窗口会让请求前缀每轮变化，
+   * 破坏服务端 prompt cache。压缩只在摘要生成时发生一次。
    */
   filterMessages(session: ChatSession): FilteredMessagesResult {
-    const maxRecentPairs = getPref("contextMaxRecentPairs") ?? 10;
     const enableSummary = getPref("contextEnableSummary") ?? false;
-    const summaryThreshold = getPref("contextSummaryThreshold") ?? 20;
 
     const messages = session.messages;
     const result: ChatMessage[] = [];
@@ -58,17 +184,12 @@ class ContextManager {
         m.isSystemNotice,
     );
 
-    // 3. 计算需要保留的最近消息
-    // 每轮对话 = 1 user + 1 assistant = 2 条消息 (tool 消息跟随 assistant)
-    const recentMessageCount = maxRecentPairs * 2;
-
-    // 取最近 N 轮 (包含 system-notice)
-    const recentMessages = conversationMessages.slice(-recentMessageCount);
-
-    // 4. 组装最终消息列表
+    // 3. 组装最终消息列表
     result.push(...systemMessages);
 
-    // 5. 如果有摘要，插入摘要消息
+    // 4. 如果有摘要，插入摘要消息，并只保留摘要覆盖范围之后的完整消息。
+    //    这个边界只在摘要更新时移动，避免每次请求都改变 prompt 前缀。
+    let messagesAfterSummary = conversationMessages;
     if (session.contextSummary && session.contextSummary.content) {
       const summaryMessage: ChatMessage = {
         id: "context-summary",
@@ -77,21 +198,40 @@ class ContextManager {
         timestamp: session.contextSummary.createdAt,
       };
       result.push(summaryMessage);
+
+      const coveredIds = new Set(session.contextSummary.coveredMessageIds);
+      let lastCoveredIndex = -1;
+      for (let i = 0; i < conversationMessages.length; i++) {
+        if (coveredIds.has(conversationMessages[i].id)) {
+          lastCoveredIndex = i;
+        }
+      }
+      if (
+        lastCoveredIndex < 0 &&
+        coveredIds.size === 0 &&
+        session.contextSummary.messageCountAtCreation > 0
+      ) {
+        lastCoveredIndex =
+          Math.min(
+            conversationMessages.length,
+            session.contextSummary.messageCountAtCreation,
+          ) - 1;
+      }
+      if (lastCoveredIndex >= 0) {
+        messagesAfterSummary = conversationMessages.slice(lastCoveredIndex + 1);
+      }
     }
 
-    result.push(...recentMessages);
+    result.push(...messagesAfterSummary);
 
-    // 6. 检查是否需要触发摘要生成
+    // 5. 检查是否需要触发摘要生成
     if (enableSummary) {
-      const totalConversation = conversationMessages.length;
-      const lastSummaryCount =
-        session.contextState?.lastSummaryMessageCount ?? 0;
+      const estimatedTokens = estimateMessagesTokens(result);
+      const autoCompactTokenLimit = getContextAutoCompactTokenLimit(session);
 
-      // 当消息数超过阈值，且距离上次摘要又增加了足够消息
-      if (
-        totalConversation >= summaryThreshold &&
-        totalConversation - lastSummaryCount >= summaryThreshold / 2
-      ) {
+      // Claude Code/Codex 风格: 根据模型上下文窗口的 token 预算触发压缩。
+      // 消息数量不再作为滑动窗口裁剪或压缩触发条件，避免短消息聊天频繁改写前缀。
+      if (estimatedTokens >= autoCompactTokenLimit) {
         summaryTriggered = true;
       }
     }
@@ -100,18 +240,35 @@ class ContextManager {
   }
 
   /**
+   * 在主请求发出前同步压缩上下文。相比请求完成后异步摘要，这更接近
+   * Codex/Claude Code 的 pre-turn compaction，能避免已经接近窗口时仍发送超长请求。
+   */
+  async compactBeforeSendIfNeeded(
+    session: ChatSession,
+    onComplete?: () => Promise<void>,
+  ): Promise<boolean> {
+    const { summaryTriggered } = this.filterMessages(session);
+    if (!summaryTriggered) {
+      return false;
+    }
+
+    return this.generateSummaryAsync(session, onComplete);
+  }
+
+  /**
    * 异步生成摘要 (不阻塞用户操作)
    */
   async generateSummaryAsync(
     session: ChatSession,
     onComplete?: () => Promise<void>,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const sessionId = session.id;
+    let summaryGenerated = false;
 
     // 防止重复生成
     if (this.summaryInProgress.get(sessionId)) {
       ztoolkit.log("[ContextManager] Summary already in progress for session");
-      return;
+      return false;
     }
 
     // 检查是否正在进行中 (通过 session state)
@@ -119,7 +276,7 @@ class ContextManager {
       ztoolkit.log(
         "[ContextManager] Summary already in progress (from session state)",
       );
-      return;
+      return false;
     }
 
     this.summaryInProgress.set(sessionId, true);
@@ -140,7 +297,7 @@ class ContextManager {
       const provider = getProviderManager().getActiveProvider();
       if (!provider || !provider.isReady()) {
         ztoolkit.log("[ContextManager] Provider not ready, skipping summary");
-        return;
+        return false;
       }
 
       // 构建要摘要的消息 (只包含 user/assistant，排除 system/error)
@@ -150,25 +307,32 @@ class ContextManager {
           (m.role === "assistant" && m.streamingState !== "interrupted"),
       );
 
-      // 排除最近的消息 (这些会被完整保留)
+      // 压缩时保留最近的消息；平时 filterMessages 不再滑动裁剪。
       const maxRecentPairs = getPref("contextMaxRecentPairs") ?? 10;
       const recentCount = maxRecentPairs * 2;
 
-      // 如果消息数不足以切分，跳过
-      if (conversationMessages.length <= recentCount) {
+      const alreadyCoveredIds = new Set(
+        session.contextSummary?.coveredMessageIds || [],
+      );
+      const unsummarizedMessages = conversationMessages.filter(
+        (message) => !alreadyCoveredIds.has(message.id),
+      );
+
+      // 如果未摘要部分不足以切分，跳过
+      if (unsummarizedMessages.length <= recentCount) {
         ztoolkit.log(
           "[ContextManager] Not enough messages to summarize, skipping",
         );
-        return;
+        return false;
       }
 
-      const messagesToSummarize = conversationMessages.slice(0, -recentCount);
+      const messagesToSummarize = unsummarizedMessages.slice(0, -recentCount);
 
       if (messagesToSummarize.length < 4) {
         ztoolkit.log(
           "[ContextManager] Not enough messages to summarize, skipping",
         );
-        return;
+        return false;
       }
 
       // 构建摘要请求，限制总长度避免超出 token 限制
@@ -194,7 +358,7 @@ class ContextManager {
       // 如果没有有效内容，跳过摘要
       if (!conversationText.trim() || actualSummarizedMessages.length < 2) {
         ztoolkit.log("[ContextManager] No valid content for summary, skipping");
-        return;
+        return false;
       }
 
       const summaryMessages: ChatMessage[] = [
@@ -207,7 +371,9 @@ class ContextManager {
         {
           id: "summary-user",
           role: "user",
-          content: `Please summarize this conversation:\n\n${conversationText}`,
+          content: session.contextSummary?.content
+            ? `Previous summary:\n${session.contextSummary.content}\n\nPlease update the summary with this additional conversation:\n\n${conversationText}`
+            : `Please summarize this conversation:\n\n${conversationText}`,
           timestamp: Date.now(),
         },
       ];
@@ -220,22 +386,33 @@ class ContextManager {
         const summary: ContextSummary = {
           id: `summary-${Date.now()}`,
           content: summaryContent,
-          coveredMessageIds: actualSummarizedMessages.map((m) => m.id),
+          coveredMessageIds: [
+            ...alreadyCoveredIds,
+            ...actualSummarizedMessages.map((m) => m.id),
+          ],
           createdAt: Date.now(),
           messageCountAtCreation: conversationMessages.length,
+          estimatedTokensAtCreation:
+            estimateMessagesTokens(conversationMessages),
         };
 
         session.contextSummary = summary;
         session.contextState!.lastSummaryMessageCount =
           conversationMessages.length;
+        session.contextState!.lastSummaryTokenEstimate =
+          estimateMessagesTokens(conversationMessages);
+        session.contextState!.lastCompactionAt = summary.createdAt;
 
         ztoolkit.log(
           "[ContextManager] Summary generated successfully:",
           summaryContent.substring(0, 100) + "...",
         );
+        summaryGenerated = true;
       }
+      return summaryGenerated;
     } catch (error) {
       ztoolkit.log("[ContextManager] Failed to generate summary:", error);
+      return false;
     } finally {
       this.summaryInProgress.delete(sessionId);
       if (session.contextState) {
@@ -256,6 +433,8 @@ class ContextManager {
     session.contextSummary = undefined;
     if (session.contextState) {
       session.contextState.lastSummaryMessageCount = 0;
+      session.contextState.lastSummaryTokenEstimate = undefined;
+      session.contextState.lastCompactionAt = undefined;
     }
   }
 

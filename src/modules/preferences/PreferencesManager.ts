@@ -34,6 +34,10 @@ import {
   normalizeWebSearchProviderId,
 } from "../chat/web-search/WebSearchRegistry";
 import { normalizeAgentMaxPlanningIterations } from "../chat/agent-runtime/IterationLimitConfig";
+import {
+  CONTEXT_AUTO_COMPACT_WINDOW_TOKEN_STEPS,
+  normalizeContextAutoCompactWindowTokens,
+} from "../chat/ContextManager";
 import { getErrorMessage } from "../../utils/common";
 import type { PrefsRefreshOptions } from "./types";
 import type {
@@ -51,6 +55,27 @@ const TOOL_PERMISSION_MODE_L10N: Record<ToolPermissionMode, string> = {
   ask: "pref-tool-permission-mode-ask",
   deny: "pref-tool-permission-mode-deny",
 };
+
+const CONTEXT_AUTO_COMPACT_SLIDER_POSITIONS: ReadonlyArray<{
+  position: number;
+  tokens: (typeof CONTEXT_AUTO_COMPACT_WINDOW_TOKEN_STEPS)[number];
+}> = [
+  { position: 0, tokens: 40000 },
+  { position: 6, tokens: 50000 },
+  { position: 12, tokens: 60000 },
+  { position: 20, tokens: 80000 },
+  { position: 28, tokens: 100000 },
+  { position: 34, tokens: 120000 },
+  { position: 42, tokens: 150000 },
+  { position: 48, tokens: 180000 },
+  { position: 50, tokens: 200000 },
+  { position: 62, tokens: 300000 },
+  { position: 70, tokens: 400000 },
+  { position: 78, tokens: 500000 },
+  { position: 84, tokens: 600000 },
+  { position: 92, tokens: 800000 },
+  { position: 100, tokens: 1000000 },
+];
 
 /**
  * Get current provider ID
@@ -190,6 +215,7 @@ function initPdfSettingsCheckbox(doc: Document): void {
 function initAIToolsSettingsCheckbox(doc: Document): void {
   populateWebSearchProviderOptions(doc);
   initAgentIterationLimitControl(doc);
+  initContextAutoCompactThresholdControl(doc);
   initToolPermissionDefaultsControls(doc);
 }
 
@@ -339,6 +365,23 @@ function bindAIToolsSettingsEvent(doc: Document): void {
     agentIterationInput.addEventListener("blur", persist);
   }
 
+  const contextAutoCompactThresholdInput = doc.getElementById(
+    "pref-context-auto-compact-threshold",
+  ) as HTMLInputElement | null;
+  if (contextAutoCompactThresholdInput) {
+    const persist = () => {
+      const step = getNearestContextAutoCompactSliderStep(
+        contextAutoCompactThresholdInput.value,
+      );
+      contextAutoCompactThresholdInput.value = String(step.position);
+      setPref("contextAutoCompactWindowTokens", step.tokens);
+      updateContextAutoCompactThresholdDisplay(doc);
+    };
+
+    contextAutoCompactThresholdInput.addEventListener("input", persist);
+    contextAutoCompactThresholdInput.addEventListener("change", persist);
+  }
+
   bindToolPermissionDefaultsEvents(doc);
 }
 
@@ -356,6 +399,69 @@ function initAgentIterationLimitControl(doc: Document): void {
   agentIterationInput.value = String(
     normalizeAgentMaxPlanningIterations(configured),
   );
+}
+
+function initContextAutoCompactThresholdControl(doc: Document): void {
+  const thresholdInput = doc.getElementById(
+    "pref-context-auto-compact-threshold",
+  ) as HTMLInputElement | null;
+  if (!thresholdInput) {
+    return;
+  }
+
+  const configured = getPref("contextAutoCompactWindowTokens") as
+    | number
+    | undefined;
+  const normalized = normalizeContextAutoCompactWindowTokens(configured);
+  const step = getContextAutoCompactSliderStepForTokens(normalized);
+  thresholdInput.value = String(step.position);
+  if (configured !== normalized) {
+    setPref("contextAutoCompactWindowTokens", normalized);
+  }
+  updateContextAutoCompactThresholdDisplay(doc);
+}
+
+function getNearestContextAutoCompactSliderStep(value: unknown): {
+  position: number;
+  tokens: (typeof CONTEXT_AUTO_COMPACT_WINDOW_TOKEN_STEPS)[number];
+} {
+  const numeric =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number.parseInt(value, 10)
+        : Number.NaN;
+  const position = Number.isFinite(numeric) ? numeric : 50;
+  return CONTEXT_AUTO_COMPACT_SLIDER_POSITIONS.reduce((nearest, candidate) => {
+    const nearestDistance = Math.abs(nearest.position - position);
+    const candidateDistance = Math.abs(candidate.position - position);
+    return candidateDistance < nearestDistance ? candidate : nearest;
+  }, CONTEXT_AUTO_COMPACT_SLIDER_POSITIONS[0]);
+}
+
+function getContextAutoCompactSliderStepForTokens(
+  tokens: number,
+): (typeof CONTEXT_AUTO_COMPACT_SLIDER_POSITIONS)[number] {
+  return (
+    CONTEXT_AUTO_COMPACT_SLIDER_POSITIONS.find(
+      (step) => step.tokens === tokens,
+    ) || getNearestContextAutoCompactSliderStep(50)
+  );
+}
+
+function updateContextAutoCompactThresholdDisplay(doc: Document): void {
+  const thresholdInput = doc.getElementById(
+    "pref-context-auto-compact-threshold",
+  ) as HTMLInputElement | null;
+  const valueLabel = doc.getElementById(
+    "pref-context-auto-compact-threshold-value",
+  );
+  if (!thresholdInput || !valueLabel) {
+    return;
+  }
+
+  const step = getNearestContextAutoCompactSliderStep(thresholdInput.value);
+  valueLabel.textContent = `${Math.round(step.tokens / 1000)}K`;
 }
 
 function populateWebSearchProviderOptions(doc: Document): void {

@@ -28,7 +28,8 @@ declare namespace _ZoteroTypes {
       "guideStatus": number;
       "contextMaxRecentPairs": number;
       "contextEnableSummary": boolean;
-      "contextSummaryThreshold": number;
+      "contextAutoCompactBufferTokens": number;
+      "contextAutoCompactWindowTokens": number;
       "toolPermissionDefaultModes": string;
       "webSearchProvider": string;
       "agentMaxPlanningIterations": number;

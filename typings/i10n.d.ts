@@ -197,6 +197,8 @@ export type FluentMessageId =
   | 'pref-api-key'
   | 'pref-api-settings'
   | 'pref-base-url'
+  | 'pref-context-auto-compact-threshold'
+  | 'pref-context-auto-compact-threshold-desc'
   | 'pref-copied'
   | 'pref-copy-btn'
   | 'pref-current-provider'

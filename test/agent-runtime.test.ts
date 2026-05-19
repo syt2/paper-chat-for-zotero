@@ -1,6 +1,9 @@
 import { assert } from "chai";
 import { ExecutionPlanManager } from "../src/modules/chat/agent-runtime/ExecutionPlanManager.ts";
-import { generatePaperContextPrompt } from "../src/modules/chat/pdf-tools/promptGenerator.ts";
+import {
+  generateAgentRuntimeContextPrompt,
+  generatePaperContextPrompt,
+} from "../src/modules/chat/pdf-tools/promptGenerator.ts";
 import type { ChatMessage, ChatSession } from "../src/types/chat";
 import type { ToolExecutionResult } from "../src/types/tool";
 
@@ -174,9 +177,36 @@ describe("agent runtime plan semantics", function () {
     assert.include(prompt, '<source-group label="Paper title or source name"');
     assert.include(prompt, 'type="paper|note|annotation|web|library|memory"');
     assert.include(prompt, "=== RETRY POLICY ===");
-    assert.include(prompt, "Runtime already blocks unchanged failed or denied retries");
+    assert.include(
+      prompt,
+      "Runtime already blocks unchanged failed or denied retries",
+    );
     assert.include(prompt, "=== FAILURE RECOVERY STRATEGY ===");
     assert.include(prompt, "category=missing_context");
     assert.include(prompt, "tools=get_item_metadata, get_item_notes");
+  });
+
+  it("keeps dynamic runtime context separable from the stable paper prompt", function () {
+    const stablePrompt = generatePaperContextPrompt(
+      undefined,
+      undefined,
+      undefined,
+      false,
+    );
+    const runtimePrompt = generateAgentRuntimeContextPrompt(undefined, {
+      runtimeLimits: {
+        hardIterationLimit: 4,
+        currentIteration: 2,
+        remainingIterations: 3,
+        forceFinalAnswer: false,
+      },
+    });
+
+    assert.include(stablePrompt, "=== NO PAPER SELECTED ===");
+    assert.include(stablePrompt, "list_all_items");
+    assert.notInclude(stablePrompt, "Current iteration:");
+    assert.notInclude(stablePrompt, "FINAL ANSWER REQUIREMENTS");
+    assert.include(runtimePrompt, "Current iteration: 2/4");
+    assert.include(runtimePrompt, "FINAL ANSWER REQUIREMENTS");
   });
 });

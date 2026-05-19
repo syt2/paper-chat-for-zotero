@@ -455,7 +455,11 @@ export class ProviderManager {
   private configs: ProviderConfig[] = [];
   private fallbackConfig: FallbackConfig = { ...DEFAULT_FALLBACK_CONFIG };
   private onProviderChangeCallback?: (providerId: string) => void;
-  private onFallbackCallback?: (fromProvider: string, toProvider: string, error: Error) => void;
+  private onFallbackCallback?: (
+    fromProvider: string,
+    toProvider: string,
+    error: Error,
+  ) => void;
   private prefsObserver: symbol | null = null;
   private isSavingPrefs = false;
 
@@ -475,11 +479,15 @@ export class ProviderManager {
   /**
    * Set callback for when fallback occurs
    */
-  setOnFallback(callback: (fromProvider: string, toProvider: string, error: Error) => void): void {
+  setOnFallback(
+    callback: (fromProvider: string, toProvider: string, error: Error) => void,
+  ): void {
     this.onFallbackCallback = callback;
   }
 
-  private notifyProviderChange(providerId: string = this.activeProviderId): void {
+  private notifyProviderChange(
+    providerId: string = this.activeProviderId,
+  ): void {
     this.onProviderChangeCallback?.(providerId);
   }
 
@@ -544,7 +552,10 @@ export class ProviderManager {
         this.configs = configs;
         // Load fallback config
         if (data.fallbackConfig) {
-          this.fallbackConfig = { ...DEFAULT_FALLBACK_CONFIG, ...data.fallbackConfig };
+          this.fallbackConfig = {
+            ...DEFAULT_FALLBACK_CONFIG,
+            ...data.fallbackConfig,
+          };
         }
         if (changed) {
           this.saveToPrefs();
@@ -553,10 +564,7 @@ export class ProviderManager {
           "[ProviderManager] Loaded configs:",
           this.configs.map((c) => ({ id: c.id, enabled: c.enabled })),
         );
-        ztoolkit.log(
-          "[ProviderManager] Fallback config:",
-          this.fallbackConfig,
-        );
+        ztoolkit.log("[ProviderManager] Fallback config:", this.fallbackConfig);
       } else {
         ztoolkit.log("[ProviderManager] No stored config, using defaults");
         this.configs = this.getDefaultConfigs();
@@ -940,7 +948,10 @@ export class ProviderManager {
   updateFallbackConfig(updates: Partial<FallbackConfig>): void {
     this.fallbackConfig = { ...this.fallbackConfig, ...updates };
     this.saveToPrefs();
-    ztoolkit.log("[ProviderManager] Fallback config updated:", this.fallbackConfig);
+    ztoolkit.log(
+      "[ProviderManager] Fallback config updated:",
+      this.fallbackConfig,
+    );
   }
 
   /**
@@ -1015,7 +1026,9 @@ export class ProviderManager {
    */
   isRetryableError(error: unknown): boolean {
     const errorMessage = getErrorMessage(error);
-    return RETRYABLE_ERROR_PATTERNS.some((pattern) => pattern.test(errorMessage));
+    return RETRYABLE_ERROR_PATTERNS.some((pattern) =>
+      pattern.test(errorMessage),
+    );
   }
 
   /**
@@ -1075,7 +1088,9 @@ export class ProviderManager {
 
         // Check if error is retryable
         if (!this.isRetryableError(error)) {
-          ztoolkit.log("[ProviderManager] Error is not retryable, stopping fallback chain");
+          ztoolkit.log(
+            "[ProviderManager] Error is not retryable, stopping fallback chain",
+          );
           throw lastError;
         }
 
@@ -1119,7 +1134,11 @@ export class ProviderManager {
       throw new Error("No available providers configured");
     }
 
-    for (let i = 0; i < chain.length && i < this.fallbackConfig.maxRetries; i++) {
+    for (
+      let i = 0;
+      i < chain.length && i < this.fallbackConfig.maxRetries;
+      i++
+    ) {
       const provider = chain[i];
       const providerId = provider.config.id;
 
@@ -1140,7 +1159,8 @@ export class ProviderManager {
           attempts,
         };
       } catch (error) {
-        const errorObj = error instanceof Error ? error : new Error(String(error));
+        const errorObj =
+          error instanceof Error ? error : new Error(String(error));
         attempts.push({
           success: false,
           error: errorObj,
@@ -1171,7 +1191,11 @@ export class ProviderManager {
    * Get list of available providers for fallback configuration UI
    * Returns providers that are enabled and ready
    */
-  getAvailableFallbackProviders(): { id: string; name: string; isActive: boolean }[] {
+  getAvailableFallbackProviders(): {
+    id: string;
+    name: string;
+    isActive: boolean;
+  }[] {
     const result: { id: string; name: string; isActive: boolean }[] = [];
 
     for (const [id, provider] of this.providers) {

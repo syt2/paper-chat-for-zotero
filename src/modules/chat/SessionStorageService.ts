@@ -46,6 +46,10 @@ type SessionRow = {
   title_edited_at: number | null;
 };
 
+type QueryableDatabase = {
+  queryAsync(sql: string, params?: unknown[]): Promise<any[] | undefined>;
+};
+
 export class SessionLoadError extends Error {
   constructor(message: string, cause?: unknown) {
     super(message);
@@ -133,8 +137,42 @@ export function mapSessionRowToChatSession(
 }
 
 export class SessionStorageService {
+  private static transactionQueue: Promise<void> = Promise.resolve();
   private initialized: boolean = false;
   private activeSessionIdCache: string | null = null;
+
+  private async runTransaction<T>(
+    db: QueryableDatabase,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const previous = SessionStorageService.transactionQueue;
+    let releaseQueue!: () => void;
+    SessionStorageService.transactionQueue = new Promise<void>((resolve) => {
+      releaseQueue = resolve;
+    });
+
+    await previous.catch(() => {
+      /* keep later transactions moving after an earlier failure */
+    });
+
+    try {
+      await db.queryAsync("BEGIN TRANSACTION");
+      try {
+        const result = await operation();
+        await db.queryAsync("COMMIT");
+        return result;
+      } catch (error) {
+        try {
+          await db.queryAsync("ROLLBACK");
+        } catch {
+          /* ignore */
+        }
+        throw error;
+      }
+    } finally {
+      releaseQueue();
+    }
+  }
 
   /**
    * 初始化存储服务
@@ -413,8 +451,7 @@ export class SessionStorageService {
     try {
       const db = await getStorageDatabase().ensureInit();
       const nextUpdatedAt = Date.now();
-      await db.queryAsync("BEGIN TRANSACTION");
-      try {
+      await this.runTransaction(db, async () => {
         await db.queryAsync(
           `UPDATE sessions SET
             updated_at = ?,
@@ -490,16 +527,7 @@ export class SessionStorageService {
             session.id,
           ],
         );
-
-        await db.queryAsync("COMMIT");
-      } catch (error) {
-        try {
-          await db.queryAsync("ROLLBACK");
-        } catch {
-          /* ignore */
-        }
-        throw error;
-      }
+      });
       // Only mutate caller state after the write committed.
       session.updatedAt = nextUpdatedAt;
     } catch (error) {
@@ -619,8 +647,7 @@ export class SessionStorageService {
 
       const meta = this.buildSessionMeta(sessionForMeta);
 
-      await db.queryAsync("BEGIN TRANSACTION");
-      try {
+      await this.runTransaction(db, async () => {
         // Upsert session (no messages column)
         await db.queryAsync(
           `INSERT INTO sessions
@@ -738,16 +765,7 @@ export class SessionStorageService {
             meta.titleEditedAt ?? null,
           ],
         );
-
-        await db.queryAsync("COMMIT");
-      } catch (error) {
-        try {
-          await db.queryAsync("ROLLBACK");
-        } catch {
-          /* ignore */
-        }
-        throw error;
-      }
+      });
       // Only mutate caller state after the write committed.
       session.updatedAt = nextUpdatedAt;
 
@@ -987,14 +1005,12 @@ export class SessionStorageService {
     try {
       const db = await getStorageDatabase().ensureInit();
       const normalizedTitle = title?.trim() || null;
-      const titleSource =
-        normalizedTitle || source === "user" ? source : null;
+      const titleSource = normalizedTitle || source === "user" ? source : null;
       const titleGeneratedAt =
         normalizedTitle && source === "generated" ? timestamp : null;
       const titleEditedAt = source === "user" ? timestamp : null;
 
-      await db.queryAsync("BEGIN TRANSACTION");
-      try {
+      await this.runTransaction(db, async () => {
         await db.queryAsync(
           `UPDATE sessions SET
             title = ?,
@@ -1025,17 +1041,12 @@ export class SessionStorageService {
             sessionId,
           ],
         );
-        await db.queryAsync("COMMIT");
-      } catch (error) {
-        try {
-          await db.queryAsync("ROLLBACK");
-        } catch {
-          /* ignore */
-        }
-        throw error;
-      }
+      });
     } catch (error) {
-      ztoolkit.log("[SessionStorageService] Update session title error:", error);
+      ztoolkit.log(
+        "[SessionStorageService] Update session title error:",
+        error,
+      );
       throw error;
     }
   }
@@ -1202,8 +1213,7 @@ export class SessionStorageService {
     }
 
     const now = Date.now();
-    await db.queryAsync("BEGIN TRANSACTION");
-    try {
+    await this.runTransaction(db, async () => {
       await db.queryAsync(
         `UPDATE messages
          SET streaming_state = 'interrupted'
@@ -1225,15 +1235,7 @@ export class SessionStorageService {
          WHERE id = ?`,
         [now, sessionId],
       );
-      await db.queryAsync("COMMIT");
-    } catch (error) {
-      try {
-        await db.queryAsync("ROLLBACK");
-      } catch {
-        /* ignore rollback failure */
-      }
-      throw error;
-    }
+    });
   }
 
   private async clearRecoveredTurnArtifacts(
@@ -1258,8 +1260,7 @@ export class SessionStorageService {
 
     const db = await getStorageDatabase().ensureInit();
     const now = Date.now();
-    await db.queryAsync("BEGIN TRANSACTION");
-    try {
+    await this.runTransaction(db, async () => {
       await db.queryAsync(
         `UPDATE sessions
          SET execution_plan = NULL,
@@ -1275,15 +1276,7 @@ export class SessionStorageService {
          WHERE id = ?`,
         [now, session.id],
       );
-      await db.queryAsync("COMMIT");
-    } catch (error) {
-      try {
-        await db.queryAsync("ROLLBACK");
-      } catch {
-        /* ignore rollback failure */
-      }
-      throw error;
-    }
+    });
 
     session.executionPlan = undefined;
     session.toolExecutionState = undefined;
@@ -1297,8 +1290,7 @@ export class SessionStorageService {
     },
     sessionId: string,
   ): Promise<void> {
-    await db.queryAsync("BEGIN TRANSACTION");
-    try {
+    await this.runTransaction(db, async () => {
       await db.queryAsync(
         "DELETE FROM task_events WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)",
         [sessionId],
@@ -1315,15 +1307,7 @@ export class SessionStorageService {
       ]);
       await db.queryAsync("DELETE FROM session_meta WHERE id = ?", [sessionId]);
       await db.queryAsync("DELETE FROM sessions WHERE id = ?", [sessionId]);
-      await db.queryAsync("COMMIT");
-    } catch (error) {
-      try {
-        await db.queryAsync("ROLLBACK");
-      } catch {
-        /* ignore rollback failure */
-      }
-      throw error;
-    }
+    });
   }
 
   /**

@@ -15,7 +15,10 @@ export {
 } from "./paperParser";
 
 // 导出提示生成函数
-export { generatePaperContextPrompt } from "./promptGenerator";
+export {
+  generateAgentRuntimeContextPrompt,
+  generatePaperContextPrompt,
+} from "./promptGenerator";
 
 // 导出常量（如需要）
 export {

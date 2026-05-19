@@ -57,12 +57,15 @@ export interface ContextSummary {
   coveredMessageIds: string[];
   createdAt: number;
   messageCountAtCreation: number;
+  estimatedTokensAtCreation?: number;
 }
 
 // 上下文状态
 export interface ContextState {
   summaryInProgress: boolean;
   lastSummaryMessageCount: number;
+  lastSummaryTokenEstimate?: number;
+  lastCompactionAt?: number;
 }
 
 export type ExecutionPlanStatus =
@@ -356,7 +359,11 @@ export interface OpenAIMessage {
 
 // OpenAI消息内容 (Vision API and File API)
 export type OpenAIMessageContent =
-  | { type: "text"; text: string }
+  | {
+      type: "text";
+      text: string;
+      cache_control?: { type: "ephemeral" };
+    }
   | {
       type: "image_url";
       image_url: { url: string; detail?: "low" | "high" | "auto" };

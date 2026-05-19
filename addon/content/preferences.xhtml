@@ -48,7 +48,11 @@
               position: relative;
               border: 1px solid var(--color-border, #ddd);
               border-radius: 8px;
-              background: color-mix(in srgb, var(--material-sidepane, #fff) 92%, #6366f1 8%);
+              background: color-mix(
+                in srgb,
+                var(--material-sidepane, #fff) 92%,
+                #6366f1 8%
+              );
               overflow: hidden;
             "
           >
@@ -76,9 +80,18 @@
                   display: flex;
                   align-items: center;
                   justify-content: center;
-                  border: 1px solid color-mix(in srgb, var(--color-border, #ddd) 88%, #6366f1 12%);
+                  border: 1px solid
+                    color-mix(
+                      in srgb,
+                      var(--color-border, #ddd) 88%,
+                      #6366f1 12%
+                    );
                   border-radius: 6px;
-                  background: color-mix(in srgb, var(--material-sidepane, #fff) 90%, #ffffff 10%);
+                  background: color-mix(
+                    in srgb,
+                    var(--material-sidepane, #fff) 90%,
+                    #ffffff 10%
+                  );
                   cursor: pointer;
                   z-index: 2;
                 "
@@ -92,12 +105,12 @@
               <html:div
                 id="pref-paperchat-notice-scroll"
                 style="
-                height: 100%;
-                overflow-y: auto;
-                padding: 6px 42px 10px 10px;
-                line-height: 1.6;
-                box-sizing: border-box;
-              "
+                  height: 100%;
+                  overflow-y: auto;
+                  padding: 6px 42px 10px 10px;
+                  line-height: 1.6;
+                  box-sizing: border-box;
+                "
               ></html:div>
             </html:div>
           </html:div>
@@ -626,6 +639,30 @@
     </hbox>
     <label
       data-l10n-id="pref-agent-max-planning-iterations-desc"
+      style="font-size: 11px; color: #666; margin-top: 4px; margin-left: 2px"
+    ></label>
+
+    <hbox align="center" style="margin-top: 10px">
+      <label
+        for="pref-context-auto-compact-threshold"
+        data-l10n-id="pref-context-auto-compact-threshold"
+        style="width: 150px; margin-right: 8px"
+      ></label>
+      <html:input
+        type="range"
+        id="pref-context-auto-compact-threshold"
+        style="width: 180px"
+        min="0"
+        max="100"
+        step="1"
+      ></html:input>
+      <label
+        id="pref-context-auto-compact-threshold-value"
+        style="margin-left: 8px; min-width: 90px"
+      ></label>
+    </hbox>
+    <label
+      data-l10n-id="pref-context-auto-compact-threshold-desc"
       style="font-size: 11px; color: #666; margin-top: 4px; margin-left: 2px"
     ></label>
 

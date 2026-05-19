@@ -183,6 +183,8 @@ describe("paperchat tier routing", function () {
         m1: {
           tier: "standard",
           priority: 4,
+          contextWindow: 198000,
+          maxOutput: 64000,
         },
         m2: {
           tier: "ultra",
@@ -195,6 +197,8 @@ describe("paperchat tier routing", function () {
       m1: {
         tierCode: 2,
         priority: 4,
+        contextWindow: 198000,
+        maxOutput: 64000,
       },
       m2: {
         tierCode: 4,
@@ -309,7 +313,12 @@ describe("paperchat tier routing", function () {
       m3: 1.0,
     };
 
-    const validated = validateTierState(state, models, shiftedRatios, () => "m2");
+    const validated = validateTierState(
+      state,
+      models,
+      shiftedRatios,
+      () => "m2",
+    );
 
     assert.equal(validated.tiers["paperchat-standard"].mode, "auto");
     assert.equal(validated.tiers["paperchat-standard"].modelId, "m3");
@@ -381,9 +390,14 @@ describe("paperchat tier routing", function () {
       m3: 0.3,
     };
 
-    const validated = validateTierState(state, models, incompleteRatios, (candidates) => {
-      return candidates[1] ?? null;
-    });
+    const validated = validateTierState(
+      state,
+      models,
+      incompleteRatios,
+      (candidates) => {
+        return candidates[1] ?? null;
+      },
+    );
 
     assert.deepEqual(validated.tiers, {
       "paperchat-lite": { mode: "auto", modelId: "m1" },
@@ -420,10 +434,14 @@ describe("paperchat tier routing", function () {
 
   it("classifies unsupported-model errors as hard failures", function () {
     assert.isTrue(
-      isPaperChatModelHardFailure(new Error("API Error: 400 - model not found")),
+      isPaperChatModelHardFailure(
+        new Error("API Error: 400 - model not found"),
+      ),
     );
     assert.isTrue(
-      isPaperChatModelHardFailure(new Error("API Error: 404 - unsupported model")),
+      isPaperChatModelHardFailure(
+        new Error("API Error: 404 - unsupported model"),
+      ),
     );
     assert.isTrue(
       isPaperChatModelHardFailure(
@@ -433,7 +451,9 @@ describe("paperchat tier routing", function () {
       ),
     );
     assert.isFalse(
-      isPaperChatModelHardFailure(new Error("API Error: 429 - rate limit exceeded")),
+      isPaperChatModelHardFailure(
+        new Error("API Error: 429 - rate limit exceeded"),
+      ),
     );
   });
 

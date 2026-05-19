@@ -1,4 +1,7 @@
-import type { PaperChatTier, PaperChatTierPools } from "./paperchat-tier-routing";
+import type {
+  PaperChatTier,
+  PaperChatTierPools,
+} from "./paperchat-tier-routing";
 
 export interface PaperChatModelRoutingMeta {
   ratio?: number;
@@ -61,7 +64,8 @@ export function parseModelRoutingConfig(
         : "";
     const tierCode = ROUTING_TIER_TO_CODE[tier];
     const priority =
-      typeof metaRecord.priority === "number" && Number.isFinite(metaRecord.priority)
+      typeof metaRecord.priority === "number" &&
+      Number.isFinite(metaRecord.priority)
         ? metaRecord.priority
         : typeof metaRecord.priority === "string" &&
             metaRecord.priority.trim().length > 0
@@ -139,7 +143,9 @@ export function hasAnyRoutingTierCoverage(
   models: string[],
   routingMeta: PaperChatModelRoutingMetaMap,
 ): boolean {
-  return models.some((model) => getRoutingTier(model, routingMeta) !== undefined);
+  return models.some(
+    (model) => getRoutingTier(model, routingMeta) !== undefined,
+  );
 }
 
 export function getRoutingTier(
