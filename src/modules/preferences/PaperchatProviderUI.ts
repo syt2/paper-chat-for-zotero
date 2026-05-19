@@ -52,7 +52,6 @@ const TIER_SELECTOR_IDS = [
 ] as const;
 
 const PAPERCHAT_CONFIG_INPUT_IDS = [
-  "pref-paperchat-maxtokens",
   "pref-paperchat-temperature",
   "pref-paperchat-systemprompt",
 ] as const;
@@ -63,16 +62,6 @@ const TIER_LABEL_KEYS: Record<PaperChatTier, string> = {
   "paperchat-pro": "pref-paperchat-tier-pro",
   "paperchat-ultra": "pref-paperchat-tier-ultra",
 };
-
-function parseOptionalPositiveInt(value: string | undefined): number | undefined {
-  const trimmed = value?.trim() || "";
-  if (!trimmed) {
-    return undefined;
-  }
-
-  const parsed = Number.parseInt(trimmed, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
 
 function syncTierSelectorLabels(doc: Document): void {
   const tierSelect = doc.getElementById(
@@ -225,9 +214,6 @@ export function populatePaperchatPanel(doc: Document): void {
   populatePaperchatModels(doc);
 
   // Populate other settings
-  const maxTokensEl = doc.getElementById(
-    "pref-paperchat-maxtokens",
-  ) as HTMLInputElement;
   const temperatureEl = doc.getElementById(
     "pref-paperchat-temperature",
   ) as HTMLInputElement;
@@ -235,12 +221,6 @@ export function populatePaperchatPanel(doc: Document): void {
     "pref-paperchat-systemprompt",
   ) as HTMLTextAreaElement;
 
-  if (maxTokensEl) {
-    maxTokensEl.value =
-      typeof config.maxTokens === "number" && config.maxTokens > 0
-        ? String(config.maxTokens)
-        : "";
-  }
   if (temperatureEl) temperatureEl.value = String(config.temperature ?? 0.7);
   if (systemPromptEl) systemPromptEl.value = config.systemPrompt || "";
 }
@@ -298,9 +278,6 @@ export function savePaperchatConfig(doc: Document): void {
   const tierSelect = doc.getElementById(
     "pref-paperchat-tier",
   ) as unknown as XULMenuListElement | null;
-  const maxTokensEl = doc.getElementById(
-    "pref-paperchat-maxtokens",
-  ) as HTMLInputElement;
   const temperatureEl = doc.getElementById(
     "pref-paperchat-temperature",
   ) as HTMLInputElement;
@@ -345,7 +322,6 @@ export function savePaperchatConfig(doc: Document): void {
   ).modelId;
   providerManager.updateProviderConfig("paperchat", {
     defaultModel: resolvedDefaultModel || undefined,
-    maxTokens: parseOptionalPositiveInt(maxTokensEl?.value),
     temperature: parseFloat(temperatureEl?.value) || 0.7,
     systemPrompt: systemPromptEl?.value || "",
   });

@@ -4,6 +4,8 @@ export interface PaperChatModelRoutingMeta {
   ratio?: number;
   tierCode?: number;
   priority?: number;
+  contextWindow?: number;
+  maxOutput?: number;
 }
 
 export type PaperChatModelRoutingMetaMap = Record<
@@ -47,7 +49,12 @@ export function parseModelRoutingConfig(
       continue;
     }
 
-    const metaRecord = rawMeta as { tier?: unknown; priority?: unknown };
+    const metaRecord = rawMeta as {
+      tier?: unknown;
+      priority?: unknown;
+      contextWindow?: unknown;
+      maxOutput?: unknown;
+    };
     const tier =
       typeof metaRecord.tier === "string"
         ? metaRecord.tier.trim().toLowerCase()
@@ -68,8 +75,27 @@ export function parseModelRoutingConfig(
     if (typeof priority === "number" && Number.isFinite(priority)) {
       meta.priority = priority;
     }
+    if (
+      typeof metaRecord.contextWindow === "number" &&
+      Number.isFinite(metaRecord.contextWindow) &&
+      metaRecord.contextWindow > 0
+    ) {
+      meta.contextWindow = metaRecord.contextWindow;
+    }
+    if (
+      typeof metaRecord.maxOutput === "number" &&
+      Number.isFinite(metaRecord.maxOutput) &&
+      metaRecord.maxOutput > 0
+    ) {
+      meta.maxOutput = metaRecord.maxOutput;
+    }
 
-    if (meta.tierCode !== undefined || meta.priority !== undefined) {
+    if (
+      meta.tierCode !== undefined ||
+      meta.priority !== undefined ||
+      meta.contextWindow !== undefined ||
+      meta.maxOutput !== undefined
+    ) {
       routingMeta[modelName] = meta;
     }
   }

@@ -449,8 +449,6 @@ const RETRYABLE_ERROR_PATTERNS = [
   /insufficient.?quota/i,
 ];
 
-const LEGACY_PAPERCHAT_DEFAULT_MAX_TOKENS = new Set([4096]);
-
 export class ProviderManager {
   private providers: Map<string, AIProvider> = new Map();
   private activeProviderId: string = "paperchat";
@@ -646,16 +644,10 @@ export class ProviderManager {
       }
 
       const paperchat = { ...provider } as PaperChatProviderConfig;
-      const maxTokens = paperchat.maxTokens;
-      const shouldClearMaxTokens =
-        maxTokens === undefined ||
-        maxTokens === null ||
-        maxTokens <= 0 ||
-        LEGACY_PAPERCHAT_DEFAULT_MAX_TOKENS.has(maxTokens);
-      if (shouldClearMaxTokens && "maxTokens" in paperchat) {
-        delete paperchat.maxTokens;                                                                                    
-        changed = true;                           
-      }                                                                                                                
+      if ("maxTokens" in paperchat) {
+        delete paperchat.maxTokens;
+        changed = true;
+      }
       return paperchat;
     });
 
