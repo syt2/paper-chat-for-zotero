@@ -1527,7 +1527,7 @@ const DEFAULT_TOOL_RESULT_COMPACTION_POLICY: ToolResultCompactionPolicy = {
 const DEEPSEEK_TOOL_RESULT_COMPACTION_POLICY: ToolResultCompactionPolicy = {
   keepFullCount: 0,
   compactCharLimit: 0,
-  summaryCharLimit: 180,
+  summaryCharLimit: 700,
   stripAssistantToolCards: true,
 };
 
