@@ -18,6 +18,7 @@ import type {
   AnthropicMessage,
   AnthropicTextBlock,
   AnthropicImageBlock,
+  ToolCallingOptions,
 } from "../../types/provider";
 import type { ToolDefinition, ToolCall } from "../../types/tool";
 import { parseSSEStreamWithToolCalling } from "./SSEParser";
@@ -294,6 +295,7 @@ export class AnthropicProvider extends BaseProvider {
     messages: ChatMessage[],
     tools?: ToolDefinition[],
     signal?: AbortSignal,
+    options?: ToolCallingOptions,
   ): Promise<{ content: string; toolCalls?: ToolCall[] }> {
     if (!this.isReady()) {
       throw new Error("Provider is not configured");
@@ -311,7 +313,7 @@ export class AnthropicProvider extends BaseProvider {
     // Add tools if provided
     if (tools && tools.length > 0) {
       requestBody.tools = this.convertToAnthropicTools(tools);
-      requestBody.tool_choice = { type: "auto" };
+      requestBody.tool_choice = { type: options?.toolChoice || "auto" };
       ztoolkit.log(
         "[AnthropicProvider.chatCompletionWithTools] Sending request with",
         tools.length,
@@ -387,6 +389,7 @@ export class AnthropicProvider extends BaseProvider {
     tools: ToolDefinition[],
     callbacks: StreamToolCallingCallbacks,
     signal?: AbortSignal,
+    options?: ToolCallingOptions,
   ): Promise<void> {
     const {
       onTextDelta,
@@ -414,7 +417,7 @@ export class AnthropicProvider extends BaseProvider {
 
       if (tools.length > 0) {
         requestBody.tools = this.convertToAnthropicTools(tools);
-        requestBody.tool_choice = { type: "auto" };
+        requestBody.tool_choice = { type: options?.toolChoice || "auto" };
       }
 
       ztoolkit.log(

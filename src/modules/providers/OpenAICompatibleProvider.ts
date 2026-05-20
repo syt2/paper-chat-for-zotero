@@ -9,7 +9,7 @@ import type {
   StreamCallbacks,
   StreamToolCallingCallbacks,
 } from "../../types/chat";
-import type { PdfAttachment } from "../../types/provider";
+import type { PdfAttachment, ToolCallingOptions } from "../../types/provider";
 import type { ToolDefinition, ToolCall } from "../../types/tool";
 import { parseSSEStreamWithToolCalling } from "./SSEParser";
 import { shouldIncludeReasoningContentForRequest } from "./reasoning-content";
@@ -242,6 +242,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
     messages: ChatMessage[],
     tools?: ToolDefinition[],
     signal?: AbortSignal,
+    options?: ToolCallingOptions,
   ): Promise<{ content: string; reasoning?: string; toolCalls?: ToolCall[] }> {
     if (!this.isReady()) {
       throw new Error("Provider is not configured");
@@ -271,7 +272,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
     // Add tools if provided
     if (tools && tools.length > 0) {
       requestBody.tools = normalizePromptCacheTools(tools);
-      requestBody.tool_choice = "auto";
+      requestBody.tool_choice = options?.toolChoice || "auto";
       ztoolkit.log(
         "[chatCompletionWithTools] Sending request with",
         tools.length,
@@ -424,6 +425,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
     tools: ToolDefinition[],
     callbacks: StreamToolCallingCallbacks,
     signal?: AbortSignal,
+    options?: ToolCallingOptions,
   ): Promise<void> {
     const { onTextDelta, onReasoningDelta, onToolCallStart, onToolCallDelta, onComplete, onError } =
       callbacks;
@@ -452,7 +454,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
 
       if (tools.length > 0) {
         requestBody.tools = normalizePromptCacheTools(tools);
-        requestBody.tool_choice = "auto";
+        requestBody.tool_choice = options?.toolChoice || "auto";
       }
 
       if (this._config.maxTokens && this._config.maxTokens > 0) {

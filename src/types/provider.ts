@@ -292,6 +292,7 @@ export interface ToolCallingProvider extends AIProvider {
     messages: ChatMessage[],
     tools?: ToolDefinition[],
     signal?: AbortSignal,
+    options?: ToolCallingOptions,
   ): Promise<{ content: string; reasoning?: string; toolCalls?: ToolCall[] }>;
 
   /** 流式 tool calling（可选，部分 provider 可能不支持） */
@@ -300,7 +301,12 @@ export interface ToolCallingProvider extends AIProvider {
     tools: ToolDefinition[],
     callbacks: StreamToolCallingCallbacks,
     signal?: AbortSignal,
+    options?: ToolCallingOptions,
   ): Promise<void>;
+}
+
+export interface ToolCallingOptions {
+  toolChoice?: "auto" | "none";
 }
 
 /**

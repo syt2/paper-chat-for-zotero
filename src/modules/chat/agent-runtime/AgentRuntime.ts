@@ -140,6 +140,7 @@ interface IterationControlState {
   maxIterations: number;
   forceFinalAnswer: boolean;
   toolsForRound: ToolDefinition[];
+  toolChoice: "auto" | "none";
 }
 
 export class AgentRuntime {
@@ -220,6 +221,7 @@ export class AgentRuntime {
           assistantMessage,
           displayBeforeThisRound,
           iteration,
+          iterationControl.toolChoice,
         );
 
         this.ensureSessionTracked(sendingSession, sessionRunId);
@@ -376,6 +378,7 @@ export class AgentRuntime {
           currentMessages,
           iterationControl.toolsForRound,
           abortSignal,
+          { toolChoice: iterationControl.toolChoice },
         );
 
         this.ensureSessionTracked(sendingSession, sessionRunId);
@@ -506,6 +509,7 @@ export class AgentRuntime {
     assistantMessage: ChatMessage,
     displayBeforeThisRound: string,
     iteration: number,
+    toolChoice: "auto" | "none",
   ): Promise<{
     content: string;
     reasoning?: string;
@@ -656,6 +660,7 @@ export class AgentRuntime {
           tools,
           callbacks,
           abortSignal,
+          { toolChoice },
         )
         .catch(reject);
     });
@@ -1349,7 +1354,8 @@ export class AgentRuntime {
       remainingIterations,
       maxIterations,
       forceFinalAnswer,
-      toolsForRound: forceFinalAnswer ? [] : tools,
+      toolsForRound: tools,
+      toolChoice: forceFinalAnswer ? "none" : "auto",
     };
   }
 

@@ -13,6 +13,7 @@ import type {
   ApiKeyProviderConfig,
   PaperChatProviderConfig,
   PdfAttachment,
+  ToolCallingOptions,
 } from "../../types/provider";
 import type { ToolDefinition, ToolCall } from "../../types/tool";
 import { getAuthManager } from "../auth";
@@ -161,9 +162,15 @@ export class PaperChatProvider implements AIProvider {
     messages: ChatMessage[],
     tools?: ToolDefinition[],
     signal?: AbortSignal,
+    options?: ToolCallingOptions,
   ): Promise<{ content: string; toolCalls?: ToolCall[] }> {
     this._delegate.updateConfig(this.createDelegateConfig());
-    return this._delegate.chatCompletionWithTools(messages, tools, signal);
+    return this._delegate.chatCompletionWithTools(
+      messages,
+      tools,
+      signal,
+      options,
+    );
   }
 
   /**
@@ -175,6 +182,7 @@ export class PaperChatProvider implements AIProvider {
     tools: ToolDefinition[],
     callbacks: StreamToolCallingCallbacks,
     signal?: AbortSignal,
+    options?: ToolCallingOptions,
   ): Promise<void> {
     this._delegate.updateConfig(this.createDelegateConfig());
     return this._delegate.streamChatCompletionWithTools(
@@ -182,6 +190,7 @@ export class PaperChatProvider implements AIProvider {
       tools,
       callbacks,
       signal,
+      options,
     );
   }
 }
