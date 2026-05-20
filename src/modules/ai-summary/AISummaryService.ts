@@ -12,6 +12,10 @@ import { getDeepSummaryTag } from "./AISummaryProcessor";
 import { getString } from "../../utils/locale";
 import { getErrorMessage, getItemTitle } from "../../utils/common";
 import type { AISummaryMode } from "../../types/ai-summary";
+import { ANALYTICS_EVENTS, getAnalyticsService } from "../analytics";
+import { getProviderManager } from "../providers";
+
+type AISummaryRequestSource = "item_context_menu" | "reader_context_menu";
 
 // 任务状态
 export type TaskStatus = "pending" | "running" | "completed" | "failed";
@@ -88,13 +92,19 @@ class AISummaryService {
           | undefined;
         if (selectedItems && selectedItems.length > 0) {
           const processedKeys = new Set<string>();
+          let queuedCount = 0;
           for (const item of selectedItems) {
             const targetItem = this.getSummaryTargetItem(item);
             if (targetItem && !processedKeys.has(targetItem.key)) {
               processedKeys.add(targetItem.key);
-              this.addItemToQueue(targetItem);
+              if (this.addToQueue(targetItem, "quick")) {
+                queuedCount++;
+              }
             }
           }
+          this.trackSummaryRequested("quick", "item_context_menu", {
+            requestedItemCount: queuedCount,
+          });
           this.onOpenTaskWindow?.();
         }
       },
@@ -135,6 +145,7 @@ class AISummaryService {
           | undefined;
         if (selectedItems && selectedItems.length > 0) {
           const processedKeys = new Set<string>();
+          let queuedCount = 0;
           for (const item of selectedItems) {
             const targetItem = this.getSummaryTargetItem(item);
             if (
@@ -143,9 +154,14 @@ class AISummaryService {
               !this.hasDeepSummary(targetItem)
             ) {
               processedKeys.add(targetItem.key);
-              this.addDeepItemToQueue(targetItem);
+              if (this.addToQueue(targetItem, "deep")) {
+                queuedCount++;
+              }
             }
           }
+          this.trackSummaryRequested("deep", "item_context_menu", {
+            requestedItemCount: queuedCount,
+          });
           this.onOpenTaskWindow?.();
         }
       },
@@ -374,9 +390,12 @@ class AISummaryService {
   /**
    * 添加到处理队列
    */
-  private addToQueue(item: Zotero.Item, mode: AISummaryMode = "quick"): void {
+  private addToQueue(
+    item: Zotero.Item,
+    mode: AISummaryMode = "quick",
+  ): boolean {
     // 如果服务已销毁，直接返回
-    if (this.isDestroyed) return;
+    if (this.isDestroyed) return false;
 
     const itemKey = item.key;
     const title = getItemTitle(item);
@@ -388,14 +407,14 @@ class AISummaryService {
       )
     ) {
       ztoolkit.log(`[AISummaryService] Item "${title}" already in queue`);
-      return;
+      return false;
     }
 
     if (mode === "deep" && this.hasDeepSummary(item)) {
       ztoolkit.log(
         `[AISummaryService] Item "${title}" already has deep summary`,
       );
-      return;
+      return false;
     }
 
     // 检查是否已处理过（有 ai-processed 标签）
@@ -407,13 +426,13 @@ class AISummaryService {
       tags.some((t: { tag: string }) => t.tag === config.markProcessedTag)
     ) {
       ztoolkit.log(`[AISummaryService] Item "${title}" already processed`);
-      return;
+      return false;
     }
 
     // 检查是否有 PDF
     if (config.filterHasPdf && !this.hasPdfAttachment(item)) {
       ztoolkit.log(`[AISummaryService] Item "${title}" has no PDF, skipping`);
-      return;
+      return false;
     }
 
     const task: AISummaryTask = {
@@ -432,17 +451,29 @@ class AISummaryService {
 
     // 开始处理队列
     this.processQueue();
+    return true;
   }
 
   /**
    * 手动添加条目到队列（右键菜单使用）
    */
-  addItemToQueue(item: Zotero.Item): void {
-    this.addToQueue(item, "quick");
+  addItemToQueue(item: Zotero.Item, source?: AISummaryRequestSource): boolean {
+    const queued = this.addToQueue(item, "quick");
+    if (queued && source) {
+      this.trackSummaryRequested("quick", source, { requestedItemCount: 1 });
+    }
+    return queued;
   }
 
-  addDeepItemToQueue(item: Zotero.Item): void {
-    this.addToQueue(item, "deep");
+  addDeepItemToQueue(
+    item: Zotero.Item,
+    source?: AISummaryRequestSource,
+  ): boolean {
+    const queued = this.addToQueue(item, "deep");
+    if (queued && source) {
+      this.trackSummaryRequested("deep", source, { requestedItemCount: 1 });
+    }
+    return queued;
   }
 
   /**
@@ -549,7 +580,7 @@ class AISummaryService {
     append({
       label: getString("aisummary-menu-generate"),
       onCommand: () => {
-        this.addItemToQueue(parentItem);
+        this.addItemToQueue(parentItem, "reader_context_menu");
         this.onOpenTaskWindow?.();
       },
     });
@@ -562,11 +593,30 @@ class AISummaryService {
       append({
         label: getString("aisummary-menu-generate-deep"),
         onCommand: () => {
-          this.addDeepItemToQueue(parentItem);
+          this.addDeepItemToQueue(parentItem, "reader_context_menu");
           this.onOpenTaskWindow?.();
         },
       });
     }
+  }
+
+  private trackSummaryRequested(
+    mode: AISummaryMode,
+    source: AISummaryRequestSource,
+    props: { requestedItemCount: number },
+  ): void {
+    if (props.requestedItemCount <= 0) return;
+
+    getAnalyticsService().track(
+      mode === "deep"
+        ? ANALYTICS_EVENTS.aiSummaryDeepRequested
+        : ANALYTICS_EVENTS.aiSummaryQuickRequested,
+      {
+        source,
+        itemCount: props.requestedItemCount,
+        provider: getProviderManager().getActiveProviderId(),
+      },
+    );
   }
 
   /**

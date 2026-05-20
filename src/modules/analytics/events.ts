@@ -1,5 +1,7 @@
 export const ANALYTICS_EVENTS = {
   aiSummaryBatchStarted: "ai_summary_batch_started",
+  aiSummaryDeepRequested: "ai_summary_deep_requested",
+  aiSummaryQuickRequested: "ai_summary_quick_requested",
   authCompleted: "auth_completed",
   authPageViewed: "auth_page_viewed",
   authVerificationCodeSent: "auth_verification_code_sent",
