@@ -170,10 +170,13 @@ paperchat-aisummary-template-methodology-name = 方法分析
 paperchat-aisummary-template-methodology-prefix = 方法分析
 paperchat-aisummary-template-literature-name = 文献笔记
 paperchat-aisummary-template-literature-prefix = 文献笔记
+paperchat-aisummary-template-deep-prefix = AI深度摘要
 
 # AI Summary Menu
-paperchat-aisummary-menu-generate = 生成 AI 摘要
+paperchat-aisummary-menu-generate = 生成 AI 快速摘要
+paperchat-aisummary-menu-generate-deep = 生成 AI 深度摘要
 paperchat-aisummary-menu-tasks = AI 摘要任务
+paperchat-aisummary-task-mode-deep = 深度摘要
 
 # Common
 paperchat-unknown = 未知

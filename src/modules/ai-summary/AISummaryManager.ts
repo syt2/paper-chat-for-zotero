@@ -8,6 +8,7 @@
 
 import type {
   AISummaryConfig,
+  AISummaryMode,
   AISummaryProgress,
   AISummaryStoredState,
 } from "../../types/ai-summary";
@@ -120,7 +121,10 @@ export class AISummaryManager {
   /**
    * 处理单个条目（供 AISummaryService 调用）
    */
-  async processSingleItem(itemKey: string): Promise<{
+  async processSingleItem(
+    itemKey: string,
+    mode: AISummaryMode = "quick",
+  ): Promise<{
     success: boolean;
     noteKey?: string;
     error?: string;
@@ -134,10 +138,19 @@ export class AISummaryManager {
 
     const template = getTemplateById(this.config.templateId);
     if (!template) {
-      return { success: false, error: `Template not found: ${this.config.templateId}` };
+      return {
+        success: false,
+        error: `Template not found: ${this.config.templateId}`,
+      };
     }
 
-    const result = await this.processor.processItem(item, template, this.config);
+    const result = await this.processor.processItem(
+      item,
+      template,
+      this.config,
+      undefined,
+      mode,
+    );
 
     return {
       success: result.success,
@@ -218,7 +231,11 @@ export class AISummaryManager {
       return;
     }
 
-    ztoolkit.log("[AISummary] Resuming batch with", storedState.pendingItemKeys.length, "items");
+    ztoolkit.log(
+      "[AISummary] Resuming batch with",
+      storedState.pendingItemKeys.length,
+      "items",
+    );
 
     this.progress.status = "running";
     this.abortController = createAbortController();

@@ -170,10 +170,13 @@ paperchat-aisummary-template-methodology-name = Methodology Analysis
 paperchat-aisummary-template-methodology-prefix = Methodology
 paperchat-aisummary-template-literature-name = Literature Note
 paperchat-aisummary-template-literature-prefix = Literature Note
+paperchat-aisummary-template-deep-prefix = AI Deep Summary
 
 # AI Summary Menu
-paperchat-aisummary-menu-generate = Generate AI Summary
+paperchat-aisummary-menu-generate = Generate AI Quick Summary
+paperchat-aisummary-menu-generate-deep = Generate Deep AI Summary
 paperchat-aisummary-menu-tasks = AI Summary Tasks
+paperchat-aisummary-task-mode-deep = Deep Summary
 
 # Common
 paperchat-unknown = Unknown

@@ -8,8 +8,10 @@
  */
 
 import { getAISummaryManager } from "./AISummaryManager";
+import { getDeepSummaryTag } from "./AISummaryProcessor";
 import { getString } from "../../utils/locale";
 import { getErrorMessage, getItemTitle } from "../../utils/common";
+import type { AISummaryMode } from "../../types/ai-summary";
 
 // 任务状态
 export type TaskStatus = "pending" | "running" | "completed" | "failed";
@@ -25,6 +27,7 @@ export interface AISummaryTask {
   completedAt?: number;
   error?: string;
   noteKey?: string;
+  mode?: AISummaryMode;
 }
 
 // 任务队列状态
@@ -44,7 +47,10 @@ class AISummaryService {
   private delayMs: number = 30000; // 30 秒延迟
 
   // 回调
-  private onTaskUpdate?: (tasks: AISummaryTask[], history: AISummaryTask[]) => void;
+  private onTaskUpdate?: (
+    tasks: AISummaryTask[],
+    history: AISummaryTask[],
+  ) => void;
   private onOpenTaskWindow?: () => void;
 
   // Reader 事件监听器引用，用于取消注册
@@ -77,26 +83,16 @@ class AISummaryService {
       icon: `chrome://${addon.data.config.addonRef}/content/icons/favicon.svg`,
       commandListener: (_event) => {
         const pane = Zotero.getActiveZoteroPane();
-        const selectedItems = pane?.getSelectedItems() as Zotero.Item[] | undefined;
+        const selectedItems = pane?.getSelectedItems() as
+          | Zotero.Item[]
+          | undefined;
         if (selectedItems && selectedItems.length > 0) {
           const processedKeys = new Set<string>();
           for (const item of selectedItems) {
-            if (item.isNote?.()) continue;
-            if (item.isPDFAttachment?.()) {
-              const parentID = item.parentItemID;
-              if (parentID) {
-                const parent = Zotero.Items.get(parentID);
-                if (parent && !parent.isNote?.() && !processedKeys.has(parent.key)) {
-                  processedKeys.add(parent.key);
-                  this.addItemToQueue(parent);
-                }
-              }
-              continue;
-            }
-            if (item.isAttachment?.()) continue;
-            if (!processedKeys.has(item.key)) {
-              processedKeys.add(item.key);
-              this.addItemToQueue(item);
+            const targetItem = this.getSummaryTargetItem(item);
+            if (targetItem && !processedKeys.has(targetItem.key)) {
+              processedKeys.add(targetItem.key);
+              this.addItemToQueue(targetItem);
             }
           }
           this.onOpenTaskWindow?.();
@@ -104,27 +100,66 @@ class AISummaryService {
       },
       getVisibility: (_elem, _ev) => {
         const pane = Zotero.getActiveZoteroPane();
-        const selectedItems = pane?.getSelectedItems() as Zotero.Item[] | undefined;
+        const selectedItems = pane?.getSelectedItems() as
+          | Zotero.Item[]
+          | undefined;
         if (!selectedItems || selectedItems.length === 0) return false;
         const config = getAISummaryManager().getConfig();
         const processedTag = config.markProcessedTag;
         // Show menu only if at least one eligible item hasn't been processed
         return selectedItems.some((item: Zotero.Item) => {
-          if (item.isNote?.()) return false;
-          if (item.isAttachment?.() && !item.isPDFAttachment?.()) return false;
-          // For PDF attachments, check the parent item
-          let targetItem: Zotero.Item | undefined = item;
-          if (item.isPDFAttachment?.()) {
-            const parentID = item.parentItemID;
-            if (!parentID) return false;
-            targetItem = Zotero.Items.get(parentID) as Zotero.Item | undefined;
-            if (!targetItem || targetItem.isNote?.()) return false;
-          }
+          const targetItem = this.getSummaryTargetItem(item);
+          if (!targetItem) return false;
           // Hide if already processed
           if (processedTag && targetItem.hasTag(processedTag)) {
             return false;
           }
           // Hide if filterHasPdf is enabled and item has no PDF
+          if (config.filterHasPdf && !this.hasPdfAttachment(targetItem)) {
+            return false;
+          }
+          return true;
+        });
+      },
+    });
+
+    ztoolkit.Menu.register("item", {
+      tag: "menuitem",
+      id: "paperchat-aisummary-deep-menuitem",
+      label: getString("aisummary-menu-generate-deep"),
+      icon: `chrome://${addon.data.config.addonRef}/content/icons/favicon.svg`,
+      commandListener: (_event) => {
+        const pane = Zotero.getActiveZoteroPane();
+        const selectedItems = pane?.getSelectedItems() as
+          | Zotero.Item[]
+          | undefined;
+        if (selectedItems && selectedItems.length > 0) {
+          const processedKeys = new Set<string>();
+          for (const item of selectedItems) {
+            const targetItem = this.getSummaryTargetItem(item);
+            if (
+              targetItem &&
+              !processedKeys.has(targetItem.key) &&
+              !this.hasDeepSummary(targetItem)
+            ) {
+              processedKeys.add(targetItem.key);
+              this.addDeepItemToQueue(targetItem);
+            }
+          }
+          this.onOpenTaskWindow?.();
+        }
+      },
+      getVisibility: (_elem, _ev) => {
+        const pane = Zotero.getActiveZoteroPane();
+        const selectedItems = pane?.getSelectedItems() as
+          | Zotero.Item[]
+          | undefined;
+        if (!selectedItems || selectedItems.length === 0) return false;
+        const config = getAISummaryManager().getConfig();
+        return selectedItems.some((item: Zotero.Item) => {
+          const targetItem = this.getSummaryTargetItem(item);
+          if (!targetItem) return false;
+          if (this.hasDeepSummary(targetItem)) return false;
           if (config.filterHasPdf && !this.hasPdfAttachment(targetItem)) {
             return false;
           }
@@ -152,6 +187,7 @@ class AISummaryService {
    */
   unregisterMenus(): void {
     ztoolkit.Menu.unregister("paperchat-aisummary-menuitem");
+    ztoolkit.Menu.unregister("paperchat-aisummary-deep-menuitem");
     ztoolkit.Menu.unregister("paperchat-aisummary-tasks-menuitem");
   }
 
@@ -174,14 +210,18 @@ class AISummaryService {
   /**
    * 设置任务更新回调
    */
-  setOnTaskUpdate(callback: (tasks: AISummaryTask[], history: AISummaryTask[]) => void): void {
+  setOnTaskUpdate(
+    callback: (tasks: AISummaryTask[], history: AISummaryTask[]) => void,
+  ): void {
     this.onTaskUpdate = callback;
   }
 
   /**
    * 获取当前任务更新回调
    */
-  getOnTaskUpdate(): ((tasks: AISummaryTask[], history: AISummaryTask[]) => void) | undefined {
+  getOnTaskUpdate():
+    | ((tasks: AISummaryTask[], history: AISummaryTask[]) => void)
+    | undefined {
     return this.onTaskUpdate;
   }
 
@@ -230,7 +270,10 @@ class AISummaryService {
       100,
     );
 
-    ztoolkit.log("[AISummaryService] Item notifier registered:", this.notifierID);
+    ztoolkit.log(
+      "[AISummaryService] Item notifier registered:",
+      this.notifierID,
+    );
   }
 
   /**
@@ -261,7 +304,11 @@ class AISummaryService {
       // 如果是 PDF 附件，获取其顶层父条目
       if (item.isPDFAttachment?.()) {
         const topLevelItem = this.getTopLevelParent(item);
-        if (topLevelItem && !topLevelItem.isNote?.() && !topLevelItem.isAttachment?.()) {
+        if (
+          topLevelItem &&
+          !topLevelItem.isNote?.() &&
+          !topLevelItem.isAttachment?.()
+        ) {
           this.scheduleItemProcessing(topLevelItem);
         }
         continue;
@@ -303,7 +350,9 @@ class AISummaryService {
     }
 
     const title = getItemTitle(item);
-    ztoolkit.log(`[AISummaryService] Scheduling AI Summary for "${title}" in ${this.delayMs / 1000}s`);
+    ztoolkit.log(
+      `[AISummaryService] Scheduling AI Summary for "${title}" in ${this.delayMs / 1000}s`,
+    );
 
     // 只保存 itemKey 和 libraryID，在回调时重新获取 item
     const timer = setTimeout(() => {
@@ -313,7 +362,9 @@ class AISummaryService {
       if (freshItem) {
         this.addToQueue(freshItem);
       } else {
-        ztoolkit.log(`[AISummaryService] Item "${itemKey}" no longer exists, skipping`);
+        ztoolkit.log(
+          `[AISummaryService] Item "${itemKey}" no longer exists, skipping`,
+        );
       }
     }, this.delayMs);
 
@@ -323,7 +374,7 @@ class AISummaryService {
   /**
    * 添加到处理队列
    */
-  private addToQueue(item: Zotero.Item): void {
+  private addToQueue(item: Zotero.Item, mode: AISummaryMode = "quick"): void {
     // 如果服务已销毁，直接返回
     if (this.isDestroyed) return;
 
@@ -331,8 +382,19 @@ class AISummaryService {
     const title = getItemTitle(item);
 
     // 检查是否已在队列中
-    if (this.taskQueue.some((t) => t.itemKey === itemKey)) {
+    if (
+      this.taskQueue.some(
+        (t) => t.itemKey === itemKey && (t.mode ?? "quick") === mode,
+      )
+    ) {
       ztoolkit.log(`[AISummaryService] Item "${title}" already in queue`);
+      return;
+    }
+
+    if (mode === "deep" && this.hasDeepSummary(item)) {
+      ztoolkit.log(
+        `[AISummaryService] Item "${title}" already has deep summary`,
+      );
       return;
     }
 
@@ -340,7 +402,10 @@ class AISummaryService {
     const manager = getAISummaryManager();
     const config = manager.getConfig();
     const tags = item.getTags?.() || [];
-    if (tags.some((t: { tag: string }) => t.tag === config.markProcessedTag)) {
+    if (
+      mode === "quick" &&
+      tags.some((t: { tag: string }) => t.tag === config.markProcessedTag)
+    ) {
       ztoolkit.log(`[AISummaryService] Item "${title}" already processed`);
       return;
     }
@@ -352,11 +417,12 @@ class AISummaryService {
     }
 
     const task: AISummaryTask = {
-      id: `task-${Date.now()}-${itemKey}`,
+      id: `task-${Date.now()}-${mode}-${itemKey}`,
       itemKey,
       itemTitle: title,
       status: "pending",
       createdAt: Date.now(),
+      mode,
     };
 
     this.taskQueue.push(task);
@@ -372,7 +438,11 @@ class AISummaryService {
    * 手动添加条目到队列（右键菜单使用）
    */
   addItemToQueue(item: Zotero.Item): void {
-    this.addToQueue(item);
+    this.addToQueue(item, "quick");
+  }
+
+  addDeepItemToQueue(item: Zotero.Item): void {
+    this.addToQueue(item, "deep");
   }
 
   /**
@@ -391,7 +461,10 @@ class AISummaryService {
 
     try {
       const manager = getAISummaryManager();
-      const result = await manager.processSingleItem(pendingTask.itemKey);
+      const result = await manager.processSingleItem(
+        pendingTask.itemKey,
+        pendingTask.mode ?? "quick",
+      );
 
       if (result.success) {
         pendingTask.status = "completed";
@@ -450,6 +523,52 @@ class AISummaryService {
     return false;
   }
 
+  private getSummaryTargetItem(item: Zotero.Item): Zotero.Item | null {
+    if (item.isNote?.()) return null;
+    if (item.isPDFAttachment?.()) {
+      const parentID = item.parentItemID;
+      if (!parentID) return null;
+      const parent = Zotero.Items.get(parentID);
+      if (!parent || parent.isNote?.() || parent.isAttachment?.()) return null;
+      return parent;
+    }
+    if (item.isAttachment?.()) return null;
+    return item;
+  }
+
+  private hasDeepSummary(item: Zotero.Item): boolean {
+    const deepTag = getDeepSummaryTag();
+    const tags = item.getTags?.() || [];
+    return tags.some((t: { tag: string }) => t.tag === deepTag);
+  }
+
+  private appendReaderSummaryMenuItems(
+    append: (options: { label: string; onCommand: () => void }) => void,
+    parentItem: Zotero.Item,
+  ): void {
+    append({
+      label: getString("aisummary-menu-generate"),
+      onCommand: () => {
+        this.addItemToQueue(parentItem);
+        this.onOpenTaskWindow?.();
+      },
+    });
+
+    const config = getAISummaryManager().getConfig();
+    if (
+      !this.hasDeepSummary(parentItem) &&
+      (!config.filterHasPdf || this.hasPdfAttachment(parentItem))
+    ) {
+      append({
+        label: getString("aisummary-menu-generate-deep"),
+        onCommand: () => {
+          this.addDeepItemToQueue(parentItem);
+          this.onOpenTaskWindow?.();
+        },
+      });
+    }
+  }
+
   /**
    * 清除所有待处理的定时器
    */
@@ -473,7 +592,9 @@ class AISummaryService {
   private registerReaderContextMenu(): void {
     // 检查 Zotero.Reader API 是否可用
     if (!Zotero.Reader?.registerEventListener) {
-      ztoolkit.log("[AISummaryService] Zotero.Reader.registerEventListener not available");
+      ztoolkit.log(
+        "[AISummaryService] Zotero.Reader.registerEventListener not available",
+      );
       return;
     }
 
@@ -487,13 +608,7 @@ class AISummaryService {
       const parentItem = this.getParentItemFromReader(reader);
       if (!parentItem) return;
 
-      append({
-        label: getString("aisummary-menu-generate"),
-        onCommand: () => {
-          this.addItemToQueue(parentItem);
-          this.onOpenTaskWindow?.();
-        },
-      });
+      this.appendReaderSummaryMenuItems(append, parentItem);
     };
 
     Zotero.Reader.registerEventListener(
@@ -512,13 +627,7 @@ class AISummaryService {
       const parentItem = this.getParentItemFromReader(reader);
       if (!parentItem) return;
 
-      append({
-        label: getString("aisummary-menu-generate"),
-        onCommand: () => {
-          this.addItemToQueue(parentItem);
-          this.onOpenTaskWindow?.();
-        },
-      });
+      this.appendReaderSummaryMenuItems(append, parentItem);
     };
 
     Zotero.Reader.registerEventListener(
@@ -557,7 +666,9 @@ class AISummaryService {
   /**
    * 从 Reader 获取父条目（论文条目）
    */
-  private getParentItemFromReader(reader: { itemID?: number }): Zotero.Item | null {
+  private getParentItemFromReader(reader: {
+    itemID?: number;
+  }): Zotero.Item | null {
     if (!reader.itemID) return null;
 
     const item = Zotero.Items.get(reader.itemID);

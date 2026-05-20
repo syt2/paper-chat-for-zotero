@@ -4,6 +4,7 @@
 // @ts-nocheck
 export type FluentMessageId =
   | 'paperchat-aisummary-menu-generate'
+  | 'paperchat-aisummary-menu-generate-deep'
   | 'paperchat-aisummary-menu-tasks'
   | 'paperchat-aisummary-no-history'
   | 'paperchat-aisummary-no-tasks'
@@ -17,6 +18,8 @@ export type FluentMessageId =
   | 'paperchat-aisummary-status-failed'
   | 'paperchat-aisummary-status-pending'
   | 'paperchat-aisummary-status-running'
+  | 'paperchat-aisummary-task-mode-deep'
+  | 'paperchat-aisummary-template-deep-prefix'
   | 'paperchat-aisummary-template-findings-name'
   | 'paperchat-aisummary-template-findings-prefix'
   | 'paperchat-aisummary-template-literature-name'

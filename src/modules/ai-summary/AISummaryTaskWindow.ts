@@ -4,7 +4,10 @@
 
 import { getAISummaryService, type AISummaryTask } from "./AISummaryService";
 import { getString } from "../../utils/locale";
-import { isDarkMode, setupThemeListener } from "../ui/chat-panel/ChatPanelTheme";
+import {
+  isDarkMode,
+  setupThemeListener,
+} from "../ui/chat-panel/ChatPanelTheme";
 
 let taskWindow: Window | null = null;
 
@@ -115,7 +118,10 @@ function buildTaskWindowContent(win: Window): void {
 function setupTaskUpdates(win: Window): void {
   const service = getAISummaryService();
 
-  const updateCallback = (_tasks: AISummaryTask[], _history: AISummaryTask[]) => {
+  const updateCallback = (
+    _tasks: AISummaryTask[],
+    _history: AISummaryTask[],
+  ) => {
     if (win.closed) return;
     renderTasks(win.document);
   };
@@ -205,7 +211,10 @@ function renderTasks(doc: Document): void {
 /**
  * 创建任务项元素
  */
-function createTaskItemElement(doc: Document, task: AISummaryTask): HTMLElement {
+function createTaskItemElement(
+  doc: Document,
+  task: AISummaryTask,
+): HTMLElement {
   const item = doc.createElement("div");
   item.className = `task-item status-${task.status}`;
 
@@ -214,7 +223,10 @@ function createTaskItemElement(doc: Document, task: AISummaryTask): HTMLElement 
 
   const titleEl = doc.createElement("div");
   titleEl.className = "task-title";
-  titleEl.textContent = task.itemTitle;
+  titleEl.textContent =
+    task.mode === "deep"
+      ? `${getString("aisummary-task-mode-deep")}: ${task.itemTitle}`
+      : task.itemTitle;
   info.appendChild(titleEl);
 
   const meta = doc.createElement("div");
@@ -227,7 +239,9 @@ function createTaskItemElement(doc: Document, task: AISummaryTask): HTMLElement 
 
   const timeSpan = doc.createElement("span");
   timeSpan.className = "task-time";
-  timeSpan.textContent = formatTime(task.completedAt || task.startedAt || task.createdAt);
+  timeSpan.textContent = formatTime(
+    task.completedAt || task.startedAt || task.createdAt,
+  );
   meta.appendChild(timeSpan);
 
   info.appendChild(meta);

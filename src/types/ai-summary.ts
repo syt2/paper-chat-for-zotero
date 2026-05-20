@@ -3,6 +3,8 @@
  */
 
 // AISummary 配置
+export type AISummaryMode = "quick" | "deep";
+
 export interface AISummaryConfig {
   templateId: string; // 使用的模板 ID
   noteLocation: "child" | "standalone"; // 笔记位置
