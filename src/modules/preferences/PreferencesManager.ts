@@ -192,9 +192,6 @@ export async function refreshPrefsUI(
 
   // Initialize AISummary settings
   initAISummarySettings(doc);
-
-  // Initialize Semantic Search settings
-  await initSemanticSearchSettings(doc);
 }
 
 /**
@@ -262,9 +259,19 @@ export function bindPrefEvents(): void {
     });
   }
 
+  const invalidateEmbeddingProviderCache = () => {
+    getEmbeddingProviderFactory().invalidateCache();
+  };
+
   // Refresh callbacks for provider list
-  const refreshProviderList = () => populateProviderList(doc);
-  const refreshActiveProvider = () => populateActiveProviderDropdown(doc);
+  const refreshProviderList = () => {
+    populateProviderList(doc);
+    invalidateEmbeddingProviderCache();
+  };
+  const refreshActiveProvider = () => {
+    populateActiveProviderDropdown(doc);
+    invalidateEmbeddingProviderCache();
+  };
 
   // Bind user auth events
   const cleanupUserAuthEvents = bindUserAuthEvents(
@@ -278,6 +285,7 @@ export function bindPrefEvents(): void {
   bindPaperchatEvents(doc, async () => {
     await fetchPaperchatModels(doc, (models) => {
       populatePaperchatModels(doc, models, true);
+      invalidateEmbeddingProviderCache();
     });
   });
 
@@ -306,6 +314,7 @@ export function bindPrefEvents(): void {
 
   // Bind active provider selection event
   bindActiveProviderEvent(doc);
+  bindEmbeddingProviderCacheInvalidationEvent(doc);
 
   // Bind PDF settings checkbox event
   bindPdfSettingsEvent(doc);
@@ -315,9 +324,6 @@ export function bindPrefEvents(): void {
 
   // Bind AISummary settings events
   bindAISummarySettingsEvents(doc);
-
-  // Bind Semantic Search settings events
-  bindSemanticSearchSettingsEvents(doc);
 }
 
 /**
@@ -743,56 +749,12 @@ function bindAISummarySettingsEvents(doc: Document): void {
   });
 }
 
-/**
- * Initialize Semantic Search settings
- */
-async function initSemanticSearchSettings(doc: Document): Promise<void> {
-  const checkbox = doc.getElementById(
-    "pref-enable-semantic-search-checkbox",
-  ) as XUL.Checkbox | null;
-  if (checkbox) {
-    // Default to true
-    const enabled = getPref("enableSemanticSearch") ?? true;
-    checkbox.checked = enabled;
-  }
+function bindEmbeddingProviderCacheInvalidationEvent(doc: Document): void {
+  const activeProviderSelect = doc.getElementById(
+    "pref-active-provider-select",
+  ) as unknown as XULMenuListElement | null;
 
-  // Update status display
-  await updateSemanticSearchStatus(doc);
-}
-
-/**
- * Update Semantic Search status display
- */
-async function updateSemanticSearchStatus(doc: Document): Promise<void> {
-  const statusLabel = doc.getElementById(
-    "pref-semantic-search-status",
-  ) as HTMLElement | null;
-  if (!statusLabel) return;
-
-  try {
-    const factory = getEmbeddingProviderFactory();
-    const status = await factory.getStatus();
-
-    statusLabel.textContent = status.message;
-    statusLabel.style.color = status.available ? "#008000" : "#c00";
-  } catch (error) {
-    statusLabel.textContent = getString("aisummary-progress-error", {
-      args: { error: getErrorMessage(error) },
-    });
-    statusLabel.style.color = "#c00";
-  }
-}
-
-/**
- * Bind Semantic Search settings events
- */
-function bindSemanticSearchSettingsEvents(doc: Document): void {
-  const checkbox = doc.getElementById(
-    "pref-enable-semantic-search-checkbox",
-  ) as XUL.Checkbox | null;
-  if (checkbox) {
-    checkbox.addEventListener("command", () => {
-      setPref("enableSemanticSearch", checkbox.checked);
-    });
-  }
+  activeProviderSelect?.addEventListener("command", () => {
+    getEmbeddingProviderFactory().invalidateCache();
+  });
 }

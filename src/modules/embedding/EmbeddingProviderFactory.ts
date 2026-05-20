@@ -1,8 +1,8 @@
 /**
  * EmbeddingProviderFactory - Auto-detect and create embedding providers
  *
- * Reuses API keys from existing Chat Provider configurations
- * Priority: PaperChat (login-based) > Gemini (free) > Ollama (local) > OpenAI (paid)
+ * Reuses API keys from existing Chat Provider configurations.
+ * PaperChat embedding is used only when PaperChat is the active chat provider.
  */
 
 import type {
@@ -27,20 +27,28 @@ export class EmbeddingProviderFactory {
   private cachedProvider: EmbeddingProvider | null = null;
   private cachedStatus: EmbeddingStatus | null = null;
   private cacheTimestamp: number = 0;
+  private cachedActiveProviderId: string | null = null;
   private readonly CACHE_TTL = 30000; // 30 seconds cache
 
   /**
    * Get current embedding status for UI display
    */
   async getStatus(): Promise<EmbeddingStatus> {
+    const activeProviderId = getProviderManager().getActiveProviderId();
+
     // Return cached status if fresh
-    if (this.cachedStatus && Date.now() - this.cacheTimestamp < this.CACHE_TTL) {
+    if (
+      this.cachedStatus &&
+      this.cachedActiveProviderId === activeProviderId &&
+      Date.now() - this.cacheTimestamp < this.CACHE_TTL
+    ) {
       return this.cachedStatus;
     }
 
     const status = await this.detectStatus();
     this.cachedStatus = status;
     this.cacheTimestamp = Date.now();
+    this.cachedActiveProviderId = activeProviderId;
     return status;
   }
 
@@ -50,68 +58,45 @@ export class EmbeddingProviderFactory {
   private async detectStatus(): Promise<EmbeddingStatus> {
     const providerManager = getProviderManager();
     const allConfigs = providerManager.getAllConfigs();
+    const activeProviderId = providerManager.getActiveProviderId();
 
-    // 1. Check PaperChat (priority: highest - login-based service)
-    const authManager = getAuthManager();
-    if (authManager.isLoggedIn() && authManager.getApiKey()) {
-      const embeddingModels = getAvailableEmbeddingModels();
-      if (embeddingModels.length > 0) {
-        return {
-          available: true,
-          provider: "paperchat",
-          message: `✅ ${getString("pref-embedding-status-paperchat", { args: { model: embeddingModels[0] } })}`,
-        };
+    const getApiKeyConfig = (providerId: string) =>
+      allConfigs.find((c) => c.id === providerId && c.enabled) as
+        | ApiKeyProviderConfig
+        | undefined;
+
+    if (activeProviderId === "paperchat") {
+      const paperChatStatus = this.detectPaperChatStatus();
+      if (paperChatStatus) {
+        return paperChatStatus;
       }
     }
 
-    // 2. Check Gemini (priority: free)
-    const geminiConfig = allConfigs.find(
-      (c) => c.id === "gemini" && c.enabled,
-    ) as ApiKeyProviderConfig | undefined;
+    if (activeProviderId === "gemini" && getApiKeyConfig("gemini")?.apiKey) {
+      return this.createGeminiStatus();
+    }
 
+    if (activeProviderId === "openai" && getApiKeyConfig("openai")?.apiKey) {
+      return this.createOpenAIStatus();
+    }
+
+    const geminiConfig = getApiKeyConfig("gemini");
     if (geminiConfig?.apiKey) {
-      return {
-        available: true,
-        provider: "gemini",
-        message: `✅ ${getString("pref-embedding-status-gemini")}`,
-      };
+      return this.createGeminiStatus();
     }
 
-    // 3. Check Ollama (priority: local)
     let ollamaRunningWithoutModel = false;
-    try {
-      const ollama = new OllamaEmbedding();
-      if (await ollama.isOllamaRunning()) {
-        if (await ollama.hasEmbeddingModel()) {
-          return {
-            available: true,
-            provider: "ollama",
-            message: `✅ ${getString("pref-embedding-status-ollama")}`,
-          };
-        } else {
-          // Ollama is running but no embedding model - continue checking other providers
-          ollamaRunningWithoutModel = true;
-        }
-      }
-    } catch {
-      // Ollama not available, continue checking
+    const ollamaStatus = await this.detectOllamaStatus();
+    if (ollamaStatus.available) {
+      return ollamaStatus;
     }
+    ollamaRunningWithoutModel = ollamaStatus.runningWithoutModel;
 
-    // 4. Check OpenAI
-    const openaiConfig = allConfigs.find(
-      (c) => c.id === "openai" && c.enabled,
-    ) as ApiKeyProviderConfig | undefined;
-
+    const openaiConfig = getApiKeyConfig("openai");
     if (openaiConfig?.apiKey) {
-      return {
-        available: true,
-        provider: "openai",
-        message: `✅ ${getString("pref-embedding-status-openai")}`,
-      };
+      return this.createOpenAIStatus();
     }
 
-    // No embedding provider available
-    // If Ollama is running without embedding model, show specific message
     if (ollamaRunningWithoutModel) {
       return {
         available: false,
@@ -124,6 +109,68 @@ export class EmbeddingProviderFactory {
       available: false,
       provider: null,
       message: `⚠️ ${getString("pref-embedding-unavailable-none")}`,
+    };
+  }
+
+  private detectPaperChatStatus(): EmbeddingStatus | null {
+    const authManager = getAuthManager();
+    if (authManager.isLoggedIn() && authManager.getApiKey()) {
+      const embeddingModels = getAvailableEmbeddingModels();
+      if (embeddingModels.length > 0) {
+        return {
+          available: true,
+          provider: "paperchat",
+          message: `✅ ${getString("pref-embedding-status-paperchat", { args: { model: embeddingModels[0] } })}`,
+        };
+      }
+    }
+
+    return null;
+  }
+
+  private createGeminiStatus(): EmbeddingStatus {
+    return {
+      available: true,
+      provider: "gemini",
+      message: `✅ ${getString("pref-embedding-status-gemini")}`,
+    };
+  }
+
+  private createOpenAIStatus(): EmbeddingStatus {
+    return {
+      available: true,
+      provider: "openai",
+      message: `✅ ${getString("pref-embedding-status-openai")}`,
+    };
+  }
+
+  private async detectOllamaStatus(): Promise<
+    | (EmbeddingStatus & { runningWithoutModel: false })
+    | { available: false; runningWithoutModel: boolean }
+  > {
+    try {
+      const ollama = new OllamaEmbedding();
+      if (await ollama.isOllamaRunning()) {
+        if (await ollama.hasEmbeddingModel()) {
+          return {
+            available: true,
+            provider: "ollama",
+            message: `✅ ${getString("pref-embedding-status-ollama")}`,
+            runningWithoutModel: false,
+          };
+        }
+        return {
+          available: false,
+          runningWithoutModel: true,
+        };
+      }
+    } catch {
+      // Ollama not available, continue checking
+    }
+
+    return {
+      available: false,
+      runningWithoutModel: false,
     };
   }
 
@@ -144,7 +191,12 @@ export class EmbeddingProviderFactory {
     }
 
     // Return cached provider if same type
-    if (this.cachedProvider && this.cachedProvider.type === status.provider) {
+    const activeProviderId = getProviderManager().getActiveProviderId();
+    if (
+      this.cachedProvider &&
+      this.cachedProvider.type === status.provider &&
+      this.cachedActiveProviderId === activeProviderId
+    ) {
       return this.cachedProvider;
     }
 
@@ -157,7 +209,9 @@ export class EmbeddingProviderFactory {
   /**
    * Create provider instance by type
    */
-  private createProvider(type: EmbeddingProviderType): EmbeddingProvider | null {
+  private createProvider(
+    type: EmbeddingProviderType,
+  ): EmbeddingProvider | null {
     const providerManager = getProviderManager();
     const allConfigs = providerManager.getAllConfigs();
 
@@ -212,6 +266,7 @@ export class EmbeddingProviderFactory {
     this.cachedProvider = null;
     this.cachedStatus = null;
     this.cacheTimestamp = 0;
+    this.cachedActiveProviderId = null;
     ztoolkit.log("[EmbeddingProviderFactory] Cache invalidated");
   }
 

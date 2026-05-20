@@ -125,14 +125,9 @@ pref-aisummary-include-annotations = Include user highlights and notes
 pref-aisummary-run-now = Generate Summaries
 pref-aisummary-desc = Generate AI summaries for unprocessed papers in your library (up to 10 per run).
 
-# Semantic Search Settings
-pref-semantic-search-settings = Semantic Search
-pref-enable-semantic-search = Enable semantic search
-pref-semantic-search-available = Using { $provider } Embedding
-pref-semantic-search-unavailable = No embedding service available. Please configure Gemini or OpenAI API Key.
 pref-embedding-status-paperchat = Using PaperChat Embedding ({ $model })
 pref-embedding-status-gemini = Using Gemini Embedding (Free)
 pref-embedding-status-ollama = Using Ollama Local Embedding
 pref-embedding-status-openai = Using OpenAI Embedding
 pref-embedding-unavailable-ollama = Ollama is running but no embedding model installed. Run: ollama pull nomic-embed-text
-pref-embedding-unavailable-none = No embedding service available. Please login PaperChat or configure API Key.
+pref-embedding-unavailable-none = No embedding service available. Use the PaperChat provider or configure Gemini/OpenAI API Key.

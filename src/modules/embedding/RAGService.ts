@@ -12,7 +12,6 @@ import type {
   ItemIndexStatus,
   TextChunk,
 } from "../../types/embedding";
-import { getPref } from "../../utils/prefs";
 import { getErrorMessage } from "../../utils/common";
 import {
   getEmbeddingProviderFactory,
@@ -39,12 +38,6 @@ export class RAGService {
    * Check if RAG/semantic search is available
    */
   async isAvailable(): Promise<boolean> {
-    // Check if enabled in settings
-    const enabled = getPref("enableSemanticSearch");
-    if (!enabled) {
-      return false;
-    }
-
     // Check if provider is available
     const status = await this.providerFactory.getStatus();
     return status.available;
@@ -65,7 +58,9 @@ export class RAGService {
    */
   async indexPaper(itemKey: string, content: string): Promise<void> {
     if (!(await this.isAvailable())) {
-      ztoolkit.log("[RAGService] Semantic search not available, skipping index");
+      ztoolkit.log(
+        "[RAGService] Semantic search not available, skipping index",
+      );
       return;
     }
 
@@ -88,7 +83,9 @@ export class RAGService {
     this.indexingInProgress.add(indexKey);
 
     try {
-      ztoolkit.log(`[RAGService] Starting to index item: ${itemKey} with model: ${modelId}`);
+      ztoolkit.log(
+        `[RAGService] Starting to index item: ${itemKey} with model: ${modelId}`,
+      );
 
       // 1. Split content into chunks
       const chunks = splitText(content);
@@ -100,7 +97,10 @@ export class RAGService {
       ztoolkit.log(`[RAGService] Split into ${chunks.length} chunks`);
 
       // 2. Check existing hashes for this model to avoid re-embedding unchanged content
-      const existingHashes = await this.vectorStore.getChunkHashes(itemKey, modelId);
+      const existingHashes = await this.vectorStore.getChunkHashes(
+        itemKey,
+        modelId,
+      );
       const chunksToEmbed: TextChunk[] = [];
       const newChunkIndexes = new Set(chunks.map((c) => c.index));
 
@@ -136,7 +136,9 @@ export class RAGService {
         return;
       }
 
-      ztoolkit.log(`[RAGService] ${chunksToEmbed.length} chunks need embedding`);
+      ztoolkit.log(
+        `[RAGService] ${chunksToEmbed.length} chunks need embedding`,
+      );
 
       // 3. Get embeddings
       const texts = chunksToEmbed.map((c) => c.text);
@@ -167,9 +169,16 @@ export class RAGService {
       }));
 
       // 5. Store in vector database (with quota handling)
-      await this.upsertWithQuotaHandling(entries, itemKey, modelId, chunks.length);
+      await this.upsertWithQuotaHandling(
+        entries,
+        itemKey,
+        modelId,
+        chunks.length,
+      );
 
-      ztoolkit.log(`[RAGService] Indexed item: ${itemKey} with model: ${modelId}`);
+      ztoolkit.log(
+        `[RAGService] Indexed item: ${itemKey} with model: ${modelId}`,
+      );
     } catch (error) {
       ztoolkit.log(
         `[RAGService] Failed to index item ${itemKey}:`,
@@ -199,7 +208,11 @@ export class RAGService {
         await this.vectorStore.upsert(entries);
 
         // Success - update access record
-        await this.vectorStore.upsertAccessRecord(itemKey, modelId, totalChunkCount);
+        await this.vectorStore.upsertAccessRecord(
+          itemKey,
+          modelId,
+          totalChunkCount,
+        );
         return;
       } catch (error) {
         // Check if it's a quota error
@@ -230,7 +243,10 @@ export class RAGService {
           for (const item of oldestItems) {
             if (item.itemKey !== itemKey) {
               await this.vectorStore.deleteByModel(item.itemKey, item.modelId);
-              await this.vectorStore.deleteAccessRecord(item.itemKey, item.modelId);
+              await this.vectorStore.deleteAccessRecord(
+                item.itemKey,
+                item.modelId,
+              );
               deleted++;
               ztoolkit.log(
                 `[RAGService] Evicted old index: ${item.itemKey} (last accessed: ${new Date(item.lastAccessedAt).toLocaleDateString()})`,
@@ -336,10 +352,7 @@ export class RAGService {
 
       return results;
     } catch (error) {
-      ztoolkit.log(
-        "[RAGService] Search failed:",
-        getErrorMessage(error),
-      );
+      ztoolkit.log("[RAGService] Search failed:", getErrorMessage(error));
       return [];
     }
   }
@@ -435,7 +448,9 @@ export class RAGService {
   async removeIndexByModel(itemKey: string, modelId: string): Promise<void> {
     await this.vectorStore.deleteByModel(itemKey, modelId);
     await this.vectorStore.deleteAccessRecord(itemKey, modelId);
-    ztoolkit.log(`[RAGService] Removed index for item: ${itemKey}, model: ${modelId}`);
+    ztoolkit.log(
+      `[RAGService] Removed index for item: ${itemKey}, model: ${modelId}`,
+    );
   }
 
   /**

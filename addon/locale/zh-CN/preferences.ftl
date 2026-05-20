@@ -125,14 +125,9 @@ pref-aisummary-include-annotations = 包含用户高亮和笔记
 pref-aisummary-run-now = 生成摘要
 pref-aisummary-desc = 为文献库中未处理的论文生成AI摘要笔记（每次最多10篇）。
 
-# Semantic Search Settings
-pref-semantic-search-settings = 语义搜索
-pref-enable-semantic-search = 启用语义搜索
-pref-semantic-search-available = 使用 { $provider } Embedding
-pref-semantic-search-unavailable = 无可用 Embedding 服务。请配置 Gemini 或 OpenAI API Key。
 pref-embedding-status-paperchat = 使用 PaperChat Embedding ({ $model })
 pref-embedding-status-gemini = 使用 Gemini Embedding (免费)
 pref-embedding-status-ollama = 使用 Ollama 本地 Embedding
 pref-embedding-status-openai = 使用 OpenAI Embedding
 pref-embedding-unavailable-ollama = Ollama 已运行但未安装 Embedding 模型，请运行: ollama pull nomic-embed-text
-pref-embedding-unavailable-none = 无可用 Embedding 服务，请登录 PaperChat 或配置 API Key
+pref-embedding-unavailable-none = 无可用 Embedding 服务，请使用 PaperChat provider 或配置 Gemini/OpenAI API Key
