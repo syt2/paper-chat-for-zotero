@@ -1103,37 +1103,61 @@ export class SessionStorageService {
   }
 
   /**
-   * 清理空 session (没有消息的 session)
+   * 清理被放弃的草稿 session。
+   *
+   * Abandoned draft 的定义比“空 session”更窄：非当前活动会话、
+   * session_meta 计数为 0、messages 表没有任何记录、并且没有用户/生成标题。
+   * 这样可以清理启动/切换过程中遗留的隐藏草稿，同时避免删除旧版本里可能
+   * 被用户命名过的空会话。
    */
-  async cleanupEmptySessions(): Promise<number> {
+  async cleanupAbandonedDraftSessions(): Promise<number> {
     await this.init();
 
     try {
       const db = await getStorageDatabase().ensureInit();
       const activeId = this.activeSessionIdCache;
 
-      // Find empty sessions (excluding active)
-      let query = "SELECT id FROM session_meta WHERE message_count = 0";
-      const params: unknown[] = [];
-
-      if (activeId) {
-        query += " AND id != ?";
-        params.push(activeId);
-      }
-
-      const rows = (await db.queryAsync(query, params)) || [];
+      const rows =
+        (await db.queryAsync(
+          `SELECT sm.id
+           FROM session_meta sm
+           WHERE sm.message_count = 0
+             AND sm.id != ?
+             AND NOT EXISTS (
+               SELECT 1 FROM messages m WHERE m.session_id = sm.id
+             )
+             AND (sm.title IS NULL OR TRIM(sm.title) = '')
+             AND sm.title_source IS NULL
+             AND sm.title_generated_at IS NULL
+             AND sm.title_edited_at IS NULL
+             AND NOT EXISTS (
+               SELECT 1
+               FROM sessions s
+               WHERE s.id = sm.id
+                 AND (
+                   (s.title IS NOT NULL AND TRIM(s.title) != '')
+                   OR s.title_source IS NOT NULL
+                   OR s.title_generated_at IS NOT NULL
+                   OR s.title_edited_at IS NOT NULL
+                 )
+             )`,
+          [activeId || ""],
+        )) || [];
 
       for (const row of rows) {
         await this.deleteSessionData(db, row.id);
       }
 
       ztoolkit.log(
-        "[SessionStorageService] Cleaned up empty sessions:",
+        "[SessionStorageService] Cleaned up abandoned draft sessions:",
         rows.length,
       );
       return rows.length;
     } catch (error) {
-      ztoolkit.log("[SessionStorageService] Cleanup error:", error);
+      ztoolkit.log(
+        "[SessionStorageService] Abandoned draft cleanup error:",
+        error,
+      );
       return 0;
     }
   }

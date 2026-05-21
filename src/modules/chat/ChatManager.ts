@@ -352,6 +352,7 @@ export class ChatManager {
         throw error;
       }
     }
+    await this.sessionStorage.cleanupAbandonedDraftSessions();
     this.reconcileApprovalState(this.currentSession);
     this.applySessionItemContext(this.currentSession);
 
@@ -816,11 +817,13 @@ export class ChatManager {
     await this.init();
     const previousSession = this.currentSession;
     if (previousSession && this.isDraftSession(previousSession)) {
+      await this.sessionStorage.cleanupAbandonedDraftSessions();
       return previousSession;
     }
     this.memoryManager.onBeforeSessionSwitch(previousSession, "");
     this.maybeGenerateSessionTitle(previousSession);
     this.currentSession = await this.sessionStorage.createSession();
+    await this.sessionStorage.cleanupAbandonedDraftSessions();
     this.applySessionItemContext(this.currentSession);
     this.reconcileApprovalState(this.currentSession);
     return this.currentSession;

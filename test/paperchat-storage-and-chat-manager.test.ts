@@ -397,6 +397,53 @@ describe("paperchat storage and chat manager", function () {
     );
   });
 
+  it("cleans up only abandoned draft sessions", async function () {
+    const recorded: RecordedQuery[] = [];
+    const deletedSessionIds: string[] = [];
+    const fakeDb = {
+      async queryAsync(sql: string, params?: unknown[]) {
+        const normalized = normalizeSql(sql);
+        recorded.push({ sql: normalized, params });
+
+        if (normalized === "SELECT value FROM settings WHERE key = ?") {
+          return [{ value: "active-draft" }];
+        }
+        if (
+          normalized.includes("FROM session_meta sm") &&
+          normalized.includes("sm.message_count = 0")
+        ) {
+          return [{ id: "abandoned-draft" }];
+        }
+        if (normalized === "DELETE FROM sessions WHERE id = ?") {
+          deletedSessionIds.push(params?.[0] as string);
+        }
+
+        return [];
+      },
+    };
+
+    const storage = getStorageDatabase() as any;
+    storage.ensureInit = async () => fakeDb;
+
+    const service = new SessionStorageService();
+    const cleanupCount = await service.cleanupAbandonedDraftSessions();
+
+    const cleanupQuery = recorded.find(
+      (entry) =>
+        entry.sql.includes("FROM session_meta sm") &&
+        entry.sql.includes("sm.message_count = 0"),
+    );
+    assert.equal(cleanupCount, 1);
+    assert.deepEqual(cleanupQuery?.params, ["active-draft"]);
+    assert.include(
+      cleanupQuery?.sql || "",
+      "NOT EXISTS ( SELECT 1 FROM messages m WHERE m.session_id = sm.id )",
+    );
+    assert.include(cleanupQuery?.sql || "", "TRIM(sm.title) = ''");
+    assert.include(cleanupQuery?.sql || "", "s.title_edited_at IS NOT NULL");
+    assert.deepEqual(deletedSessionIds, ["abandoned-draft"]);
+  });
+
   it("excludes interrupted assistant messages from future context windows", function () {
     prefStore.set(`${PREFS_PREFIX}.contextMaxRecentPairs`, 10);
     prefStore.set(`${PREFS_PREFIX}.contextEnableSummary`, false);
@@ -927,6 +974,9 @@ describe("paperchat storage and chat manager", function () {
   it("reuses the active draft session when creating a new session", async function () {
     const manager = Object.create(ChatManager.prototype) as ChatManager & {
       currentSession: ChatSession;
+      sessionStorage: {
+        cleanupAbandonedDraftSessions: () => Promise<number>;
+      };
       init: () => Promise<void>;
     };
     const draftSession: ChatSession = {
@@ -936,14 +986,70 @@ describe("paperchat storage and chat manager", function () {
       lastActiveItemKey: null,
       messages: [],
     };
+    let cleanupCalls = 0;
 
     manager.currentSession = draftSession;
+    manager.sessionStorage = {
+      cleanupAbandonedDraftSessions: async () => {
+        cleanupCalls += 1;
+        return 0;
+      },
+    };
     manager.init = async () => undefined;
 
     const nextSession = await manager.createNewSession();
 
     assert.strictEqual(nextSession, draftSession);
     assert.strictEqual(manager.currentSession, draftSession);
+    assert.equal(cleanupCalls, 1);
+  });
+
+  it("cleans abandoned drafts after creating a new session from a started session", async function () {
+    const startedSession: ChatSession = {
+      id: "started-session",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      messages: [
+        {
+          id: "user-message-1",
+          role: "user",
+          content: "hello",
+          timestamp: 1,
+        },
+      ],
+    };
+    const freshDraft: ChatSession = {
+      id: "fresh-draft-session",
+      createdAt: 2,
+      updatedAt: 2,
+      lastActiveItemKey: null,
+      messages: [],
+    };
+    const manager = Object.create(ChatManager.prototype) as any;
+    let cleanupCalls = 0;
+
+    manager.currentSession = startedSession;
+    manager.init = async () => undefined;
+    manager.memoryManager = {
+      onBeforeSessionSwitch: () => undefined,
+    };
+    manager.maybeGenerateSessionTitle = () => undefined;
+    manager.applySessionItemContext = () => undefined;
+    manager.reconcileApprovalState = () => undefined;
+    manager.sessionStorage = {
+      createSession: async () => freshDraft,
+      cleanupAbandonedDraftSessions: async () => {
+        cleanupCalls += 1;
+        return 0;
+      },
+    };
+
+    const nextSession = await manager.createNewSession();
+
+    assert.strictEqual(nextSession, freshDraft);
+    assert.strictEqual(manager.currentSession, freshDraft);
+    assert.equal(cleanupCalls, 1);
   });
 
   it("reuses an active draft session on chat manager init", async function () {
@@ -956,6 +1062,7 @@ describe("paperchat storage and chat manager", function () {
     };
     const manager = Object.create(ChatManager.prototype) as any;
     let createSessionCalls = 0;
+    let cleanupCalls = 0;
 
     manager.initialized = false;
     manager.sessionStorage = {
@@ -971,6 +1078,10 @@ describe("paperchat storage and chat manager", function () {
           messages: [],
         } satisfies ChatSession;
       },
+      cleanupAbandonedDraftSessions: async () => {
+        cleanupCalls += 1;
+        return 0;
+      },
     };
     manager.memoryManager = {
       onSessionReady: () => undefined,
@@ -982,6 +1093,7 @@ describe("paperchat storage and chat manager", function () {
 
     assert.strictEqual(manager.currentSession, draftSession);
     assert.equal(createSessionCalls, 0);
+    assert.equal(cleanupCalls, 1);
   });
 
   it("creates a fresh draft session on init when the active session has user messages", async function () {
@@ -1008,6 +1120,7 @@ describe("paperchat storage and chat manager", function () {
     };
     const manager = Object.create(ChatManager.prototype) as any;
     let createSessionCalls = 0;
+    let cleanupCalls = 0;
 
     manager.initialized = false;
     manager.sessionStorage = {
@@ -1016,6 +1129,10 @@ describe("paperchat storage and chat manager", function () {
       createSession: async () => {
         createSessionCalls += 1;
         return freshDraft;
+      },
+      cleanupAbandonedDraftSessions: async () => {
+        cleanupCalls += 1;
+        return 0;
       },
     };
     manager.memoryManager = {
@@ -1028,6 +1145,7 @@ describe("paperchat storage and chat manager", function () {
 
     assert.strictEqual(manager.currentSession, freshDraft);
     assert.equal(createSessionCalls, 1);
+    assert.equal(cleanupCalls, 1);
   });
 
   it("wraps session metadata writes in a transaction", async function () {
