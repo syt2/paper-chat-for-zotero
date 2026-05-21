@@ -6,6 +6,7 @@ import type {
   ChatMessage,
   ExecutionPlan,
   ExecutionPlanStep,
+  ImageAttachment,
   ToolApprovalState,
 } from "../../chat";
 import type { ToolApprovalResolution } from "../../../types/tool";
@@ -37,6 +38,61 @@ import { darkTheme } from "./ChatPanelTheme";
 import { ANALYTICS_EVENTS, getAnalyticsService } from "../../analytics";
 
 const RECOVERY_STEP_PREFIX = "replan:";
+
+function getImageAttachmentSrc(image: ImageAttachment): string {
+  if (image.type === "base64") {
+    return `data:${image.mimeType};base64,${image.data}`;
+  }
+  return image.data;
+}
+
+function isRenderableImageAttachment(
+  image: ImageAttachment,
+): image is ImageAttachment {
+  if (!image.data) {
+    return false;
+  }
+  if (image.type === "base64") {
+    return !!image.mimeType;
+  }
+  return true;
+}
+
+function createMessageImagesElement(
+  doc: Document,
+  images: ImageAttachment[],
+): HTMLElement {
+  const renderableImages = images.filter(isRenderableImageAttachment);
+  const container = createElement(doc, "div", {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: "8px",
+    marginTop: "10px",
+  });
+
+  for (const image of renderableImages) {
+    const img = createElement(
+      doc,
+      "img",
+      {
+        display: "block",
+        maxWidth: renderableImages.length === 1 ? "260px" : "128px",
+        maxHeight: renderableImages.length === 1 ? "220px" : "128px",
+        borderRadius: "10px",
+        objectFit: "cover",
+        background: "rgba(255, 255, 255, 0.18)",
+      },
+      {
+        src: getImageAttachmentSrc(image),
+        alt: image.name || "Attached image",
+        title: image.name || "Attached image",
+      },
+    );
+    container.appendChild(img);
+  }
+
+  return container;
+}
 
 type ExecutionBannerKind =
   | "idle"
@@ -367,6 +423,13 @@ export function createMessageElement(
   }
 
   bubble.appendChild(content);
+
+  if (
+    msg.role === "user" &&
+    msg.images?.some(isRenderableImageAttachment)
+  ) {
+    bubble.appendChild(createMessageImagesElement(doc, msg.images));
+  }
 
   if (quotaDetails) {
     bubble.appendChild(createTopupButton(doc));
