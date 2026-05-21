@@ -172,7 +172,10 @@ export function createSessionItem(
         session.title = nextTitle || undefined;
         titleEl.textContent = session.title || fallbackTitle;
       } catch (error) {
-        ztoolkit.log("[HistoryDropdown] Failed to update session title:", error);
+        ztoolkit.log(
+          "[HistoryDropdown] Failed to update session title:",
+          error,
+        );
       } finally {
         input.replaceWith(titleEl);
       }

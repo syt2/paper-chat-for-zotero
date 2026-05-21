@@ -340,7 +340,8 @@ describe("paperchat storage and chat manager", function () {
           return [];
         }
         if (
-          normalized === "SELECT * FROM session_meta ORDER BY updated_at DESC"
+          normalized ===
+          "SELECT * FROM session_meta WHERE message_count > 0 ORDER BY updated_at DESC"
         ) {
           return [
             {
@@ -921,6 +922,112 @@ describe("paperchat storage and chat manager", function () {
 
     assert.equal(manager.getCurrentItemKey(), "READER-ITEM");
     assert.equal(session.lastActiveItemKey, "SESSION-ITEM");
+  });
+
+  it("reuses the active draft session when creating a new session", async function () {
+    const manager = Object.create(ChatManager.prototype) as ChatManager & {
+      currentSession: ChatSession;
+      init: () => Promise<void>;
+    };
+    const draftSession: ChatSession = {
+      id: "draft-session",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      messages: [],
+    };
+
+    manager.currentSession = draftSession;
+    manager.init = async () => undefined;
+
+    const nextSession = await manager.createNewSession();
+
+    assert.strictEqual(nextSession, draftSession);
+    assert.strictEqual(manager.currentSession, draftSession);
+  });
+
+  it("reuses an active draft session on chat manager init", async function () {
+    const draftSession: ChatSession = {
+      id: "startup-draft-session",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      messages: [],
+    };
+    const manager = Object.create(ChatManager.prototype) as any;
+    let createSessionCalls = 0;
+
+    manager.initialized = false;
+    manager.sessionStorage = {
+      init: async () => undefined,
+      getActiveSession: async () => draftSession,
+      createSession: async () => {
+        createSessionCalls += 1;
+        return {
+          id: "unexpected-new-session",
+          createdAt: 2,
+          updatedAt: 2,
+          lastActiveItemKey: null,
+          messages: [],
+        } satisfies ChatSession;
+      },
+    };
+    manager.memoryManager = {
+      onSessionReady: () => undefined,
+    };
+    manager.reconcileApprovalState = () => undefined;
+    manager.applySessionItemContext = () => undefined;
+
+    await manager.init();
+
+    assert.strictEqual(manager.currentSession, draftSession);
+    assert.equal(createSessionCalls, 0);
+  });
+
+  it("creates a fresh draft session on init when the active session has user messages", async function () {
+    const activeSession: ChatSession = {
+      id: "started-session",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      messages: [
+        {
+          id: "user-message-1",
+          role: "user",
+          content: "hello",
+          timestamp: 1,
+        },
+      ],
+    };
+    const freshDraft: ChatSession = {
+      id: "fresh-draft-session",
+      createdAt: 2,
+      updatedAt: 2,
+      lastActiveItemKey: null,
+      messages: [],
+    };
+    const manager = Object.create(ChatManager.prototype) as any;
+    let createSessionCalls = 0;
+
+    manager.initialized = false;
+    manager.sessionStorage = {
+      init: async () => undefined,
+      getActiveSession: async () => activeSession,
+      createSession: async () => {
+        createSessionCalls += 1;
+        return freshDraft;
+      },
+    };
+    manager.memoryManager = {
+      onSessionReady: () => undefined,
+    };
+    manager.reconcileApprovalState = () => undefined;
+    manager.applySessionItemContext = () => undefined;
+
+    await manager.init();
+
+    assert.strictEqual(manager.currentSession, freshDraft);
+    assert.equal(createSessionCalls, 1);
   });
 
   it("wraps session metadata writes in a transaction", async function () {

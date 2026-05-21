@@ -147,9 +147,7 @@ function isDeepSeekToolPromptCacheTarget(
   );
 }
 
-function buildStableToolCatalogForPromptCache(
-  tools: ToolDefinition[],
-): string {
+function buildStableToolCatalogForPromptCache(tools: ToolDefinition[]): string {
   const lines = [
     "=== STABLE TOOL CATALOG FOR PROMPT CACHE ===",
     "The structured tools field remains authoritative. This stable catalog duplicates tool schemas so providers with prefix-only prompt caches can reuse the large, unchanged tool context before dynamic conversation messages.",
@@ -325,10 +323,13 @@ export class ChatManager {
     // 初始化存储服务 (migration + task recovery handled at startup in hooks.ts)
     await this.sessionStorage.init();
 
-    // 加载活动 session
+    // 启动时复用草稿会话；如果上次活动会话已经开始聊天，则创建新的草稿。
     try {
+      const activeSession = await this.sessionStorage.getActiveSession();
       this.currentSession =
-        await this.sessionStorage.getOrCreateActiveSession();
+        activeSession && this.isDraftSession(activeSession)
+          ? activeSession
+          : await this.sessionStorage.createSession();
     } catch (error) {
       if (error instanceof MissingActiveSessionError) {
         ztoolkit.log(
@@ -814,6 +815,9 @@ export class ChatManager {
   async createNewSession(): Promise<ChatSession> {
     await this.init();
     const previousSession = this.currentSession;
+    if (previousSession && this.isDraftSession(previousSession)) {
+      return previousSession;
+    }
     this.memoryManager.onBeforeSessionSwitch(previousSession, "");
     this.maybeGenerateSessionTitle(previousSession);
     this.currentSession = await this.sessionStorage.createSession();
@@ -1604,6 +1608,7 @@ export class ChatManager {
       }
 
       // 创建用户消息
+      const wasDraftSession = this.isDraftSession(sendingSession);
       const userMessage: ChatMessage = {
         id: this.generateId(),
         role: "user",
@@ -1618,6 +1623,9 @@ export class ChatManager {
       sendingSession.messages.push(userMessage);
       await this.sessionStorage.insertMessage(sendingSession.id, userMessage);
       sendingSession.updatedAt = Date.now();
+      if (wasDraftSession) {
+        this.notifySessionListUpdated();
+      }
       if (this.isSessionActive(sendingSession)) {
         this.onMessageUpdate?.(sendingSession.messages);
       }
@@ -2524,16 +2532,18 @@ export class ChatManager {
     >,
     sendingSession: ChatSession,
     sessionRunId: number,
-    buildSystemPrompt: ((
-      currentMessages: ChatMessage[],
-      session: ChatSession,
-      runtimeState?: {
-        currentIteration?: number;
-        remainingIterations?: number;
-        maxIterations: number;
-        forceFinalAnswer: boolean;
-      },
-    ) => string) | undefined,
+    buildSystemPrompt:
+      | ((
+          currentMessages: ChatMessage[],
+          session: ChatSession,
+          runtimeState?: {
+            currentIteration?: number;
+            remainingIterations?: number;
+            maxIterations: number;
+            forceFinalAnswer: boolean;
+          },
+        ) => string)
+      | undefined,
     abortSignal?: AbortSignal,
   ): Promise<void> {
     await this.agentRuntime.executeStreamingToolLoop({
@@ -2569,16 +2579,18 @@ export class ChatManager {
     >,
     sendingSession: ChatSession,
     sessionRunId: number,
-    buildSystemPrompt: ((
-      currentMessages: ChatMessage[],
-      session: ChatSession,
-      runtimeState?: {
-        currentIteration?: number;
-        remainingIterations?: number;
-        maxIterations: number;
-        forceFinalAnswer: boolean;
-      },
-    ) => string) | undefined,
+    buildSystemPrompt:
+      | ((
+          currentMessages: ChatMessage[],
+          session: ChatSession,
+          runtimeState?: {
+            currentIteration?: number;
+            remainingIterations?: number;
+            maxIterations: number;
+            forceFinalAnswer: boolean;
+          },
+        ) => string)
+      | undefined,
     abortSignal?: AbortSignal,
   ): Promise<void> {
     await this.agentRuntime.executeNonStreamingToolLoop({
@@ -2831,6 +2843,12 @@ export class ChatManager {
       lastRetryableErrorMessageId: undefined,
       lastRetryableFailedModelId: undefined,
     };
+  }
+
+  private isDraftSession(session: ChatSession): boolean {
+    return !session.messages.some(
+      (message) => message.role === "user" && !message.apiOnly,
+    );
   }
 
   private applySessionItemContext(session: ChatSession | null): void {

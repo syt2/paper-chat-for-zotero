@@ -974,7 +974,7 @@ export class SessionStorageService {
       const db = await getStorageDatabase().ensureInit();
       const rows =
         (await db.queryAsync(
-          "SELECT * FROM session_meta ORDER BY updated_at DESC",
+          "SELECT * FROM session_meta WHERE message_count > 0 ORDER BY updated_at DESC",
         )) || [];
 
       return rows.map((row: any) => ({
@@ -993,7 +993,7 @@ export class SessionStorageService {
       }));
     } catch (error) {
       ztoolkit.log("[SessionStorageService] List sessions error:", error);
-      return [];
+      throw error;
     }
   }
 
