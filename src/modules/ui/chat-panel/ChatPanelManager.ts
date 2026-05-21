@@ -1352,6 +1352,26 @@ function cloneAttachmentState(state: AttachmentState): AttachmentState {
   };
 }
 
+function renderPendingAttachmentsPreview(container: HTMLElement): void {
+  updateAttachmentsPreviewDisplay(
+    container,
+    {
+      pendingImages,
+      pendingFiles,
+      pendingSelectedText,
+    },
+    {
+      onRemoveImage: (index) => {
+        if (index < 0 || index >= pendingImages.length) return;
+        pendingImages = pendingImages.filter(
+          (_image, imageIndex) => imageIndex !== index,
+        );
+        renderPendingAttachmentsPreview(container);
+      },
+    },
+  );
+}
+
 function createContext(container: HTMLElement): ChatPanelContext {
   const manager = getChatManager();
   const authManager = getAuthManager();
@@ -1396,11 +1416,7 @@ function createContext(container: HTMLElement): ChatPanelContext {
     },
     updateAttachmentsPreview: () => {
       if (container) {
-        updateAttachmentsPreviewDisplay(container, {
-          pendingImages,
-          pendingFiles,
-          pendingSelectedText,
-        });
+        renderPendingAttachmentsPreview(container);
       }
     },
     updateUserBar: () => {
@@ -1587,10 +1603,6 @@ export async function unregisterAll(): Promise<void> {
 export function addSelectedTextAttachment(text: string): void {
   pendingSelectedText = text;
   if (chatContainer) {
-    updateAttachmentsPreviewDisplay(chatContainer, {
-      pendingImages,
-      pendingFiles,
-      pendingSelectedText,
-    });
+    renderPendingAttachmentsPreview(chatContainer);
   }
 }

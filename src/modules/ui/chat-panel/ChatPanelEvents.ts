@@ -84,6 +84,14 @@ const MESSAGE_INPUT_MIN_HEIGHT = 60;
 const MESSAGE_INPUT_MAX_HEIGHT = 140;
 const CHAT_HISTORY_BOTTOM_STICKY_THRESHOLD = 24;
 
+interface AttachmentPreviewActions {
+  onRemoveImage?: (index: number) => void;
+}
+
+type AttachmentPreviewTag =
+  | { text: string; type: "selection" | "file" }
+  | { text: string; type: "image"; index: number };
+
 function trackChatModelSwitched(props: Record<string, string | boolean>): void {
   getAnalyticsService().track(ANALYTICS_EVENTS.chatModelSwitched, props);
 }
@@ -566,7 +574,10 @@ export function setupEventHandlers(context: ChatPanelContext): void {
         await authManager.refreshUserInfo();
         updateUserBarDisplay(container, authManager);
       } catch (error) {
-        ztoolkit.log("[ChatPanel] Failed to refresh balance after check-in:", error);
+        ztoolkit.log(
+          "[ChatPanel] Failed to refresh balance after check-in:",
+          error,
+        );
       }
 
       // Flash "+quota" for 5 s, then settle into the checked-in state
@@ -574,7 +585,10 @@ export function setupEventHandlers(context: ChatPanelContext): void {
         checkinBtn.textContent = `+${result.quotaAwarded}`;
         setTimeout(() => {
           void refreshCheckinDisplay(container, authManager).catch((error) => {
-            ztoolkit.log("[ChatPanel] Failed to refresh check-in state:", error);
+            ztoolkit.log(
+              "[ChatPanel] Failed to refresh check-in state:",
+              error,
+            );
             setCheckinButtonCheckedInState(checkinBtn);
           });
         }, CHECKIN_FLASH_DURATION_MS);
@@ -768,6 +782,7 @@ export function setupEventHandlers(context: ChatPanelContext): void {
             mimeType: result.mimeType,
             name: fileName,
           });
+          context.setAttachmentState(attachmentState);
           context.updateAttachmentsPreview();
         } else {
           ztoolkit.log("[User Upload] Failed to read image file:", filePath);
@@ -788,6 +803,7 @@ export function setupEventHandlers(context: ChatPanelContext): void {
             content: fileContent.substring(0, 50000),
             type: "text",
           });
+          context.setAttachmentState(attachmentState);
           context.updateAttachmentsPreview();
         } else {
           ztoolkit.log("[User Upload] Failed to read text file:", filePath);
@@ -1048,6 +1064,7 @@ export function setupEventHandlers(context: ChatPanelContext): void {
 export function updateAttachmentsPreviewDisplay(
   container: HTMLElement,
   attachmentState: AttachmentState,
+  actions: AttachmentPreviewActions = {},
 ): void {
   const attachmentsPreview = container.querySelector(
     "#chat-attachments-preview",
@@ -1057,17 +1074,18 @@ export function updateAttachmentsPreviewDisplay(
   attachmentsPreview.textContent = "";
   const doc = container.ownerDocument!;
 
-  const tags = [
+  const tags: AttachmentPreviewTag[] = [
     ...(attachmentState.pendingSelectedText
-      ? [{ text: "\uD83D\uDCDD Selection", type: "selection" }]
+      ? [{ text: "\uD83D\uDCDD Selection", type: "selection" as const }]
       : []),
-    ...attachmentState.pendingImages.map((img) => ({
+    ...attachmentState.pendingImages.map((img, index) => ({
       text: `\uD83D\uDDBC\uFE0F ${img.name || "image"}`,
-      type: "image",
+      type: "image" as const,
+      index,
     })),
     ...attachmentState.pendingFiles.map((file) => ({
       text: `\uD83D\uDCCE ${file.name}`,
-      type: "file",
+      type: "file" as const,
     })),
   ];
 
@@ -1083,7 +1101,45 @@ export function updateAttachmentsPreviewDisplay(
       fontSize: "11px",
       color: chatColors.attachmentText,
     });
-    span.textContent = tag.text;
+
+    const label = createElement(doc, "span", {});
+    label.textContent = tag.text;
+    span.appendChild(label);
+
+    if (tag.type === "image" && actions.onRemoveImage) {
+      const removeBtn = createElement(
+        doc,
+        "button",
+        {
+          background: "transparent",
+          border: "none",
+          padding: "0 2px",
+          cursor: "pointer",
+          fontSize: "12px",
+          color: chatColors.attachmentText,
+          opacity: "0.7",
+          lineHeight: "1",
+        },
+        {
+          type: "button",
+          "aria-label": `Remove ${tag.text}`,
+        },
+      );
+      removeBtn.textContent = "x";
+      removeBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        actions.onRemoveImage?.(tag.index);
+      });
+      removeBtn.addEventListener("mouseenter", () => {
+        removeBtn.style.opacity = "1";
+      });
+      removeBtn.addEventListener("mouseleave", () => {
+        removeBtn.style.opacity = "0.7";
+      });
+      span.appendChild(removeBtn);
+    }
+
     attachmentsPreview.appendChild(span);
   }
 
@@ -1911,7 +1967,9 @@ function populateModelDropdown(
               ? theme.inputFocusBorderColor
               : theme.textPrimary,
             cursor: "pointer",
-            background: isCurrentModel ? theme.dropdownItemHoverBg : "transparent",
+            background: isCurrentModel
+              ? theme.dropdownItemHoverBg
+              : "transparent",
             display: "flex",
             alignItems: "center",
             gap: "8px",
