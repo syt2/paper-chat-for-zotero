@@ -16,6 +16,7 @@ import { getPref, setPref } from "../../utils/prefs";
 import { getString } from "../../utils/locale";
 import { BUILTIN_PROVIDERS, getProviderManager } from "../providers";
 import {
+  fetchPaperchatRoutingMeta,
   fetchPaperchatRatios,
   getModelRatios,
   getModelRoutingMeta,
@@ -883,13 +884,14 @@ export class AuthManager {
     ztoolkit.log("[AuthManager] Fetching models from:", url);
 
     try {
-      // Fetch models and ratios in parallel
+      // Fetch models, ratios, and tier routing metadata in parallel.
       const [response] = await Promise.all([
         fetch(url, {
           method: "GET",
           headers: { Authorization: `Bearer ${apiKey}` },
         }),
         fetchPaperchatRatios(),
+        fetchPaperchatRoutingMeta(),
       ]);
 
       if (!response.ok) {
