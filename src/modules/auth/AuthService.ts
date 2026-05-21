@@ -459,6 +459,31 @@ export class AuthService {
     return result.data;
   }
 
+  async updateUserLanguage(language: string): Promise<ApiResponse> {
+    const url = `${this.baseUrl}/api/user/self`;
+    const result = await this.request<ApiResponse>("PUT", url, {
+      body: { language },
+    });
+
+    if (result.error) {
+      return { success: false, message: result.error };
+    }
+
+    if (result.status >= 400 || !result.data?.success) {
+      return {
+        success: false,
+        message: this.parseErrorMessage(
+          result.data,
+          getString("api-error-request-failed", {
+            args: { status: result.status },
+          }),
+        ),
+      };
+    }
+
+    return result.data;
+  }
+
   async getPricing(): Promise<ApiResponse<Array<Record<string, unknown>>>> {
     const url = `${this.baseUrl}/api/pricing`;
     const result = await this.request<

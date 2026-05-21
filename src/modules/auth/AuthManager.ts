@@ -102,6 +102,16 @@ const PLUGIN_TOKEN_NAME = "Paper-Chat-Plugin";
 // 模型列表自动刷新间隔（1小时）
 const MODEL_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
 
+const SUPPORTED_USER_LANGUAGES = new Set([
+  "zh-TW",
+  "en",
+  "zh-CN",
+  "fr",
+  "ru",
+  "ja",
+  "vi",
+]);
+
 export class AuthManager {
   private authService: AuthService;
   private state: AuthState;
@@ -508,6 +518,9 @@ export class AuthManager {
       this.state.isLoggedIn = true;
       this.notifyLoginStatusChange(true);
       this.startModelRefreshTimer();
+      this.syncLocalLanguagePreference().catch((error) => {
+        ztoolkit.log("[AuthManager] Login language sync failed:", error);
+      });
 
       return { success: true, message: getString("api-success-login") };
     }
@@ -700,6 +713,45 @@ export class AuthManager {
       () => this.authService.getPricing(),
       "getPricing",
     );
+  }
+
+  private getLocalUserLanguage(): string {
+    const locale = (Zotero.locale || "en").replace("_", "-").toLowerCase();
+
+    if (locale === "zh-tw" || locale === "zh-hant") {
+      return "zh-TW";
+    }
+    if (locale === "zh-cn" || locale === "zh-hans" || locale === "zh-sg") {
+      return "zh-CN";
+    }
+
+    const language = locale.split("-")[0];
+    if (SUPPORTED_USER_LANGUAGES.has(language)) {
+      return language;
+    }
+
+    return "en";
+  }
+
+  private async syncLocalLanguagePreference(): Promise<void> {
+    if (!this.state.isLoggedIn) {
+      return;
+    }
+
+    const language = this.getLocalUserLanguage();
+    const result = await this.withSessionRetry(
+      () => this.authService.updateUserLanguage(language),
+      "updateUserLanguage",
+    );
+
+    if (result.success) {
+      ztoolkit.log("[AuthManager] Synced user language:", language);
+    } else {
+      ztoolkit.log(
+        "[AuthManager] Failed to sync user language:",
+        result.message,
+      );
+    }
   }
 
   /**
@@ -995,6 +1047,9 @@ export class AuthManager {
         // Refresh model list on startup (non-blocking — don't delay UI registration)
         this.fetchAndSetDefaultModel().catch((e) => {
           ztoolkit.log("[AuthManager] Startup model refresh failed:", e);
+        });
+        this.syncLocalLanguagePreference().catch((e) => {
+          ztoolkit.log("[AuthManager] Startup language sync failed:", e);
         });
         // Start periodic refresh
         this.startModelRefreshTimer();
