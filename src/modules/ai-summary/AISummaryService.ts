@@ -16,6 +16,7 @@ import { ANALYTICS_EVENTS, getAnalyticsService } from "../analytics";
 import { getProviderManager } from "../providers";
 
 type AISummaryRequestSource = "item_context_menu" | "reader_context_menu";
+const MAX_CONTEXT_MENU_SUMMARY_ITEMS = 10;
 
 // 任务状态
 export type TaskStatus = "pending" | "running" | "completed" | "failed";
@@ -86,11 +87,16 @@ class AISummaryService {
       label: getString("aisummary-menu-generate"),
       icon: `chrome://${addon.data.config.addonRef}/content/icons/favicon.svg`,
       commandListener: (_event) => {
+        if (this.isSummaryQueueActive()) return;
         const pane = Zotero.getActiveZoteroPane();
         const selectedItems = pane?.getSelectedItems() as
           | Zotero.Item[]
           | undefined;
-        if (selectedItems && selectedItems.length > 0) {
+        if (
+          selectedItems &&
+          selectedItems.length > 0 &&
+          selectedItems.length <= MAX_CONTEXT_MENU_SUMMARY_ITEMS
+        ) {
           const processedKeys = new Set<string>();
           let queuedCount = 0;
           for (const item of selectedItems) {
@@ -114,6 +120,12 @@ class AISummaryService {
           | Zotero.Item[]
           | undefined;
         if (!selectedItems || selectedItems.length === 0) return false;
+        if (
+          selectedItems.length > MAX_CONTEXT_MENU_SUMMARY_ITEMS ||
+          this.isSummaryQueueActive()
+        ) {
+          return false;
+        }
         const config = getAISummaryManager().getConfig();
         const processedTag = config.markProcessedTag;
         // Show menu only if at least one eligible item hasn't been processed
@@ -139,11 +151,16 @@ class AISummaryService {
       label: getString("aisummary-menu-generate-deep"),
       icon: `chrome://${addon.data.config.addonRef}/content/icons/favicon.svg`,
       commandListener: (_event) => {
+        if (this.isSummaryQueueActive()) return;
         const pane = Zotero.getActiveZoteroPane();
         const selectedItems = pane?.getSelectedItems() as
           | Zotero.Item[]
           | undefined;
-        if (selectedItems && selectedItems.length > 0) {
+        if (
+          selectedItems &&
+          selectedItems.length > 0 &&
+          selectedItems.length <= MAX_CONTEXT_MENU_SUMMARY_ITEMS
+        ) {
           const processedKeys = new Set<string>();
           let queuedCount = 0;
           for (const item of selectedItems) {
@@ -171,6 +188,12 @@ class AISummaryService {
           | Zotero.Item[]
           | undefined;
         if (!selectedItems || selectedItems.length === 0) return false;
+        if (
+          selectedItems.length > MAX_CONTEXT_MENU_SUMMARY_ITEMS ||
+          this.isSummaryQueueActive()
+        ) {
+          return false;
+        }
         const config = getAISummaryManager().getConfig();
         return selectedItems.some((item: Zotero.Item) => {
           const targetItem = this.getSummaryTargetItem(item);
@@ -376,6 +399,10 @@ class AISummaryService {
       // 重新获取 item，确保使用最新状态
       const freshItem = Zotero.Items.getByLibraryAndKey(libraryID, itemKey);
       if (freshItem) {
+        if (this.isSummaryQueueActive()) {
+          this.scheduleItemProcessing(freshItem);
+          return;
+        }
         this.addToQueue(freshItem);
       } else {
         ztoolkit.log(
@@ -573,13 +600,27 @@ class AISummaryService {
     return tags.some((t: { tag: string }) => t.tag === deepTag);
   }
 
+  private isSummaryQueueActive(): boolean {
+    const batchStatus = getAISummaryManager().getProgress().status;
+    return (
+      batchStatus === "running" ||
+      this.isProcessing ||
+      this.taskQueue.some(
+        (task) => task.status === "pending" || task.status === "running",
+      )
+    );
+  }
+
   private appendReaderSummaryMenuItems(
     append: (options: { label: string; onCommand: () => void }) => void,
     parentItem: Zotero.Item,
   ): void {
+    if (this.isSummaryQueueActive()) return;
+
     append({
       label: getString("aisummary-menu-generate"),
       onCommand: () => {
+        if (this.isSummaryQueueActive()) return;
         this.addItemToQueue(parentItem, "reader_context_menu");
         this.onOpenTaskWindow?.();
       },
@@ -593,6 +634,7 @@ class AISummaryService {
       append({
         label: getString("aisummary-menu-generate-deep"),
         onCommand: () => {
+          if (this.isSummaryQueueActive()) return;
           this.addDeepItemToQueue(parentItem, "reader_context_menu");
           this.onOpenTaskWindow?.();
         },
