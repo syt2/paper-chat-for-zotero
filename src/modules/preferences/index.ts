@@ -10,7 +10,9 @@ import {
   bindPrefEvents,
   refreshPrefsUI as refreshPrefsUIState,
 } from "./PreferencesManager";
+import { getAuthManager } from "../auth";
 import { togglePaperChatNotice } from "./PaperChatNoticeRenderer";
+import { updateUserDisplay } from "./UserAuthUI";
 import type { PrefsRefreshOptions } from "./types";
 
 /**
@@ -21,8 +23,24 @@ export async function registerPrefsScripts(_window: Window): Promise<void> {
     window: _window,
   };
 
-  await initializePrefsUI();
-  bindPrefEvents();
+  try {
+    await initializePrefsUI();
+  } catch (error) {
+    ztoolkit.log("[Preferences] Failed to initialize prefs UI:", error);
+    try {
+      updateUserDisplay(_window.document, getAuthManager());
+    } catch (displayError) {
+      ztoolkit.log(
+        "[Preferences] Failed to update user display after init failure:",
+        displayError,
+      );
+    }
+  }
+  try {
+    bindPrefEvents();
+  } catch (error) {
+    ztoolkit.log("[Preferences] Failed to bind prefs events:", error);
+  }
 }
 
 export async function refreshPrefsUI(
