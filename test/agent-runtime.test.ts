@@ -169,6 +169,11 @@ describe("agent runtime plan semantics", function () {
     );
 
     assert.include(prompt, "FINAL ANSWER REQUIREMENTS");
+    assert.include(prompt, "=== PARALLEL TOOL CALLING ===");
+    assert.include(
+      prompt,
+      "request all independent read-only or network lookups in the same tool-calling turn",
+    );
     assert.include(prompt, "Attribute claims to the correct paper");
     assert.include(
       prompt,
@@ -204,6 +209,7 @@ describe("agent runtime plan semantics", function () {
 
     assert.include(stablePrompt, "=== NO PAPER SELECTED ===");
     assert.include(stablePrompt, "list_all_items");
+    assert.include(stablePrompt, "=== PARALLEL TOOL CALLING ===");
     assert.notInclude(stablePrompt, "Current iteration:");
     assert.notInclude(stablePrompt, "FINAL ANSWER REQUIREMENTS");
     assert.include(runtimePrompt, "Current iteration: 2/4");
