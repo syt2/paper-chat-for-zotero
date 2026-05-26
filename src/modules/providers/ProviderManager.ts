@@ -67,33 +67,10 @@ export const BUILTIN_PROVIDERS: Record<BuiltinProviderId, ProviderMetadata> = {
     website: "https://platform.deepseek.com",
     type: "openai-compatible",
   },
-  mistral: {
-    id: "mistral",
-    name: "Mistral",
-    description: "Mistral AI - Pixtral, Mistral Large, etc.",
-    defaultBaseUrl: "https://api.mistral.ai/v1",
-    website: "https://console.mistral.ai",
-    type: "openai-compatible",
-  },
-  groq: {
-    id: "groq",
-    name: "Groq",
-    description: "Groq Cloud - Ultra-fast inference",
-    defaultBaseUrl: "https://api.groq.com/openai/v1",
-    website: "https://console.groq.com",
-    type: "openai-compatible",
-  },
-  openrouter: {
-    id: "openrouter",
-    name: "OpenRouter",
-    description: "OpenRouter - Access multiple AI providers",
-    defaultBaseUrl: "https://openrouter.ai/api/v1",
-    website: "https://openrouter.ai",
-    type: "openai-compatible",
-  },
 };
 
 const PREFS_KEY = `${config.prefsPrefix}.providersConfig`;
+const REMOVED_BUILTIN_PROVIDER_IDS = new Set(["mistral", "groq", "openrouter"]);
 
 /**
  * Default fallback configuration
@@ -227,14 +204,33 @@ export class ProviderManager {
         this.activeProviderId = data.activeProviderId || "paperchat";
         const { configs, changed } = this.normalizeLoadedConfigs(providers);
         this.configs = configs;
+        let prefsChanged = changed;
+        if (
+          !this.configs.some(
+            (provider) => provider.id === this.activeProviderId,
+          )
+        ) {
+          this.activeProviderId = "paperchat";
+          prefsChanged = true;
+        }
         // Load fallback config
         if (data.fallbackConfig) {
+          const fallbackProviderIds = (
+            data.fallbackConfig.fallbackProviderIds || []
+          ).filter((id) => !REMOVED_BUILTIN_PROVIDER_IDS.has(id));
           this.fallbackConfig = {
             ...DEFAULT_FALLBACK_CONFIG,
             ...data.fallbackConfig,
+            fallbackProviderIds,
           };
+          if (
+            fallbackProviderIds.length !==
+            (data.fallbackConfig.fallbackProviderIds || []).length
+          ) {
+            prefsChanged = true;
+          }
         }
-        if (changed) {
+        if (prefsChanged) {
           this.saveToPrefs();
         }
         ztoolkit.log(
@@ -294,9 +290,6 @@ export class ProviderManager {
       "claude",
       "gemini",
       "deepseek",
-      "mistral",
-      "groq",
-      "openrouter",
     ];
 
     apiKeyProviders.forEach((id, index) => {
@@ -348,7 +341,13 @@ export class ProviderManager {
     changed: boolean;
   } {
     let changed = false;
-    const configs = providers.map((provider) => {
+    const configs: ProviderConfig[] = [];
+    for (const provider of providers) {
+      if (provider.isBuiltin && REMOVED_BUILTIN_PROVIDER_IDS.has(provider.id)) {
+        changed = true;
+        continue;
+      }
+
       if (
         this.shouldClearUnfetchedBuiltinModels(provider) &&
         provider.availableModels &&
@@ -357,19 +356,21 @@ export class ProviderManager {
         changed = true;
         const customModelIds = this.getCustomModelIds(provider);
         if (provider.type === "paperchat") {
-          return {
+          configs.push({
             ...provider,
             defaultModel: undefined,
             availableModels: [],
-          } as PaperChatProviderConfig;
+          } as PaperChatProviderConfig);
+          continue;
         }
-        return {
+        configs.push({
           ...provider,
           defaultModel: customModelIds.includes(provider.defaultModel)
             ? provider.defaultModel
             : customModelIds[0] || "",
           availableModels: customModelIds,
-        } as ApiKeyProviderConfig;
+        } as ApiKeyProviderConfig);
+        continue;
       }
 
       if (
@@ -379,14 +380,16 @@ export class ProviderManager {
           !provider.availableModels.includes(provider.defaultModel))
       ) {
         changed = true;
-        return {
+        configs.push({
           ...provider,
           defaultModel: provider.availableModels[0],
-        } as ApiKeyProviderConfig;
+        } as ApiKeyProviderConfig);
+        continue;
       }
 
       if (provider.id !== "paperchat" || provider.type !== "paperchat") {
-        return provider;
+        configs.push(provider);
+        continue;
       }
 
       const paperchat = { ...provider } as PaperChatProviderConfig;
@@ -394,8 +397,8 @@ export class ProviderManager {
         delete paperchat.maxTokens;
         changed = true;
       }
-      return paperchat;
-    });
+      configs.push(paperchat);
+    }
 
     return { configs, changed };
   }

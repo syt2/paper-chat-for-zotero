@@ -38,7 +38,7 @@ export type ProviderType =
   | "openai" // Native OpenAI API
   | "anthropic" // Anthropic Claude API (different format)
   | "gemini" // Google Gemini API (different format)
-  | "openai-compatible" // DeepSeek, Mistral, Groq, OpenRouter
+  | "openai-compatible" // DeepSeek and user-configured compatible APIs
   | "custom"; // User-defined OpenAI-compatible
 
 /**
@@ -49,10 +49,7 @@ export type BuiltinProviderId =
   | "openai"
   | "claude"
   | "gemini"
-  | "deepseek"
-  | "mistral"
-  | "groq"
-  | "openrouter";
+  | "deepseek";
 
 /**
  * Base provider configuration
