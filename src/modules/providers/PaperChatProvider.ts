@@ -28,6 +28,7 @@ import {
   resolveAutoModel,
   resolveAutoModelSmart,
 } from "../preferences/ModelsFetcher";
+import { isEmbeddingModel } from "../embedding/providers/PaperChatEmbedding";
 import { resolveSelectedTierModel } from "./paperchat-tier-routing";
 
 export class PaperChatProvider implements AIProvider {
@@ -39,12 +40,30 @@ export class PaperChatProvider implements AIProvider {
     this._delegate = new OpenAICompatibleProvider(this.createDelegateConfig());
   }
 
+  private getConfiguredModels(): string[] {
+    const cachedModels = getPref("paperchatModelsCache") as string;
+    if (cachedModels) {
+      try {
+        const models = JSON.parse(cachedModels) as string[];
+        if (Array.isArray(models) && models.length > 0) {
+          return models.filter((model) => !isEmbeddingModel(model));
+        }
+      } catch (error) {
+        ztoolkit.log(
+          "[PaperChatProvider] Invalid paperchatModelsCache, falling back to provider config:",
+          error,
+        );
+      }
+    }
+    return (this._config.availableModels || []).filter(
+      (model) => !isEmbeddingModel(model),
+    );
+  }
+
   private createDelegateConfig(): ApiKeyProviderConfig {
     const authManager = getAuthManager();
-    const availableModels =
-      this._config.availableModels ||
-      BUILTIN_PROVIDERS.paperchat.defaultModels;
-    const fallbackModel = BUILTIN_PROVIDERS.paperchat.defaultModels[0];
+    const availableModels = this.getConfiguredModels();
+    const fallbackModel = availableModels[0] || "";
 
     let model = this._config.resolvedModelOverride;
 
@@ -95,7 +114,11 @@ export class PaperChatProvider implements AIProvider {
 
   isReady(): boolean {
     const authManager = getAuthManager();
-    return authManager.isLoggedIn() && !!authManager.getApiKey();
+    return (
+      authManager.isLoggedIn() &&
+      !!authManager.getApiKey() &&
+      this.getConfiguredModels().length > 0
+    );
   }
 
   updateConfig(config: Partial<PaperChatProviderConfig>): void {
@@ -137,21 +160,7 @@ export class PaperChatProvider implements AIProvider {
   }
 
   async getAvailableModels(): Promise<string[]> {
-    const cachedModels = getPref("paperchatModelsCache") as string;
-    if (cachedModels) {
-      try {
-        const models = JSON.parse(cachedModels) as string[];
-        if (Array.isArray(models) && models.length > 0) {
-          return models;
-        }
-      } catch (error) {
-        ztoolkit.log(
-          "[PaperChatProvider] Invalid paperchatModelsCache, falling back to defaults:",
-          error,
-        );
-      }
-    }
-    return BUILTIN_PROVIDERS.paperchat.defaultModels;
+    return this.getConfiguredModels();
   }
 
   /**

@@ -1,7 +1,7 @@
 import type { ChatMessage, ChatSession } from "../../types/chat";
 import type { AIProvider, PaperChatProviderConfig } from "../../types/provider";
 import { getErrorMessage } from "../../utils/common";
-import { BUILTIN_PROVIDERS, getProviderManager } from "../providers";
+import { getProviderManager } from "../providers";
 import { PaperChatProvider } from "../providers/PaperChatProvider";
 import { deriveTierPools } from "../providers/paperchat-tier-routing";
 import {
@@ -66,7 +66,10 @@ function sanitizeTitle(raw: string): string {
     .trim();
 }
 
-function pickLowestRatioModel(models: string[], ratios: Record<string, number>) {
+function pickLowestRatioModel(
+  models: string[],
+  ratios: Record<string, number>,
+) {
   return [...models].sort((a, b) => {
     const ratioA = ratios[a] ?? Number.POSITIVE_INFINITY;
     const ratioB = ratios[b] ?? Number.POSITIVE_INFINITY;
@@ -84,10 +87,7 @@ function createPaperChatTitleProvider(): AIProvider | null {
     return null;
   }
 
-  const availableModels =
-    config.availableModels && config.availableModels.length > 0
-      ? config.availableModels
-      : BUILTIN_PROVIDERS.paperchat.defaultModels;
+  const availableModels = config.availableModels || [];
   const ratios = getModelRatios();
   const pools = deriveTierPools(availableModels, ratios, getModelRoutingMeta());
   const modelId = pickLowestRatioModel(pools["paperchat-lite"], ratios);

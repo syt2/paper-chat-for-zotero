@@ -20,11 +20,7 @@ const MODEL_EXTRA_REQUEST_BODY_PLACEHOLDER =
   '{\n  "deepseek-v4-flash": {\n    "thinking": { "type": "enabled" },\n    "reasoning_effort": "max"\n  }\n}';
 
 function isPlainJsonObject(value: unknown): value is Record<string, unknown> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value)
-  );
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function formatJsonObject(value: Record<string, unknown> | undefined): string {
@@ -149,8 +145,9 @@ export function populateApiKeyPanel(
     // Clear existing items
     clearElement(modelPopup);
 
-    // Add available models
-    const models = config.availableModels || metadata?.defaultModels || [];
+    // Add only fetched or user-added models. Built-in provider metadata is not
+    // used as a visible fallback because the Refresh button can fetch live models.
+    const models = config.availableModels || [];
     models.forEach((model) => {
       const menuitem = doc.createXULElement("menuitem");
       menuitem.setAttribute("label", model);
@@ -158,7 +155,10 @@ export function populateApiKeyPanel(
       modelPopup.appendChild(menuitem);
     });
 
-    modelSelect.value = config.defaultModel || models[0] || "";
+    modelSelect.value =
+      config.defaultModel && models.includes(config.defaultModel)
+        ? config.defaultModel
+        : models[0] || "";
   }
 
   // Show delete button only for custom providers
@@ -409,14 +409,37 @@ export async function autoFetchModels(
       currentProviderId,
     ) as ApiKeyProviderConfig;
     if (config && models.length > 0) {
+      const customModels = (config.models || []).filter(
+        (model) => model.isCustom,
+      );
+      const customModelIds = new Set(
+        customModels.map((model) => model.modelId),
+      );
+      const availableModels = [
+        ...models,
+        ...customModels
+          .map((model) => model.modelId)
+          .filter((modelId) => !models.includes(modelId)),
+      ];
+      const modelInfos = [
+        ...models
+          .filter((modelId) => !customModelIds.has(modelId))
+          .map((modelId) => ({ modelId })),
+        ...customModels,
+      ];
+      const defaultModel = availableModels.includes(config.defaultModel)
+        ? config.defaultModel
+        : availableModels[0] || "";
       providerManager.updateProviderConfig(currentProviderId, {
-        availableModels: models,
+        defaultModel,
+        availableModels,
+        models: modelInfos,
       });
       // Refresh panel
       const metadata = providerManager.getProviderMetadata(currentProviderId);
       populateApiKeyPanel(
         doc,
-        { ...config, availableModels: models },
+        { ...config, defaultModel, availableModels, models: modelInfos },
         metadata,
       );
       showTestResult(

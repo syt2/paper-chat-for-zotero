@@ -113,6 +113,9 @@ export class AnthropicProvider extends BaseProvider {
 
   async testConnection(): Promise<boolean> {
     try {
+      if (!this._config.defaultModel) {
+        return false;
+      }
       const response = await fetch(`${this._config.baseUrl}/messages`, {
         method: "POST",
         headers: {
@@ -121,7 +124,7 @@ export class AnthropicProvider extends BaseProvider {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: this._config.defaultModel || "claude-haiku-4-5-20251001",
+          model: this._config.defaultModel,
           max_tokens: 10,
           messages: [{ role: "user", content: "Hi" }],
         }),
@@ -170,9 +173,7 @@ export class AnthropicProvider extends BaseProvider {
    * - Consecutive tool results are combined into one user message
    * - Tool calls use "tool_use" blocks in assistant messages
    */
-  private formatMessagesWithTools(
-    messages: ChatMessage[],
-  ): AnthropicMessage[] {
+  private formatMessagesWithTools(messages: ChatMessage[]): AnthropicMessage[] {
     const result: AnthropicMessage[] = [];
     const filtered = messages.filter(
       (msg) => msg.role !== "system" && msg.role !== "error",

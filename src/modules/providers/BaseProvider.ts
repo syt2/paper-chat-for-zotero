@@ -43,7 +43,10 @@ export abstract class BaseProvider implements AIProvider {
 
   isReady(): boolean {
     return (
-      !!this._config.apiKey && !!this._config.baseUrl && this._config.enabled
+      !!this._config.apiKey &&
+      !!this._config.baseUrl &&
+      !!this._config.defaultModel &&
+      this._config.enabled
     );
   }
 

@@ -20,10 +20,11 @@ import { GeminiProvider } from "./GeminiProvider";
 import { PaperChatProvider } from "./PaperChatProvider";
 import { config } from "../../../package.json";
 import { getErrorMessage } from "../../utils/common";
+import { getPref } from "../../utils/prefs";
 
 /**
- * Built-in provider metadata with comprehensive model lists
- * Based on chatbox project (https://github.com/chatboxai/chatbox)
+ * Built-in provider metadata. Model lists are loaded from provider APIs or
+ * user-added entries, not hard-coded here.
  */
 export const BUILTIN_PROVIDERS: Record<BuiltinProviderId, ProviderMetadata> = {
   paperchat: {
@@ -31,95 +32,6 @@ export const BUILTIN_PROVIDERS: Record<BuiltinProviderId, ProviderMetadata> = {
     name: "PaperChat",
     description: "Login-based AI service with multi-model support",
     defaultBaseUrl: "https://paperchat.zotero.store/v1",
-    defaultModels: [
-      // claude-haiku-4-5-20251001 作为首选默认模型
-      "claude-haiku-4-5-20251001",
-      "Pro/deepseek-ai/DeepSeek-V3.2",
-      "Pro/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
-      "Pro/Qwen/Qwen2.5-VL-7B-Instruct",
-      "Pro/THUDM/glm-4-9b-chat",
-      "Pro/THUDM/GLM-4.1V-9B-Thinking",
-      "claude-3-haiku-20240307",
-      "claude-3-5-haiku-20241022",
-      "claude-sonnet-4-5-20250929",
-      "Pro/zai-org/GLM-4.7",
-      "Pro/moonshotai/Kimi-K2-Instruct-0905",
-      "claude-opus-4-5-20251101",
-    ],
-    defaultModelInfos: [
-      {
-        modelId: "claude-haiku-4-5-20251001",
-        contextWindow: 200000,
-        maxOutput: 64000,
-        capabilities: ["vision", "tool_use"],
-      },
-      {
-        modelId: "Pro/deepseek-ai/DeepSeek-V3.2",
-        contextWindow: 64000,
-        maxOutput: 8192,
-        capabilities: ["tool_use"],
-      },
-      {
-        modelId: "Pro/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
-        contextWindow: 64000,
-        maxOutput: 8192,
-        capabilities: ["reasoning"],
-      },
-      {
-        modelId: "Pro/Qwen/Qwen2.5-VL-7B-Instruct",
-        contextWindow: 32000,
-        maxOutput: 8192,
-        capabilities: ["vision"],
-      },
-      {
-        modelId: "Pro/THUDM/glm-4-9b-chat",
-        contextWindow: 128000,
-        maxOutput: 8192,
-        capabilities: ["tool_use"],
-      },
-      {
-        modelId: "Pro/THUDM/GLM-4.1V-9B-Thinking",
-        contextWindow: 128000,
-        maxOutput: 8192,
-        capabilities: ["vision", "reasoning"],
-      },
-      {
-        modelId: "claude-3-haiku-20240307",
-        contextWindow: 200000,
-        maxOutput: 4096,
-        capabilities: ["vision", "tool_use"],
-      },
-      {
-        modelId: "claude-3-5-haiku-20241022",
-        contextWindow: 200000,
-        maxOutput: 8192,
-        capabilities: ["vision", "tool_use"],
-      },
-      {
-        modelId: "claude-sonnet-4-5-20250929",
-        contextWindow: 200000,
-        maxOutput: 64000,
-        capabilities: ["vision", "reasoning", "tool_use"],
-      },
-      {
-        modelId: "Pro/zai-org/GLM-4.7",
-        contextWindow: 128000,
-        maxOutput: 8192,
-        capabilities: ["tool_use"],
-      },
-      {
-        modelId: "Pro/moonshotai/Kimi-K2-Instruct-0905",
-        contextWindow: 128000,
-        maxOutput: 8192,
-        capabilities: ["tool_use"],
-      },
-      {
-        modelId: "claude-opus-4-5-20251101",
-        contextWindow: 200000,
-        maxOutput: 64000,
-        capabilities: ["vision", "reasoning", "tool_use"],
-      },
-    ],
     website: "https://paperchat.zotero.store",
     type: "paperchat",
   },
@@ -128,52 +40,6 @@ export const BUILTIN_PROVIDERS: Record<BuiltinProviderId, ProviderMetadata> = {
     name: "OpenAI",
     description: "Native OpenAI API - GPT-4o, o3, etc.",
     defaultBaseUrl: "https://api.openai.com/v1",
-    defaultModels: [
-      "gpt-4o",
-      "gpt-4o-mini",
-      "o3-mini",
-      "o1",
-      "o1-mini",
-      "gpt-4-turbo",
-    ],
-    defaultModelInfos: [
-      {
-        modelId: "gpt-4o",
-        contextWindow: 128000,
-        maxOutput: 16384,
-        capabilities: ["vision", "tool_use"],
-      },
-      {
-        modelId: "gpt-4o-mini",
-        contextWindow: 128000,
-        maxOutput: 16384,
-        capabilities: ["vision", "tool_use"],
-      },
-      {
-        modelId: "o3-mini",
-        contextWindow: 200000,
-        maxOutput: 100000,
-        capabilities: ["reasoning", "tool_use"],
-      },
-      {
-        modelId: "o1",
-        contextWindow: 200000,
-        maxOutput: 100000,
-        capabilities: ["reasoning"],
-      },
-      {
-        modelId: "o1-mini",
-        contextWindow: 128000,
-        maxOutput: 65536,
-        capabilities: ["reasoning"],
-      },
-      {
-        modelId: "gpt-4-turbo",
-        contextWindow: 128000,
-        maxOutput: 4096,
-        capabilities: ["vision", "tool_use"],
-      },
-    ],
     website: "https://platform.openai.com",
     type: "openai",
   },
@@ -182,45 +48,6 @@ export const BUILTIN_PROVIDERS: Record<BuiltinProviderId, ProviderMetadata> = {
     name: "Claude",
     description: "Anthropic Claude API - Claude 4, Claude 3.5, etc.",
     defaultBaseUrl: "https://api.anthropic.com/v1",
-    defaultModels: [
-      "claude-haiku-4-5-20251001",
-      "claude-sonnet-4-5-20250929",
-      "claude-opus-4-5-20251101",
-      "claude-3-5-haiku-20241022",
-      "claude-3-haiku-20240307",
-    ],
-    defaultModelInfos: [
-      {
-        modelId: "claude-haiku-4-5-20251001",
-        contextWindow: 200000,
-        maxOutput: 64000,
-        capabilities: ["vision", "tool_use"],
-      },
-      {
-        modelId: "claude-sonnet-4-5-20250929",
-        contextWindow: 200000,
-        maxOutput: 64000,
-        capabilities: ["vision", "reasoning", "tool_use"],
-      },
-      {
-        modelId: "claude-opus-4-5-20251101",
-        contextWindow: 200000,
-        maxOutput: 64000,
-        capabilities: ["vision", "reasoning", "tool_use"],
-      },
-      {
-        modelId: "claude-3-5-haiku-20241022",
-        contextWindow: 200000,
-        maxOutput: 8192,
-        capabilities: ["vision", "tool_use"],
-      },
-      {
-        modelId: "claude-3-haiku-20240307",
-        contextWindow: 200000,
-        maxOutput: 4096,
-        capabilities: ["vision", "tool_use"],
-      },
-    ],
     website: "https://console.anthropic.com",
     type: "anthropic",
   },
@@ -229,45 +56,6 @@ export const BUILTIN_PROVIDERS: Record<BuiltinProviderId, ProviderMetadata> = {
     name: "Gemini",
     description: "Google AI Gemini API - Gemini 2.5, 2.0, etc.",
     defaultBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
-    defaultModels: [
-      "gemini-2.5-pro-preview-06-05",
-      "gemini-2.5-flash-preview-05-20",
-      "gemini-2.0-flash-exp",
-      "gemini-1.5-pro",
-      "gemini-1.5-flash",
-    ],
-    defaultModelInfos: [
-      {
-        modelId: "gemini-2.5-pro-preview-06-05",
-        contextWindow: 1000000,
-        maxOutput: 65536,
-        capabilities: ["vision", "reasoning", "tool_use"],
-      },
-      {
-        modelId: "gemini-2.5-flash-preview-05-20",
-        contextWindow: 1000000,
-        maxOutput: 65536,
-        capabilities: ["vision", "reasoning", "tool_use"],
-      },
-      {
-        modelId: "gemini-2.0-flash-exp",
-        contextWindow: 1000000,
-        maxOutput: 8192,
-        capabilities: ["vision", "tool_use"],
-      },
-      {
-        modelId: "gemini-1.5-pro",
-        contextWindow: 2000000,
-        maxOutput: 8192,
-        capabilities: ["vision", "tool_use"],
-      },
-      {
-        modelId: "gemini-1.5-flash",
-        contextWindow: 1000000,
-        maxOutput: 8192,
-        capabilities: ["vision", "tool_use"],
-      },
-    ],
     website: "https://ai.google.dev",
     type: "gemini",
   },
@@ -276,21 +64,6 @@ export const BUILTIN_PROVIDERS: Record<BuiltinProviderId, ProviderMetadata> = {
     name: "DeepSeek",
     description: "DeepSeek AI - DeepSeek Chat, Reasoner",
     defaultBaseUrl: "https://api.deepseek.com/v1",
-    defaultModels: ["deepseek-chat", "deepseek-reasoner"],
-    defaultModelInfos: [
-      {
-        modelId: "deepseek-chat",
-        contextWindow: 64000,
-        maxOutput: 8192,
-        capabilities: ["tool_use"],
-      },
-      {
-        modelId: "deepseek-reasoner",
-        contextWindow: 64000,
-        maxOutput: 8192,
-        capabilities: ["reasoning"],
-      },
-    ],
     website: "https://platform.deepseek.com",
     type: "openai-compatible",
   },
@@ -299,38 +72,6 @@ export const BUILTIN_PROVIDERS: Record<BuiltinProviderId, ProviderMetadata> = {
     name: "Mistral",
     description: "Mistral AI - Pixtral, Mistral Large, etc.",
     defaultBaseUrl: "https://api.mistral.ai/v1",
-    defaultModels: [
-      "pixtral-large-latest",
-      "mistral-large-latest",
-      "mistral-small-latest",
-      "codestral-latest",
-    ],
-    defaultModelInfos: [
-      {
-        modelId: "pixtral-large-latest",
-        contextWindow: 128000,
-        maxOutput: 4096,
-        capabilities: ["vision", "tool_use"],
-      },
-      {
-        modelId: "mistral-large-latest",
-        contextWindow: 128000,
-        maxOutput: 4096,
-        capabilities: ["tool_use"],
-      },
-      {
-        modelId: "mistral-small-latest",
-        contextWindow: 32000,
-        maxOutput: 4096,
-        capabilities: ["tool_use"],
-      },
-      {
-        modelId: "codestral-latest",
-        contextWindow: 32000,
-        maxOutput: 4096,
-        capabilities: [],
-      },
-    ],
     website: "https://console.mistral.ai",
     type: "openai-compatible",
   },
@@ -339,38 +80,6 @@ export const BUILTIN_PROVIDERS: Record<BuiltinProviderId, ProviderMetadata> = {
     name: "Groq",
     description: "Groq Cloud - Ultra-fast inference",
     defaultBaseUrl: "https://api.groq.com/openai/v1",
-    defaultModels: [
-      "llama-3.3-70b-versatile",
-      "llama-3.1-8b-instant",
-      "mixtral-8x7b-32768",
-      "gemma2-9b-it",
-    ],
-    defaultModelInfos: [
-      {
-        modelId: "llama-3.3-70b-versatile",
-        contextWindow: 131072,
-        maxOutput: 32768,
-        capabilities: ["tool_use"],
-      },
-      {
-        modelId: "llama-3.1-8b-instant",
-        contextWindow: 131072,
-        maxOutput: 8192,
-        capabilities: ["tool_use"],
-      },
-      {
-        modelId: "mixtral-8x7b-32768",
-        contextWindow: 32768,
-        maxOutput: 4096,
-        capabilities: [],
-      },
-      {
-        modelId: "gemma2-9b-it",
-        contextWindow: 8192,
-        maxOutput: 4096,
-        capabilities: [],
-      },
-    ],
     website: "https://console.groq.com",
     type: "openai-compatible",
   },
@@ -379,38 +88,6 @@ export const BUILTIN_PROVIDERS: Record<BuiltinProviderId, ProviderMetadata> = {
     name: "OpenRouter",
     description: "OpenRouter - Access multiple AI providers",
     defaultBaseUrl: "https://openrouter.ai/api/v1",
-    defaultModels: [
-      "openai/gpt-4o",
-      "anthropic/claude-sonnet-4-20250514",
-      "google/gemini-2.0-flash-exp:free",
-      "deepseek/deepseek-chat",
-    ],
-    defaultModelInfos: [
-      {
-        modelId: "openai/gpt-4o",
-        contextWindow: 128000,
-        maxOutput: 16384,
-        capabilities: ["vision", "tool_use"],
-      },
-      {
-        modelId: "anthropic/claude-sonnet-4-20250514",
-        contextWindow: 200000,
-        maxOutput: 64000,
-        capabilities: ["vision", "reasoning", "tool_use"],
-      },
-      {
-        modelId: "google/gemini-2.0-flash-exp:free",
-        contextWindow: 1000000,
-        maxOutput: 8192,
-        capabilities: ["vision", "tool_use"],
-      },
-      {
-        modelId: "deepseek/deepseek-chat",
-        contextWindow: 64000,
-        maxOutput: 8192,
-        capabilities: ["tool_use"],
-      },
-    ],
     website: "https://openrouter.ai",
     type: "openai-compatible",
   },
@@ -604,8 +281,8 @@ export class ProviderManager {
         enabled: true,
         isBuiltin: true,
         order: 0,
-        defaultModel: BUILTIN_PROVIDERS.paperchat.defaultModels[0],
-        availableModels: BUILTIN_PROVIDERS.paperchat.defaultModels,
+        defaultModel: undefined,
+        availableModels: [],
         temperature: 0.7,
         systemPrompt: "",
       } as PaperChatProviderConfig,
@@ -633,12 +310,37 @@ export class ProviderManager {
         order: index + 1,
         apiKey: "",
         baseUrl: meta.defaultBaseUrl,
-        defaultModel: meta.defaultModels[0],
-        availableModels: meta.defaultModels,
+        defaultModel: "",
+        availableModels: [],
       } as ApiKeyProviderConfig);
     });
 
     return configs;
+  }
+
+  private shouldClearUnfetchedBuiltinModels(config: ProviderConfig): boolean {
+    if (!config.isBuiltin || !(config.id in BUILTIN_PROVIDERS)) {
+      return false;
+    }
+    if (config.type === "paperchat") {
+      const cachedModels = getPref("paperchatModelsCache") as string;
+      return !cachedModels && (config.availableModels || []).length > 0;
+    }
+    return (
+      !config.apiKey.trim() &&
+      (config.availableModels || []).some(
+        (modelId) => !this.getCustomModelIds(config).includes(modelId),
+      )
+    );
+  }
+
+  private getCustomModelIds(config: ProviderConfig): string[] {
+    if (!("models" in config)) {
+      return [];
+    }
+    return (config.models || [])
+      .filter((model) => model.isCustom)
+      .map((model) => model.modelId);
   }
 
   private normalizeLoadedConfigs(providers: ProviderConfig[]): {
@@ -647,6 +349,42 @@ export class ProviderManager {
   } {
     let changed = false;
     const configs = providers.map((provider) => {
+      if (
+        this.shouldClearUnfetchedBuiltinModels(provider) &&
+        provider.availableModels &&
+        provider.availableModels.length > 0
+      ) {
+        changed = true;
+        const customModelIds = this.getCustomModelIds(provider);
+        if (provider.type === "paperchat") {
+          return {
+            ...provider,
+            defaultModel: undefined,
+            availableModels: [],
+          } as PaperChatProviderConfig;
+        }
+        return {
+          ...provider,
+          defaultModel: customModelIds.includes(provider.defaultModel)
+            ? provider.defaultModel
+            : customModelIds[0] || "",
+          availableModels: customModelIds,
+        } as ApiKeyProviderConfig;
+      }
+
+      if (
+        provider.type !== "paperchat" &&
+        provider.availableModels.length > 0 &&
+        (!provider.defaultModel ||
+          !provider.availableModels.includes(provider.defaultModel))
+      ) {
+        changed = true;
+        return {
+          ...provider,
+          defaultModel: provider.availableModels[0],
+        } as ApiKeyProviderConfig;
+      }
+
       if (provider.id !== "paperchat" || provider.type !== "paperchat") {
         return provider;
       }
@@ -851,6 +589,7 @@ export class ProviderManager {
     const newModelInfos = [...(config.models || []), modelInfo];
 
     this.updateProviderConfig(providerId, {
+      defaultModel: config.defaultModel || modelId,
       availableModels: newModels,
       models: newModelInfos,
     });
@@ -884,8 +623,8 @@ export class ProviderManager {
       availableModels: newModels,
       models: newModelInfos,
     };
-    if (config.defaultModel === modelId && newModels.length > 0) {
-      updates.defaultModel = newModels[0];
+    if (config.defaultModel === modelId) {
+      updates.defaultModel = newModels[0] || "";
     }
 
     this.updateProviderConfig(providerId, updates);
@@ -904,15 +643,6 @@ export class ProviderManager {
     // First check provider config models
     const configModel = config.models?.find((m) => m.modelId === modelId);
     if (configModel) return configModel;
-
-    // Then check built-in provider defaults
-    const metadata = BUILTIN_PROVIDERS[providerId as BuiltinProviderId];
-    if (metadata) {
-      const builtinModel = metadata.defaultModelInfos.find(
-        (m) => m.modelId === modelId,
-      );
-      if (builtinModel) return builtinModel;
-    }
 
     // Return basic info if not found
     return { modelId };

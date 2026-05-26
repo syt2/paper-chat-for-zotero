@@ -109,8 +109,6 @@ export interface ProviderMetadata {
   name: string;
   description: string;
   defaultBaseUrl: string;
-  defaultModels: string[]; // Model ID list
-  defaultModelInfos: ModelInfo[]; // Detailed model info
   website: string;
   type: ProviderType;
 }
@@ -268,7 +266,10 @@ export interface AIProvider {
   ): Promise<void>;
 
   /** Non-streaming chat completion */
-  chatCompletion(messages: ChatMessage[], signal?: AbortSignal): Promise<string>;
+  chatCompletion(
+    messages: ChatMessage[],
+    signal?: AbortSignal,
+  ): Promise<string>;
 
   /** Test connection to the API */
   testConnection(): Promise<boolean>;

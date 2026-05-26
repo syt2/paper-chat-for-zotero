@@ -3,7 +3,7 @@
  */
 
 import { getPref, setPref } from "../../utils/prefs";
-import { getProviderManager, BUILTIN_PROVIDERS } from "../providers";
+import { getProviderManager } from "../providers";
 import {
   deriveTierPools,
   getAvailablePaperChatTiers,
@@ -141,13 +141,6 @@ function getAvailableChatModels(
   models?: string[],
 ): string[] {
   let modelList = models;
-  if (
-    !modelList &&
-    config?.availableModels &&
-    config.availableModels.length > 0
-  ) {
-    modelList = config.availableModels;
-  }
   if (!modelList) {
     const cachedModels = getPref("paperchatModelsCache") as string;
     if (cachedModels) {
@@ -155,18 +148,21 @@ function getAvailableChatModels(
         modelList = JSON.parse(cachedModels) as string[];
       } catch (error) {
         ztoolkit.log(
-          "[Preferences] Invalid paperchatModelsCache, falling back to defaults:",
+          "[Preferences] Invalid paperchatModelsCache, falling back to provider config:",
           error,
         );
         modelList = undefined;
       }
     }
   }
-  if (!modelList || modelList.length === 0) {
-    modelList = BUILTIN_PROVIDERS.paperchat.defaultModels;
+  if (
+    !modelList &&
+    config?.availableModels &&
+    config.availableModels.length > 0
+  ) {
+    modelList = config.availableModels;
   }
-
-  return modelList.filter((model) => !isEmbeddingModel(model));
+  return (modelList || []).filter((model) => !isEmbeddingModel(model));
 }
 
 function populateTierOverridePopup(
