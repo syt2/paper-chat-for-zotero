@@ -58,6 +58,9 @@ export type ChatPanelOpenSource = "menu" | "toolbar" | "unknown";
 
 const APPROVAL_RESOLVED_ANIMATION_MS = 260;
 const APPROVAL_ENTER_ANIMATION_MS = 220;
+const STREAMING_TEXT_RENDER_INTERVAL_MS = 80;
+const STREAMING_MARKDOWN_RENDER_INTERVAL_MS = 5000;
+const STREAMING_TEXT_TAIL_ATTR = "data-streaming-text-tail";
 
 type PendingApprovalRequest = ToolApprovalState["pendingRequests"][number];
 
@@ -70,6 +73,165 @@ const approvalPanelTransitions = new WeakMap<
   HTMLElement,
   ApprovalPanelTransitionEntry
 >();
+
+type StreamingTextRenderState = {
+  messageId: string;
+  pendingContent: string;
+  lastRenderedContent: string;
+  lastMarkdownContent: string;
+  lastRenderAt: number;
+  lastMarkdownRenderAt: number;
+  timeoutId: ReturnType<typeof setTimeout> | null;
+};
+
+const streamingTextRenderStates = new WeakMap<
+  HTMLElement,
+  StreamingTextRenderState
+>();
+
+function cancelPendingStreamingTextRender(container: HTMLElement): void {
+  const state = streamingTextRenderStates.get(container);
+  if (!state) return;
+  if (state.timeoutId) {
+    clearTimeout(state.timeoutId);
+  }
+  streamingTextRenderStates.delete(container);
+}
+
+function renderStreamingTextNow(
+  container: HTMLElement,
+  manager: ChatManager,
+  state: StreamingTextRenderState,
+  content: string,
+  messageId: string,
+): boolean {
+  const activeMessage = manager
+    .getActiveSession()
+    ?.messages.find((message) => message.id === messageId);
+  if (
+    !activeMessage ||
+    activeMessage.role !== "assistant" ||
+    activeMessage.streamingState !== "in_progress"
+  ) {
+    return false;
+  }
+
+  const streamingEl = container.querySelector(
+    getStreamingContentSelector(messageId),
+  ) as HTMLElement | null;
+  if (!streamingEl) {
+    return false;
+  }
+
+  if (
+    state.lastMarkdownContent &&
+    !content.startsWith(state.lastMarkdownContent)
+  ) {
+    state.lastMarkdownContent = "";
+  }
+
+  const now = Date.now();
+  const shouldRenderMarkdown =
+    now - state.lastMarkdownRenderAt >= STREAMING_MARKDOWN_RENDER_INTERVAL_MS;
+
+  if (shouldRenderMarkdown) {
+    renderMarkdownToElement(streamingEl, content, messageId);
+    const tail = streamingEl.ownerDocument.createElement("span");
+    tail.setAttribute(STREAMING_TEXT_TAIL_ATTR, "true");
+    streamingEl.appendChild(tail);
+    state.lastMarkdownContent = content;
+    state.lastMarkdownRenderAt = now;
+  } else if (state.lastMarkdownContent) {
+    let tail = streamingEl.querySelector(
+      `[${STREAMING_TEXT_TAIL_ATTR}]`,
+    ) as HTMLElement | null;
+    if (!tail) {
+      tail = streamingEl.ownerDocument.createElement("span");
+      tail.setAttribute(STREAMING_TEXT_TAIL_ATTR, "true");
+      streamingEl.appendChild(tail);
+    }
+    tail.textContent = content.slice(state.lastMarkdownContent.length);
+  } else if (streamingEl.textContent !== content) {
+    streamingEl.textContent = content;
+  }
+
+  if (state.lastRenderedContent !== content) {
+    const chatHistory = container.querySelector(
+      "#chat-history",
+    ) as HTMLElement | null;
+    if (chatHistory) {
+      chatHistory.scrollTop = chatHistory.scrollHeight;
+    }
+  }
+  state.lastRenderedContent = content;
+  return true;
+}
+
+function scheduleStreamingTextRender(
+  container: HTMLElement,
+  manager: ChatManager,
+  content: string,
+  messageId: string,
+): void {
+  let state = streamingTextRenderStates.get(container);
+  if (!state || state.messageId !== messageId) {
+    cancelPendingStreamingTextRender(container);
+    state = {
+      messageId,
+      pendingContent: content,
+      lastRenderedContent: "",
+      lastMarkdownContent: "",
+      lastRenderAt: 0,
+      lastMarkdownRenderAt: Date.now(),
+      timeoutId: null,
+    };
+    streamingTextRenderStates.set(container, state);
+  }
+
+  state.pendingContent = content;
+  if (state.pendingContent === state.lastRenderedContent) {
+    return;
+  }
+
+  const render = () => {
+    const latestState = streamingTextRenderStates.get(container);
+    if (!latestState || latestState.messageId !== messageId) {
+      return;
+    }
+    latestState.timeoutId = null;
+    const nextContent = latestState.pendingContent;
+    if (
+      !renderStreamingTextNow(
+        container,
+        manager,
+        latestState,
+        nextContent,
+        messageId,
+      )
+    ) {
+      streamingTextRenderStates.delete(container);
+      return;
+    }
+    latestState.lastRenderAt = Date.now();
+  };
+
+  const elapsed = Date.now() - state.lastRenderAt;
+  if (elapsed >= STREAMING_TEXT_RENDER_INTERVAL_MS) {
+    if (state.timeoutId) {
+      clearTimeout(state.timeoutId);
+      state.timeoutId = null;
+    }
+    render();
+    return;
+  }
+
+  if (!state.timeoutId) {
+    state.timeoutId = setTimeout(
+      render,
+      STREAMING_TEXT_RENDER_INTERVAL_MS - elapsed,
+    );
+  }
+}
 
 function buildApprovalActionsForContainer(
   manager: ChatManager,
@@ -87,7 +249,10 @@ function buildApprovalActionsForContainer(
         manager,
         requestId,
       );
-      const decision = manager.resolveToolApprovalRequest(requestId, resolution);
+      const decision = manager.resolveToolApprovalRequest(
+        requestId,
+        resolution,
+      );
       if (decision && currentRequest) {
         startApprovalTransition(
           container,
@@ -169,18 +334,20 @@ function clonePendingApprovalRequest(
   request: PendingApprovalRequest,
   doc: Document,
 ): PendingApprovalRequest {
-  return structuredCloneIfAvailable(request, doc.defaultView) || {
-    ...request,
-    descriptor: { ...request.descriptor },
-    request: {
-      ...request.request,
-      toolCall: {
-        ...request.request.toolCall,
-        function: { ...request.request.toolCall.function },
+  return (
+    structuredCloneIfAvailable(request, doc.defaultView) || {
+      ...request,
+      descriptor: { ...request.descriptor },
+      request: {
+        ...request.request,
+        toolCall: {
+          ...request.request.toolCall,
+          function: { ...request.request.toolCall.function },
+        },
+        args: { ...request.request.args },
       },
-      args: { ...request.request.args },
-    },
-  };
+    }
+  );
 }
 
 function structuredCloneIfAvailable<T>(
@@ -199,7 +366,9 @@ function structuredCloneIfAvailable<T>(
 }
 
 function getApprovalPanel(container: HTMLElement): HTMLElement | null {
-  return container.querySelector("#chat-execution-approval-panel") as HTMLElement | null;
+  return container.querySelector(
+    "#chat-execution-approval-panel",
+  ) as HTMLElement | null;
 }
 
 function clearApprovalTransition(panel: HTMLElement | null): void {
@@ -215,7 +384,10 @@ function clearApprovalTransition(panel: HTMLElement | null): void {
   approvalPanelTransitions.delete(panel);
 }
 
-function rerenderApprovalPanel(container: HTMLElement, manager: ChatManager): void {
+function rerenderApprovalPanel(
+  container: HTMLElement,
+  manager: ChatManager,
+): void {
   updateExecutionInsetsForContainer(
     container,
     manager,
@@ -815,6 +987,10 @@ function closeFloatingWindow(): void {
     floatingTabNotifierID = null;
   }
 
+  if (floatingContainer) {
+    cancelPendingStreamingTextRender(floatingContainer);
+  }
+
   if (floatingWindow && !floatingWindow.closed) {
     suppressFloatingUnloadTracking = true;
     floatingWindow.close();
@@ -1006,27 +1182,13 @@ function setupChatManagerCallbacks(
         "onMessageUpdate callback fired, messages:",
         messages.length,
       );
+      cancelPendingStreamingTextRender(container);
       context.renderMessages(messages);
       updateModelSelectorDisplay(container);
     },
     onStreamingUpdate: (content, messageId) => {
       if (container) {
-        const activeMessage = manager
-          .getActiveSession()
-          ?.messages.find((message) => message.id === messageId);
-        if (
-          !activeMessage ||
-          activeMessage.role !== "assistant" ||
-          activeMessage.streamingState !== "in_progress"
-        ) {
-          return;
-        }
-        const streamingEl = container.querySelector(
-          getStreamingContentSelector(messageId),
-        );
-        if (streamingEl) {
-          renderMarkdownToElement(streamingEl as HTMLElement, content, messageId);
-        }
+        scheduleStreamingTextRender(container, manager, content, messageId);
       }
     },
     onReasoningUpdate: (reasoning, messageId) => {
@@ -1431,6 +1593,7 @@ function createContext(container: HTMLElement): ChatPanelContext {
     },
     renderMessages: (messages: ChatMessage[]) => {
       if (container) {
+        cancelPendingStreamingTextRender(container);
         const chatHistory = container.querySelector(
           "#chat-history",
         ) as HTMLElement;
@@ -1551,6 +1714,7 @@ export async function unregisterAll(): Promise<void> {
 
   // Remove container
   if (chatContainer) {
+    cancelPendingStreamingTextRender(chatContainer);
     chatContainer.remove();
     chatContainer = null;
   }

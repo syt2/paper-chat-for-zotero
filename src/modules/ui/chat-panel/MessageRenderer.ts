@@ -162,7 +162,10 @@ function createTopupButton(doc: Document): HTMLElement {
     void import("../../preferences/UserAuthUI")
       .then((module) => module.openPaperChatSettingsForTopup())
       .catch((error) => {
-        ztoolkit.log("[Chat] Failed to open PaperChat settings for topup:", error);
+        ztoolkit.log(
+          "[Chat] Failed to open PaperChat settings for topup:",
+          error,
+        );
         Zotero.Utilities.Internal.openPreferences("paperchat-prefpane");
       });
   });
@@ -372,6 +375,8 @@ export function createMessageElement(
 
       // Inject animation keyframes
       injectTypingAnimation(doc);
+    } else if (msg.streamingState === "in_progress") {
+      content.textContent = msg.content;
     } else {
       renderMarkdownToElement(content, msg.content, msg.id);
     }
@@ -424,10 +429,7 @@ export function createMessageElement(
 
   bubble.appendChild(content);
 
-  if (
-    msg.role === "user" &&
-    msg.images?.some(isRenderableImageAttachment)
-  ) {
+  if (msg.role === "user" && msg.images?.some(isRenderableImageAttachment)) {
     bubble.appendChild(createMessageImagesElement(doc, msg.images));
   }
 
@@ -1181,9 +1183,7 @@ function populateExecutionBannerElement(
 
   const bar = createElement(doc, "div", {
     border: `1px solid ${
-      isApprovalDock
-        ? accent.borderColor
-        : theme.borderColor
+      isApprovalDock ? accent.borderColor : theme.borderColor
     }`,
     background: theme.assistantBubbleBg,
     borderRadius: isApprovalDock ? "16px" : "12px",
@@ -1580,7 +1580,7 @@ export function updateStreamingContent(
     getStreamingContentSelector(messageId),
   );
   if (streamingEl) {
-    renderMarkdownToElement(streamingEl as HTMLElement, content, messageId);
+    streamingEl.textContent = content;
   }
 }
 
