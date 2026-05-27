@@ -2,6 +2,8 @@ import { assert } from "chai";
 import {
   applyExtraRequestBody,
   OpenAICompatibleProvider,
+  shouldUseOpenAIMaxCompletionTokens,
+  supportsOpenAITemperature,
 } from "../src/modules/providers/OpenAICompatibleProvider.ts";
 import {
   normalizePromptCacheUsage,
@@ -49,6 +51,7 @@ describe("OpenAI-compatible extra request body", function () {
       extraRequestBody: {
         reasoning_effort: "low",
         max_tokens: 2048,
+        max_completion_tokens: 4096,
         temperature: 1.5,
         stream: false,
         model: "other-model",
@@ -69,17 +72,84 @@ describe("OpenAI-compatible extra request body", function () {
     });
 
     assert.equal(requestBody.model, "gpt-5");
-    assert.deepEqual(requestBody.messages, [{ role: "user", content: "hello" }]);
+    assert.deepEqual(requestBody.messages, [
+      { role: "user", content: "hello" },
+    ]);
     assert.equal(requestBody.stream, true);
     assert.deepEqual(requestBody.tools, [
       { type: "function", function: { name: "search" } },
     ]);
     assert.equal(requestBody.tool_choice, "auto");
     assert.equal(requestBody.max_tokens, 8192);
+    assert.notProperty(requestBody, "max_completion_tokens");
     assert.equal(requestBody.temperature, 0.7);
     assert.equal(requestBody.reasoning_effort, "high");
     assert.deepEqual(requestBody.reasoning, { effort: "high" });
     assert.equal(requestBody.top_p, 0.9);
+  });
+
+  it("uses OpenAI max_completion_tokens only for official OpenAI endpoints", function () {
+    assert.isTrue(
+      shouldUseOpenAIMaxCompletionTokens({
+        id: "openai",
+        type: "openai",
+        baseUrl: "https://api.openai.com/v1",
+      }),
+    );
+
+    assert.isTrue(
+      shouldUseOpenAIMaxCompletionTokens({
+        id: "custom-openai",
+        type: "custom",
+        baseUrl: "https://api.openai.com/v1",
+      }),
+    );
+
+    assert.isFalse(
+      shouldUseOpenAIMaxCompletionTokens({
+        id: "openai",
+        type: "openai",
+        baseUrl: "https://openai-proxy.example.test/v1",
+      }),
+    );
+  });
+
+  it("omits temperature for official OpenAI reasoning models", function () {
+    assert.isFalse(
+      supportsOpenAITemperature({
+        id: "openai",
+        type: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        defaultModel: "o3-mini",
+      }),
+    );
+
+    assert.isFalse(
+      supportsOpenAITemperature({
+        id: "openai",
+        type: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        defaultModel: "gpt-5",
+      }),
+    );
+
+    assert.isTrue(
+      supportsOpenAITemperature({
+        id: "openai",
+        type: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        defaultModel: "gpt-4o",
+      }),
+    );
+
+    assert.isTrue(
+      supportsOpenAITemperature({
+        id: "openai",
+        type: "openai",
+        baseUrl: "https://openai-proxy.example.test/v1",
+        defaultModel: "o3-mini",
+      }),
+    );
   });
 
   it("canonicalizes extra request body fields for stable prompt cache keys", function () {

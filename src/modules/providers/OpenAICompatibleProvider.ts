@@ -29,7 +29,36 @@ const EXTRA_REQUEST_BODY_PROTECTED_KEYS = new Set([
   "tool_choice",
   "temperature",
   "max_tokens",
+  "max_completion_tokens",
 ]);
+
+function isOfficialOpenAIEndpoint(config: { baseUrl: string }): boolean {
+  try {
+    return new URL(config.baseUrl).hostname === "api.openai.com";
+  } catch {
+    return false;
+  }
+}
+
+export function shouldUseOpenAIMaxCompletionTokens(config: {
+  id: string;
+  type: string;
+  baseUrl: string;
+}): boolean {
+  return isOfficialOpenAIEndpoint(config);
+}
+
+export function supportsOpenAITemperature(config: {
+  id: string;
+  type: string;
+  baseUrl: string;
+  defaultModel: string;
+}): boolean {
+  if (!isOfficialOpenAIEndpoint(config)) {
+    return true;
+  }
+  return !/^(?:o\d|gpt-5)(?:[-.]|$)/i.test(config.defaultModel);
+}
 
 function mergeExtraRequestBody(
   requestBody: Record<string, unknown>,
@@ -62,6 +91,20 @@ export function applyExtraRequestBody(
 }
 
 export class OpenAICompatibleProvider extends BaseProvider {
+  private applyGenerationOptions(requestBody: Record<string, unknown>): void {
+    if (supportsOpenAITemperature(this._config)) {
+      requestBody.temperature = this._config.temperature ?? 0.7;
+    }
+
+    if (this._config.maxTokens && this._config.maxTokens > 0) {
+      if (shouldUseOpenAIMaxCompletionTokens(this._config)) {
+        requestBody.max_completion_tokens = this._config.maxTokens;
+      } else {
+        requestBody.max_tokens = this._config.maxTokens;
+      }
+    }
+  }
+
   private prepareOpenAIRequestBody(
     requestKind: string,
     requestBody: Record<string, unknown>,
@@ -118,12 +161,9 @@ export class OpenAICompatibleProvider extends BaseProvider {
       const requestBody: Record<string, unknown> = {
         model: this._config.defaultModel,
         messages: apiMessages,
-        temperature: this._config.temperature ?? 0.7,
         stream: true,
       };
-      if (this._config.maxTokens && this._config.maxTokens > 0) {
-        requestBody.max_tokens = this._config.maxTokens;
-      }
+      this.applyGenerationOptions(requestBody);
       applyExtraRequestBody(requestBody, this._config);
 
       const response = await fetch(`${this._config.baseUrl}/chat/completions`, {
@@ -163,12 +203,9 @@ export class OpenAICompatibleProvider extends BaseProvider {
     const requestBody: Record<string, unknown> = {
       model: this._config.defaultModel,
       messages: apiMessages,
-      temperature: this._config.temperature ?? 0.7,
       stream: false,
     };
-    if (this._config.maxTokens && this._config.maxTokens > 0) {
-      requestBody.max_tokens = this._config.maxTokens;
-    }
+    this.applyGenerationOptions(requestBody);
     applyExtraRequestBody(requestBody, this._config);
 
     const response = await fetch(`${this._config.baseUrl}/chat/completions`, {
@@ -260,13 +297,10 @@ export class OpenAICompatibleProvider extends BaseProvider {
     const requestBody: Record<string, unknown> = {
       model: this._config.defaultModel,
       messages: apiMessages,
-      temperature: this._config.temperature ?? 0.7,
       stream: false,
     };
 
-    if (this._config.maxTokens && this._config.maxTokens > 0) {
-      requestBody.max_tokens = this._config.maxTokens;
-    }
+    this.applyGenerationOptions(requestBody);
     applyExtraRequestBody(requestBody, this._config);
 
     // Add tools if provided
@@ -381,8 +415,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
       if (!blockMatch) return [];
 
       const block = blockMatch[1];
-      const invokeRegex =
-        /<invoke\s+name="([^"]+)">([\s\S]*?)<\/invoke>/g;
+      const invokeRegex = /<invoke\s+name="([^"]+)">([\s\S]*?)<\/invoke>/g;
       const toolCalls: ToolCall[] = [];
       let invokeMatch: RegExpExecArray | null;
       let index = 0;
@@ -427,8 +460,14 @@ export class OpenAICompatibleProvider extends BaseProvider {
     signal?: AbortSignal,
     options?: ToolCallingOptions,
   ): Promise<void> {
-    const { onTextDelta, onReasoningDelta, onToolCallStart, onToolCallDelta, onComplete, onError } =
-      callbacks;
+    const {
+      onTextDelta,
+      onReasoningDelta,
+      onToolCallStart,
+      onToolCallDelta,
+      onComplete,
+      onError,
+    } = callbacks;
 
     if (!this.isReady()) {
       onError(new Error("Provider is not configured"));
@@ -448,7 +487,6 @@ export class OpenAICompatibleProvider extends BaseProvider {
       const requestBody: Record<string, unknown> = {
         model: this._config.defaultModel,
         messages: apiMessages,
-        temperature: this._config.temperature ?? 0.7,
         stream: true,
       };
 
@@ -457,9 +495,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
         requestBody.tool_choice = options?.toolChoice || "auto";
       }
 
-      if (this._config.maxTokens && this._config.maxTokens > 0) {
-        requestBody.max_tokens = this._config.maxTokens;
-      }
+      this.applyGenerationOptions(requestBody);
       applyExtraRequestBody(requestBody, this._config);
 
       ztoolkit.log(
@@ -555,7 +591,11 @@ export class OpenAICompatibleProvider extends BaseProvider {
         content: fullContent,
         reasoning: fullReasoning || undefined,
         toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-        stopReason: stopReason as "tool_calls" | "end_turn" | "max_tokens" | "stop",
+        stopReason: stopReason as
+          | "tool_calls"
+          | "end_turn"
+          | "max_tokens"
+          | "stop",
       });
     } catch (error) {
       onError(this.wrapError(error));
