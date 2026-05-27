@@ -28,6 +28,43 @@ export function getStreamingReasoningContainerSelector(
 ): string {
   return `[data-streaming-reasoning-container-for="${messageId}"]`;
 }
+
+const CHAT_HISTORY_BOTTOM_STICKY_THRESHOLD = 24;
+const CHAT_HISTORY_AUTO_SCROLL_ATTR = "data-auto-scroll";
+
+function getChatHistoryBottomOffset(chatHistory: HTMLElement): number {
+  return (
+    chatHistory.scrollHeight - chatHistory.scrollTop - chatHistory.clientHeight
+  );
+}
+
+export function isChatHistoryNearBottom(chatHistory: HTMLElement): boolean {
+  return (
+    getChatHistoryBottomOffset(chatHistory) <=
+    CHAT_HISTORY_BOTTOM_STICKY_THRESHOLD
+  );
+}
+
+export function shouldAutoScrollChatHistory(chatHistory: HTMLElement): boolean {
+  if (!chatHistory.hasAttribute(CHAT_HISTORY_AUTO_SCROLL_ATTR)) {
+    chatHistory.setAttribute(CHAT_HISTORY_AUTO_SCROLL_ATTR, "true");
+  }
+  return chatHistory.getAttribute(CHAT_HISTORY_AUTO_SCROLL_ATTR) !== "false";
+}
+
+export function updateChatHistoryAutoScrollState(
+  chatHistory: HTMLElement,
+): void {
+  chatHistory.setAttribute(
+    CHAT_HISTORY_AUTO_SCROLL_ATTR,
+    isChatHistoryNearBottom(chatHistory) ? "true" : "false",
+  );
+}
+
+export function scrollChatHistoryToBottom(chatHistory: HTMLElement): void {
+  chatHistory.scrollTop = chatHistory.scrollHeight;
+  chatHistory.setAttribute(CHAT_HISTORY_AUTO_SCROLL_ATTR, "true");
+}
 import { createElement, copyToClipboard } from "./ChatPanelBuilder";
 import { getString } from "../../../utils/locale";
 import {
@@ -697,6 +734,7 @@ export function renderMessages(
 ): void {
   const doc = chatHistory.ownerDocument;
   if (!doc) return;
+  const shouldScrollToBottom = shouldAutoScrollChatHistory(chatHistory);
 
   chatHistory.textContent = "";
 
@@ -738,8 +776,9 @@ export function renderMessages(
     );
   }
 
-  // Scroll to bottom
-  chatHistory.scrollTop = chatHistory.scrollHeight;
+  if (shouldScrollToBottom) {
+    scrollChatHistoryToBottom(chatHistory);
+  }
 }
 
 export function updateExecutionPlanView(
@@ -1006,9 +1045,9 @@ function syncExecutionInsets(panel: HTMLElement): void {
 
   const previousScrollTop = chatHistory.scrollTop;
   const previousScrollHeight = chatHistory.scrollHeight;
-  const previousBottomOffset =
-    previousScrollHeight - chatHistory.clientHeight - previousScrollTop;
-  const wasNearBottom = previousBottomOffset <= 48;
+  const wasNearBottom =
+    isChatHistoryNearBottom(chatHistory) ||
+    shouldAutoScrollChatHistory(chatHistory);
   const shouldPreserveViewport = previousScrollTop > 0;
 
   chatHistory.style.paddingTop = `${nextPaddingTop}px`;
@@ -1017,7 +1056,7 @@ function syncExecutionInsets(panel: HTMLElement): void {
   chatHistory.style.scrollPaddingBottom = `${nextPaddingBottom}px`;
 
   if (wasNearBottom) {
-    chatHistory.scrollTop = chatHistory.scrollHeight;
+    scrollChatHistoryToBottom(chatHistory);
     return;
   }
 
@@ -1588,5 +1627,5 @@ export function updateStreamingContent(
  * Scroll chat history to the bottom
  */
 export function scrollToBottom(chatHistory: HTMLElement): void {
-  chatHistory.scrollTop = chatHistory.scrollHeight;
+  scrollChatHistoryToBottom(chatHistory);
 }

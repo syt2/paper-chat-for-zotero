@@ -36,6 +36,11 @@ import {
   type MentionResource,
   findMentionAtCursor,
 } from "./MentionSelector";
+import {
+  scrollChatHistoryToBottom,
+  shouldAutoScrollChatHistory,
+  updateChatHistoryAutoScrollState,
+} from "./MessageRenderer";
 import { ANALYTICS_EVENTS, getAnalyticsService } from "../../analytics";
 import { buildErrorProps } from "../../analytics/errorProps";
 import { LOW_BALANCE_WARNING_THRESHOLD } from "../../preferences/UserAuthUI";
@@ -390,8 +395,11 @@ function resizeMessageInput(
     return;
   }
 
-  if (previousBottomOffset <= CHAT_HISTORY_BOTTOM_STICKY_THRESHOLD) {
-    chatHistory.scrollTop = chatHistory.scrollHeight;
+  if (
+    previousBottomOffset <= CHAT_HISTORY_BOTTOM_STICKY_THRESHOLD &&
+    shouldAutoScrollChatHistory(chatHistory)
+  ) {
+    scrollChatHistoryToBottom(chatHistory);
     return;
   }
 
@@ -541,6 +549,10 @@ export function setupEventHandlers(context: ChatPanelContext): void {
   const emptyState = container.querySelector(
     "#chat-empty-state",
   ) as HTMLElement;
+
+  chatHistory?.addEventListener("scroll", () => {
+    updateChatHistoryAutoScrollState(chatHistory);
+  });
 
   // History dropdown state
   const historyState = createHistoryDropdownState();
