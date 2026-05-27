@@ -61,7 +61,7 @@ export type ChatPanelOpenSource = "menu" | "toolbar" | "unknown";
 const APPROVAL_RESOLVED_ANIMATION_MS = 260;
 const APPROVAL_ENTER_ANIMATION_MS = 220;
 const STREAMING_TEXT_RENDER_INTERVAL_MS = 80;
-const STREAMING_MARKDOWN_RENDER_INTERVAL_MS = 5000;
+const STREAMING_MARKDOWN_RENDER_INTERVAL_MS = 1200;
 const STREAMING_TEXT_TAIL_ATTR = "data-streaming-text-tail";
 
 type PendingApprovalRequest = ToolApprovalState["pendingRequests"][number];
