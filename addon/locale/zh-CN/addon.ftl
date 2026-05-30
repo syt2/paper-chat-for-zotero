@@ -56,6 +56,7 @@ paperchat-user-panel-title = 用户信息
 paperchat-user-panel-logged-in = 已登录: { $username }
 paperchat-user-panel-not-logged-in = 未登录
 paperchat-user-panel-balance = Token余额
+paperchat-user-panel-subscription = 订阅额度: { $total }
 paperchat-user-panel-used = 已用
 paperchat-user-panel-login-btn = 登录/注册
 paperchat-user-panel-logout-btn = 退出登录

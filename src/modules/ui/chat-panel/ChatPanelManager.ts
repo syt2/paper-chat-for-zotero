@@ -14,6 +14,7 @@ import type {
 import type { ToolApprovalResolution } from "../../../types/tool";
 import { getAuthManager } from "../../auth";
 import { getProviderManager } from "../../providers";
+import { isPaperChatQuotaError } from "../../providers/paperchat-errors";
 import { getPref, setPref } from "../../../utils/prefs";
 
 import type { AttachmentState, ChatPanelContext } from "./types";
@@ -1237,6 +1238,20 @@ function setupChatManagerCallbacks(
     onError: (error) => {
       ztoolkit.log("[ChatPanel] API Error:", error.message);
       context.appendError(error.message);
+      if (isPaperChatQuotaError(error)) {
+        void (async () => {
+          try {
+            ztoolkit.log("[Balance] Refreshing balance after quota error");
+            await authManager.refreshUserInfo();
+            context.updateUserBar();
+          } catch (refreshError) {
+            ztoolkit.log(
+              "[Balance] Failed to refresh balance after quota error:",
+              refreshError,
+            );
+          }
+        })();
+      }
     },
     onPdfAttached: () => {
       if (container) {

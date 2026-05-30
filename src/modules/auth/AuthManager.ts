@@ -11,6 +11,8 @@ import type {
   TokenInfo,
   AuthState,
   ApiResponse,
+  SubscriptionSelfInfo,
+  SubscriptionUsageSummary,
 } from "../../types/auth";
 import { getPref, setPref } from "../../utils/prefs";
 import { getString } from "../../utils/locale";
@@ -113,6 +115,61 @@ const SUPPORTED_USER_LANGUAGES = new Set([
   "vi",
 ]);
 
+function getSubscriptionEndTimeMs(endTime: number): number | null {
+  if (!Number.isFinite(endTime) || endTime <= 0) {
+    return null;
+  }
+
+  return endTime >= 1_000_000_000_000 ? endTime : endTime * 1000;
+}
+
+function isActiveSubscriptionCacheValid(
+  subscription: { status?: string; end_time?: number },
+  now: number,
+): boolean {
+  if (subscription.status !== "active") {
+    return false;
+  }
+
+  const endTimeMs = getSubscriptionEndTimeMs(subscription.end_time || 0);
+  return endTimeMs !== null && endTimeMs > now;
+}
+
+function getActiveSubscriptionInfo(
+  info: SubscriptionSelfInfo | null,
+): SubscriptionSelfInfo | null {
+  const subscriptions = (info?.subscriptions || []).filter(
+    (item) => item?.subscription?.status === "active",
+  );
+
+  if (subscriptions.length === 0) {
+    return null;
+  }
+
+  return {
+    ...info,
+    subscriptions,
+  };
+}
+
+function getUnexpiredActiveSubscriptionInfo(
+  info: SubscriptionSelfInfo | null,
+  now: number = Date.now(),
+): SubscriptionSelfInfo | null {
+  const subscriptions = (info?.subscriptions || []).filter((item) =>
+    isActiveSubscriptionCacheValid(item?.subscription || {}, now),
+  );
+
+  if (subscriptions.length === 0) {
+    return null;
+  }
+
+  return {
+    ...info,
+    subscriptions,
+  };
+}
+
 export class AuthManager {
   private authService: AuthService;
   private state: AuthState;
@@ -130,6 +187,7 @@ export class AuthManager {
     this.state = {
       isLoggedIn: false,
       user: null,
+      subscription: null,
       token: null,
       apiKey: null,
       sessionToken: null,
@@ -264,6 +322,7 @@ export class AuthManager {
     let savedQuota = 0;
     let savedUsedQuota = 0;
     let savedAffCode = "";
+    let savedSubscription: SubscriptionSelfInfo | null = null;
     try {
       const quotaJson = getPref("userQuotaJson") as string;
       if (quotaJson) {
@@ -274,6 +333,19 @@ export class AuthManager {
       }
     } catch {
       // ignore parse error
+    }
+    try {
+      const subscriptionJson = getPref("userSubscriptionJson") as string;
+      if (subscriptionJson) {
+        savedSubscription = getUnexpiredActiveSubscriptionInfo(
+          JSON.parse(subscriptionJson) as SubscriptionSelfInfo,
+        );
+        if (!savedSubscription) {
+          setPref("userSubscriptionJson", "");
+        }
+      }
+    } catch {
+      setPref("userSubscriptionJson", "");
     }
 
     // 从浏览器 cookie jar 恢复 session（浏览器会自动持久化）
@@ -290,6 +362,7 @@ export class AuthManager {
       savedUsername,
       savedQuota,
       savedUsedQuota,
+      savedSubscription: savedSubscription ? "exists" : "empty",
     });
 
     if (savedApiKey) {
@@ -331,6 +404,7 @@ export class AuthManager {
         inviter_id: 0,
         created_time: 0,
       };
+      this.state.subscription = savedSubscription;
       this.state.isLoggedIn = true;
     }
   }
@@ -359,6 +433,14 @@ export class AuthManager {
           affCode: this.state.user.aff_code,
         }),
       );
+    }
+    const activeSubscription = getUnexpiredActiveSubscriptionInfo(
+      this.state.subscription,
+    );
+    if (activeSubscription) {
+      setPref("userSubscriptionJson", JSON.stringify(activeSubscription));
+    } else {
+      setPref("userSubscriptionJson", "");
     }
   }
 
@@ -466,12 +548,14 @@ export class AuthManager {
     ztoolkit.log("[AuthManager] Clearing old state before login");
     this.state.userId = null;
     this.state.user = null;
+    this.state.subscription = null;
     this.state.apiKey = null;
     this.state.sessionToken = null;
     this.state.isLoggedIn = false;
     this.authService.setUserId(null);
     this.authService.setAccessToken(null);
     this.authService.clearSessionCookie();
+    setPref("userSubscriptionJson", "");
 
     const result = await this.authService.login({ username, password });
 
@@ -614,6 +698,7 @@ export class AuthManager {
     this.state = {
       isLoggedIn: false,
       user: null,
+      subscription: null,
       token: null,
       apiKey: null,
       sessionToken: null,
@@ -630,6 +715,8 @@ export class AuthManager {
     setPref("userId", 0);
     setPref("username", "");
     setPref("userQuotaJson", "");
+    setPref("userSubscriptionJson", "");
+    this.state.subscription = null;
     setPref("loginPassword", "");
 
     this.notifyLoginStatusChange(false);
@@ -680,6 +767,7 @@ export class AuthManager {
     if (result.success && result.data) {
       this.state.user = result.data;
       this.state.isLoggedIn = true;
+      await this.refreshSubscriptionInfo();
       // 保存用户信息到本地，以便重启后恢复
       // quota 值可能超过 32 位整数，存为 JSON 字符串
       ztoolkit.log("[AuthManager] refreshUserInfo - saving to prefs:", {
@@ -714,6 +802,74 @@ export class AuthManager {
       () => this.authService.getPricing(),
       "getPricing",
     );
+  }
+
+  async refreshSubscriptionInfo(): Promise<void> {
+    const result = await this.withSessionRetry(
+      () => this.authService.getSubscriptionSelf(),
+      "getSubscriptionSelf",
+    );
+
+    if (result.success) {
+      const activeSubscription = getActiveSubscriptionInfo(result.data || null);
+      this.state.subscription = activeSubscription;
+      const cachedSubscription =
+        getUnexpiredActiveSubscriptionInfo(activeSubscription);
+      setPref(
+        "userSubscriptionJson",
+        cachedSubscription ? JSON.stringify(cachedSubscription) : "",
+      );
+    } else {
+      ztoolkit.log(
+        "[AuthManager] refreshSubscriptionInfo failed:",
+        result.message || "",
+      );
+    }
+  }
+
+  getSubscriptionUsageSummary(): SubscriptionUsageSummary | null {
+    const records = (this.state.subscription?.subscriptions || [])
+      .map((item) => item?.subscription)
+      .filter(
+        (subscription) =>
+          subscription &&
+          subscription.status === "active" &&
+          Number.isFinite(subscription.amount_total) &&
+          subscription.amount_total > 0,
+      );
+
+    if (records.length === 0) {
+      return null;
+    }
+
+    const amountTotal = records.reduce(
+      (sum, subscription) => sum + Math.max(0, subscription.amount_total),
+      0,
+    );
+    const amountUsed = records.reduce(
+      (sum, subscription) =>
+        sum +
+        Math.max(
+          0,
+          Number.isFinite(subscription.amount_used)
+            ? subscription.amount_used
+            : 0,
+        ),
+      0,
+    );
+
+    if (amountTotal <= 0) {
+      return null;
+    }
+
+    return {
+      amountTotal,
+      amountUsed,
+      amountRemaining: Math.max(0, amountTotal - amountUsed),
+      amountTotalLabel: AuthService.formatQuota(amountTotal),
+      amountUsedLabel: AuthService.formatQuota(amountUsed),
+      percentUsed: Math.min(100, Math.max(0, (amountUsed / amountTotal) * 100)),
+    };
   }
 
   private getLocalUserLanguage(): string {

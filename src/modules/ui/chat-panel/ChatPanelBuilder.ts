@@ -160,6 +160,10 @@ export function createChatContainer(
     display: "flex",
     flexDirection: "column",
     gap: "2px",
+    flex: "1",
+    minWidth: "0",
+    overflow: "hidden",
+    marginRight: "8px",
   });
 
   const userName = createElement(
@@ -168,6 +172,9 @@ export function createChatContainer(
     {
       fontWeight: "600",
       fontSize: "14px",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
     },
     { id: "chat-user-name" },
   );
@@ -178,12 +185,86 @@ export function createChatContainer(
     {
       fontSize: "11px",
       opacity: "0.9",
+      flexShrink: "0",
+      whiteSpace: "nowrap",
     },
     { id: "chat-user-balance" },
   );
 
+  const userUsageRow = createElement(
+    doc,
+    "div",
+    {
+      display: "flex",
+      alignItems: "flex-start",
+      justifyContent: "flex-start",
+      gap: "8px",
+      minWidth: "0",
+      width: "100%",
+    },
+    { id: "chat-user-usage-row" },
+  );
+
+  const userSubscription = createElement(
+    doc,
+    "div",
+    {
+      display: "none",
+      flexDirection: "column",
+      gap: "3px",
+      width: "fit-content",
+      maxWidth: "100%",
+      flexShrink: "0",
+    },
+    { id: "chat-user-subscription" },
+  );
+  const userSubscriptionTotal = createElement(
+    doc,
+    "span",
+    {
+      fontSize: "10px",
+      fontWeight: "600",
+      lineHeight: "1.2",
+      opacity: "0.95",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
+    },
+    { id: "chat-user-subscription-total" },
+  );
+  const userSubscriptionProgress = createElement(
+    doc,
+    "div",
+    {
+      width: "100%",
+      height: "4px",
+      borderRadius: "999px",
+      background: "rgba(0, 0, 0, 0.14)",
+      overflow: "hidden",
+    },
+    { id: "chat-user-subscription-progress" },
+  );
+  const userSubscriptionProgressFill = createElement(
+    doc,
+    "div",
+    {
+      width: "0%",
+      height: "100%",
+      borderRadius: "999px",
+      background: theme.userBubbleText,
+      opacity: "0.6",
+      transition: "width 160ms ease",
+    },
+    { id: "chat-user-subscription-progress-fill" },
+  );
+  userSubscriptionProgress.appendChild(userSubscriptionProgressFill);
+  userSubscription.appendChild(userSubscriptionTotal);
+  userSubscription.appendChild(userSubscriptionProgress);
+
   userInfo.appendChild(userName);
-  userInfo.appendChild(userBalance);
+  userUsageRow.appendChild(userSubscription);
+  userUsageRow.appendChild(userBalance);
+  userInfo.appendChild(userUsageRow);
 
   const userActionBtn = createElement(
     doc,

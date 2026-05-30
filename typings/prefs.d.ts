@@ -17,6 +17,7 @@ declare namespace _ZoteroTypes {
       "loginPassword": string;
       "userId": number;
       "userQuotaJson": string;
+      "userSubscriptionJson": string;
       "paperchatModelsCache": string;
       "paperchatRatiosCache": string;
       "paperchatRoutingConfigCache": string;

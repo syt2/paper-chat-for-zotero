@@ -49,6 +49,43 @@ export interface UserInfo {
   created_time: number;
 }
 
+export interface SubscriptionRecord {
+  id: number;
+  user_id: number;
+  plan_id: number;
+  amount_total: number;
+  amount_used: number;
+  start_time: number;
+  end_time: number;
+  status: string;
+  source: string;
+  last_reset_time: number;
+  next_reset_time: number;
+  upgrade_group: string;
+  prev_user_group: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface SubscriptionItem {
+  subscription: SubscriptionRecord;
+}
+
+export interface SubscriptionSelfInfo {
+  all_subscriptions?: SubscriptionItem[];
+  billing_preference?: string;
+  subscriptions?: SubscriptionItem[];
+}
+
+export interface SubscriptionUsageSummary {
+  amountTotal: number;
+  amountUsed: number;
+  amountRemaining: number;
+  amountTotalLabel: string;
+  amountUsedLabel: string;
+  percentUsed: number;
+}
+
 /**
  * Token信息
  */
@@ -95,6 +132,7 @@ export interface TopUpRequest {
 export interface AuthState {
   isLoggedIn: boolean;
   user: UserInfo | null;
+  subscription: SubscriptionSelfInfo | null;
   token: TokenInfo | null;
   apiKey: string | null;
   sessionToken: string | null;

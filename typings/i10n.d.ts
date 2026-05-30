@@ -182,6 +182,7 @@ export type FluentMessageId =
   | 'paperchat-user-panel-redeem-placeholder'
   | 'paperchat-user-panel-redeem-success'
   | 'paperchat-user-panel-redeem-title'
+  | 'paperchat-user-panel-subscription'
   | 'paperchat-user-panel-title'
   | 'paperchat-user-panel-used'
   | 'pref-account-settings'

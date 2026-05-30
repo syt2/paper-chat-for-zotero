@@ -10,6 +10,7 @@ import type {
   RegisterRequest,
   ApiResponse,
   UserInfo,
+  SubscriptionSelfInfo,
   TokenInfo,
   CreateTokenRequest,
   TopUpRequest,
@@ -459,6 +460,33 @@ export class AuthService {
     return result.data;
   }
 
+  async getSubscriptionSelf(): Promise<ApiResponse<SubscriptionSelfInfo>> {
+    const url = `${this.baseUrl}/api/subscription/self`;
+    const result = await this.request<ApiResponse<SubscriptionSelfInfo>>(
+      "GET",
+      url,
+      { skipAccessToken: true },
+    );
+
+    if (result.error) {
+      return { success: false, message: result.error };
+    }
+
+    if (result.status >= 400 || !result.data?.success) {
+      return {
+        success: false,
+        message: this.parseErrorMessage(
+          result.data,
+          getString("api-error-request-failed", {
+            args: { status: result.status },
+          }),
+        ),
+      };
+    }
+
+    return result.data;
+  }
+
   async updateUserLanguage(language: string): Promise<ApiResponse> {
     const url = `${this.baseUrl}/api/user/self`;
     const result = await this.request<ApiResponse>("PUT", url, {
@@ -724,6 +752,10 @@ export class AuthService {
   }
 
   static formatQuota(quota: number): string {
+    if (!Number.isFinite(quota)) {
+      return "0";
+    }
+
     if (quota >= 1_000_000_000_000) {
       return `${(quota / 1_000_000_000_000).toFixed(1)}T`;
     } else if (quota >= 1_000_000_000) {

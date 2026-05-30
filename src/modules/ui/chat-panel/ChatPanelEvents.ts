@@ -17,6 +17,7 @@ import { showAuthDialog } from "../AuthDialog";
 import { getString } from "../../../utils/locale";
 import { getProviderManager } from "../../providers";
 import type { PaperChatProviderConfig } from "../../../types/provider";
+import type { SubscriptionUsageSummary } from "../../../types/auth";
 import { getPref, setPref } from "../../../utils/prefs";
 import {
   formatModelLabel,
@@ -84,6 +85,28 @@ function applyUserBalanceLowBalanceStyles(userBalanceEl: HTMLElement): void {
   userBalanceEl.setAttribute("role", "button");
   userBalanceEl.setAttribute("tabindex", "0");
   userBalanceEl.setAttribute("data-low-balance-clickable", "true");
+}
+
+function resetSubscriptionLimitStyles(subscriptionEl: HTMLElement): void {
+  subscriptionEl.style.color = "";
+  subscriptionEl.style.fontWeight = "";
+  subscriptionEl.style.textDecoration = "";
+  subscriptionEl.style.textUnderlineOffset = "";
+  subscriptionEl.style.cursor = "";
+  subscriptionEl.removeAttribute("role");
+  subscriptionEl.removeAttribute("tabindex");
+  subscriptionEl.removeAttribute("data-subscription-limit-clickable");
+}
+
+function applySubscriptionLimitStyles(subscriptionEl: HTMLElement): void {
+  subscriptionEl.style.color = "#dc2626";
+  subscriptionEl.style.fontWeight = "700";
+  subscriptionEl.style.textDecoration = "underline";
+  subscriptionEl.style.textUnderlineOffset = "2px";
+  subscriptionEl.style.cursor = "pointer";
+  subscriptionEl.setAttribute("role", "button");
+  subscriptionEl.setAttribute("tabindex", "0");
+  subscriptionEl.setAttribute("data-subscription-limit-clickable", "true");
 }
 const MESSAGE_INPUT_MIN_HEIGHT = 60;
 const MESSAGE_INPUT_MAX_HEIGHT = 140;
@@ -1043,6 +1066,40 @@ export function setupEventHandlers(context: ChatPanelContext): void {
     });
   }
 
+  const userSubscriptionEl = container.querySelector(
+    "#chat-user-subscription",
+  ) as HTMLElement;
+  if (userSubscriptionEl) {
+    const openSubscriptionTopup = () => {
+      if (
+        userSubscriptionEl.getAttribute("data-subscription-limit-clickable") !==
+        "true"
+      ) {
+        return;
+      }
+      getAnalyticsService().track(ANALYTICS_EVENTS.paperChatQuotaTopupClicked, {
+        source: "chat_user_bar_subscription",
+      });
+      void import("../../preferences/UserAuthUI")
+        .then((module) => module.openPaperChatSettingsForTopup())
+        .catch((error) => {
+          ztoolkit.log(
+            "[Chat] Failed to open PaperChat settings for subscription limit:",
+            error,
+          );
+          Zotero.Utilities.Internal.openPreferences("paperchat-prefpane");
+        });
+    };
+    userSubscriptionEl.addEventListener("click", openSubscriptionTopup);
+    userSubscriptionEl.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+      event.preventDefault();
+      openSubscriptionTopup();
+    });
+  }
+
   // Panel mode toggle button - switch between sidebar and floating mode
   const panelModeBtn = container.querySelector(
     "#chat-panel-mode-btn",
@@ -1463,10 +1520,20 @@ export function updateUserBarDisplay(
     getUser(): { username: string } | null;
     getBalance(): { quota: number; usedQuota: number };
     formatBalance(): string;
+    getSubscriptionUsageSummary(): SubscriptionUsageSummary | null;
   },
 ): void {
   const userBar = container.querySelector("#chat-user-bar") as HTMLElement;
   const userNameEl = container.querySelector("#chat-user-name") as HTMLElement;
+  const userSubscriptionEl = container.querySelector(
+    "#chat-user-subscription",
+  ) as HTMLElement;
+  const userSubscriptionTotalEl = container.querySelector(
+    "#chat-user-subscription-total",
+  ) as HTMLElement;
+  const userSubscriptionProgressFillEl = container.querySelector(
+    "#chat-user-subscription-progress-fill",
+  ) as HTMLElement;
   const userBalanceEl = container.querySelector(
     "#chat-user-balance",
   ) as HTMLElement;
@@ -1497,9 +1564,55 @@ export function updateUserBarDisplay(
     const user = authManager.getUser();
     const isLowBalance =
       authManager.getBalance().quota < LOW_BALANCE_WARNING_THRESHOLD;
+    const subscriptionUsage = authManager.getSubscriptionUsageSummary();
+    const shouldHideTokenBalance =
+      !!subscriptionUsage &&
+      subscriptionUsage.amountRemaining > LOW_BALANCE_WARNING_THRESHOLD;
     userNameEl.textContent = user?.username || "";
-    userBalanceEl.textContent = `${getString("user-panel-balance")}: ${authManager.formatBalance()}`;
-    if (isLowBalance) {
+    if (userSubscriptionEl) {
+      if (
+        subscriptionUsage &&
+        userSubscriptionTotalEl &&
+        userSubscriptionProgressFillEl
+      ) {
+        userSubscriptionTotalEl.textContent = getString(
+          "user-panel-subscription",
+          {
+            args: { total: subscriptionUsage.amountTotalLabel },
+          },
+        );
+        userSubscriptionProgressFillEl.style.width = `${subscriptionUsage.percentUsed}%`;
+        const usageLabel = `${getString("user-panel-used")}: ${subscriptionUsage.amountUsedLabel} / ${subscriptionUsage.amountTotalLabel}`;
+        userSubscriptionEl.title = usageLabel;
+        userSubscriptionEl.setAttribute("aria-label", usageLabel);
+        if (subscriptionUsage.percentUsed >= 99) {
+          applySubscriptionLimitStyles(userSubscriptionEl);
+        } else {
+          resetSubscriptionLimitStyles(userSubscriptionEl);
+        }
+        userSubscriptionEl.style.display = "flex";
+      } else {
+        if (userSubscriptionTotalEl) {
+          userSubscriptionTotalEl.textContent = "";
+        }
+        if (userSubscriptionProgressFillEl) {
+          userSubscriptionProgressFillEl.style.width = "0%";
+        }
+        userSubscriptionEl.removeAttribute("title");
+        userSubscriptionEl.removeAttribute("aria-label");
+        resetSubscriptionLimitStyles(userSubscriptionEl);
+        userSubscriptionEl.style.display = "none";
+      }
+    }
+    if (shouldHideTokenBalance) {
+      userBalanceEl.textContent = "";
+      userBalanceEl.style.display = "none";
+      resetUserBalanceLowBalanceStyles(userBalanceEl);
+    } else {
+      userBalanceEl.style.display = "inline";
+      userBalanceEl.textContent = `${getString("user-panel-balance")}: ${authManager.formatBalance()}`;
+    }
+    if (!shouldHideTokenBalance && isLowBalance) {
       applyUserBalanceLowBalanceStyles(userBalanceEl);
     } else {
       resetUserBalanceLowBalanceStyles(userBalanceEl);
@@ -1513,7 +1626,20 @@ export function updateUserBarDisplay(
     // Do NOT force-show it here — that would override the server's enabled:false response.
   } else {
     userNameEl.textContent = getString("user-panel-not-logged-in");
+    if (userSubscriptionEl) {
+      if (userSubscriptionTotalEl) {
+        userSubscriptionTotalEl.textContent = "";
+      }
+      if (userSubscriptionProgressFillEl) {
+        userSubscriptionProgressFillEl.style.width = "0%";
+      }
+      userSubscriptionEl.removeAttribute("title");
+      userSubscriptionEl.removeAttribute("aria-label");
+      resetSubscriptionLimitStyles(userSubscriptionEl);
+      userSubscriptionEl.style.display = "none";
+    }
     userBalanceEl.textContent = "";
+    userBalanceEl.style.display = "inline";
     resetUserBalanceLowBalanceStyles(userBalanceEl);
     userActionBtn.textContent = getString("user-panel-login-btn");
     // Show settings button when not logged in

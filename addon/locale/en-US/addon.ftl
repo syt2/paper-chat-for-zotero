@@ -56,6 +56,7 @@ paperchat-user-panel-title = User Info
 paperchat-user-panel-logged-in = Logged in: { $username }
 paperchat-user-panel-not-logged-in = Not logged in
 paperchat-user-panel-balance = Token Balance
+paperchat-user-panel-subscription = Subscription: { $total }
 paperchat-user-panel-used = Used
 paperchat-user-panel-login-btn = Login/Register
 paperchat-user-panel-logout-btn = Logout

@@ -13,6 +13,7 @@ pref("username", "");
 pref("loginPassword", ""); // 存储密码用于自动重新登录
 pref("userId", 0);
 pref("userQuotaJson", "");
+pref("userSubscriptionJson", "");
 
 // Cache
 pref("paperchatModelsCache", "");

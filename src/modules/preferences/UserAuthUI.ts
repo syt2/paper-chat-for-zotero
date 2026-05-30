@@ -33,7 +33,8 @@ function markTopupAttentionRequested(): void {
 }
 
 function hasActiveTopupAttention(): boolean {
-  const attentionUntil = getTopupAttentionAddonData().paperchatTopupAttentionUntil;
+  const attentionUntil =
+    getTopupAttentionAddonData().paperchatTopupAttentionUntil;
   return typeof attentionUntil === "number" && attentionUntil > Date.now();
 }
 
@@ -44,9 +45,23 @@ export function isPaperChatLowBalance(authManager: AuthManagerType): boolean {
   );
 }
 
-function shouldHighlightTopup(
-  authManager: AuthManagerType,
-): { highlight: boolean; forced: boolean; lowBalance: boolean } {
+function shouldHighlightTopup(authManager: AuthManagerType): {
+  highlight: boolean;
+  forced: boolean;
+  lowBalance: boolean;
+} {
+  const subscriptionUsage = authManager.getSubscriptionUsageSummary();
+  if (
+    subscriptionUsage &&
+    subscriptionUsage.amountRemaining > LOW_BALANCE_WARNING_THRESHOLD
+  ) {
+    return {
+      highlight: false,
+      forced: false,
+      lowBalance: false,
+    };
+  }
+
   const lowBalance = isPaperChatLowBalance(authManager);
   const forced = hasActiveTopupAttention();
 
@@ -71,14 +86,11 @@ function animateTopupElement(
 
   element.setAttribute(attr, "true");
   try {
-    const animation = element.animate?.(
-      keyframes,
-      {
-        duration,
-        easing: "ease-out",
-        iterations: 2,
-      },
-    );
+    const animation = element.animate?.(keyframes, {
+      duration,
+      easing: "ease-out",
+      iterations: 2,
+    });
 
     if (animation) {
       animation.addEventListener("finish", () => {
@@ -161,20 +173,26 @@ function schedulePrefsRefresh(
   options: PrefsRefreshOptions,
   attempt: number = 0,
 ): void {
-  scheduleWithAvailableTimer(() => {
-    if (!addon.data.prefs?.window) {
-      if (attempt < PREFS_REFRESH_MAX_ATTEMPTS) {
-        schedulePrefsRefresh(options, attempt + 1);
+  scheduleWithAvailableTimer(
+    () => {
+      if (!addon.data.prefs?.window) {
+        if (attempt < PREFS_REFRESH_MAX_ATTEMPTS) {
+          schedulePrefsRefresh(options, attempt + 1);
+        }
+        return;
       }
-      return;
-    }
 
-    void import("./index")
-      .then((module) => module.refreshPrefsUI(options))
-      .catch((error) => {
-        ztoolkit.log("[Preferences] Failed to refresh PaperChat prefs UI:", error);
-      });
-  }, attempt === 0 ? 0 : PREFS_REFRESH_RETRY_DELAY_MS);
+      void import("./index")
+        .then((module) => module.refreshPrefsUI(options))
+        .catch((error) => {
+          ztoolkit.log(
+            "[Preferences] Failed to refresh PaperChat prefs UI:",
+            error,
+          );
+        });
+    },
+    attempt === 0 ? 0 : PREFS_REFRESH_RETRY_DELAY_MS,
+  );
 }
 
 function applyTopupAttentionStyles(
@@ -246,6 +264,15 @@ export function updateUserDisplay(
     "pref-user-balance",
   ) as HTMLElement | null;
   const userUsedEl = doc.getElementById("pref-user-used") as HTMLElement | null;
+  const userSubscriptionEl = doc.getElementById(
+    "pref-user-subscription",
+  ) as HTMLElement | null;
+  const userSubscriptionTotalEl = doc.getElementById(
+    "pref-user-subscription-total",
+  ) as HTMLElement | null;
+  const userSubscriptionProgressFillEl = doc.getElementById(
+    "pref-user-subscription-progress-fill",
+  ) as HTMLElement | null;
   const loginBtn = doc.getElementById("pref-login-btn") as HTMLElement | null;
   const getRedeemCodeBtn = doc.getElementById(
     "pref-get-redeem-code-btn",
@@ -254,6 +281,10 @@ export function updateUserDisplay(
 
   if (authManager.isLoggedIn()) {
     const user = authManager.getUser();
+    const subscriptionUsage = authManager.getSubscriptionUsageSummary();
+    const shouldHideTokenBalance =
+      !!subscriptionUsage &&
+      subscriptionUsage.amountRemaining > LOW_BALANCE_WARNING_THRESHOLD;
     if (userStatusEl) {
       userStatusEl.setAttribute(
         "value",
@@ -262,16 +293,54 @@ export function updateUserDisplay(
       userStatusEl.style.color = prefColors.userLoggedIn;
     }
     if (userBalanceEl) {
-      userBalanceEl.setAttribute(
-        "value",
-        `${getString("user-panel-balance")}: ${authManager.formatBalance()}`,
-      );
+      if (shouldHideTokenBalance) {
+        userBalanceEl.setAttribute("value", "");
+        userBalanceEl.style.display = "none";
+      } else {
+        userBalanceEl.style.display = "";
+        userBalanceEl.setAttribute(
+          "value",
+          `${getString("user-panel-balance")}: ${authManager.formatBalance()}`,
+        );
+      }
     }
     if (userUsedEl) {
-      userUsedEl.setAttribute(
-        "value",
-        `${getString("user-panel-used")}: ${authManager.formatUsedQuota()}`,
-      );
+      if (shouldHideTokenBalance) {
+        userUsedEl.setAttribute("value", "");
+        userUsedEl.style.display = "none";
+      } else {
+        userUsedEl.style.display = "";
+        userUsedEl.setAttribute(
+          "value",
+          `${getString("user-panel-used")}: ${authManager.formatUsedQuota()}`,
+        );
+      }
+    }
+    if (
+      userSubscriptionEl &&
+      userSubscriptionTotalEl &&
+      userSubscriptionProgressFillEl
+    ) {
+      if (subscriptionUsage) {
+        userSubscriptionTotalEl.textContent = getString(
+          "user-panel-subscription",
+          {
+            args: { total: subscriptionUsage.amountTotalLabel },
+          },
+        );
+        userSubscriptionProgressFillEl.style.width = `${subscriptionUsage.percentUsed}%`;
+        userSubscriptionProgressFillEl.style.background =
+          subscriptionUsage.percentUsed >= 99
+            ? prefColors.testError
+            : "#2563eb";
+        userSubscriptionEl.title = `${getString("user-panel-used")}: ${subscriptionUsage.amountUsedLabel} / ${subscriptionUsage.amountTotalLabel}`;
+        userSubscriptionEl.style.display = "inline-block";
+      } else {
+        userSubscriptionTotalEl.textContent = "";
+        userSubscriptionProgressFillEl.style.width = "0%";
+        userSubscriptionEl.removeAttribute("title");
+        userSubscriptionEl.style.display = "none";
+      }
     }
     if (loginBtn) {
       loginBtn.setAttribute("label", getString("user-panel-logout-btn"));
@@ -287,9 +356,21 @@ export function updateUserDisplay(
     }
     if (userBalanceEl) {
       userBalanceEl.setAttribute("value", "");
+      userBalanceEl.style.display = "";
     }
     if (userUsedEl) {
       userUsedEl.setAttribute("value", "");
+      userUsedEl.style.display = "";
+    }
+    if (
+      userSubscriptionEl &&
+      userSubscriptionTotalEl &&
+      userSubscriptionProgressFillEl
+    ) {
+      userSubscriptionTotalEl.textContent = "";
+      userSubscriptionProgressFillEl.style.width = "0%";
+      userSubscriptionEl.removeAttribute("title");
+      userSubscriptionEl.style.display = "none";
     }
     if (loginBtn) {
       loginBtn.setAttribute("label", getString("user-panel-login-btn"));

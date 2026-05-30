@@ -181,6 +181,47 @@
               id="pref-user-used"
               style="font-size: 12px; opacity: 0.6"
             ></label>
+            <html:div
+              id="pref-user-subscription"
+              style="
+                display: none;
+                margin-top: 6px;
+                width: fit-content;
+                max-width: 100%;
+              "
+            >
+              <html:div
+                id="pref-user-subscription-total"
+                style="
+                  font-size: 12px;
+                  font-weight: 600;
+                  opacity: 0.85;
+                  overflow: hidden;
+                  text-overflow: ellipsis;
+                  white-space: nowrap;
+                "
+              ></html:div>
+              <html:div
+                style="
+                  margin-top: 4px;
+                  height: 5px;
+                  width: 100%;
+                  border-radius: 999px;
+                  overflow: hidden;
+                  background: rgba(0, 0, 0, 0.12);
+                "
+              >
+                <html:div
+                  id="pref-user-subscription-progress-fill"
+                  style="
+                    width: 0%;
+                    height: 100%;
+                    border-radius: 999px;
+                    background: #2563eb;
+                  "
+                ></html:div>
+              </html:div>
+            </html:div>
           </vbox>
           <button
             id="pref-login-btn"
