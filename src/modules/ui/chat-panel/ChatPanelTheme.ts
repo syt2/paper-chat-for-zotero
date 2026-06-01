@@ -120,6 +120,10 @@ export function applyThemeToContainer(container: HTMLElement): void {
     scrollBottomBtn.style.color = theme.textPrimary;
   }
 
+  container.querySelectorAll(".typing-indicator span").forEach((dot) => {
+    (dot as HTMLElement).style.background = theme.textMuted;
+  });
+
   const executionPlanPanel = container.querySelector(
     "#chat-execution-plan-panel",
   ) as HTMLElement;

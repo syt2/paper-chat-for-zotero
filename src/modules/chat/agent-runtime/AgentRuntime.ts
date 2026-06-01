@@ -127,7 +127,6 @@ interface ToolIterationParams {
 
 // Hard stop for a single assistant turn. Keeps malformed tool loops bounded
 // while still allowing a few replan / retry pivots inside one response.
-const THINKING_SUFFIX = "\n\n···";
 const MAX_ITERATIONS_MESSAGE =
   "\n\nI apologize, but I was unable to complete the request within the allowed number of iterations.";
 const MAX_ITERATIONS_ERROR = "Maximum tool-calling iterations reached.";
@@ -915,8 +914,7 @@ export class AgentRuntime {
     }
 
     this.ensureSessionTracked(sendingSession, sessionRunId);
-    const thinkingDisplay = accumulatedDisplay + THINKING_SUFFIX;
-    assistantMessage.content = thinkingDisplay;
+    assistantMessage.content = accumulatedDisplay;
     assistantMessage.streamingState = "in_progress";
     await this.flushAssistantMessageCheckpoint(
       sendingSession,
@@ -926,7 +924,10 @@ export class AgentRuntime {
     );
     this.ensureSessionTracked(sendingSession, sessionRunId);
     if (this.callbacks.isSessionActive(sendingSession)) {
-      this.callbacks.onStreamingUpdate?.(thinkingDisplay, assistantMessage.id);
+      this.callbacks.onStreamingUpdate?.(
+        accumulatedDisplay,
+        assistantMessage.id,
+      );
     }
 
     return accumulatedDisplay;

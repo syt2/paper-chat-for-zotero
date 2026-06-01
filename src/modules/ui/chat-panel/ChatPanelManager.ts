@@ -27,6 +27,7 @@ import {
 } from "./ChatPanelTheme";
 import { createChatContainer } from "./ChatPanelBuilder";
 import {
+  ensureStreamingTypingIndicator,
   getStreamingContentSelector,
   getStreamingReasoningContainerSelector,
   getStreamingReasoningSelector,
@@ -188,6 +189,8 @@ function renderStreamingTextNow(
   } else if (streamingEl.textContent !== content) {
     streamingEl.textContent = content;
   }
+
+  ensureStreamingTypingIndicator(streamingEl, getCurrentTheme());
 
   if (state.lastRenderedContent !== content) {
     const chatHistory = container.querySelector(

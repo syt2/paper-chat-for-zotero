@@ -32,6 +32,7 @@ export function getStreamingReasoningContainerSelector(
 const CHAT_HISTORY_BOTTOM_STICKY_THRESHOLD = 24;
 const CHAT_HISTORY_AUTO_SCROLL_ATTR = "data-auto-scroll";
 const CHAT_SCROLL_BOTTOM_BUTTON_ID = "chat-scroll-bottom-btn";
+const STREAMING_TYPING_INDICATOR_ATTR = "data-streaming-typing-indicator";
 
 function getChatHistoryBottomOffset(chatHistory: HTMLElement): number {
   return (
@@ -287,6 +288,7 @@ function injectTypingAnimation(doc: Document): void {
   style.id = "typing-indicator-style";
   style.textContent = `
     .typing-indicator span {
+      display: block;
       animation: typing-bounce 1.4s ease-in-out infinite;
     }
     .typing-indicator span:nth-child(2) {
@@ -301,6 +303,57 @@ function injectTypingAnimation(doc: Document): void {
     }
   `;
   doc.head?.appendChild(style);
+}
+
+function createTypingIndicator(doc: Document, theme: ThemeColors): HTMLElement {
+  injectTypingAnimation(doc);
+
+  const loader = createElement(
+    doc,
+    "div",
+    {
+      display: "flex",
+      alignItems: "center",
+      gap: "4px",
+      marginTop: "6px",
+      padding: "4px 0",
+    },
+    {
+      class: "typing-indicator",
+      [STREAMING_TYPING_INDICATOR_ATTR]: "true",
+      "aria-hidden": "true",
+    },
+  );
+
+  for (let i = 0; i < 3; i++) {
+    const dot = createElement(doc, "span", {
+      width: "6px",
+      height: "6px",
+      borderRadius: "50%",
+      background: theme.textMuted,
+      opacity: "0.4",
+    });
+    loader.appendChild(dot);
+  }
+
+  return loader;
+}
+
+export function ensureStreamingTypingIndicator(
+  content: HTMLElement,
+  theme: ThemeColors,
+): void {
+  const existing = content.querySelector(
+    `[${STREAMING_TYPING_INDICATOR_ATTR}]`,
+  ) as HTMLElement | null;
+  if (existing) {
+    existing.querySelectorAll("span").forEach((dot) => {
+      (dot as HTMLElement).style.background = theme.textMuted;
+    });
+    return;
+  }
+
+  content.appendChild(createTypingIndicator(content.ownerDocument, theme));
 }
 
 /**
@@ -414,36 +467,9 @@ export function createMessageElement(
     rawContent = quotaDetails?.rawMessage || errorDisplay;
   } else {
     // Render assistant message as markdown
-    if (isLastAssistant && !msg.content) {
-      // Show loading indicator for empty streaming placeholder
-      const loader = createElement(
-        doc,
-        "div",
-        {
-          display: "inline-flex",
-          alignItems: "center",
-          gap: "4px",
-          padding: "4px 0",
-        },
-        { class: "typing-indicator" },
-      );
-
-      for (let i = 0; i < 3; i++) {
-        const dot = createElement(doc, "span", {
-          width: "6px",
-          height: "6px",
-          borderRadius: "50%",
-          background: theme.textMuted,
-          opacity: "0.4",
-        });
-        loader.appendChild(dot);
-      }
-      content.appendChild(loader);
-
-      // Inject animation keyframes
-      injectTypingAnimation(doc);
-    } else if (msg.streamingState === "in_progress") {
+    if (msg.streamingState === "in_progress") {
       content.textContent = msg.content;
+      ensureStreamingTypingIndicator(content, theme);
     } else {
       renderMarkdownToElement(content, msg.content, msg.id);
     }
