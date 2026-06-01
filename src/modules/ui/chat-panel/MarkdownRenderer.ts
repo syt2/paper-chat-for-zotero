@@ -294,7 +294,22 @@ function getToolCardStatusColor(
       : colors.statusError;
 }
 
+export function stripIncompleteTrailingToolCall(content: string): string {
+  const lastOpen = content.lastIndexOf("<tool-call");
+  if (lastOpen === -1) {
+    return content;
+  }
+
+  const lastClose = content.lastIndexOf("</tool-call>");
+  if (lastClose >= lastOpen) {
+    return content;
+  }
+
+  return content.slice(0, lastOpen);
+}
+
 function parseToolCallFragments(content: string): ToolCallFragment[] {
+  const stableContent = stripIncompleteTrailingToolCall(content);
   const toolCallRegex =
     /<tool-call status="(calling|completed|error)">\s*<tool-name>([^<]*)<\/tool-name>\s*(?:<tool-args>([^<]*)<\/tool-args>\s*)?<tool-status>([^<]*)<\/tool-status>\s*(?:<tool-result>([^<]*)<\/tool-result>\s*)?<\/tool-call>/g;
 
@@ -302,9 +317,9 @@ function parseToolCallFragments(content: string): ToolCallFragment[] {
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
-  while ((match = toolCallRegex.exec(content)) !== null) {
+  while ((match = toolCallRegex.exec(stableContent)) !== null) {
     if (match.index > lastIndex) {
-      const markdownBefore = content.slice(lastIndex, match.index);
+      const markdownBefore = stableContent.slice(lastIndex, match.index);
       if (markdownBefore.trim()) {
         fragments.push({
           kind: "markdown",
@@ -330,11 +345,11 @@ function parseToolCallFragments(content: string): ToolCallFragment[] {
   }
 
   if (fragments.length === 0) {
-    return [{ kind: "markdown", content }];
+    return [{ kind: "markdown", content: stableContent }];
   }
 
-  if (lastIndex < content.length) {
-    const trailingMarkdown = content.slice(lastIndex);
+  if (lastIndex < stableContent.length) {
+    const trailingMarkdown = stableContent.slice(lastIndex);
     if (trailingMarkdown.trim()) {
       fragments.push({
         kind: "markdown",
@@ -781,7 +796,7 @@ function renderToolCallCards(
 ): string {
   const fragments = parseToolCallFragments(content);
   if (fragments.length === 1 && fragments[0].kind === "markdown") {
-    return content;
+    return fragments[0].content;
   }
 
   let groupIndex = 0;

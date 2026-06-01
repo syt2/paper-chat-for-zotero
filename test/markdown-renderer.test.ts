@@ -1,5 +1,8 @@
 import { assert } from "chai";
-import { extractSourceGroupFragments } from "../src/modules/ui/chat-panel/MarkdownRenderer.ts";
+import {
+  extractSourceGroupFragments,
+  stripIncompleteTrailingToolCall,
+} from "../src/modules/ui/chat-panel/MarkdownRenderer.ts";
 
 describe("markdown renderer source groups", function () {
   it("extracts source-group fragments while preserving surrounding markdown", function () {
@@ -66,5 +69,54 @@ Missing label should not be parsed.
     }
     assert.equal(fragments[0].label, "Paper B");
     assert.equal(fragments[0].type, "web");
+  });
+});
+
+describe("markdown renderer tool-call streaming", function () {
+  const completedToolCall = `
+<tool-call status="completed">
+<tool-name>done search_paper_content</tool-name>
+<tool-args>query=&quot;positional encoding&quot;</tool-args>
+<tool-status>completed</tool-status>
+<tool-result>Found relevant passages.</tool-result>
+</tool-call>
+`;
+
+  it("keeps complete tool-call blocks while hiding the trailing draft", function () {
+    const content = `Intro
+${completedToolCall}
+<tool-call status="calling">
+<tool-name>calling search_paper_content</tool-name>
+<tool-args>query=&quot;encoder decoder`;
+
+    const stable = stripIncompleteTrailingToolCall(content);
+
+    assert.include(stable, "Intro");
+    assert.include(stable, completedToolCall.trim());
+    assert.notInclude(stable, "encoder decoder");
+    assert.notInclude(stable, '<tool-call status="calling">');
+  });
+
+  it("returns complete consecutive tool-call blocks unchanged", function () {
+    const secondToolCall = `
+<tool-call status="completed">
+<tool-name>done search_paper_content</tool-name>
+<tool-args>query=&quot;encoder decoder attention&quot;</tool-args>
+<tool-status>completed</tool-status>
+<tool-result>Found more relevant passages.</tool-result>
+</tool-call>
+`;
+
+    const content = `${completedToolCall}${secondToolCall}`;
+
+    assert.equal(stripIncompleteTrailingToolCall(content), content);
+  });
+
+  it("hides a standalone incomplete tool-call draft", function () {
+    const content = `
+<tool-call status="calling">
+<tool-name>calling search_paper_content</tool-name>`;
+
+    assert.equal(stripIncompleteTrailingToolCall(content), "\n");
   });
 });

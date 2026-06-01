@@ -37,7 +37,10 @@ import {
   updateApprovalView,
   type ApprovalViewTransitionState,
 } from "./MessageRenderer";
-import { renderMarkdownToElement } from "./MarkdownRenderer";
+import {
+  renderMarkdownToElement,
+  stripIncompleteTrailingToolCall,
+} from "./MarkdownRenderer";
 import {
   setupEventHandlers,
   updateAttachmentsPreviewDisplay,
@@ -101,6 +104,32 @@ function cancelPendingStreamingTextRender(container: HTMLElement): void {
   streamingTextRenderStates.delete(container);
 }
 
+function shouldForceStreamingMarkdownRender(
+  content: string,
+  state: StreamingTextRenderState,
+): boolean {
+  if (!content.includes("<tool-call")) {
+    return false;
+  }
+
+  if (stripIncompleteTrailingToolCall(content) !== content) {
+    return true;
+  }
+
+  if (!state.lastMarkdownContent) {
+    return true;
+  }
+
+  const incrementalContent = content.startsWith(state.lastMarkdownContent)
+    ? content.slice(state.lastMarkdownContent.length)
+    : content;
+
+  return (
+    incrementalContent.includes("<tool-call") ||
+    incrementalContent.includes("</tool-call>")
+  );
+}
+
 function renderStreamingTextNow(
   container: HTMLElement,
   manager: ChatManager,
@@ -135,6 +164,7 @@ function renderStreamingTextNow(
 
   const now = Date.now();
   const shouldRenderMarkdown =
+    shouldForceStreamingMarkdownRender(content, state) ||
     now - state.lastMarkdownRenderAt >= STREAMING_MARKDOWN_RENDER_INTERVAL_MS;
 
   if (shouldRenderMarkdown) {

@@ -701,18 +701,14 @@ export class AgentRuntime {
     };
     currentMessages.push(assistantToolMessage);
     if (contextStrategy.persistApiOnlyTranscript) {
-      insertApiOnlyModelContextMessage(
-        sendingSession,
-        assistantMessage,
-        {
-          ...assistantToolMessage,
-          id: buildApiOnlyModelContextMessageId(
-            assistantMessage.id,
-            this.callbacks.generateId(),
-          ),
-          apiOnly: true,
-        },
-      );
+      insertApiOnlyModelContextMessage(sendingSession, assistantMessage, {
+        ...assistantToolMessage,
+        id: buildApiOnlyModelContextMessageId(
+          assistantMessage.id,
+          this.callbacks.generateId(),
+        ),
+        apiOnly: true,
+      });
     }
 
     let accumulatedDisplay = params.accumulatedDisplay;
@@ -728,8 +724,20 @@ export class AgentRuntime {
       paperStructure,
     );
 
+    const formatCallingToolCards = (calls: ToolCall[]): string =>
+      calls
+        .map((toolCall) =>
+          this.callbacks.formatToolCallCard(
+            toolCall.function.name,
+            toolCall.function.arguments,
+            "calling",
+          ),
+        )
+        .join("");
+
     for (const entry of executionEntries) {
       let callingDisplay = accumulatedDisplay;
+      const pendingDisplayToolCalls = new Map<string, ToolCall>();
 
       if (entry.kind === "execute") {
         for (const request of entry.requests) {
@@ -738,11 +746,7 @@ export class AgentRuntime {
           const toolArgs = toolCall.function.arguments;
           ztoolkit.log(`[${logPrefix}] Executing: ${toolName}`, toolArgs);
 
-          callingDisplay += this.callbacks.formatToolCallCard(
-            toolName,
-            toolArgs,
-            "calling",
-          );
+          pendingDisplayToolCalls.set(toolCall.id, toolCall);
           this.executionPlanManager.addOrUpdateToolStep(
             sendingSession,
             currentMessages,
@@ -752,6 +756,9 @@ export class AgentRuntime {
             truncateToolDetail(toolArgs),
           );
         }
+        callingDisplay += formatCallingToolCards([
+          ...pendingDisplayToolCalls.values(),
+        ]);
 
         assistantMessage.content = callingDisplay;
         assistantMessage.streamingState = "in_progress";
@@ -811,18 +818,14 @@ export class AgentRuntime {
         };
         currentMessages.push(toolResultMessage);
         if (contextStrategy.persistApiOnlyTranscript) {
-          insertApiOnlyModelContextMessage(
-            sendingSession,
-            assistantMessage,
-            {
-              ...toolResultMessage,
-              id: buildApiOnlyModelContextMessageId(
-                assistantMessage.id,
-                this.callbacks.generateId(),
-              ),
-              apiOnly: true,
-            },
-          );
+          insertApiOnlyModelContextMessage(sendingSession, assistantMessage, {
+            ...toolResultMessage,
+            id: buildApiOnlyModelContextMessageId(
+              assistantMessage.id,
+              this.callbacks.generateId(),
+            ),
+            apiOnly: true,
+          });
         }
 
         const toolSucceeded = executionResult.status === "completed";
@@ -840,7 +843,11 @@ export class AgentRuntime {
           toolDisplayStatus,
           toolResult,
         );
-        assistantMessage.content = accumulatedDisplay;
+        pendingDisplayToolCalls.delete(toolCall.id);
+        const displayWithPendingTools =
+          accumulatedDisplay +
+          formatCallingToolCards([...pendingDisplayToolCalls.values()]);
+        assistantMessage.content = displayWithPendingTools;
         assistantMessage.streamingState = "in_progress";
         await this.flushAssistantMessageCheckpoint(
           sendingSession,
@@ -885,7 +892,7 @@ export class AgentRuntime {
         );
         if (this.callbacks.isSessionActive(sendingSession)) {
           this.callbacks.onStreamingUpdate?.(
-            accumulatedDisplay,
+            displayWithPendingTools,
             assistantMessage.id,
           );
         }
@@ -1435,10 +1442,7 @@ export class AgentRuntime {
     provider: ToolCallingProvider,
   ): void {
     const strategy = getToolContextStrategy(provider);
-    compactOlderToolResultMessages(
-      currentMessages,
-      strategy.compactionPolicy,
-    );
+    compactOlderToolResultMessages(currentMessages, strategy.compactionPolicy);
   }
 
   private emitRuntimeEvent<T extends AgentRuntimeEventType>(
@@ -1683,7 +1687,8 @@ function stripAssistantToolCallCards(messages: ChatMessage[]): void {
       )
       .replace(/\n{3,}/g, "\n\n")
       .trim();
-    message.content = stripped || "[Tool call details omitted from model context.]";
+    message.content =
+      stripped || "[Tool call details omitted from model context.]";
   }
 }
 
