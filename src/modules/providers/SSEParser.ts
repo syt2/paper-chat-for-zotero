@@ -38,6 +38,7 @@ interface OpenAIStreamDelta {
   choices?: Array<{
     delta?: {
       content?: string | null;
+      reasoning?: string | null;
       reasoning_content?: string | null;
       tool_calls?: Array<{
         index: number;
@@ -127,95 +128,93 @@ const contentExtractors: Record<SSEFormat, (parsed: unknown) => string | null> =
 /**
  * 解析 OpenAI 流式事件为统一的 SSEToolCallingEvent
  */
-function parseOpenAIToolCallingEvent(
-  parsed: unknown,
-): SSEToolCallingEvent | null {
+function parseOpenAIToolCallingEvents(parsed: unknown): SSEToolCallingEvent[] {
   const data = parsed as OpenAIStreamDelta;
   const choice = data.choices?.[0];
 
-  if (!choice) return null;
+  if (!choice) return [];
 
-  // 检查完成原因
+  const events: SSEToolCallingEvent[] = [];
+  const delta = choice.delta;
+
+  if (delta) {
+    const reasoning = delta.reasoning_content || delta.reasoning;
+    if (reasoning) {
+      events.push({ type: "reasoning_delta", text: reasoning });
+    }
+
+    if (delta.content) {
+      events.push({ type: "text_delta", text: delta.content });
+    }
+
+    if (delta.tool_calls && delta.tool_calls.length > 0) {
+      for (const toolCall of delta.tool_calls) {
+        const index = toolCall.index;
+
+        if (toolCall.id && toolCall.function?.name) {
+          events.push({
+            type: "tool_call_start",
+            index,
+            id: toolCall.id,
+            name: toolCall.function.name,
+          });
+        }
+
+        if (toolCall.function?.arguments) {
+          events.push({
+            type: "tool_call_delta",
+            index,
+            argumentsDelta: toolCall.function.arguments,
+          });
+        }
+      }
+    }
+  }
+
   if (choice.finish_reason) {
-    return {
+    events.push({
       type: "done",
       stopReason:
         choice.finish_reason === "tool_calls" ? "tool_calls" : "end_turn",
-    };
+    });
   }
 
-  const delta = choice.delta;
-  if (!delta) return null;
-
-  // Reasoning content (e.g. DeepSeek-Reasoner)
-  if (delta.reasoning_content) {
-    return { type: "reasoning_delta", text: delta.reasoning_content };
-  }
-
-  // 文本内容
-  if (delta.content) {
-    return { type: "text_delta", text: delta.content };
-  }
-
-  // Tool calls
-  // Note: OpenAI streaming API sends one tool_call delta at a time,
-  // so we only need to process the first element in the array
-  if (delta.tool_calls && delta.tool_calls.length > 0) {
-    const toolCall = delta.tool_calls[0];
-    const index = toolCall.index;
-
-    // 新的 tool call 开始（有 id 和 name）
-    if (toolCall.id && toolCall.function?.name) {
-      return {
-        type: "tool_call_start",
-        index,
-        id: toolCall.id,
-        name: toolCall.function.name,
-      };
-    }
-
-    // tool call 参数增量
-    if (toolCall.function?.arguments) {
-      return {
-        type: "tool_call_delta",
-        index,
-        argumentsDelta: toolCall.function.arguments,
-      };
-    }
-  }
-
-  return null;
+  return events;
 }
 
 /**
  * 解析 Anthropic 流式事件为统一的 SSEToolCallingEvent
  */
-function parseAnthropicToolCallingEvent(
+function parseAnthropicToolCallingEvents(
   parsed: unknown,
-): SSEToolCallingEvent | null {
+): SSEToolCallingEvent[] {
   const data = parsed as AnthropicStreamEvent;
 
   // 错误处理
   if (data.type === "error") {
-    return {
-      type: "error",
-      error: new Error(data.error?.message || "Unknown Anthropic error"),
-    };
+    return [
+      {
+        type: "error",
+        error: new Error(data.error?.message || "Unknown Anthropic error"),
+      },
+    ];
   }
 
   // 内容块开始
   if (data.type === "content_block_start") {
     const block = data.content_block;
     if (block?.type === "tool_use" && block.id && block.name) {
-      return {
-        type: "tool_call_start",
-        index: data.index ?? 0,
-        id: block.id,
-        name: block.name,
-      };
+      return [
+        {
+          type: "tool_call_start",
+          index: data.index ?? 0,
+          id: block.id,
+          name: block.name,
+        },
+      ];
     }
     // text 块开始不需要特殊处理
-    return null;
+    return [];
   }
 
   // 内容块增量
@@ -224,16 +223,18 @@ function parseAnthropicToolCallingEvent(
 
     // 文本增量
     if (delta?.type === "text_delta" && delta.text) {
-      return { type: "text_delta", text: delta.text };
+      return [{ type: "text_delta", text: delta.text }];
     }
 
     // Tool 参数增量
     if (delta?.type === "input_json_delta" && delta.partial_json) {
-      return {
-        type: "tool_call_delta",
-        index: data.index ?? 0,
-        argumentsDelta: delta.partial_json,
-      };
+      return [
+        {
+          type: "tool_call_delta",
+          index: data.index ?? 0,
+          argumentsDelta: delta.partial_json,
+        },
+      ];
     }
   }
 
@@ -241,19 +242,21 @@ function parseAnthropicToolCallingEvent(
   if (data.type === "message_delta") {
     const stopReason = data.delta?.stop_reason;
     if (stopReason) {
-      return {
-        type: "done",
-        stopReason: stopReason === "tool_use" ? "tool_calls" : "end_turn",
-      };
+      return [
+        {
+          type: "done",
+          stopReason: stopReason === "tool_use" ? "tool_calls" : "end_turn",
+        },
+      ];
     }
   }
 
   // message_stop 作为备用完成信号
   if (data.type === "message_stop") {
-    return { type: "done", stopReason: "end_turn" };
+    return [{ type: "done", stopReason: "end_turn" }];
   }
 
-  return null;
+  return [];
 }
 
 // ============ 流式解析函数 ============
@@ -299,10 +302,11 @@ export async function parseSSEStream(
           // For OpenAI format, check reasoning_content before regular content
           if (format === "openai" && onReasoning) {
             const openaiData = parsed as OpenAIStreamDelta;
-            const reasoningContent = openaiData.choices?.[0]?.delta?.reasoning_content;
+            const reasoningContent =
+              openaiData.choices?.[0]?.delta?.reasoning_content ||
+              openaiData.choices?.[0]?.delta?.reasoning;
             if (reasoningContent) {
               onReasoning(reasoningContent);
-              continue;
             }
           }
 
@@ -347,13 +351,14 @@ export async function parseSSEStreamWithToolCalling(
   callbacks: SSEToolCallingCallbacks,
 ): Promise<void> {
   const { onEvent } = callbacks;
-  const parseEvent =
+  const parseEvents =
     format === "openai"
-      ? parseOpenAIToolCallingEvent
-      : parseAnthropicToolCallingEvent;
+      ? parseOpenAIToolCallingEvents
+      : parseAnthropicToolCallingEvents;
   const decoder = new TextDecoder();
   let buffer = "";
   let hasReceivedDone = false;
+  const startedToolCallIndexes = new Set<number>();
 
   try {
     while (true) {
@@ -388,9 +393,18 @@ export async function parseSSEStreamWithToolCalling(
 
         try {
           const parsed = JSON.parse(data);
-          const event = parseEvent(parsed);
-          if (event) {
+          const events = parseEvents(parsed);
+          for (const event of events) {
+            if (event.type === "tool_call_start") {
+              if (startedToolCallIndexes.has(event.index)) {
+                continue;
+              }
+              startedToolCallIndexes.add(event.index);
+            }
             if (event.type === "done") {
+              if (hasReceivedDone) {
+                continue;
+              }
               hasReceivedDone = true;
             }
             onEvent(event);
