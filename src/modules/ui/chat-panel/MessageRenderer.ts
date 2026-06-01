@@ -31,6 +31,7 @@ export function getStreamingReasoningContainerSelector(
 
 const CHAT_HISTORY_BOTTOM_STICKY_THRESHOLD = 24;
 const CHAT_HISTORY_AUTO_SCROLL_ATTR = "data-auto-scroll";
+const CHAT_SCROLL_BOTTOM_BUTTON_ID = "chat-scroll-bottom-btn";
 
 function getChatHistoryBottomOffset(chatHistory: HTMLElement): number {
   return (
@@ -59,11 +60,40 @@ export function updateChatHistoryAutoScrollState(
     CHAT_HISTORY_AUTO_SCROLL_ATTR,
     isChatHistoryNearBottom(chatHistory) ? "true" : "false",
   );
+  updateChatHistoryScrollBottomButton(chatHistory);
 }
 
 export function scrollChatHistoryToBottom(chatHistory: HTMLElement): void {
   chatHistory.scrollTop = chatHistory.scrollHeight;
   chatHistory.setAttribute(CHAT_HISTORY_AUTO_SCROLL_ATTR, "true");
+  updateChatHistoryScrollBottomButton(chatHistory);
+}
+
+export function updateChatHistoryScrollBottomButton(
+  chatHistory: HTMLElement,
+): void {
+  const button = chatHistory.parentElement?.querySelector(
+    `#${CHAT_SCROLL_BOTTOM_BUTTON_ID}`,
+  ) as HTMLElement | null;
+  if (!button) return;
+
+  const bottomPanel = chatHistory.parentElement?.querySelector(
+    "#chat-execution-approval-panel",
+  ) as HTMLElement | null;
+  const bottomInset = Number(bottomPanel?.dataset.visibleHeight || 0);
+  const hasScrollableContent =
+    chatHistory.scrollHeight > chatHistory.clientHeight;
+  const shouldShow =
+    hasScrollableContent && !isChatHistoryNearBottom(chatHistory);
+
+  button.style.bottom = `${16 + bottomInset}px`;
+  button.style.opacity = shouldShow ? "1" : "0";
+  button.style.transform = shouldShow
+    ? "translateY(0) scale(1)"
+    : "translateY(8px) scale(0.92)";
+  button.style.pointerEvents = shouldShow ? "auto" : "none";
+  button.setAttribute("aria-hidden", shouldShow ? "false" : "true");
+  button.setAttribute("data-visible", shouldShow ? "true" : "false");
 }
 import { createElement, copyToClipboard } from "./ChatPanelBuilder";
 import { getString } from "../../../utils/locale";
@@ -742,6 +772,7 @@ export function renderMessages(
     const visibleEmptyState = emptyState || createChatEmptyState(doc, theme);
     chatHistory.appendChild(visibleEmptyState);
     visibleEmptyState.style.display = "flex";
+    updateChatHistoryScrollBottomButton(chatHistory);
     return;
   }
 
@@ -778,6 +809,8 @@ export function renderMessages(
 
   if (shouldScrollToBottom) {
     scrollChatHistoryToBottom(chatHistory);
+  } else {
+    updateChatHistoryScrollBottomButton(chatHistory);
   }
 }
 
@@ -1040,6 +1073,7 @@ function syncExecutionInsets(panel: HTMLElement): void {
     chatHistory.style.paddingBottom = `${nextPaddingBottom}px`;
     chatHistory.style.scrollPaddingTop = `${nextPaddingTop}px`;
     chatHistory.style.scrollPaddingBottom = `${nextPaddingBottom}px`;
+    updateChatHistoryScrollBottomButton(chatHistory);
     return;
   }
 
@@ -1068,6 +1102,7 @@ function syncExecutionInsets(panel: HTMLElement): void {
         (nextPaddingBottom - currentPaddingBottom),
     );
   }
+  updateChatHistoryScrollBottomButton(chatHistory);
 }
 
 function deriveExecutionBannerState(

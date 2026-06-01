@@ -386,6 +386,45 @@ export function createChatContainer(
     { id: "chat-history" },
   );
 
+  const scrollBottomBtn = createElement(
+    doc,
+    "button",
+    {
+      position: "absolute",
+      right: "16px",
+      bottom: "16px",
+      width: "36px",
+      height: "36px",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: "0",
+      border: `1px solid ${theme.borderColor}`,
+      borderRadius: "999px",
+      background: theme.buttonBg,
+      color: theme.textPrimary,
+      boxShadow: "0 6px 18px rgba(0,0,0,0.18)",
+      cursor: "pointer",
+      fontSize: "20px",
+      lineHeight: "1",
+      opacity: "0",
+      transform: "translateY(8px) scale(0.92)",
+      pointerEvents: "none",
+      zIndex: "4",
+      transition:
+        "opacity 160ms ease, transform 160ms ease, background 120ms ease, box-shadow 120ms ease",
+    },
+    {
+      id: "chat-scroll-bottom-btn",
+      type: "button",
+      title: "Scroll to bottom",
+      "aria-label": "Scroll to bottom",
+      "aria-hidden": "true",
+      "data-visible": "false",
+    },
+  );
+  scrollBottomBtn.textContent = "↓";
+
   // Empty State
   const emptyState = createElement(
     doc,
@@ -917,6 +956,7 @@ export function createChatContainer(
   chatViewport.appendChild(chatHistory);
   chatViewport.appendChild(executionPlanPanel);
   chatViewport.appendChild(executionApprovalPanel);
+  chatViewport.appendChild(scrollBottomBtn);
   root.appendChild(chatViewport);
   root.appendChild(toolbar);
   root.appendChild(attachmentsPreview);

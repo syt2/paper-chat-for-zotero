@@ -41,6 +41,7 @@ import {
   scrollChatHistoryToBottom,
   shouldAutoScrollChatHistory,
   updateChatHistoryAutoScrollState,
+  updateChatHistoryScrollBottomButton,
 } from "./MessageRenderer";
 import { ANALYTICS_EVENTS, getAnalyticsService } from "../../analytics";
 import { buildErrorProps } from "../../analytics/errorProps";
@@ -568,13 +569,26 @@ export function setupEventHandlers(context: ChatPanelContext): void {
   const checkinBtn = container.querySelector(
     "#chat-checkin-btn",
   ) as HTMLButtonElement;
-  const chatHistory = container.querySelector("#chat-history") as HTMLElement;
+  const chatHistory = container.querySelector(
+    "#chat-history",
+  ) as HTMLElement | null;
+  const scrollBottomBtn = container.querySelector(
+    "#chat-scroll-bottom-btn",
+  ) as HTMLButtonElement | null;
   const emptyState = container.querySelector(
     "#chat-empty-state",
   ) as HTMLElement;
 
-  chatHistory?.addEventListener("scroll", () => {
-    updateChatHistoryAutoScrollState(chatHistory);
+  if (chatHistory) {
+    chatHistory.addEventListener("scroll", () => {
+      updateChatHistoryAutoScrollState(chatHistory);
+    });
+    updateChatHistoryScrollBottomButton(chatHistory);
+  }
+
+  scrollBottomBtn?.addEventListener("click", () => {
+    if (!chatHistory) return;
+    scrollChatHistoryToBottom(chatHistory);
   });
 
   // History dropdown state

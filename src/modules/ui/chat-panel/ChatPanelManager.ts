@@ -33,6 +33,7 @@ import {
   renderMessages as renderMessageElements,
   scrollChatHistoryToBottom,
   shouldAutoScrollChatHistory,
+  updateChatHistoryScrollBottomButton,
   updateExecutionPlanView,
   updateApprovalView,
   type ApprovalViewTransitionState,
@@ -194,6 +195,8 @@ function renderStreamingTextNow(
     ) as HTMLElement | null;
     if (chatHistory && shouldAutoScrollChatHistory(chatHistory)) {
       scrollChatHistoryToBottom(chatHistory);
+    } else if (chatHistory) {
+      updateChatHistoryScrollBottomButton(chatHistory);
     }
   }
   state.lastRenderedContent = content;
@@ -1718,6 +1721,8 @@ function createContext(container: HTMLElement): ChatPanelContext {
           chatHistory.appendChild(wrapper);
           if (shouldAutoScrollChatHistory(chatHistory)) {
             scrollChatHistoryToBottom(chatHistory);
+          } else {
+            updateChatHistoryScrollBottomButton(chatHistory);
           }
           ztoolkit.log("[ChatPanel] Error message appended to chat history");
         }

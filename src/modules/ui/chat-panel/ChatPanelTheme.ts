@@ -111,6 +111,15 @@ export function applyThemeToContainer(container: HTMLElement): void {
     chatHistory.style.background = theme.chatHistoryBg;
   }
 
+  const scrollBottomBtn = container.querySelector(
+    "#chat-scroll-bottom-btn",
+  ) as HTMLElement;
+  if (scrollBottomBtn) {
+    scrollBottomBtn.style.background = theme.buttonBg;
+    scrollBottomBtn.style.borderColor = theme.borderColor;
+    scrollBottomBtn.style.color = theme.textPrimary;
+  }
+
   const executionPlanPanel = container.querySelector(
     "#chat-execution-plan-panel",
   ) as HTMLElement;
