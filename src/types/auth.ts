@@ -114,9 +114,13 @@ export interface CreateTokenRequest {
   name: string;
   expired_time?: number;
   remain_quota?: number;
+  remain_amount?: number;
   unlimited_quota?: boolean;
+  model_limits_enabled?: boolean;
   model_limits?: string;
+  cross_group_retry?: boolean;
   group?: string;
+  allow_ips?: string;
 }
 
 /**

@@ -2,6 +2,7 @@
 .DS_Store
 .claude
 CLAUDE.md
+AGENTS.md
 
 # Node.js
 node_modules

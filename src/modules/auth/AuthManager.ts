@@ -11,6 +11,7 @@ import type {
   TokenInfo,
   AuthState,
   ApiResponse,
+  CreateTokenRequest,
   SubscriptionSelfInfo,
   SubscriptionUsageSummary,
 } from "../../types/auth";
@@ -29,6 +30,13 @@ import {
   validateTierState,
 } from "../providers/paperchat-tier-routing";
 import { isEmbeddingModel } from "../embedding/providers/PaperChatEmbedding";
+import {
+  buildLegacyPluginTokenCreateRequest,
+  buildPluginTokenCreateRequest,
+  findActiveAutoPluginToken,
+  findLegacyPluginToken,
+  normalizePluginApiKey,
+} from "./PluginToken";
 
 // 密码加密/解密（使用简单的 XOR 加密 + Base64 编码）
 // 加密密钥基于插件 ID 和用户 profile 路径生成，比纯 Base64 更安全
@@ -98,9 +106,6 @@ type CallbackListeners = {
   onBalanceUpdate: Array<(quota: number, usedQuota: number) => void>;
   onError: Array<(error: Error) => void>;
 };
-
-// 插件专用Token名称
-const PLUGIN_TOKEN_NAME = "Paper-Chat-Plugin";
 
 // 模型列表自动刷新间隔（1小时）
 const MODEL_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
@@ -470,6 +475,78 @@ export class AuthManager {
    */
   getApiKey(): string | null {
     return this.state.apiKey;
+  }
+
+  private savePluginTokenKey(token: TokenInfo, key: string): string {
+    this.state.token = token;
+    this.state.apiKey = normalizePluginApiKey(key);
+    setPref("apiKey", this.state.apiKey);
+    this.authService.setAccessToken(this.state.apiKey);
+    return this.state.apiKey;
+  }
+
+  private async fetchAndSavePluginTokenKey(
+    token: TokenInfo,
+    operationName: string,
+  ): Promise<string | null> {
+    const keyResult = await this.withSessionRetry(
+      () => this.authService.getTokenKey(token.id),
+      operationName,
+    );
+    if (keyResult.success && keyResult.data?.key) {
+      return this.savePluginTokenKey(token, keyResult.data.key);
+    }
+    return null;
+  }
+
+  private async fetchAndSavePluginTokenKeyWithRetry(
+    token: TokenInfo,
+    operationName: string,
+  ): Promise<string | null> {
+    let apiKey = await this.fetchAndSavePluginTokenKey(token, operationName);
+    if (apiKey) {
+      return apiKey;
+    }
+
+    ztoolkit.log(`[AuthManager] ${operationName} failed, retrying after 2s...`);
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    apiKey = await this.fetchAndSavePluginTokenKey(token, operationName);
+    if (!apiKey) {
+      ztoolkit.log(
+        `[AuthManager] ${operationName} failed after retry, token key unavailable`,
+      );
+    }
+    return apiKey;
+  }
+
+  private async createAndSavePluginToken(
+    request: CreateTokenRequest,
+    selectToken: (tokens: TokenInfo[]) => TokenInfo | undefined,
+    createOperationName: string,
+    getKeyOperationName: string,
+  ): Promise<string | null> {
+    const createResult = await this.withSessionRetry(
+      () => this.authService.createToken(request),
+      createOperationName,
+    );
+    if (!createResult.success) {
+      return null;
+    }
+
+    const tokensResult = await this.withSessionRetry(
+      () => this.authService.getTokens(0, 100),
+      `${createOperationName}:getTokens`,
+    );
+    if (!tokensResult.success || !tokensResult.data) {
+      return null;
+    }
+
+    const token = selectToken(tokensResult.data.items || []);
+    if (!token) {
+      return null;
+    }
+
+    return this.fetchAndSavePluginTokenKeyWithRetry(token, getKeyOperationName);
   }
 
   /**
@@ -923,32 +1000,29 @@ export class AuthManager {
       "getTokens",
     );
 
+    let legacyToken: TokenInfo | undefined;
     if (tokensResult.success && tokensResult.data) {
-      const existingToken = tokensResult.data.items?.find(
-        (t) => t.name === PLUGIN_TOKEN_NAME && t.status === 1,
-      );
+      const tokens = tokensResult.data.items || [];
+      const autoToken = findActiveAutoPluginToken(tokens);
+      legacyToken = findLegacyPluginToken(tokens);
 
-      if (existingToken && !forceRefresh) {
+      if (autoToken && !forceRefresh) {
         // getTokens 返回的 key 是掩码形式，需要通过 getTokenKey 获取真实 key
-        const keyResult = await this.withSessionRetry(
-          () => this.authService.getTokenKey(existingToken.id),
+        const apiKey = await this.fetchAndSavePluginTokenKey(
+          autoToken,
           "getTokenKey",
         );
-        if (keyResult.success && keyResult.data?.key) {
-          this.state.token = existingToken;
-          this.state.apiKey = `sk-${keyResult.data.key}`;
-          setPref("apiKey", this.state.apiKey);
-          this.authService.setAccessToken(this.state.apiKey);
+        if (apiKey) {
           ztoolkit.log(
-            "[AuthManager] Using existing plugin token:",
-            this.state.apiKey.substring(0, 10) + "...",
+            "[AuthManager] Using existing auto plugin token:",
+            apiKey.substring(0, 10) + "...",
           );
           return;
         }
         // getTokenKey failed (e.g. 429 rate limit) — keep using cached apiKey if available
         const cachedApiKey = getPref("apiKey") as string;
         if (cachedApiKey && !cachedApiKey.includes("*")) {
-          this.state.token = existingToken;
+          this.state.token = autoToken;
           this.state.apiKey = cachedApiKey;
           this.authService.setAccessToken(cachedApiKey);
           ztoolkit.log(
@@ -959,68 +1033,76 @@ export class AuthManager {
         }
         // No cached key — cannot proceed, log warning
         ztoolkit.log(
-          "[AuthManager] getTokenKey failed and no cached apiKey available, token will be unusable",
+          "[AuthManager] getTokenKey failed and no cached apiKey available",
         );
+        if (legacyToken) {
+          const legacyApiKey = await this.fetchAndSavePluginTokenKey(
+            legacyToken,
+            "getLegacyTokenKey",
+          );
+          if (legacyApiKey) {
+            ztoolkit.log(
+              "[AuthManager] Falling back to legacy plugin token:",
+              legacyApiKey.substring(0, 10) + "...",
+            );
+          }
+        }
         return;
       }
 
-      // forceRefresh 时，如果有旧 token 则删除它
-      if (existingToken && forceRefresh) {
-        ztoolkit.log("[AuthManager] Force refresh: deleting old token");
+      // forceRefresh 只删除 auto token。旧版本默认分组 token 保留作回滚兜底。
+      if (autoToken && forceRefresh) {
+        ztoolkit.log("[AuthManager] Force refresh: deleting old auto token");
         await this.withSessionRetry(
-          () => this.authService.deleteToken(existingToken.id),
-          "deleteOldToken",
+          () => this.authService.deleteToken(autoToken.id),
+          "deleteOldAutoToken",
+        );
+      } else if (legacyToken) {
+        ztoolkit.log(
+          "[AuthManager] Found legacy plugin token, creating auto token",
         );
       }
     }
 
-    // 创建新Token
-    const createResult = await this.withSessionRetry(
-      () =>
-        this.authService.createToken({
-          name: PLUGIN_TOKEN_NAME,
-          unlimited_quota: true,
-          expired_time: -1, // 永不过期
-        }),
-      "createToken",
+    const autoApiKey = await this.createAndSavePluginToken(
+      buildPluginTokenCreateRequest(),
+      findActiveAutoPluginToken,
+      "createAutoToken",
+      "getAutoTokenKey",
     );
+    if (autoApiKey) {
+      ztoolkit.log(
+        "[AuthManager] Auto plugin token created and saved:",
+        autoApiKey.substring(0, 10) + "...",
+      );
+      return;
+    }
 
-    if (createResult.success) {
-      // 重新获取Token列表找到新创建的Token ID
-      const newTokensResult = await this.authService.getTokens(0, 100);
-      if (newTokensResult.success && newTokensResult.data) {
-        const newToken = newTokensResult.data.items?.find(
-          (t) => t.name === PLUGIN_TOKEN_NAME && t.status === 1,
-        );
-        if (newToken) {
-          // 通过 getTokenKey 获取真实 key (retry once after 2s if rate limited)
-          let keyResult = await this.withSessionRetry(
-            () => this.authService.getTokenKey(newToken.id),
-            "getTokenKey",
-          );
-          if (!keyResult.success || !keyResult.data?.key) {
-            ztoolkit.log(
-              "[AuthManager] getTokenKey failed, retrying after 2s...",
-            );
-            await new Promise((r) => setTimeout(r, 2000));
-            keyResult = await this.authService.getTokenKey(newToken.id);
-          }
-          if (!keyResult.success || !keyResult.data?.key) {
-            ztoolkit.log(
-              "[AuthManager] getTokenKey failed after retry, token key unavailable",
-            );
-            return;
-          }
-          this.state.token = newToken;
-          this.state.apiKey = `sk-${keyResult.data.key}`;
-          setPref("apiKey", this.state.apiKey);
-          this.authService.setAccessToken(this.state.apiKey);
-          ztoolkit.log(
-            "[AuthManager] Plugin token created and saved:",
-            this.state.apiKey.substring(0, 10) + "...",
-          );
-        }
+    if (legacyToken && !forceRefresh) {
+      ztoolkit.log(
+        "[AuthManager] Auto token unavailable, falling back to legacy token",
+      );
+      const legacyApiKey = await this.fetchAndSavePluginTokenKey(
+        legacyToken,
+        "getLegacyTokenKey",
+      );
+      if (legacyApiKey) {
+        return;
       }
+    }
+
+    const legacyCreateApiKey = await this.createAndSavePluginToken(
+      buildLegacyPluginTokenCreateRequest(),
+      findLegacyPluginToken,
+      "createLegacyToken",
+      "getLegacyTokenKey",
+    );
+    if (legacyCreateApiKey) {
+      ztoolkit.log(
+        "[AuthManager] Legacy plugin token created and saved:",
+        legacyCreateApiKey.substring(0, 10) + "...",
+      );
+      return;
     }
   }
 
