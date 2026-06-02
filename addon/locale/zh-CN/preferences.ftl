@@ -97,18 +97,10 @@ pref-upload-raw-pdf-desc = 启用后，若文本提取失败将上传原始 PDF 
 
 # AI Tools Settings
 pref-ai-tools-settings = AI 工具设置
-pref-web-search-provider = 搜索后端
-pref-web-search-provider-desc = 本地 web_search 工具的默认来源。Auto 只做轻量的学术优先 fallback，最适合由模型显式指定 source 或 intent 时配合使用。
 pref-agent-max-planning-iterations = 最大规划轮次
 pref-agent-max-planning-iterations-desc = 单个 agent 回复内允许的最大 planning iterations。到最后 1 轮时将强制停止继续调工具并直接总结输出。
 pref-context-auto-compact-threshold = 上下文压缩
 pref-context-auto-compact-threshold-desc = 当估算输入达到选定的上下文窗口预算时压缩上下文；实际触发点仍会扣除输出预留和安全缓冲。
-pref-web-search-provider-auto = Auto（轻量 fallback）
-pref-web-search-provider-semantic-scholar = Semantic Scholar（网页）
-pref-web-search-provider-google-scholar = Google Scholar（网页）
-pref-web-search-provider-openalex = OpenAlex
-pref-web-search-provider-bing = Bing（HTML 抓取）
-pref-web-search-provider-duckduckgo = DuckDuckGo（HTML 抓取）
 pref-tool-permission-defaults = 默认审批策略
 pref-tool-permission-defaults-desc = 控制高风险工具类别的默认行为；纯读取工具仍保持自动允许。
 pref-tool-permission-network = 网络工具

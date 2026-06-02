@@ -97,18 +97,10 @@ pref-upload-raw-pdf-desc = When enabled, uploads original PDF to AI if text extr
 
 # AI Tools Settings
 pref-ai-tools-settings = AI Tools Settings
-pref-web-search-provider = Search Provider
-pref-web-search-provider-desc = Default source for the local web_search tool. Auto uses lightweight academic-first fallback and works best when the model specifies source or intent explicitly.
 pref-agent-max-planning-iterations = Max planning iterations
 pref-agent-max-planning-iterations-desc = Maximum planning iterations allowed inside a single agent response. On the final iteration, tool use is disabled and the model must synthesize a final answer.
 pref-context-auto-compact-threshold = Context compression
 pref-context-auto-compact-threshold-desc = Compresses conversation context when estimated input reaches the selected context-window budget. The trigger still reserves output tokens and the safety buffer.
-pref-web-search-provider-auto = Auto (lightweight fallback)
-pref-web-search-provider-semantic-scholar = Semantic Scholar (web)
-pref-web-search-provider-google-scholar = Google Scholar (web)
-pref-web-search-provider-openalex = OpenAlex
-pref-web-search-provider-bing = Bing (HTML scraping)
-pref-web-search-provider-duckduckgo = DuckDuckGo (HTML scraping)
 pref-tool-permission-defaults = Default Approval Policy
 pref-tool-permission-defaults-desc = Controls the default behavior for risky tool classes. Read-only tools remain auto-allowed.
 pref-tool-permission-network = Network tools

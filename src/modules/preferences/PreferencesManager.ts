@@ -28,11 +28,6 @@ import {
   getToolPermissionDefaultMode,
   setToolPermissionDefaultMode,
 } from "../chat/tool-permissions/ToolPermissionDefaults";
-import {
-  DEFAULT_WEB_SEARCH_PROVIDER_ID,
-  listWebSearchProviders,
-  normalizeWebSearchProviderId,
-} from "../chat/web-search/WebSearchRegistry";
 import { normalizeAgentMaxPlanningIterations } from "../chat/agent-runtime/IterationLimitConfig";
 import {
   CONTEXT_AUTO_COMPACT_WINDOW_TOKEN_STEPS,
@@ -210,7 +205,6 @@ function initPdfSettingsCheckbox(doc: Document): void {
  * Initialize AI tools settings checkbox
  */
 function initAIToolsSettingsCheckbox(doc: Document): void {
-  populateWebSearchProviderOptions(doc);
   initAgentIterationLimitControl(doc);
   initContextAutoCompactThresholdControl(doc);
   initToolPermissionDefaultsControls(doc);
@@ -344,18 +338,6 @@ function bindPdfSettingsEvent(doc: Document): void {
  * Bind AI tools settings checkbox events
  */
 function bindAIToolsSettingsEvent(doc: Document): void {
-  const webSearchProviderSelect = doc.getElementById(
-    "pref-web-search-provider",
-  ) as unknown as XULMenuListElement | null;
-  if (webSearchProviderSelect) {
-    webSearchProviderSelect.addEventListener("command", () => {
-      setPref(
-        "webSearchProvider",
-        webSearchProviderSelect.value || DEFAULT_WEB_SEARCH_PROVIDER_ID,
-      );
-    });
-  }
-
   const agentIterationInput = doc.getElementById(
     "pref-agent-max-planning-iterations",
   ) as HTMLInputElement | null;
@@ -468,38 +450,6 @@ function updateContextAutoCompactThresholdDisplay(doc: Document): void {
 
   const step = getNearestContextAutoCompactSliderStep(thresholdInput.value);
   valueLabel.textContent = `${Math.round(step.tokens / 1000)}K`;
-}
-
-function populateWebSearchProviderOptions(doc: Document): void {
-  const providerSelect = doc.getElementById(
-    "pref-web-search-provider",
-  ) as unknown as XULMenuListElement | null;
-  const providerPopup = doc.getElementById(
-    "pref-web-search-provider-popup",
-  ) as XUL.MenuPopup | null;
-
-  if (!providerSelect || !providerPopup) {
-    return;
-  }
-
-  while (providerPopup.firstChild) {
-    providerPopup.removeChild(providerPopup.firstChild);
-  }
-
-  for (const provider of listWebSearchProviders()) {
-    const providerItem = doc.createXULElement("menuitem");
-    providerItem.setAttribute("label", getString(provider.labelL10nId));
-    providerItem.setAttribute("value", provider.id);
-    providerPopup.appendChild(providerItem);
-  }
-
-  const selectedProvider =
-    (getPref("webSearchProvider") as string) || DEFAULT_WEB_SEARCH_PROVIDER_ID;
-  const normalizedProvider = normalizeWebSearchProviderId(selectedProvider);
-  if (normalizedProvider !== selectedProvider) {
-    setPref("webSearchProvider", normalizedProvider);
-  }
-  providerSelect.value = normalizedProvider;
 }
 
 function initToolPermissionDefaultsControls(doc: Document): void {

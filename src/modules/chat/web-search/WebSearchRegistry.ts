@@ -6,25 +6,21 @@ import { SemanticScholarWebProvider } from "./SemanticScholarWebProvider";
 import type { WebSearchProvider } from "./WebSearchProvider";
 
 /*
- * Three id sets live here, intentionally distinct:
+ * Two id sets live here, intentionally distinct:
  *
- * - WEB_SEARCH_PROVIDER_DESCRIPTORS  — ids shown in the prefs dropdown.
- * - VISIBLE_WEB_SEARCH_PROVIDER_IDS  — the same ids as a Set, used to
- *   validate the user-facing pref.
- * - WEB_SEARCH_PROVIDER_IDS          — every id that `createWebSearchProvider`
- *   can instantiate. Superset of the visible ids. Includes `semantic_scholar`
- *   as a legacy alias (old prefs, old tool-arg usage) that is hidden from the
- *   UI but still callable, plus `semantic_scholar_web` which is only exposed
- *   via the tool `source` argument.
+ * - CONFIGURABLE_WEB_SEARCH_PROVIDER_IDS — ids accepted from the persisted
+ *   webSearchProvider pref. The prefs UI no longer exposes this setting, but
+ *   old fixed-provider values remain compatible.
+ * - WEB_SEARCH_PROVIDER_IDS              — every id that
+ *   `createWebSearchProvider` can instantiate. Superset of configurable ids.
+ *   Includes `semantic_scholar` as a legacy alias (old prefs, old tool-arg
+ *   usage) that is hidden from the UI but still callable, plus
+ *   `semantic_scholar_web` which is only exposed via the tool `source`
+ *   argument.
  *
  * `WEB_SEARCH_SOURCES` in `src/types/tool.ts` is the separate list of ids the
  * `source` tool arg accepts. Keep them in sync.
  */
-
-export interface WebSearchProviderDescriptor {
-  id: string;
-  labelL10nId: string;
-}
 
 class AutoWebSearchProvider implements WebSearchProvider {
   readonly id = "auto";
@@ -37,45 +33,22 @@ class AutoWebSearchProvider implements WebSearchProvider {
 
 export const DEFAULT_WEB_SEARCH_PROVIDER_ID = "auto";
 
-const WEB_SEARCH_PROVIDER_DESCRIPTORS: WebSearchProviderDescriptor[] = [
-  {
-    id: DEFAULT_WEB_SEARCH_PROVIDER_ID,
-    labelL10nId: "pref-web-search-provider-auto",
-  },
-  {
-    id: "google_scholar",
-    labelL10nId: "pref-web-search-provider-google-scholar",
-  },
-  {
-    id: "openalex",
-    labelL10nId: "pref-web-search-provider-openalex",
-  },
-  {
-    id: "bing",
-    labelL10nId: "pref-web-search-provider-bing",
-  },
-  {
-    id: "duckduckgo",
-    labelL10nId: "pref-web-search-provider-duckduckgo",
-  },
-];
-
-const VISIBLE_WEB_SEARCH_PROVIDER_IDS = new Set<string>(
-  WEB_SEARCH_PROVIDER_DESCRIPTORS.map((descriptor) => descriptor.id),
-);
+const CONFIGURABLE_WEB_SEARCH_PROVIDER_IDS = new Set<string>([
+  DEFAULT_WEB_SEARCH_PROVIDER_ID,
+  "google_scholar",
+  "openalex",
+  "bing",
+  "duckduckgo",
+]);
 
 const WEB_SEARCH_PROVIDER_IDS = new Set<string>([
-  ...VISIBLE_WEB_SEARCH_PROVIDER_IDS,
+  ...CONFIGURABLE_WEB_SEARCH_PROVIDER_IDS,
   "semantic_scholar",
   "semantic_scholar_web",
 ]);
 
-export function listWebSearchProviders(): WebSearchProviderDescriptor[] {
-  return [...WEB_SEARCH_PROVIDER_DESCRIPTORS];
-}
-
 export function normalizeWebSearchProviderId(providerId?: string): string {
-  if (providerId && VISIBLE_WEB_SEARCH_PROVIDER_IDS.has(providerId)) {
+  if (providerId && CONFIGURABLE_WEB_SEARCH_PROVIDER_IDS.has(providerId)) {
     return providerId;
   }
 

@@ -284,12 +284,4 @@ export type FluentMessageId =
   | 'pref-tool-permission-network'
   | 'pref-tool-permission-write'
   | 'pref-upload-raw-pdf'
-  | 'pref-upload-raw-pdf-desc'
-  | 'pref-web-search-provider'
-  | 'pref-web-search-provider-auto'
-  | 'pref-web-search-provider-bing'
-  | 'pref-web-search-provider-desc'
-  | 'pref-web-search-provider-duckduckgo'
-  | 'pref-web-search-provider-google-scholar'
-  | 'pref-web-search-provider-openalex'
-  | 'pref-web-search-provider-semantic-scholar';
+  | 'pref-upload-raw-pdf-desc';
