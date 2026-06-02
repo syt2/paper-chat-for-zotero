@@ -107,6 +107,7 @@ pref-web-search-provider-auto = Auto (lightweight fallback)
 pref-web-search-provider-semantic-scholar = Semantic Scholar (web)
 pref-web-search-provider-google-scholar = Google Scholar (web)
 pref-web-search-provider-openalex = OpenAlex
+pref-web-search-provider-bing = Bing (HTML scraping)
 pref-web-search-provider-duckduckgo = DuckDuckGo (HTML scraping)
 pref-tool-permission-defaults = Default Approval Policy
 pref-tool-permission-defaults-desc = Controls the default behavior for risky tool classes. Read-only tools remain auto-allowed.

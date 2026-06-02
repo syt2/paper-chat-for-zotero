@@ -100,7 +100,7 @@ function buildProviderOrder(
 
   if (request.intent === "web") {
     return {
-      providerIds: ["duckduckgo"],
+      providerIds: ["bing", "duckduckgo"],
       reason: "intent=web explicitly targets the public web",
     };
   }
@@ -108,7 +108,8 @@ function buildProviderOrder(
   if (request.intent === "biomedical") {
     return {
       providerIds: ["google_scholar", "openalex", "duckduckgo"],
-      reason: "intent=biomedical defaults to broad biomedical scholarly discovery",
+      reason:
+        "intent=biomedical defaults to broad biomedical scholarly discovery",
     };
   }
 

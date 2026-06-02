@@ -292,13 +292,13 @@ export class PdfToolManager {
                 type: "string" as const,
                 enum: [...MODEL_VISIBLE_WEB_SEARCH_SOURCES],
                 description:
-                  "Preferred source selector. Specify this explicitly whenever you know the target source. auto uses lightweight fallback routing with duckduckgo only as the final fallback. google_scholar is useful for broad scholarly lookup and cited-by style discovery, openalex for author/institution metadata, and duckduckgo is for general web pages.",
+                  "Preferred source selector. Specify this explicitly whenever you know the target source. auto uses lightweight fallback routing with duckduckgo only as the final fallback. google_scholar is useful for broad scholarly lookup and cited-by style discovery, openalex for author/institution metadata, and bing or duckduckgo are for general web pages.",
               },
               intent: {
                 type: "string" as const,
                 enum: [...WEB_SEARCH_INTENTS],
                 description:
-                  "Optional search intent for auto mode. related finds adjacent papers, discover broadens a topic, biomedical prefers broad biomedical scholarly discovery, web prefers DuckDuckGo, and paper is for direct scholarly lookup.",
+                  "Optional search intent for auto mode. related finds adjacent papers, discover broadens a topic, biomedical prefers broad biomedical scholarly discovery, web prefers Bing then DuckDuckGo, and paper is for direct scholarly lookup.",
               },
               max_results: {
                 type: "number" as const,

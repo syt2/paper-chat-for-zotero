@@ -1,3 +1,4 @@
+import { BingProvider } from "./BingProvider";
 import { DuckDuckGoProvider } from "./DuckDuckGoProvider";
 import { GoogleScholarProvider } from "./GoogleScholarProvider";
 import { OpenAlexProvider } from "./OpenAlexProvider";
@@ -48,6 +49,10 @@ const WEB_SEARCH_PROVIDER_DESCRIPTORS: WebSearchProviderDescriptor[] = [
   {
     id: "openalex",
     labelL10nId: "pref-web-search-provider-openalex",
+  },
+  {
+    id: "bing",
+    labelL10nId: "pref-web-search-provider-bing",
   },
   {
     id: "duckduckgo",
@@ -107,6 +112,8 @@ export function createWebSearchProvider(
       return new GoogleScholarProvider();
     case "openalex":
       return new OpenAlexProvider();
+    case "bing":
+      return new BingProvider();
     case "duckduckgo":
     default:
       return new DuckDuckGoProvider();

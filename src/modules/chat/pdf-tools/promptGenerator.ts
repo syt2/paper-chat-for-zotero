@@ -49,7 +49,7 @@ export function generatePaperContextPrompt(
   const toolUseDisabledThisIteration =
     agentContext?.runtimeLimits?.forceFinalAnswer === true;
   const webSearchLine =
-    "- web_search: Search external scholarly sources or the public web outside Zotero. Prefer specifying source explicitly: google_scholar for broad scholarly lookup, openalex for broad discovery and author metadata, duckduckgo for general websites. Use source=auto only when you genuinely want lightweight fallback routing, where duckduckgo is only a final fallback.\n";
+    "- web_search: Search external scholarly sources or the public web outside Zotero. Prefer specifying source explicitly: google_scholar for broad scholarly lookup, openalex for broad discovery and author metadata, bing or duckduckgo for general websites. Use source=auto only when you genuinely want lightweight fallback routing, where duckduckgo is only a final fallback.\n";
   const parallelToolCallingGuidance = `=== PARALLEL TOOL CALLING ===
 When you need multiple independent pieces of evidence, request all independent read-only or network lookups in the same tool-calling turn instead of waiting for one result before requesting the next.
 Examples: fetch metadata for several itemKeys at once, search several independent keywords at once, or inspect several known sections/pages at once.

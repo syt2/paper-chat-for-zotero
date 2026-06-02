@@ -287,6 +287,7 @@ export type FluentMessageId =
   | 'pref-upload-raw-pdf-desc'
   | 'pref-web-search-provider'
   | 'pref-web-search-provider-auto'
+  | 'pref-web-search-provider-bing'
   | 'pref-web-search-provider-desc'
   | 'pref-web-search-provider-duckduckgo'
   | 'pref-web-search-provider-google-scholar'

@@ -15,4 +15,5 @@ export type {
 export { SemanticScholarWebProvider } from "./SemanticScholarWebProvider";
 export { GoogleScholarProvider } from "./GoogleScholarProvider";
 export { OpenAlexProvider } from "./OpenAlexProvider";
+export { BingProvider } from "./BingProvider";
 export { EuropePmcProvider } from "./EuropePmcProvider";

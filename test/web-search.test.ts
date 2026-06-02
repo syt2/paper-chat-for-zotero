@@ -39,6 +39,52 @@ class FakeElementNode {
   }
 
   querySelector(selector: string): FakeElementNode | null {
+    if (selector === "h2>a") {
+      const match = this.html.match(
+        /<h2[^>]*>[\s\S]*?<a([^>]*)>([\s\S]*?)<\/a>[\s\S]*?<\/h2>/i,
+      );
+      if (!match) {
+        return null;
+      }
+      return new FakeElementNode(match[0], stripTags(match[2]), {
+        href: match[1].match(/\bhref="([^"]+)"/i)?.[1] || "",
+        "aria-label": match[1].match(/\baria-label="([^"]+)"/i)?.[1] || "",
+      });
+    }
+
+    if (selector === "a.tilk") {
+      const match = this.html.match(
+        /<a([^>]*class="[^"]*\btilk\b[^"]*"[^>]*)>([\s\S]*?)<\/a>/i,
+      );
+      if (!match) {
+        return null;
+      }
+      return new FakeElementNode(match[0], stripTags(match[2]), {
+        href: match[1].match(/\bhref="([^"]+)"/i)?.[1] || "",
+        "aria-label": match[1].match(/\baria-label="([^"]+)"/i)?.[1] || "",
+      });
+    }
+
+    if (selector === "p[class^='b_lineclamp']") {
+      const match = this.html.match(
+        /<p[^>]*class="b_lineclamp[^"]*"[^>]*>([\s\S]*?)<\/p>/i,
+      );
+      if (!match) {
+        return null;
+      }
+      return new FakeElementNode(match[0], stripTags(match[1]));
+    }
+
+    if (selector === ".b_caption p") {
+      const match = this.html.match(
+        /<div[^>]*class="[^"]*\bb_caption\b[^"]*"[^>]*>[\s\S]*?<p[^>]*>([\s\S]*?)<\/p>[\s\S]*?<\/div>/i,
+      );
+      if (!match) {
+        return null;
+      }
+      return new FakeElementNode(match[0], stripTags(match[1]));
+    }
+
     if (selector === ".result__title a.result__a, a.result__a") {
       const match = this.html.match(
         /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i,
@@ -79,6 +125,17 @@ class FakeDocumentNode {
   }
 
   querySelectorAll(selector: string): FakeElementNode[] {
+    if (selector === "#b_results>li.b_algo") {
+      const matches = Array.from(
+        this.html.matchAll(
+          /<li[^>]*class="[^"]*\bb_algo\b[^"]*"[^>]*>([\s\S]*?)<\/li>/gi,
+        ),
+      );
+      return matches.map(
+        (match) => new FakeElementNode(match[0], stripTags(match[0])),
+      );
+    }
+
     if (selector !== ".result") {
       return [];
     }
@@ -364,6 +421,75 @@ describe("web search", function () {
       "HEAD",
       "GET",
       "GET",
+    ]);
+  });
+
+  it("returns parsed Bing results", async function () {
+    FakeXMLHttpRequest.queue.push({
+      mode: "load",
+      responseText: `
+        <ol id="b_results">
+          <li class="b_algo">
+            <h2><a href="https://example.com/bing-result">Bing Result</a></h2>
+            <div class="b_caption"><p>A concise Bing snippet.</p></div>
+          </li>
+          <li class="b_algo">
+            <h2><a href="https://example.org/second" aria-label="Second Bing Result">Ignored text</a></h2>
+            <p class="b_lineclamp2">Another Bing snippet.</p>
+          </li>
+        </ol>
+      `,
+      headers: { "Content-Type": "text/html" },
+    });
+
+    const result = await executeWebSearch({
+      query: "Bing search test",
+      source: "bing",
+      max_results: 2,
+    });
+
+    assert.include(result, "via Bing");
+    assert.include(result, "Bing Result");
+    assert.include(result, "A concise Bing snippet.");
+    assert.include(result, "Second Bing Result");
+    assert.include(result, "Another Bing snippet.");
+    assert.equal(
+      FakeXMLHttpRequest.requestedUrls[0],
+      "https://www.bing.com/search?q=Bing%20search%20test",
+    );
+  });
+
+  it("routes web intent to Bing before falling back to DuckDuckGo", async function () {
+    prefStore.set("extensions.zotero.paperchat.webSearchProvider", "auto");
+    FakeXMLHttpRequest.queue.push(
+      {
+        mode: "load",
+        responseText: `<ol id="b_results"></ol>`,
+        headers: { "Content-Type": "text/html" },
+      },
+      {
+        mode: "load",
+        responseText: `
+          <div class="result">
+            <a class="result__a" href="https://example.com/web-fallback">Web Fallback</a>
+            <div class="result__snippet">Recovered from Bing miss.</div>
+          </div>
+        `,
+        headers: { "Content-Type": "text/html" },
+      },
+    );
+
+    const result = await executeWebSearch({
+      query: "general web lookup",
+      intent: "web",
+    });
+
+    assert.include(result, "via DuckDuckGo");
+    assert.include(result, "Web Fallback");
+    assert.include(result, "attempts: bing -> duckduckgo");
+    assert.deepEqual(FakeXMLHttpRequest.requestedUrls, [
+      "https://www.bing.com/search?q=general%20web%20lookup",
+      "https://html.duckduckgo.com/html/?q=general%20web%20lookup",
     ]);
   });
 
@@ -824,6 +950,10 @@ describe("web search", function () {
       query: "valid semantic source",
       source: "semantic_scholar_web",
     });
+    const validBing = isValidWebSearchArgs({
+      query: "valid bing source",
+      source: "bing",
+    });
     const invalidSource = isValidWebSearchArgs({
       query: "invalid source",
       source: "google-scholar",
@@ -839,6 +969,7 @@ describe("web search", function () {
 
     assert.isTrue(validGoogleScholar);
     assert.isTrue(validSemanticScholarWeb);
+    assert.isTrue(validBing);
     assert.isFalse(invalidSource);
     assert.isFalse(removedEuropePmc);
     assert.isFalse(invalidDomainFilter);
@@ -886,7 +1017,10 @@ describe("web search", function () {
     assert.equal(page.title, "Legacy hidden browser title");
     assert.equal(page.bodyText, "Legacy hidden browser body");
     assert.equal(page.html, "<main>legacy hidden browser html</main>");
-    assert.include(importESModuleCalls, "chrome://zotero/content/HiddenBrowser.mjs");
+    assert.include(
+      importESModuleCalls,
+      "chrome://zotero/content/HiddenBrowser.mjs",
+    );
     assert.include(importCalls, "chrome://zotero/content/HiddenBrowser.jsm");
   });
 
