@@ -692,58 +692,62 @@
 
     <separator class="thin" style="margin: 12px 0 8px 0" />
 
-    <label
-      data-l10n-id="pref-tool-permission-defaults"
-      style="font-weight: bold"
-    ></label>
-    <label
-      data-l10n-id="pref-tool-permission-defaults-desc"
-      style="font-size: 11px; color: #666; margin-top: 4px; margin-left: 2px"
-    ></label>
-
-    <hbox align="center" style="margin-top: 10px">
+    <html:details style="margin-top: 8px">
+      <html:summary
+        data-l10n-id="pref-tool-permission-defaults"
+        style="cursor: pointer; font-weight: bold; margin-bottom: 8px"
+      ></html:summary>
       <label
-        for="pref-tool-permission-network"
-        data-l10n-id="pref-tool-permission-network"
-        style="width: 140px; margin-right: 8px"
+        data-l10n-id="pref-tool-permission-defaults-desc"
+        style="font-size: 11px; color: #666; margin-top: 4px; margin-left: 12px"
       ></label>
-      <menulist id="pref-tool-permission-network" style="width: 160px">
-        <menupopup id="pref-tool-permission-network-popup"></menupopup>
-      </menulist>
-    </hbox>
 
-    <hbox align="center" style="margin-top: 8px">
-      <label
-        for="pref-tool-permission-write"
-        data-l10n-id="pref-tool-permission-write"
-        style="width: 140px; margin-right: 8px"
-      ></label>
-      <menulist id="pref-tool-permission-write" style="width: 160px">
-        <menupopup id="pref-tool-permission-write-popup"></menupopup>
-      </menulist>
-    </hbox>
+      <vbox style="margin-left: 12px; margin-top: 8px">
+        <hbox align="center">
+          <label
+            for="pref-tool-permission-network"
+            data-l10n-id="pref-tool-permission-network"
+            style="width: 140px; margin-right: 8px"
+          ></label>
+          <menulist id="pref-tool-permission-network" style="width: 160px">
+            <menupopup id="pref-tool-permission-network-popup"></menupopup>
+          </menulist>
+        </hbox>
 
-    <hbox align="center" style="margin-top: 8px">
-      <label
-        for="pref-tool-permission-memory"
-        data-l10n-id="pref-tool-permission-memory"
-        style="width: 140px; margin-right: 8px"
-      ></label>
-      <menulist id="pref-tool-permission-memory" style="width: 160px">
-        <menupopup id="pref-tool-permission-memory-popup"></menupopup>
-      </menulist>
-    </hbox>
+        <hbox align="center" style="margin-top: 8px">
+          <label
+            for="pref-tool-permission-write"
+            data-l10n-id="pref-tool-permission-write"
+            style="width: 140px; margin-right: 8px"
+          ></label>
+          <menulist id="pref-tool-permission-write" style="width: 160px">
+            <menupopup id="pref-tool-permission-write-popup"></menupopup>
+          </menulist>
+        </hbox>
 
-    <hbox align="center" style="margin-top: 8px">
-      <label
-        for="pref-tool-permission-high-cost"
-        data-l10n-id="pref-tool-permission-high-cost"
-        style="width: 140px; margin-right: 8px"
-      ></label>
-      <menulist id="pref-tool-permission-high-cost" style="width: 160px">
-        <menupopup id="pref-tool-permission-high-cost-popup"></menupopup>
-      </menulist>
-    </hbox>
+        <hbox align="center" style="margin-top: 8px">
+          <label
+            for="pref-tool-permission-memory"
+            data-l10n-id="pref-tool-permission-memory"
+            style="width: 140px; margin-right: 8px"
+          ></label>
+          <menulist id="pref-tool-permission-memory" style="width: 160px">
+            <menupopup id="pref-tool-permission-memory-popup"></menupopup>
+          </menulist>
+        </hbox>
+
+        <hbox align="center" style="margin-top: 8px">
+          <label
+            for="pref-tool-permission-high-cost"
+            data-l10n-id="pref-tool-permission-high-cost"
+            style="width: 140px; margin-right: 8px"
+          ></label>
+          <menulist id="pref-tool-permission-high-cost" style="width: 160px">
+            <menupopup id="pref-tool-permission-high-cost-popup"></menupopup>
+          </menulist>
+        </hbox>
+      </vbox>
+    </html:details>
   </groupbox>
 
   <!-- AISummary Settings -->
