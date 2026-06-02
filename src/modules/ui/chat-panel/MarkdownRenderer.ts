@@ -783,6 +783,59 @@ function renderSourceGroupBlocks(
   return true;
 }
 
+interface MarkdownMessageCopyOptions {
+  reasoning?: string | null;
+}
+
+function formatToolCallFragmentsForMarkdownCopy(content: string): string {
+  return parseToolCallFragments(content)
+    .map((fragment) => {
+      if (fragment.kind === "markdown") {
+        return fragment.content.trim();
+      }
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function formatSourceGroupForMarkdownCopy(
+  fragment: Extract<SourceGroupFragment, { kind: "source-group" }>,
+): string {
+  const title = [formatSourceGroupType(fragment.type), fragment.label]
+    .filter(Boolean)
+    .join(": ");
+  const body = formatToolCallFragmentsForMarkdownCopy(fragment.content);
+  return [`### ${title}`, body].filter(Boolean).join("\n\n");
+}
+
+export function formatMarkdownForMessageCopy(
+  content: string,
+  options: MarkdownMessageCopyOptions = {},
+): string {
+  const stableContent = stripIncompleteTrailingToolCall(content);
+  const copiedContent = extractSourceGroupFragments(stableContent)
+    .map((fragment) => {
+      if (fragment.kind === "markdown") {
+        return formatToolCallFragmentsForMarkdownCopy(fragment.content);
+      }
+      return formatSourceGroupForMarkdownCopy(fragment);
+    })
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+
+  const reasoning = options.reasoning?.trim();
+  if (!reasoning) {
+    return copiedContent;
+  }
+
+  return [`## Thinking`, reasoning, copiedContent]
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+}
+
 /**
  * Parse and render tool call cards from special markup
  * Format: <tool-call status="calling|completed|error">...</tool-call>

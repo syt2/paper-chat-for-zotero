@@ -332,10 +332,12 @@ export function applyThemeToContainer(container: HTMLElement): void {
       el.style.borderColor = theme.borderColor;
     });
 
-  // Update copy buttons
-  container.querySelectorAll(".copy-btn").forEach((btn: Element) => {
+  // Update message action buttons
+  container.querySelectorAll(".message-action-btn").forEach((btn: Element) => {
     const el = btn as HTMLElement;
     el.style.background = theme.copyBtnBg;
+    el.style.borderColor = theme.borderColor;
+    el.style.color = theme.textPrimary;
   });
 }
 

@@ -1,6 +1,7 @@
 import { assert } from "chai";
 import {
   extractSourceGroupFragments,
+  formatMarkdownForMessageCopy,
   stripIncompleteTrailingToolCall,
 } from "../src/modules/ui/chat-panel/MarkdownRenderer.ts";
 
@@ -118,5 +119,61 @@ ${completedToolCall}
 <tool-name>calling search_paper_content</tool-name>`;
 
     assert.equal(stripIncompleteTrailingToolCall(content), "\n");
+  });
+});
+
+describe("markdown message copy", function () {
+  it("keeps normal markdown content unchanged", function () {
+    const content = `# Summary
+
+- First point
+- Second point
+
+\`\`\`ts
+const value = 1;
+\`\`\``;
+
+    assert.equal(formatMarkdownForMessageCopy(content), content);
+  });
+
+  it("omits tool-call cards from copied markdown", function () {
+    const content = `Before
+
+<tool-call status="completed">
+<tool-name>done search_paper_content</tool-name>
+<tool-args>{&quot;query&quot;:&quot;attention&quot;}</tool-args>
+<tool-status>completed</tool-status>
+<tool-result>Found passages.</tool-result>
+</tool-call>
+
+After`;
+
+    const copied = formatMarkdownForMessageCopy(content);
+
+    assert.equal(copied, "Before\n\nAfter");
+    assert.notInclude(copied, "Tool Call");
+    assert.notInclude(copied, "search_paper_content");
+    assert.notInclude(copied, "<tool-call");
+  });
+
+  it("serializes source groups to markdown headings", function () {
+    const content = `<source-group label="Paper A" type="paper">
+- Relevant result.
+</source-group>`;
+
+    const copied = formatMarkdownForMessageCopy(content);
+
+    assert.equal(copied, "### Paper: Paper A\n\n- Relevant result.");
+  });
+
+  it("includes reasoning before the visible answer content", function () {
+    const copied = formatMarkdownForMessageCopy("Final answer.", {
+      reasoning: "Hidden thinking details.",
+    });
+
+    assert.equal(
+      copied,
+      "## Thinking\n\nHidden thinking details.\n\nFinal answer.",
+    );
   });
 });

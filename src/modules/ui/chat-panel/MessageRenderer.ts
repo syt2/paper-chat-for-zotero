@@ -2,6 +2,7 @@
  * MessageRenderer - Create and manage message bubble elements
  */
 
+import { config } from "../../../../package.json";
 import type {
   ChatMessage,
   ExecutionPlan,
@@ -13,7 +14,10 @@ import type { ToolApprovalResolution } from "../../../types/tool";
 import { chatColors } from "../../../utils/colors";
 import type { ThemeColors } from "./types";
 import { HTML_NS } from "./types";
-import { renderMarkdownToElement } from "./MarkdownRenderer";
+import {
+  formatMarkdownForMessageCopy,
+  renderMarkdownToElement,
+} from "./MarkdownRenderer";
 
 export function getStreamingContentSelector(messageId: string): string {
   return `[data-streaming-content-for="${messageId}"]`;
@@ -33,6 +37,7 @@ const CHAT_HISTORY_BOTTOM_STICKY_THRESHOLD = 24;
 const CHAT_HISTORY_AUTO_SCROLL_ATTR = "data-auto-scroll";
 const CHAT_SCROLL_BOTTOM_BUTTON_ID = "chat-scroll-bottom-btn";
 const STREAMING_TYPING_INDICATOR_ATTR = "data-streaming-typing-indicator";
+const MESSAGE_ACTION_ICON_SIZE = "15px";
 
 function getChatHistoryBottomOffset(chatHistory: HTMLElement): number {
   return (
@@ -160,6 +165,64 @@ function createMessageImagesElement(
   }
 
   return container;
+}
+
+function getMessageActionIconUrl(iconName: "copy"): string {
+  return `chrome://${config.addonRef}/content/icons/${iconName}.svg`;
+}
+
+function setIconButtonImage(
+  button: HTMLElement,
+  iconName: "copy",
+  alt: string,
+): void {
+  button.textContent = "";
+  const icon = button.ownerDocument.createElementNS(HTML_NS, "img");
+  icon.setAttribute("src", getMessageActionIconUrl(iconName));
+  icon.setAttribute("alt", alt);
+  Object.assign((icon as HTMLElement).style, {
+    width: MESSAGE_ACTION_ICON_SIZE,
+    height: MESSAGE_ACTION_ICON_SIZE,
+    display: "block",
+    pointerEvents: "none",
+  });
+  button.appendChild(icon);
+}
+
+function createMessageActionButton(
+  doc: Document,
+  theme: ThemeColors,
+  title: string,
+): HTMLElement {
+  const btn = createElement(
+    doc,
+    "button",
+    {
+      width: "26px",
+      height: "26px",
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+      background: theme.copyBtnBg,
+      border: `1px solid ${theme.borderColor}`,
+      borderRadius: "6px",
+      padding: "0",
+      cursor: "pointer",
+      transition: "background 0.2s, opacity 0.2s, transform 0.2s",
+      color: theme.textPrimary,
+    },
+    { title },
+  );
+  btn.setAttribute("type", "button");
+  btn.addEventListener("mouseenter", () => {
+    btn.style.background = theme.buttonHoverBg;
+    btn.style.transform = "translateY(-1px)";
+  });
+  btn.addEventListener("mouseleave", () => {
+    btn.style.background = theme.copyBtnBg;
+    btn.style.transform = "translateY(0)";
+  });
+  return btn;
 }
 
 type ExecutionBannerKind =
@@ -530,11 +593,12 @@ export function createMessageElement(
     bubble.appendChild(createTopupButton(doc));
   }
 
-  // Add copy button
-  const copyBtn = createCopyButton(doc, theme, rawContent);
-  setupCopyButtonHover(bubble, copyBtn);
-
-  bubble.appendChild(copyBtn);
+  const actions = createMessageActions(doc, theme, msg, rawContent);
+  if (actions) {
+    bubble.style.paddingBottom = "38px";
+    setupMessageActionsHover(bubble, actions);
+    bubble.appendChild(actions);
+  }
 
   if (showReroll && onReroll && !quotaDetails) {
     const rerollBtn = createRerollButton(doc, theme, onReroll, onRerollError);
@@ -693,25 +757,9 @@ export function createCopyButton(
   theme: ThemeColors,
   contentToCopy: string,
 ): HTMLElement {
-  const copyBtn = createElement(
-    doc,
-    "button",
-    {
-      position: "absolute",
-      bottom: "4px",
-      right: "4px",
-      background: theme.copyBtnBg,
-      border: "none",
-      borderRadius: "4px",
-      padding: "4px 8px",
-      fontSize: "12px",
-      cursor: "pointer",
-      opacity: "0",
-      transition: "opacity 0.2s",
-    },
-    { class: "copy-btn", title: getString("chat-copy") },
-  );
-  copyBtn.textContent = "\uD83D\uDCCB"; // 📋
+  const copyBtn = createMessageActionButton(doc, theme, getString("chat-copy"));
+  copyBtn.setAttribute("class", "message-action-btn copy-message-btn");
+  setIconButtonImage(copyBtn, "copy", getString("chat-copy"));
 
   copyBtn.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -719,25 +767,62 @@ export function createCopyButton(
     copyToClipboard(contentToCopy);
     copyBtn.textContent = "\u2713"; // ✓
     setTimeout(() => {
-      copyBtn.textContent = "\uD83D\uDCCB"; // 📋
+      setIconButtonImage(copyBtn, "copy", getString("chat-copy"));
     }, 1500);
   });
 
   return copyBtn;
 }
 
+function createMessageActions(
+  doc: Document,
+  theme: ThemeColors,
+  msg: ChatMessage,
+  rawContent: string,
+): HTMLElement | null {
+  const actions = createElement(
+    doc,
+    "div",
+    {
+      position: "absolute",
+      right: "8px",
+      bottom: "8px",
+      display: "inline-flex",
+      alignItems: "center",
+      gap: "6px",
+      opacity: "0",
+      pointerEvents: "none",
+      transition: "opacity 0.2s",
+    },
+    { class: "message-actions" },
+  );
+
+  const copyContent =
+    msg.role === "assistant"
+      ? formatMarkdownForMessageCopy(msg.content, {
+          reasoning: msg.reasoning,
+        })
+      : rawContent;
+
+  actions.appendChild(createCopyButton(doc, theme, copyContent));
+
+  return actions.childElementCount > 0 ? actions : null;
+}
+
 /**
- * Setup hover behavior for copy button visibility
+ * Setup hover behavior for message action visibility
  */
-export function setupCopyButtonHover(
+export function setupMessageActionsHover(
   bubble: HTMLElement,
-  copyBtn: HTMLElement,
+  actions: HTMLElement,
 ): void {
   bubble.addEventListener("mouseenter", () => {
-    copyBtn.style.opacity = "1";
+    actions.style.opacity = "1";
+    actions.style.pointerEvents = "auto";
   });
   bubble.addEventListener("mouseleave", () => {
-    copyBtn.style.opacity = "0";
+    actions.style.opacity = "0";
+    actions.style.pointerEvents = "none";
   });
 }
 
