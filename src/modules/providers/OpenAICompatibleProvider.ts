@@ -60,6 +60,114 @@ export function supportsOpenAITemperature(config: {
   return !/^(?:o\d|gpt-5)(?:[-.]|$)/i.test(config.defaultModel);
 }
 
+const DSML_TAG_PREFIX = String.raw`[|｜]\s*DSML\s*[|｜]`;
+const DSML_TOOL_CALLS_START_REGEX = new RegExp(
+  String.raw`<\s*${DSML_TAG_PREFIX}\s*tool_calls\s*>`,
+  "i",
+);
+const DSML_TOOL_CALLS_BLOCK_REGEX = new RegExp(
+  String.raw`<\s*${DSML_TAG_PREFIX}\s*tool_calls\s*>([\s\S]*?)<\s*\/\s*${DSML_TAG_PREFIX}\s*tool_calls\s*>`,
+  "gi",
+);
+const DSML_INVOKE_REGEX = new RegExp(
+  String.raw`<\s*${DSML_TAG_PREFIX}\s*invoke\b([^>]*)>([\s\S]*?)<\s*\/\s*${DSML_TAG_PREFIX}\s*invoke\s*>`,
+  "gi",
+);
+const DSML_PARAMETER_REGEX = new RegExp(
+  String.raw`<\s*${DSML_TAG_PREFIX}\s*parameter\b([^>]*)>([\s\S]*?)<\s*\/\s*${DSML_TAG_PREFIX}\s*parameter\s*>`,
+  "gi",
+);
+const XML_ATTRIBUTE_REGEX =
+  /([A-Za-z_:][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+const DSML_DETECTION_TAIL_LENGTH = 64;
+
+function decodeXmlEntities(value: string): string {
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+function parseXmlAttributes(rawAttributes: string): Record<string, string> {
+  const attributes: Record<string, string> = {};
+  let match: RegExpExecArray | null;
+  XML_ATTRIBUTE_REGEX.lastIndex = 0;
+
+  while ((match = XML_ATTRIBUTE_REGEX.exec(rawAttributes)) !== null) {
+    attributes[match[1]] = decodeXmlEntities(match[2] ?? match[3] ?? "");
+  }
+
+  return attributes;
+}
+
+export function stripDsmlToolCallBlocks(content: string): string {
+  DSML_TOOL_CALLS_BLOCK_REGEX.lastIndex = 0;
+  return content.replace(DSML_TOOL_CALLS_BLOCK_REGEX, "").trim();
+}
+
+export function parseDsmlToolCallsFromContent(content: string): ToolCall[] {
+  const toolCalls: ToolCall[] = [];
+  let blockMatch: RegExpExecArray | null;
+  let index = 0;
+
+  DSML_TOOL_CALLS_BLOCK_REGEX.lastIndex = 0;
+  while ((blockMatch = DSML_TOOL_CALLS_BLOCK_REGEX.exec(content)) !== null) {
+    const block = blockMatch[1];
+    let invokeMatch: RegExpExecArray | null;
+    DSML_INVOKE_REGEX.lastIndex = 0;
+
+    while ((invokeMatch = DSML_INVOKE_REGEX.exec(block)) !== null) {
+      const invokeAttributes = parseXmlAttributes(invokeMatch[1]);
+      const functionName = invokeAttributes.name;
+      if (!functionName) {
+        continue;
+      }
+
+      const paramsBlock = invokeMatch[2];
+      const params: Record<string, string> = {};
+      let paramMatch: RegExpExecArray | null;
+      DSML_PARAMETER_REGEX.lastIndex = 0;
+
+      while ((paramMatch = DSML_PARAMETER_REGEX.exec(paramsBlock)) !== null) {
+        const paramAttributes = parseXmlAttributes(paramMatch[1]);
+        const paramName = paramAttributes.name;
+        if (!paramName) {
+          continue;
+        }
+        params[paramName] = decodeXmlEntities(paramMatch[2].trim());
+      }
+
+      toolCalls.push({
+        id: `dsml_call_${index}`,
+        type: "function",
+        function: {
+          name: functionName,
+          arguments: JSON.stringify(params),
+        },
+      });
+      index++;
+    }
+  }
+
+  return toolCalls;
+}
+
+function filterToolCallsByAllowedTools(
+  toolCalls: ToolCall[],
+  tools: ToolDefinition[] | undefined,
+): ToolCall[] {
+  if (!tools || tools.length === 0) {
+    return [];
+  }
+
+  const allowedToolNames = new Set(tools.map((tool) => tool.function.name));
+  return toolCalls.filter((toolCall) =>
+    allowedToolNames.has(toolCall.function.name),
+  );
+}
+
 function mergeExtraRequestBody(
   requestBody: Record<string, unknown>,
   extra: Record<string, unknown> | undefined,
@@ -371,20 +479,25 @@ export class OpenAICompatibleProvider extends BaseProvider {
       );
     }
 
-    // Fallback: when finish_reason is "tool_calls" but no structured tool_calls,
-    // try parsing XML-formatted tool calls from content
+    const rawContent = message?.content || "";
+    const structuredToolCalls = message?.tool_calls;
+    const allowDsmlFallback =
+      !!tools && tools.length > 0 && options?.toolChoice !== "none";
+
+    // Fallback: some OpenAI-compatible backends leak native tool-call markup
+    // into content instead of returning structured message.tool_calls.
     if (
       finishReason === "tool_calls" &&
-      (!message?.tool_calls || message.tool_calls.length === 0)
+      (!structuredToolCalls || structuredToolCalls.length === 0)
     ) {
-      const xmlToolCalls = this.parseXmlToolCalls(message?.content || "");
+      const xmlToolCalls = this.parseXmlToolCalls(rawContent);
       if (xmlToolCalls.length > 0) {
         ztoolkit.log(
           "[chatCompletionWithTools] Parsed",
           xmlToolCalls.length,
           "tool calls from XML fallback",
         );
-        const cleanContent = (message?.content || "")
+        const cleanContent = rawContent
           .replace(/<function_calls>[\s\S]*?<\/function_calls>/g, "")
           .trim();
         return {
@@ -395,10 +508,32 @@ export class OpenAICompatibleProvider extends BaseProvider {
       }
     }
 
+    const dsmlToolCalls = allowDsmlFallback
+      ? filterToolCallsByAllowedTools(
+          parseDsmlToolCallsFromContent(rawContent),
+          tools,
+        )
+      : [];
+    if (dsmlToolCalls.length > 0) {
+      ztoolkit.log(
+        "[chatCompletionWithTools] Parsed",
+        dsmlToolCalls.length,
+        "tool calls from DSML fallback",
+      );
+      return {
+        content: stripDsmlToolCallBlocks(rawContent),
+        reasoning: message?.reasoning_content || undefined,
+        toolCalls:
+          structuredToolCalls && structuredToolCalls.length > 0
+            ? structuredToolCalls
+            : dsmlToolCalls,
+      };
+    }
+
     return {
-      content: message?.content || "",
+      content: rawContent,
       reasoning: message?.reasoning_content || undefined,
-      toolCalls: message?.tool_calls,
+      toolCalls: structuredToolCalls,
     };
   }
 
@@ -525,13 +660,60 @@ export class OpenAICompatibleProvider extends BaseProvider {
         { id: string; name: string; arguments: string }
       >();
       let stopReason = "end_turn";
+      const allowDsmlFallback =
+        tools.length > 0 && options?.toolChoice !== "none";
+      let pendingTextDelta = "";
+      let suppressDsmlTextDeltas = false;
+
+      const flushPendingTextDelta = (): void => {
+        if (!pendingTextDelta) {
+          return;
+        }
+        onTextDelta(pendingTextDelta);
+        pendingTextDelta = "";
+      };
+
+      const handleTextDelta = (text: string): void => {
+        fullContent += text;
+
+        if (!allowDsmlFallback) {
+          onTextDelta(text);
+          return;
+        }
+
+        if (suppressDsmlTextDeltas) {
+          return;
+        }
+
+        const combined = pendingTextDelta + text;
+        const dsmlStartMatch = DSML_TOOL_CALLS_START_REGEX.exec(combined);
+        if (dsmlStartMatch?.index !== undefined) {
+          const safePrefix = combined.slice(0, dsmlStartMatch.index);
+          pendingTextDelta = "";
+          suppressDsmlTextDeltas = true;
+          if (safePrefix) {
+            onTextDelta(safePrefix);
+          }
+          return;
+        }
+
+        const emitLength = Math.max(
+          0,
+          combined.length - DSML_DETECTION_TAIL_LENGTH,
+        );
+        if (emitLength > 0) {
+          onTextDelta(combined.slice(0, emitLength));
+          pendingTextDelta = combined.slice(emitLength);
+        } else {
+          pendingTextDelta = combined;
+        }
+      };
 
       await parseSSEStreamWithToolCalling(reader, "openai", {
         onEvent: (event) => {
           switch (event.type) {
             case "text_delta":
-              fullContent += event.text;
-              onTextDelta(event.text);
+              handleTextDelta(event.text);
               break;
 
             case "reasoning_delta":
@@ -587,15 +769,34 @@ export class OpenAICompatibleProvider extends BaseProvider {
         });
       }
 
+      const dsmlToolCalls = allowDsmlFallback
+        ? filterToolCallsByAllowedTools(
+            parseDsmlToolCallsFromContent(fullContent),
+            tools,
+          )
+        : [];
+      const cleanContent =
+        dsmlToolCalls.length > 0
+          ? stripDsmlToolCallBlocks(fullContent)
+          : fullContent;
+
+      if (dsmlToolCalls.length === 0) {
+        flushPendingTextDelta();
+      }
+
       onComplete({
-        content: fullContent,
+        content: cleanContent,
         reasoning: fullReasoning || undefined,
-        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-        stopReason: stopReason as
-          | "tool_calls"
-          | "end_turn"
-          | "max_tokens"
-          | "stop",
+        toolCalls:
+          toolCalls.length > 0
+            ? toolCalls
+            : dsmlToolCalls.length > 0
+              ? dsmlToolCalls
+              : undefined,
+        stopReason:
+          dsmlToolCalls.length > 0
+            ? "tool_calls"
+            : (stopReason as "tool_calls" | "end_turn" | "max_tokens" | "stop"),
       });
     } catch (error) {
       onError(this.wrapError(error));

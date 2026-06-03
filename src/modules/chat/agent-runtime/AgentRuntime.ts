@@ -630,9 +630,9 @@ export class AgentRuntime {
         },
         onComplete: (result) => {
           stopReason = result.stopReason;
-          const toolCalls: ToolCall[] = [];
+          const streamedToolCalls: ToolCall[] = [];
           for (const [, tc] of pendingToolCalls) {
-            toolCalls.push({
+            streamedToolCalls.push({
               id: tc.id,
               type: "function",
               function: {
@@ -641,9 +641,13 @@ export class AgentRuntime {
               },
             });
           }
+          const toolCalls =
+            result.toolCalls && result.toolCalls.length > 0
+              ? result.toolCalls
+              : streamedToolCalls;
           resolve({
-            content: roundContent,
-            reasoning: roundReasoning || undefined,
+            content: result.content,
+            reasoning: result.reasoning || roundReasoning || undefined,
             toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
             stopReason,
           });
