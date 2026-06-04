@@ -7,6 +7,10 @@ import { getString } from "../../utils/locale";
 import { prefColors } from "../../utils/colors";
 import { getPref } from "../../utils/prefs";
 import { getAuthManager } from "../auth";
+import type {
+  PaperChatProduct,
+  PaperChatPurchaseOrder,
+} from "../auth/AuthService";
 import { BUILTIN_PROVIDERS } from "../providers";
 import { showAuthDialog } from "../ui/AuthDialog";
 import type { PrefsRefreshOptions } from "./types";
@@ -21,6 +25,9 @@ const PREFS_REFRESH_MAX_ATTEMPTS = 12;
 const PREFS_REFRESH_RETRY_DELAY_MS = 120;
 const TOPUP_ATTENTION_DURATION_MS = 8000;
 const REDEEM_CODE_INFO_PATH = "/ext/paperchat/redeem-code-info";
+const PURCHASE_POLL_INTERVAL_MS = 3000;
+const PURCHASE_POLL_MAX_ATTEMPTS = 200;
+const PURCHASE_POLL_FAILURE_NOTICE_ATTEMPTS = 3;
 
 interface RedeemCodeInfo {
   qrImageUrl: string | null;
@@ -458,7 +465,7 @@ export function bindUserAuthEvents(
     getAnalyticsService().track(ANALYTICS_EVENTS.paperChatRedeemCodeClicked, {
       low_balance: isPaperChatLowBalance(authManager),
     });
-    await showRedeemCodeDialog();
+    await showRedeemCodeDialog(doc, authManager);
   });
 
   // Official website link
@@ -490,18 +497,30 @@ let redeemDialogWindow: Window | null = null;
 /**
  * Show dialog with QR code for getting redemption code
  */
-async function showRedeemCodeDialog(): Promise<void> {
+async function showRedeemCodeDialog(
+  prefsDoc: Document,
+  authManager: AuthManagerType,
+): Promise<void> {
   // If dialog already open, focus it
   if (redeemDialogWindow && !redeemDialogWindow.closed) {
     redeemDialogWindow.focus();
     return;
   }
 
-  const redeemInfo = await fetchRedeemCodeInfo();
+  const productsResult = await authManager.listPaperChatProducts();
+  const products = productsResult.success ? productsResult.products : [];
+  const showProducts = products.length > 0;
+  const redeemInfo = showProducts
+    ? createEmptyRedeemCodeInfo()
+    : await fetchRedeemCodeInfo();
   const showHtml = !!redeemInfo.html;
   const showUnavailable =
-    !showHtml && !redeemInfo.qrImageUrl && !redeemInfo.purchaseUrl;
-  const canCopyPurchaseUrl = !showHtml && !!redeemInfo.purchaseUrl;
+    !showProducts &&
+    !showHtml &&
+    !redeemInfo.qrImageUrl &&
+    !redeemInfo.purchaseUrl;
+  const canCopyPurchaseUrl =
+    !showProducts && !showHtml && !!redeemInfo.purchaseUrl;
 
   const dialogHelper = new ztoolkit.Dialog(1, 1).addCell(0, 0, {
     tag: "div",
@@ -514,9 +533,11 @@ async function showRedeemCodeDialog(): Promise<void> {
       gap: "16px",
       minWidth: "280px",
     },
-    children: showHtml
-      ? []
-      : buildRedeemCodeInfoChildren(redeemInfo, showUnavailable),
+    children: showProducts
+      ? buildProductPurchaseChildren(products)
+      : showHtml
+        ? []
+        : buildRedeemCodeInfoChildren(redeemInfo, showUnavailable),
   });
 
   if (canCopyPurchaseUrl) {
@@ -557,6 +578,17 @@ async function showRedeemCodeDialog(): Promise<void> {
       }
     }
 
+    if (showProducts) {
+      bindProductPurchaseEvents(
+        doc,
+        dialogWin,
+        prefsDoc,
+        authManager,
+        products,
+      );
+      return;
+    }
+
     // Click on link opens URL
     const linkEl = doc.getElementById("redeem-purchase-link");
     linkEl?.addEventListener("click", (e: Event) => {
@@ -582,6 +614,239 @@ async function showRedeemCodeDialog(): Promise<void> {
       }
     });
   }, 100);
+}
+
+function buildProductPurchaseChildren(
+  products: PaperChatProduct[],
+): TagElementProps[] {
+  const children: TagElementProps[] = [
+    {
+      tag: "div",
+      id: "paperchat-purchase-status",
+      properties: {
+        textContent: "",
+      },
+      styles: {
+        minHeight: "18px",
+        maxWidth: "360px",
+        fontSize: "13px",
+        color: "#555",
+        lineHeight: "1.5",
+        textAlign: "center",
+      },
+    },
+  ];
+
+  for (const product of products) {
+    children.push({
+      tag: "div",
+      styles: {
+        width: "100%",
+        maxWidth: "360px",
+        border: "1px solid #d0d7de",
+        borderRadius: "8px",
+        padding: "14px",
+        boxSizing: "border-box",
+        display: "flex",
+        flexDirection: "column",
+        gap: "10px",
+        background: "#fff",
+      },
+      children: [
+        {
+          tag: "div",
+          properties: {
+            textContent: product.name,
+          },
+          styles: {
+            fontSize: "15px",
+            fontWeight: "700",
+            color: "#222",
+          },
+        },
+        {
+          tag: "div",
+          properties: {
+            textContent: product.description,
+          },
+          styles: {
+            fontSize: "13px",
+            color: "#666",
+            lineHeight: "1.5",
+          },
+        },
+        {
+          tag: "div",
+          styles: {
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "12px",
+          },
+          children: [
+            {
+              tag: "div",
+              properties: {
+                textContent: product.quotaLabel
+                  ? `¥${product.money} · ${product.quotaLabel}`
+                  : `¥${product.money}`,
+              },
+              styles: {
+                fontSize: "16px",
+                fontWeight: "700",
+                color: "#111",
+              },
+            },
+            {
+              tag: "button",
+              id: getProductButtonId(product.sku),
+              properties: {
+                textContent: getString("pref-paperchat-buy-btn"),
+              },
+              styles: {
+                minWidth: "88px",
+                padding: "6px 12px",
+                borderRadius: "6px",
+                border: "1px solid #2563eb",
+                background: "#2563eb",
+                color: "#fff",
+                cursor: "pointer",
+                fontSize: "13px",
+                fontWeight: "700",
+              },
+            },
+          ],
+        },
+      ],
+    });
+  }
+
+  return children;
+}
+
+function bindProductPurchaseEvents(
+  doc: Document,
+  dialogWin: Window,
+  prefsDoc: Document,
+  authManager: AuthManagerType,
+  products: PaperChatProduct[],
+): void {
+  const statusEl = doc.getElementById(
+    "paperchat-purchase-status",
+  ) as HTMLElement | null;
+  let pollTimer: number | null = null;
+
+  const setStatus = (message: string, isError = false) => {
+    if (!statusEl) return;
+    statusEl.textContent = message;
+    statusEl.style.color = isError ? prefColors.testError : "#555";
+  };
+
+  const stopPolling = () => {
+    if (pollTimer !== null) {
+      dialogWin.clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  };
+
+  dialogWin.addEventListener("unload", stopPolling);
+
+  const setButtonsDisabled = (disabled: boolean) => {
+    for (const product of products) {
+      const button = doc.getElementById(
+        getProductButtonId(product.sku),
+      ) as HTMLButtonElement | null;
+      if (button) {
+        button.disabled = disabled;
+        button.style.opacity = disabled ? "0.6" : "1";
+        button.style.cursor = disabled ? "default" : "pointer";
+      }
+    }
+  };
+
+  const startPolling = (order: PaperChatPurchaseOrder) => {
+    let attempts = 0;
+    let consecutiveFailures = 0;
+    let lastGrantFailed = false;
+    stopPolling();
+    pollTimer = dialogWin.setInterval(async () => {
+      attempts += 1;
+      if (attempts > PURCHASE_POLL_MAX_ATTEMPTS) {
+        stopPolling();
+        setButtonsDisabled(false);
+        setStatus(
+          lastGrantFailed
+            ? getString("pref-paperchat-purchase-grant-failed")
+            : getString("pref-paperchat-purchase-timeout"),
+          true,
+        );
+        return;
+      }
+
+      const result = await authManager.getPaperChatOrder(order.id);
+      if (!result.success || !result.order) {
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= PURCHASE_POLL_FAILURE_NOTICE_ATTEMPTS) {
+          setStatus(getString("pref-paperchat-purchase-check-failed"), true);
+        }
+        return;
+      }
+      consecutiveFailures = 0;
+
+      if (result.order.status === "paid") {
+        if (result.order.grantStatus === "failed") {
+          lastGrantFailed = true;
+          setStatus(getString("pref-paperchat-purchase-check-failed"), true);
+          return;
+        }
+        if (result.order.grantStatus !== "granted") {
+          setStatus(getString("pref-paperchat-purchase-check-failed"));
+          return;
+        }
+
+        stopPolling();
+        setButtonsDisabled(false);
+        setStatus(getString("pref-paperchat-purchase-paid"));
+        await authManager.refreshUserInfo().catch((error) => {
+          ztoolkit.log(
+            "[Preferences] Failed to refresh user after payment:",
+            error,
+          );
+        });
+        updateUserDisplay(prefsDoc, authManager);
+      }
+    }, PURCHASE_POLL_INTERVAL_MS);
+  };
+
+  for (const product of products) {
+    const button = doc.getElementById(
+      getProductButtonId(product.sku),
+    ) as HTMLButtonElement | null;
+    button?.addEventListener("click", async (event: Event) => {
+      event.preventDefault();
+      setButtonsDisabled(true);
+      setStatus(getString("pref-paperchat-purchase-creating"));
+      const result = await authManager.createPaperChatOrder(product.sku);
+      if (!result.success || !result.order) {
+        setButtonsDisabled(false);
+        setStatus(
+          result.message || getString("pref-paperchat-purchase-failed"),
+          true,
+        );
+        return;
+      }
+
+      if (result.order.paymentUrl) {
+        Zotero.launchURL(result.order.paymentUrl);
+      }
+      setStatus(getString("pref-paperchat-purchase-opened"));
+      startPolling(result.order);
+    });
+  }
+}
+
+function getProductButtonId(sku: string): string {
+  return `paperchat-buy-${sku.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
 }
 
 async function fetchRedeemCodeInfo(): Promise<RedeemCodeInfo> {

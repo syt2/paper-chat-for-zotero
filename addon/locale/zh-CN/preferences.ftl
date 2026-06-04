@@ -8,12 +8,20 @@ pref-redeem-label = Token 兑换码
 pref-redeem-placeholder =
     .placeholder = 输入Token兑换码
 pref-redeem-btn = 兑换
-pref-get-redeem-code = 获取兑换码
-pref-get-redeem-code-title = 获取兑换码
+pref-get-redeem-code = 购买额度
+pref-get-redeem-code-title = 购买 PaperChat 额度
 pref-get-redeem-code-link = 购买链接
 pref-get-redeem-code-unavailable-prefix = 暂时无法购买，可
 pref-get-redeem-code-unavailable-link = 访问官网
 pref-get-redeem-code-unavailable-suffix = 联系客服处理。
+pref-paperchat-buy-btn = 购买
+pref-paperchat-purchase-creating = 正在创建支付订单...
+pref-paperchat-purchase-opened = 已打开支付页面，付款后这里会自动更新状态。
+pref-paperchat-purchase-paid = 支付成功，权益已刷新。
+pref-paperchat-purchase-grant-failed = 支付成功，但权益发放失败，请联系客服处理。
+pref-paperchat-purchase-check-failed = 正在等待支付结果同步，如已付款请稍后重新打开此窗口查看。
+pref-paperchat-purchase-failed = 创建支付订单失败，请稍后重试。
+pref-paperchat-purchase-timeout = 暂未检测到支付成功，请完成支付后重新打开此窗口查看。
 
 # API Settings
 pref-api-settings = API 设置

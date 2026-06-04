@@ -5,7 +5,11 @@
  * 与Zotero偏好设置集成
  */
 
-import { AuthService } from "./AuthService";
+import {
+  AuthService,
+  type PaperChatOrderResult,
+  type PaperChatProductsResult,
+} from "./AuthService";
 import type {
   UserInfo,
   TokenInfo,
@@ -1248,6 +1252,27 @@ export class AuthManager {
         result.message ||
         getString("api-error-redeem-failed", { args: { status: "" } }),
     };
+  }
+
+  async listPaperChatProducts(): Promise<PaperChatProductsResult> {
+    return this.withSessionRetry(
+      () => this.authService.listPaperChatProducts(),
+      "listPaperChatProducts",
+    );
+  }
+
+  async createPaperChatOrder(sku: string): Promise<PaperChatOrderResult> {
+    return this.withSessionRetry(
+      () => this.authService.createPaperChatOrder(sku),
+      "createPaperChatOrder",
+    );
+  }
+
+  async getPaperChatOrder(orderId: string): Promise<PaperChatOrderResult> {
+    return this.withSessionRetry(
+      () => this.authService.getPaperChatOrder(orderId),
+      "getPaperChatOrder",
+    );
   }
 
   /**

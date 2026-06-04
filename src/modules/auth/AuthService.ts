@@ -21,6 +21,42 @@ import { getString } from "../../utils/locale";
 
 const DEFAULT_API_BASE = BUILTIN_PROVIDERS.paperchat.website!;
 
+export interface PaperChatProduct {
+  sku: string;
+  name: string;
+  money: string;
+  description: string;
+  quotaLabel: string | null;
+}
+
+export interface PaperChatPurchaseOrder {
+  id: string;
+  sku: string;
+  product: PaperChatProduct;
+  status: "pending" | "paid";
+  grantStatus: "pending" | "granted" | "failed";
+  qiuPayOutTradeNo: string;
+  qiuPayTradeNo: string | null;
+  paymentUrl: string | null;
+  qrcode: string | null;
+  requestedMoney: string;
+  payableMoney: string;
+  createdAt: string;
+  paidAt: string | null;
+}
+
+export interface PaperChatProductsResult {
+  success: boolean;
+  message?: string;
+  products: PaperChatProduct[];
+}
+
+export interface PaperChatOrderResult {
+  success: boolean;
+  message?: string;
+  order?: PaperChatPurchaseOrder;
+}
+
 // 临时存储从 HTTP Observer 捕获的 session cookie
 let pendingSessionCookie: string | null = null;
 
@@ -731,6 +767,100 @@ export class AuthService {
     await this.syncCurrentUserEntitlement();
 
     return result.data;
+  }
+
+  async listPaperChatProducts(): Promise<PaperChatProductsResult> {
+    const url = `${this.baseUrl}/ext/paperchat/products`;
+    const result = await this.request<{
+      success?: boolean;
+      message?: string;
+      data?: { products?: PaperChatProduct[] };
+    }>("GET", url, {
+      skipAccessToken: true,
+    });
+
+    if (result.error) {
+      return { success: false, message: result.error, products: [] };
+    }
+
+    if (result.status >= 400 || !result.data?.success) {
+      return {
+        success: false,
+        message: this.parseErrorMessage(
+          result.data,
+          getString("api-error-request-failed", {
+            args: { status: result.status },
+          }),
+        ),
+        products: [],
+      };
+    }
+
+    return {
+      success: true,
+      products: Array.isArray(result.data.data?.products)
+        ? result.data.data.products
+        : [],
+    };
+  }
+
+  async createPaperChatOrder(sku: string): Promise<PaperChatOrderResult> {
+    const url = `${this.baseUrl}/ext/paperchat/orders`;
+    const result = await this.request<{
+      success?: boolean;
+      message?: string;
+      data?: PaperChatPurchaseOrder;
+    }>("POST", url, {
+      body: { sku },
+      skipAccessToken: true,
+    });
+
+    if (result.error) {
+      return { success: false, message: result.error };
+    }
+
+    if (result.status >= 400 || !result.data?.success || !result.data.data) {
+      return {
+        success: false,
+        message: this.parseErrorMessage(
+          result.data,
+          getString("api-error-request-failed", {
+            args: { status: result.status },
+          }),
+        ),
+      };
+    }
+
+    return { success: true, order: result.data.data };
+  }
+
+  async getPaperChatOrder(orderId: string): Promise<PaperChatOrderResult> {
+    const url = `${this.baseUrl}/ext/paperchat/orders/${encodeURIComponent(orderId)}`;
+    const result = await this.request<{
+      success?: boolean;
+      message?: string;
+      data?: PaperChatPurchaseOrder;
+    }>("GET", url, {
+      skipAccessToken: true,
+    });
+
+    if (result.error) {
+      return { success: false, message: result.error };
+    }
+
+    if (result.status >= 400 || !result.data?.success || !result.data.data) {
+      return {
+        success: false,
+        message: this.parseErrorMessage(
+          result.data,
+          getString("api-error-request-failed", {
+            args: { status: result.status },
+          }),
+        ),
+      };
+    }
+
+    return { success: true, order: result.data.data };
   }
 
   private async syncCurrentUserEntitlement(): Promise<void> {

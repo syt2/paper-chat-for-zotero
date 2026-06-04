@@ -8,12 +8,20 @@ pref-redeem-label = Token Redemption Code
 pref-redeem-placeholder =
     .placeholder = Enter token redemption code
 pref-redeem-btn = Redeem
-pref-get-redeem-code = Get Code
-pref-get-redeem-code-title = Get Redemption Code
+pref-get-redeem-code = Buy Credits
+pref-get-redeem-code-title = Buy PaperChat Credits
 pref-get-redeem-code-link = Purchase Link
 pref-get-redeem-code-unavailable-prefix = Purchase is temporarily unavailable. Please
 pref-get-redeem-code-unavailable-link =  visit the official website
 pref-get-redeem-code-unavailable-suffix =  and contact support.
+pref-paperchat-buy-btn = Buy
+pref-paperchat-purchase-creating = Creating payment order...
+pref-paperchat-purchase-opened = Payment page opened. This window will update after payment.
+pref-paperchat-purchase-paid = Payment successful. Access has been refreshed.
+pref-paperchat-purchase-grant-failed = Payment succeeded, but access could not be granted. Please contact support.
+pref-paperchat-purchase-check-failed = Waiting for the payment result to sync. If you have paid, reopen this window later to check again.
+pref-paperchat-purchase-failed = Failed to create payment order. Please try again later.
+pref-paperchat-purchase-timeout = Payment has not been detected yet. Finish payment and reopen this window to check again.
 
 # API Settings
 pref-api-settings = API Settings
