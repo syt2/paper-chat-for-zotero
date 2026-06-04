@@ -1302,7 +1302,13 @@ function setupChatManagerCallbacks(
           manager,
           content,
           messageId,
-          createPdfQuoteMarkdownRenderOptions(context),
+          createPdfQuoteMarkdownRenderOptions({
+            getCurrentItem: () =>
+              getQuoteNavigationItem(
+                manager.getActiveSession(),
+                moduleCurrentItem,
+              ),
+          }),
         );
       }
     },
@@ -1742,7 +1748,7 @@ function createContext(container: HTMLElement): ChatPanelContext {
             chatHistory,
             emptyState,
             messages,
-            () => getQuoteNavigationItem(session, context.getCurrentItem()),
+            () => getQuoteNavigationItem(session, moduleCurrentItem),
             retryableErrorMessageId,
             async () => {
               await context.rerollPaperChatTierForCurrentSession();
