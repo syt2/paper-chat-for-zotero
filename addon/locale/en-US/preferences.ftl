@@ -14,6 +14,7 @@ pref-get-redeem-code-link = Purchase Link
 pref-get-redeem-code-unavailable-prefix = Purchase is temporarily unavailable. Please
 pref-get-redeem-code-unavailable-link =  visit the official website
 pref-get-redeem-code-unavailable-suffix =  and contact support.
+pref-paperchat-select-plan = Select a plan
 pref-paperchat-buy-btn = Buy
 pref-paperchat-purchase-creating = Creating payment order...
 pref-paperchat-purchase-opened = Payment page opened. This window will update after payment.

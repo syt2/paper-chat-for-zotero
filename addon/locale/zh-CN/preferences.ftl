@@ -14,6 +14,7 @@ pref-get-redeem-code-link = 购买链接
 pref-get-redeem-code-unavailable-prefix = 暂时无法购买，可
 pref-get-redeem-code-unavailable-link = 访问官网
 pref-get-redeem-code-unavailable-suffix = 联系客服处理。
+pref-paperchat-select-plan = 选择套餐
 pref-paperchat-buy-btn = 购买
 pref-paperchat-purchase-creating = 正在创建支付订单...
 pref-paperchat-purchase-opened = 已打开支付页面，付款后这里会自动更新状态。

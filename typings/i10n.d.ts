@@ -262,6 +262,7 @@ export type FluentMessageId =
   | 'pref-paperchat-purchase-opened'
   | 'pref-paperchat-purchase-paid'
   | 'pref-paperchat-purchase-timeout'
+  | 'pref-paperchat-select-plan'
   | 'pref-paperchat-standard-model'
   | 'pref-paperchat-tier'
   | 'pref-paperchat-tier-lite'

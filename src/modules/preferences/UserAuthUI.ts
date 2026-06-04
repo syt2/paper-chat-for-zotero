@@ -619,6 +619,7 @@ async function showRedeemCodeDialog(
 function buildProductPurchaseChildren(
   products: PaperChatProduct[],
 ): TagElementProps[] {
+  const selectedProduct = products[0];
   const children: TagElementProps[] = [
     {
       tag: "div",
@@ -628,100 +629,221 @@ function buildProductPurchaseChildren(
       },
       styles: {
         minHeight: "18px",
-        maxWidth: "360px",
+        maxWidth: "430px",
         fontSize: "13px",
         color: "#555",
         lineHeight: "1.5",
         textAlign: "center",
       },
     },
-  ];
-
-  for (const product of products) {
-    children.push({
+    {
       tag: "div",
+      id: "paperchat-product-picker",
       styles: {
         width: "100%",
-        maxWidth: "360px",
-        border: "1px solid #d0d7de",
+        maxWidth: "430px",
         borderRadius: "8px",
-        padding: "14px",
         boxSizing: "border-box",
         display: "flex",
         flexDirection: "column",
-        gap: "10px",
-        background: "#fff",
+        gap: "12px",
       },
       children: [
         {
           tag: "div",
           properties: {
-            textContent: product.name,
-          },
-          styles: {
-            fontSize: "15px",
-            fontWeight: "700",
-            color: "#222",
-          },
-        },
-        {
-          tag: "div",
-          properties: {
-            textContent: product.description,
+            textContent: getString("pref-paperchat-select-plan"),
           },
           styles: {
             fontSize: "13px",
-            color: "#666",
-            lineHeight: "1.5",
+            fontWeight: "700",
+            color: "#555",
           },
         },
         {
           tag: "div",
+          styles: {
+            display: "grid",
+            gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+            gap: "8px",
+          },
+          children: products.map((product, index) =>
+            buildProductOption(product, index === 0),
+          ),
+        },
+        {
+          tag: "div",
+          id: "paperchat-selected-product-panel",
           styles: {
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            gap: "12px",
+            gap: "14px",
+            border: "1px solid #dbe3f0",
+            borderRadius: "8px",
+            padding: "12px",
+            background: "#f8fafc",
+            boxSizing: "border-box",
           },
           children: [
             {
               tag: "div",
-              properties: {
-                textContent: product.quotaLabel
-                  ? `¥${product.money} · ${product.quotaLabel}`
-                  : `¥${product.money}`,
-              },
               styles: {
-                fontSize: "16px",
-                fontWeight: "700",
-                color: "#111",
+                minWidth: "0",
+                display: "flex",
+                flexDirection: "column",
+                gap: "4px",
               },
+              children: [
+                {
+                  tag: "div",
+                  id: "paperchat-selected-product-name",
+                  properties: {
+                    textContent: selectedProduct?.name ?? "",
+                  },
+                  styles: {
+                    minWidth: "0",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    fontSize: "13px",
+                    fontWeight: "700",
+                    color: "#334155",
+                  },
+                },
+                {
+                  tag: "div",
+                  id: "paperchat-selected-product-price",
+                  properties: {
+                    textContent: selectedProduct
+                      ? formatProductPrice(selectedProduct)
+                      : "",
+                  },
+                  styles: {
+                    fontSize: "20px",
+                    fontWeight: "800",
+                    color: "#111827",
+                    letterSpacing: "0",
+                  },
+                },
+              ],
             },
             {
               tag: "button",
-              id: getProductButtonId(product.sku),
+              id: "paperchat-buy-selected",
               properties: {
                 textContent: getString("pref-paperchat-buy-btn"),
               },
               styles: {
-                minWidth: "88px",
-                padding: "6px 12px",
-                borderRadius: "6px",
+                flex: "0 0 auto",
+                minWidth: "104px",
+                minHeight: "38px",
+                padding: "8px 16px",
+                borderRadius: "7px",
                 border: "1px solid #2563eb",
                 background: "#2563eb",
                 color: "#fff",
                 cursor: "pointer",
-                fontSize: "13px",
-                fontWeight: "700",
+                fontSize: "14px",
+                fontWeight: "800",
               },
             },
           ],
         },
       ],
-    });
-  }
+    },
+  ];
 
   return children;
+}
+
+function buildProductOption(
+  product: PaperChatProduct,
+  selected: boolean,
+): TagElementProps {
+  return {
+    tag: "button",
+    id: getProductOptionId(product.sku),
+    attributes: {
+      "aria-pressed": selected ? "true" : "false",
+      "data-sku": product.sku,
+      type: "button",
+    },
+    styles: getProductOptionStyles(selected),
+    children: [
+      {
+        tag: "span",
+        properties: {
+          textContent: product.quotaLabel || product.name,
+        },
+        styles: {
+          minWidth: "0",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          fontSize: "14px",
+          fontWeight: "800",
+          color: selected ? "#1d4ed8" : "#111827",
+        },
+      },
+      {
+        tag: "span",
+        properties: {
+          textContent: `¥${product.money}`,
+        },
+        styles: {
+          fontSize: "12px",
+          fontWeight: "700",
+          color: selected ? "#2563eb" : "#64748b",
+        },
+      },
+    ],
+  };
+}
+
+function getProductOptionStyles(selected: boolean): Record<string, string> {
+  return {
+    position: "relative",
+    minWidth: "0",
+    minHeight: "54px",
+    padding: "8px 10px",
+    borderRadius: "8px",
+    border: selected ? "2px solid #2563eb" : "2px solid #d0d7de",
+    background: selected ? "#eff6ff" : "#fff",
+    boxSizing: "border-box",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "flex-start",
+    justifyContent: "center",
+    gap: "3px",
+    cursor: "pointer",
+    textAlign: "left",
+    outline: "none",
+  };
+}
+
+function applyProductOptionStyles(
+  option: HTMLElement,
+  selected: boolean,
+): void {
+  const styles = getProductOptionStyles(selected);
+  for (const [key, value] of Object.entries(styles)) {
+    option.style.setProperty(toKebabCase(key), value);
+  }
+  option.setAttribute("aria-pressed", selected ? "true" : "false");
+  const [labelEl, priceEl] = Array.from(option.children) as HTMLElement[];
+  if (labelEl) {
+    labelEl.style.color = selected ? "#1d4ed8" : "#111827";
+  }
+  if (priceEl) {
+    priceEl.style.color = selected ? "#2563eb" : "#64748b";
+  }
+}
+
+function formatProductPrice(product: PaperChatProduct): string {
+  return product.quotaLabel
+    ? `¥${product.money} · ${product.quotaLabel}`
+    : `¥${product.money}`;
 }
 
 function bindProductPurchaseEvents(
@@ -734,7 +856,17 @@ function bindProductPurchaseEvents(
   const statusEl = doc.getElementById(
     "paperchat-purchase-status",
   ) as HTMLElement | null;
+  const selectedNameEl = doc.getElementById(
+    "paperchat-selected-product-name",
+  ) as HTMLElement | null;
+  const selectedPriceEl = doc.getElementById(
+    "paperchat-selected-product-price",
+  ) as HTMLElement | null;
+  const buyButton = doc.getElementById(
+    "paperchat-buy-selected",
+  ) as HTMLButtonElement | null;
   let pollTimer: number | null = null;
+  let selectedSku = products[0]?.sku ?? "";
 
   const setStatus = (message: string, isError = false) => {
     if (!statusEl) return;
@@ -752,16 +884,39 @@ function bindProductPurchaseEvents(
   dialogWin.addEventListener("unload", stopPolling);
 
   const setButtonsDisabled = (disabled: boolean) => {
+    if (buyButton) {
+      buyButton.disabled = disabled;
+      buyButton.style.opacity = disabled ? "0.6" : "1";
+      buyButton.style.cursor = disabled ? "default" : "pointer";
+    }
     for (const product of products) {
-      const button = doc.getElementById(
-        getProductButtonId(product.sku),
+      const option = doc.getElementById(
+        getProductOptionId(product.sku),
       ) as HTMLButtonElement | null;
-      if (button) {
-        button.disabled = disabled;
-        button.style.opacity = disabled ? "0.6" : "1";
-        button.style.cursor = disabled ? "default" : "pointer";
+      if (option) {
+        option.disabled = disabled;
+        option.style.cursor = disabled ? "default" : "pointer";
       }
     }
+  };
+
+  const selectProduct = (product: PaperChatProduct) => {
+    selectedSku = product.sku;
+    for (const item of products) {
+      const option = doc.getElementById(
+        getProductOptionId(item.sku),
+      ) as HTMLElement | null;
+      if (option) {
+        applyProductOptionStyles(option, item.sku === selectedSku);
+      }
+    }
+    if (selectedNameEl) {
+      selectedNameEl.textContent = product.name;
+    }
+    if (selectedPriceEl) {
+      selectedPriceEl.textContent = formatProductPrice(product);
+    }
+    setStatus("");
   };
 
   const startPolling = (order: PaperChatPurchaseOrder) => {
@@ -825,34 +980,50 @@ function bindProductPurchaseEvents(
   };
 
   for (const product of products) {
-    const button = doc.getElementById(
-      getProductButtonId(product.sku),
+    const option = doc.getElementById(
+      getProductOptionId(product.sku),
     ) as HTMLButtonElement | null;
-    button?.addEventListener("click", async (event: Event) => {
+    option?.addEventListener("click", (event: Event) => {
       event.preventDefault();
-      setButtonsDisabled(true);
-      setStatus(getString("pref-paperchat-purchase-creating"));
-      const result = await authManager.createPaperChatOrder(product.sku);
-      if (!result.success || !result.order) {
-        setButtonsDisabled(false);
-        setStatus(
-          result.message || getString("pref-paperchat-purchase-failed"),
-          true,
-        );
-        return;
+      if (!option.disabled) {
+        selectProduct(product);
       }
-
-      if (result.order.paymentUrl) {
-        Zotero.launchURL(result.order.paymentUrl);
-      }
-      setStatus(getString("pref-paperchat-purchase-opened"));
-      startPolling(result.order);
     });
   }
+
+  buyButton?.addEventListener("click", async (event: Event) => {
+    event.preventDefault();
+    const product = products.find((item) => item.sku === selectedSku);
+    if (!product) {
+      setStatus(getString("pref-paperchat-purchase-failed"), true);
+      return;
+    }
+    setButtonsDisabled(true);
+    setStatus(getString("pref-paperchat-purchase-creating"));
+    const result = await authManager.createPaperChatOrder(product.sku);
+    if (!result.success || !result.order) {
+      setButtonsDisabled(false);
+      setStatus(
+        result.message || getString("pref-paperchat-purchase-failed"),
+        true,
+      );
+      return;
+    }
+
+    if (result.order.paymentUrl) {
+      Zotero.launchURL(result.order.paymentUrl);
+    }
+    setStatus(getString("pref-paperchat-purchase-opened"));
+    startPolling(result.order);
+  });
 }
 
-function getProductButtonId(sku: string): string {
-  return `paperchat-buy-${sku.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+function getProductOptionId(sku: string): string {
+  return `paperchat-product-${sku.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+}
+
+function toKebabCase(value: string): string {
+  return value.replace(/[A-Z]/g, (match) => `-${match.toLowerCase()}`);
 }
 
 async function fetchRedeemCodeInfo(): Promise<RedeemCodeInfo> {
