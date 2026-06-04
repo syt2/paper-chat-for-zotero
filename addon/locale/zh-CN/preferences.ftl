@@ -11,7 +11,9 @@ pref-redeem-btn = 兑换
 pref-get-redeem-code = 获取兑换码
 pref-get-redeem-code-title = 获取兑换码
 pref-get-redeem-code-link = 购买链接
-pref-get-redeem-code-scan = 手机淘宝扫码前往获取
+pref-get-redeem-code-unavailable-prefix = 暂时无法购买，可
+pref-get-redeem-code-unavailable-link = 访问官网
+pref-get-redeem-code-unavailable-suffix = 联系客服处理。
 
 # API Settings
 pref-api-settings = API 设置

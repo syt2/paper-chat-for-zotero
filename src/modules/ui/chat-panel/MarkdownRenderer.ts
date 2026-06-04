@@ -857,6 +857,7 @@ function renderToolCallCards(
   parent: HTMLElement,
   content: string,
   messageId: string | undefined,
+  options: MarkdownRenderOptions = {},
 ): string {
   const fragments = parseToolCallFragments(content);
   if (fragments.length === 1 && fragments[0].kind === "markdown") {
@@ -867,8 +868,8 @@ function renderToolCallCards(
   for (let i = 0; i < fragments.length; ) {
     const fragment = fragments[i];
     if (fragment.kind === "markdown") {
-      if (!renderSourceGroupBlocks(doc, parent, fragment.content)) {
-        renderMarkdownFragment(doc, parent, fragment.content);
+      if (!renderSourceGroupBlocks(doc, parent, fragment.content, options)) {
+        renderMarkdownFragment(doc, parent, fragment.content, options);
       }
       i++;
       continue;
@@ -1008,6 +1009,7 @@ export function renderMarkdownToElement(
     element,
     markdownContent,
     messageId,
+    options,
   );
 
   if (!remainingContent) {

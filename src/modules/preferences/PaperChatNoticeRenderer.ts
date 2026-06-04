@@ -68,12 +68,18 @@ function getNoticeElements(doc: Document): {
   debugStatus: HTMLElement | null;
 } {
   return {
-    wrap: doc.getElementById("pref-paperchat-notice-wrap") as HTMLElement | null,
-    card: doc.getElementById("pref-paperchat-notice-card") as HTMLElement | null,
+    wrap: doc.getElementById(
+      "pref-paperchat-notice-wrap",
+    ) as HTMLElement | null,
+    card: doc.getElementById(
+      "pref-paperchat-notice-card",
+    ) as HTMLElement | null,
     viewport: doc.getElementById(
       "pref-paperchat-notice-viewport",
     ) as HTMLElement | null,
-    body: doc.getElementById("pref-paperchat-notice-scroll") as HTMLElement | null,
+    body: doc.getElementById(
+      "pref-paperchat-notice-scroll",
+    ) as HTMLElement | null,
     toggle: doc.getElementById(
       "pref-paperchat-notice-toggle",
     ) as HTMLButtonElement | null,
@@ -207,7 +213,10 @@ function cloneSanitizedNode(
   return targetElement;
 }
 
-function renderSanitizedHtmlToElement(element: HTMLElement, htmlContent: string): void {
+export function renderSanitizedHtmlToElement(
+  element: HTMLElement,
+  htmlContent: string,
+): void {
   clearElement(element);
   const doc = element.ownerDocument;
   if (!doc) {
@@ -316,7 +325,9 @@ function getExpandedNoticeHeight(
   viewport: HTMLElement | null,
   body: HTMLElement,
 ): number {
-  const panel = doc.getElementById("pref-panel-paperchat") as HTMLElement | null;
+  const panel = doc.getElementById(
+    "pref-panel-paperchat",
+  ) as HTMLElement | null;
   const win = doc.defaultView;
   const measuredContentHeight = measureNoticeContentHeight(viewport, body) + 44;
 
@@ -328,7 +339,9 @@ function getExpandedNoticeHeight(
   const maxHeight = Math.max(
     NOTICE_EXPANDED_MIN_HEIGHT_PX,
     Math.min(
-      Math.round(win.innerHeight - panelRect.top - NOTICE_EXPANDED_BOTTOM_MARGIN_PX),
+      Math.round(
+        win.innerHeight - panelRect.top - NOTICE_EXPANDED_BOTTOM_MARGIN_PX,
+      ),
       Math.round(panelRect.height - 48),
     ),
   );
@@ -377,11 +390,9 @@ function syncNoticeToggleUI(doc: Document): void {
 
   const expanded = isNoticeExpanded(card);
   const label = getString(
-    (
-      expanded
-        ? "pref-paperchat-notice-collapse"
-        : "pref-paperchat-notice-expand"
-    ) as any,
+    (expanded
+      ? "pref-paperchat-notice-collapse"
+      : "pref-paperchat-notice-expand") as any,
   );
 
   toggle.title = label;
@@ -409,10 +420,7 @@ function syncExpandedNoticeLayout(doc: Document): void {
   );
 }
 
-function setPaperChatNoticeExpanded(
-  doc: Document,
-  expanded: boolean,
-): void {
+function setPaperChatNoticeExpanded(doc: Document, expanded: boolean): void {
   const { card, viewport, body } = getNoticeElements(doc);
   if (!card || !body) {
     return;
@@ -471,13 +479,15 @@ export function bindPaperChatNoticeEvents(doc: Document): void {
   toggle.addEventListener("command", handleToggle);
   toggle.addEventListener("click", handleToggle);
 
-  const win = doc.defaultView as (Window & {
-    __paperchatNoticeResizeHandler?: () => void;
-    __paperchatNoticeThemeMediaQuery?: MediaQueryList;
-    __paperchatNoticeThemeHandler?: () => void;
-    __paperchatNoticeCleanupRegistered?: boolean;
-    __paperchatPrefsCleanup?: Array<() => void>;
-  }) | null;
+  const win = doc.defaultView as
+    | (Window & {
+        __paperchatNoticeResizeHandler?: () => void;
+        __paperchatNoticeThemeMediaQuery?: MediaQueryList;
+        __paperchatNoticeThemeHandler?: () => void;
+        __paperchatNoticeCleanupRegistered?: boolean;
+        __paperchatPrefsCleanup?: Array<() => void>;
+      })
+    | null;
   if (!win) {
     applyNoticeTheme(doc);
     syncNoticeToggleUI(doc);
@@ -487,7 +497,10 @@ export function bindPaperChatNoticeEvents(doc: Document): void {
   if (win.__paperchatNoticeResizeHandler) {
     win.removeEventListener("resize", win.__paperchatNoticeResizeHandler);
   }
-  if (win.__paperchatNoticeThemeMediaQuery && win.__paperchatNoticeThemeHandler) {
+  if (
+    win.__paperchatNoticeThemeMediaQuery &&
+    win.__paperchatNoticeThemeHandler
+  ) {
     win.__paperchatNoticeThemeMediaQuery.removeEventListener(
       "change",
       win.__paperchatNoticeThemeHandler,
@@ -523,7 +536,10 @@ export function bindPaperChatNoticeEvents(doc: Document): void {
         win.removeEventListener("resize", win.__paperchatNoticeResizeHandler);
         delete win.__paperchatNoticeResizeHandler;
       }
-      if (win.__paperchatNoticeThemeMediaQuery && win.__paperchatNoticeThemeHandler) {
+      if (
+        win.__paperchatNoticeThemeMediaQuery &&
+        win.__paperchatNoticeThemeHandler
+      ) {
         win.__paperchatNoticeThemeMediaQuery.removeEventListener(
           "change",
           win.__paperchatNoticeThemeHandler,
@@ -588,7 +604,8 @@ export async function refreshPaperChatNoticeUI(doc: Document): Promise<void> {
 
 export function syncPaperChatNoticeDebugUI(doc: Document): void {
   const { debugWrap, debugInput, debugStatus } = getNoticeElements(doc);
-  const isProduction = typeof __env__ !== "undefined" && __env__ === "production";
+  const isProduction =
+    typeof __env__ !== "undefined" && __env__ === "production";
 
   if (debugWrap) {
     debugWrap.hidden = isProduction;

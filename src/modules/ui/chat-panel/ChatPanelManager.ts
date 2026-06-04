@@ -4,7 +4,7 @@
 
 import { config } from "../../../../package.json";
 import { getString } from "../../../utils/locale";
-import { ChatManager, type ChatMessage } from "../../chat";
+import { ChatManager, type ChatMessage, type ChatSession } from "../../chat";
 import type {
   ExecutionPlan,
   ImageAttachment,
@@ -31,7 +31,7 @@ import {
   getStreamingContentSelector,
   getStreamingReasoningContainerSelector,
   getStreamingReasoningSelector,
-  renderMessages as renderMessageElements,
+  renderMessages as renderMessageElementsBase,
   scrollChatHistoryToBottom,
   shouldAutoScrollChatHistory,
   updateChatHistoryScrollBottomButton,
@@ -40,6 +40,7 @@ import {
   type ApprovalViewTransitionState,
 } from "./MessageRenderer";
 import {
+  type MarkdownRenderOptions,
   renderMarkdownToElement,
   stripIncompleteTrailingToolCall,
 } from "./MarkdownRenderer";
@@ -139,6 +140,7 @@ function renderStreamingTextNow(
   state: StreamingTextRenderState,
   content: string,
   messageId: string,
+  markdownOptions: MarkdownRenderOptions,
 ): boolean {
   const activeMessage = manager
     .getActiveSession()
@@ -158,20 +160,21 @@ function renderStreamingTextNow(
     return false;
   }
 
-  if (
-    state.lastMarkdownContent &&
-    !content.startsWith(state.lastMarkdownContent)
-  ) {
+  const contentReplacedAfterMarkdownRender =
+    Boolean(state.lastMarkdownContent) &&
+    !content.startsWith(state.lastMarkdownContent);
+  if (contentReplacedAfterMarkdownRender) {
     state.lastMarkdownContent = "";
   }
 
   const now = Date.now();
   const shouldRenderMarkdown =
+    contentReplacedAfterMarkdownRender ||
     shouldForceStreamingMarkdownRender(content, state) ||
     now - state.lastMarkdownRenderAt >= STREAMING_MARKDOWN_RENDER_INTERVAL_MS;
 
   if (shouldRenderMarkdown) {
-    renderMarkdownToElement(streamingEl, content, messageId);
+    renderMarkdownToElement(streamingEl, content, messageId, markdownOptions);
     const tail = streamingEl.ownerDocument.createElement("span");
     tail.setAttribute(STREAMING_TEXT_TAIL_ATTR, "true");
     streamingEl.appendChild(tail);
@@ -212,6 +215,7 @@ function scheduleStreamingTextRender(
   manager: ChatManager,
   content: string,
   messageId: string,
+  markdownOptions: MarkdownRenderOptions,
 ): void {
   let state = streamingTextRenderStates.get(container);
   if (!state || state.messageId !== messageId) {
@@ -222,7 +226,7 @@ function scheduleStreamingTextRender(
       lastRenderedContent: "",
       lastMarkdownContent: "",
       lastRenderAt: 0,
-      lastMarkdownRenderAt: Date.now(),
+      lastMarkdownRenderAt: 0,
       timeoutId: null,
     };
     streamingTextRenderStates.set(container, state);
@@ -247,6 +251,7 @@ function scheduleStreamingTextRender(
         latestState,
         nextContent,
         messageId,
+        markdownOptions,
       )
     ) {
       streamingTextRenderStates.delete(container);
@@ -271,6 +276,70 @@ function scheduleStreamingTextRender(
       STREAMING_TEXT_RENDER_INTERVAL_MS - elapsed,
     );
   }
+}
+
+function createPdfQuoteMarkdownRenderOptions(
+  context: Pick<ChatPanelContext, "getCurrentItem">,
+): MarkdownRenderOptions {
+  return {
+    blockquoteAction: {
+      label: getString("chat-jump-to-quote"),
+      title: getString("chat-jump-to-quote-title"),
+      onClick: async (quoteText) => {
+        await navigateToPdfQuote(quoteText, context.getCurrentItem());
+      },
+    },
+  };
+}
+
+function getItemByLibraryKey(
+  itemKey: string | null | undefined,
+): Zotero.Item | null {
+  if (!itemKey) {
+    return null;
+  }
+  const libraryID = Zotero.Libraries.userLibraryID;
+  return (
+    (Zotero.Items.getByLibraryAndKey(libraryID, itemKey) as
+      | Zotero.Item
+      | false) || null
+  );
+}
+
+function getQuoteNavigationItem(
+  session: ChatSession | null | undefined,
+  currentItem: Zotero.Item | null,
+): Zotero.Item | null {
+  return (
+    getItemByLibraryKey(session?.lastActiveItemKey) ||
+    currentItem ||
+    getActiveReaderItem()
+  );
+}
+
+function renderMessageElementsWithPdfQuoteAction(
+  chatHistory: HTMLElement,
+  emptyState: HTMLElement | null,
+  messages: ChatMessage[],
+  getNavigationItem: () => Zotero.Item | null,
+  retryableErrorMessageId?: string,
+  onReroll?: () => void | Promise<void>,
+  onRerollError?: (error: Error) => void,
+): void {
+  renderMessageElementsBase(
+    chatHistory,
+    emptyState,
+    messages,
+    getCurrentTheme(),
+    retryableErrorMessageId,
+    onReroll,
+    onRerollError,
+    {
+      markdown: createPdfQuoteMarkdownRenderOptions({
+        getCurrentItem: getNavigationItem,
+      }),
+    },
+  );
 }
 
 function buildApprovalActionsForContainer(
@@ -977,11 +1046,11 @@ async function refreshChatForContainer(container: HTMLElement): Promise<void> {
     "#chat-empty-state",
   ) as HTMLElement;
   if (chatHistory && session) {
-    renderMessageElements(
+    renderMessageElementsWithPdfQuoteAction(
       chatHistory,
       emptyState,
       session.messages,
-      getCurrentTheme(),
+      () => getQuoteNavigationItem(session, moduleCurrentItem),
     );
     updateExecutionInsetsForContainer(
       container,
@@ -1228,7 +1297,13 @@ function setupChatManagerCallbacks(
     },
     onStreamingUpdate: (content, messageId) => {
       if (container) {
-        scheduleStreamingTextRender(container, manager, content, messageId);
+        scheduleStreamingTextRender(
+          container,
+          manager,
+          content,
+          messageId,
+          createPdfQuoteMarkdownRenderOptions(context),
+        );
       }
     },
     onReasoningUpdate: (reasoning, messageId) => {
@@ -1663,31 +1738,17 @@ function createContext(container: HTMLElement): ChatPanelContext {
             ? session?.lastRetryableErrorMessageId
             : undefined;
         if (chatHistory) {
-          renderMessageElements(
+          renderMessageElementsWithPdfQuoteAction(
             chatHistory,
             emptyState,
             messages,
-            getCurrentTheme(),
+            () => getQuoteNavigationItem(session, context.getCurrentItem()),
             retryableErrorMessageId,
             async () => {
               await context.rerollPaperChatTierForCurrentSession();
             },
             (error) => {
               context.appendError(error.message);
-            },
-            {
-              markdown: {
-                blockquoteAction: {
-                  label: getString("chat-jump-to-quote"),
-                  title: getString("chat-jump-to-quote-title"),
-                  onClick: async (quoteText) => {
-                    await navigateToPdfQuote(
-                      quoteText,
-                      context.getCurrentItem(),
-                    );
-                  },
-                },
-              },
             },
           );
         }

@@ -11,7 +11,9 @@ pref-redeem-btn = Redeem
 pref-get-redeem-code = Get Code
 pref-get-redeem-code-title = Get Redemption Code
 pref-get-redeem-code-link = Purchase Link
-pref-get-redeem-code-scan = Scan with Taobao app to purchase
+pref-get-redeem-code-unavailable-prefix = Purchase is temporarily unavailable. Please
+pref-get-redeem-code-unavailable-link =  visit the official website
+pref-get-redeem-code-unavailable-suffix =  and contact support.
 
 # API Settings
 pref-api-settings = API Settings

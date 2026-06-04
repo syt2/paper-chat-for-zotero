@@ -537,7 +537,12 @@ export function createMessageElement(
   } else {
     // Render assistant message as markdown
     if (msg.streamingState === "in_progress") {
-      content.textContent = msg.content;
+      renderMarkdownToElement(
+        content,
+        msg.content,
+        msg.id,
+        renderOptions.markdown,
+      );
       ensureStreamingTypingIndicator(content, theme);
     } else {
       renderMarkdownToElement(

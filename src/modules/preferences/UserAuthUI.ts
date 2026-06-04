@@ -2,15 +2,17 @@
  * UserAuthUI - User authentication status display and events
  */
 
-import { config } from "../../../package.json";
+import type { TagElementProps } from "zotero-plugin-toolkit";
 import { getString } from "../../utils/locale";
 import { prefColors } from "../../utils/colors";
+import { getPref } from "../../utils/prefs";
 import { getAuthManager } from "../auth";
 import { BUILTIN_PROVIDERS } from "../providers";
 import { showAuthDialog } from "../ui/AuthDialog";
 import type { PrefsRefreshOptions } from "./types";
 import { showMessage } from "./utils";
 import { ANALYTICS_EVENTS, getAnalyticsService } from "../analytics";
+import { renderSanitizedHtmlToElement } from "./PaperChatNoticeRenderer";
 
 type AuthManagerType = ReturnType<typeof getAuthManager>;
 
@@ -18,6 +20,14 @@ export const LOW_BALANCE_WARNING_THRESHOLD = 10000;
 const PREFS_REFRESH_MAX_ATTEMPTS = 12;
 const PREFS_REFRESH_RETRY_DELAY_MS = 120;
 const TOPUP_ATTENTION_DURATION_MS = 8000;
+const REDEEM_CODE_INFO_PATH = "/ext/paperchat/redeem-code-info";
+
+interface RedeemCodeInfo {
+  qrImageUrl: string | null;
+  qrDescription: string | null;
+  purchaseUrl: string | null;
+  html: string | null;
+}
 
 type TopupAttentionAddonData = typeof addon.data & {
   paperchatTopupAttentionUntil?: number;
@@ -444,11 +454,11 @@ export function bindUserAuthEvents(
 
   // Get redemption code button - show QR code dialog
   const getRedeemCodeBtn = doc.getElementById("pref-get-redeem-code-btn");
-  getRedeemCodeBtn?.addEventListener("click", () => {
+  getRedeemCodeBtn?.addEventListener("click", async () => {
     getAnalyticsService().track(ANALYTICS_EVENTS.paperChatRedeemCodeClicked, {
       low_balance: isPaperChatLowBalance(authManager),
     });
-    showRedeemCodeDialog();
+    await showRedeemCodeDialog();
   });
 
   // Official website link
@@ -480,89 +490,39 @@ let redeemDialogWindow: Window | null = null;
 /**
  * Show dialog with QR code for getting redemption code
  */
-function showRedeemCodeDialog(): void {
+async function showRedeemCodeDialog(): Promise<void> {
   // If dialog already open, focus it
   if (redeemDialogWindow && !redeemDialogWindow.closed) {
     redeemDialogWindow.focus();
     return;
   }
 
-  const purchaseUrl = "https://item.taobao.com/item.htm?id=1008529360525";
-  const qrCodeUrl = `chrome://${config.addonRef}/content/icons/tb_qrcode.png`;
+  const redeemInfo = await fetchRedeemCodeInfo();
+  const showHtml = !!redeemInfo.html;
+  const showUnavailable =
+    !showHtml && !redeemInfo.qrImageUrl && !redeemInfo.purchaseUrl;
+  const canCopyPurchaseUrl = !showHtml && !!redeemInfo.purchaseUrl;
 
-  const dialogHelper = new ztoolkit.Dialog(1, 1)
-    .addCell(0, 0, {
-      tag: "div",
-      styles: {
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        padding: "20px",
-        gap: "16px",
-        minWidth: "280px",
-      },
-      children: [
-        // QR Code image
-        {
-          tag: "img",
-          attributes: {
-            src: qrCodeUrl,
-          },
-          styles: {
-            width: "200px",
-            height: "200px",
-            borderRadius: "8px",
-          },
-        },
-        // Scan instruction text
-        {
-          tag: "div",
-          properties: {
-            textContent: getString("pref-get-redeem-code-scan"),
-          },
-          styles: {
-            fontSize: "14px",
-            color: "#666",
-            textAlign: "center",
-          },
-        },
-        // Purchase link
-        {
-          tag: "div",
-          styles: {
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-          },
-          children: [
-            {
-              tag: "span",
-              properties: {
-                textContent: `${getString("pref-get-redeem-code-link")}: `,
-              },
-              styles: {
-                fontSize: "13px",
-              },
-            },
-            {
-              tag: "a",
-              id: "redeem-purchase-link",
-              properties: {
-                textContent: purchaseUrl,
-              },
-              styles: {
-                color: "#0078d4",
-                cursor: "pointer",
-                fontSize: "13px",
-                textDecoration: "underline",
-              },
-            },
-          ],
-        },
-      ],
-    })
-    .addButton(getString("pref-copy-btn"), "copy")
-    .addButton(getString("auth-cancel"), "cancel");
+  const dialogHelper = new ztoolkit.Dialog(1, 1).addCell(0, 0, {
+    tag: "div",
+    id: "redeem-code-info-body",
+    styles: {
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      padding: "20px",
+      gap: "16px",
+      minWidth: "280px",
+    },
+    children: showHtml
+      ? []
+      : buildRedeemCodeInfoChildren(redeemInfo, showUnavailable),
+  });
+
+  if (canCopyPurchaseUrl) {
+    dialogHelper.addButton(getString("pref-copy-btn"), "copy");
+  }
+  dialogHelper.addButton(getString("auth-cancel"), "cancel");
 
   dialogHelper.open(getString("pref-get-redeem-code-title"), {
     resizable: false,
@@ -587,12 +547,23 @@ function showRedeemCodeDialog(): void {
     });
 
     const doc = dialogWin.document;
+    if (showHtml && redeemInfo.html) {
+      const bodyEl = doc.getElementById(
+        "redeem-code-info-body",
+      ) as HTMLElement | null;
+      if (bodyEl) {
+        bodyEl.style.alignItems = "stretch";
+        renderSanitizedHtmlToElement(bodyEl, redeemInfo.html);
+      }
+    }
 
     // Click on link opens URL
     const linkEl = doc.getElementById("redeem-purchase-link");
     linkEl?.addEventListener("click", (e: Event) => {
       e.preventDefault();
-      Zotero.launchURL(purchaseUrl);
+      if (redeemInfo.purchaseUrl) {
+        Zotero.launchURL(redeemInfo.purchaseUrl);
+      }
     });
 
     // Copy button copies URL
@@ -601,10 +572,194 @@ function showRedeemCodeDialog(): void {
       if (btn.textContent === getString("pref-copy-btn")) {
         btn.addEventListener("click", (e: Event) => {
           e.preventDefault();
-          new ztoolkit.Clipboard().addText(purchaseUrl, "text/plain").copy();
+          if (redeemInfo.purchaseUrl) {
+            new ztoolkit.Clipboard()
+              .addText(redeemInfo.purchaseUrl, "text/plain")
+              .copy();
+          }
           dialogWin.close();
         });
       }
     });
   }, 100);
+}
+
+async function fetchRedeemCodeInfo(): Promise<RedeemCodeInfo> {
+  const fallback = createEmptyRedeemCodeInfo();
+  try {
+    const response = await Zotero.HTTP.request("GET", getRedeemCodeInfoUrl(), {
+      responseType: "json",
+      successCodes: false as const,
+    });
+    if (response.status >= 400) {
+      return fallback;
+    }
+    return normalizeRedeemCodeInfoResponse(response.response);
+  } catch (error) {
+    ztoolkit.log("[Preferences] Failed to fetch redeem code info:", error);
+    return fallback;
+  }
+}
+
+function getRedeemCodeInfoUrl(): string {
+  const baseUrl =
+    (getPref("baseUrl") as string | undefined) ||
+    BUILTIN_PROVIDERS.paperchat.defaultBaseUrl;
+  try {
+    return `${new URL(baseUrl).origin}${REDEEM_CODE_INFO_PATH}`;
+  } catch {
+    return `${BUILTIN_PROVIDERS.paperchat.website}${REDEEM_CODE_INFO_PATH}`;
+  }
+}
+
+function normalizeRedeemCodeInfoResponse(response: unknown): RedeemCodeInfo {
+  const payload =
+    response && typeof response === "object" && "data" in response
+      ? (response as { data?: unknown }).data
+      : response;
+  if (!payload || typeof payload !== "object") {
+    return createEmptyRedeemCodeInfo();
+  }
+  const record = payload as Record<string, unknown>;
+  return {
+    qrImageUrl: normalizeOptionalString(record.qrImageUrl),
+    qrDescription: normalizeOptionalString(record.qrDescription),
+    purchaseUrl: normalizeOptionalString(record.purchaseUrl),
+    html: normalizeOptionalString(record.html),
+  };
+}
+
+function createEmptyRedeemCodeInfo(): RedeemCodeInfo {
+  return {
+    qrImageUrl: null,
+    qrDescription: null,
+    purchaseUrl: null,
+    html: null,
+  };
+}
+
+function normalizeOptionalString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function buildRedeemCodeInfoChildren(
+  redeemInfo: RedeemCodeInfo,
+  showUnavailable: boolean,
+): TagElementProps[] {
+  if (showUnavailable) {
+    return [
+      {
+        tag: "div",
+        styles: {
+          maxWidth: "320px",
+          fontSize: "14px",
+          color: "#666",
+          lineHeight: "1.6",
+          textAlign: "center",
+        },
+        children: [
+          {
+            tag: "span",
+            properties: {
+              textContent: getString("pref-get-redeem-code-unavailable-prefix"),
+            },
+          },
+          {
+            tag: "a",
+            properties: {
+              textContent: getString("pref-get-redeem-code-unavailable-link"),
+            },
+            styles: {
+              color: "#0078d4",
+              cursor: "pointer",
+              textDecoration: "underline",
+            },
+            listeners: [
+              {
+                type: "click",
+                listener: (event: Event) => {
+                  event.preventDefault();
+                  Zotero.launchURL(BUILTIN_PROVIDERS.paperchat.website!);
+                },
+              },
+            ],
+          },
+          {
+            tag: "span",
+            properties: {
+              textContent: getString("pref-get-redeem-code-unavailable-suffix"),
+            },
+          },
+        ],
+      },
+    ];
+  }
+
+  const children: TagElementProps[] = [];
+
+  if (redeemInfo.qrImageUrl) {
+    children.push({
+      tag: "img",
+      attributes: {
+        src: redeemInfo.qrImageUrl,
+      },
+      styles: {
+        width: "200px",
+        height: "200px",
+        borderRadius: "8px",
+        objectFit: "contain",
+      },
+    });
+  }
+
+  if (redeemInfo.qrDescription) {
+    children.push({
+      tag: "div",
+      properties: {
+        textContent: redeemInfo.qrDescription,
+      },
+      styles: {
+        fontSize: "14px",
+        color: "#666",
+        textAlign: "center",
+      },
+    });
+  }
+
+  if (redeemInfo.purchaseUrl) {
+    children.push({
+      tag: "div",
+      styles: {
+        display: "flex",
+        alignItems: "center",
+        gap: "8px",
+      },
+      children: [
+        {
+          tag: "span",
+          properties: {
+            textContent: `${getString("pref-get-redeem-code-link")}: `,
+          },
+          styles: {
+            fontSize: "13px",
+          },
+        },
+        {
+          tag: "a",
+          id: "redeem-purchase-link",
+          properties: {
+            textContent: redeemInfo.purchaseUrl,
+          },
+          styles: {
+            color: "#0078d4",
+            cursor: "pointer",
+            fontSize: "13px",
+            textDecoration: "underline",
+          },
+        },
+      ],
+    });
+  }
+
+  return children;
 }
