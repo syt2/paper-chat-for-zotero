@@ -34,7 +34,7 @@ export interface PaperChatPurchaseOrder {
   sku: string;
   product: PaperChatProduct;
   status: "pending" | "paid";
-  grantStatus: "pending" | "granted" | "failed";
+  grantStatus: "pending" | "granted" | "failed" | "manual_review";
   qiuPayOutTradeNo: string;
   qiuPayTradeNo: string | null;
   paymentUrl: string | null;

@@ -794,6 +794,12 @@ function bindProductPurchaseEvents(
       consecutiveFailures = 0;
 
       if (result.order.status === "paid") {
+        if (result.order.grantStatus === "manual_review") {
+          stopPolling();
+          setButtonsDisabled(false);
+          setStatus(getString("pref-paperchat-purchase-grant-failed"), true);
+          return;
+        }
         if (result.order.grantStatus === "failed") {
           lastGrantFailed = true;
           setStatus(getString("pref-paperchat-purchase-check-failed"), true);
