@@ -184,6 +184,13 @@ const TOOL_RUNTIME_METADATA: Record<PaperToolName, ToolRuntimeMetadata> = {
     targetScope: "library",
     mutatesState: true,
   },
+  append_to_note: {
+    name: "append_to_note",
+    executionClass: "write",
+    concurrency: "serial",
+    targetScope: "library",
+    mutatesState: true,
+  },
   batch_update_tags: {
     name: "batch_update_tags",
     executionClass: "write",

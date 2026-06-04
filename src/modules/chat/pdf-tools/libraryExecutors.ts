@@ -9,10 +9,12 @@
  * - get_recent: 获取最近条目
  * - search_notes: 跨条目搜索笔记
  * - create_note: 创建笔记
+ * - append_to_note: 追加写入笔记
  * - batch_update_tags: 批量更新标签
  */
 
 import type {
+  AppendToNoteArgs,
   GetAnnotationsArgs,
   SearchItemsArgs,
   GetCollectionsArgs,
@@ -27,6 +29,8 @@ import type {
 } from "../../../types/tool";
 import { getString } from "../../../utils/locale";
 import { getErrorMessage, getItemTitleSmart } from "../../../utils/common";
+
+const PAPERCHAT_NOTES_TITLE = "PaperChat Notes";
 
 /**
  * 根据 itemKey 获取 Zotero Item
@@ -55,6 +59,81 @@ function stripHtml(html: string): string {
     .replace(/&quot;/g, '"')
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function noteContentToHtml(
+  content: string,
+  format: "plain" | "html" = "plain",
+): string {
+  if (format === "html") {
+    return content;
+  }
+  return content
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean)
+    .map(
+      (paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, "<br/>")}</p>`,
+    )
+    .join("\n");
+}
+
+function resolveParentItemForNote(itemKey: string): Zotero.Item | string {
+  let parentItem = getItemByKey(itemKey);
+
+  if (parentItem && parentItem.isAttachment?.()) {
+    const parentID = parentItem.parentItemID;
+    if (parentID) {
+      const realParent = Zotero.Items.get(parentID);
+      if (realParent) {
+        parentItem = realParent;
+      }
+    }
+  }
+
+  if (!parentItem || parentItem.isAttachment?.() || parentItem.isNote?.()) {
+    return `Error: Item with key "${itemKey}" not found or is not a regular Zotero item.`;
+  }
+
+  return parentItem;
+}
+
+function addTagsToNote(note: Zotero.Item, tags?: string): void {
+  if (!tags) {
+    return;
+  }
+  const tagList = tags
+    .split(",")
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+  for (const tag of tagList) {
+    note.addTag(tag);
+  }
+}
+
+function findDedicatedPaperChatNote(
+  parentItem: Zotero.Item,
+): Zotero.Item | null {
+  const noteIDs = parentItem.getNotes?.() || [];
+  for (const noteID of noteIDs) {
+    const candidate = Zotero.Items.get(noteID);
+    if (
+      candidate?.isNote?.() &&
+      candidate.getNoteTitle?.() === PAPERCHAT_NOTES_TITLE
+    ) {
+      return candidate;
+    }
+  }
+  return null;
 }
 
 // ==================== get_annotations ====================
@@ -240,7 +319,9 @@ export async function executeGetAnnotations(
       parts.push(`   Comment: ${ann.comment}\n`);
     }
     if (ann.rect) {
-      parts.push(`   Position: [${ann.rect.map((n) => n.toFixed(1)).join(", ")}]\n`);
+      parts.push(
+        `   Position: [${ann.rect.map((n) => n.toFixed(1)).join(", ")}]\n`,
+      );
     }
 
     return parts.join("");
@@ -258,9 +339,11 @@ export async function executeGetAnnotations(
 export function executeGetPdfSelection(): string {
   try {
     // 获取主窗口
-    const mainWindow = Zotero.getMainWindow() as (Window & {
-      Zotero_Tabs?: { selectedID: string };
-    }) | null;
+    const mainWindow = Zotero.getMainWindow() as
+      | (Window & {
+          Zotero_Tabs?: { selectedID: string };
+        })
+      | null;
 
     // 获取当前选中的 tab
     const selectedID = mainWindow?.Zotero_Tabs?.selectedID;
@@ -699,7 +782,7 @@ export async function executeCreateNote(
   currentItemKey: string | null,
 ): Promise<string> {
   const targetItemKey = args.itemKey ?? currentItemKey;
-  const { content, tags } = args;
+  const { content, format = "plain", tags } = args;
 
   if (!content || content.trim() === "") {
     return `Error: Note content is required.`;
@@ -712,31 +795,15 @@ export async function executeCreateNote(
   note.libraryID = libraryID;
 
   // 设置笔记内容（包装为 HTML）
-  const htmlContent = content.includes("<")
-    ? content
-    : `<p>${content.replace(/\n/g, "</p><p>")}</p>`;
-  note.setNote(htmlContent);
+  note.setNote(noteContentToHtml(content, format));
 
   // 如果指定了父条目
   if (targetItemKey) {
-    let parentItem = getItemByKey(targetItemKey);
-
-    // 如果是附件，获取其父 item
-    if (parentItem && parentItem.isAttachment && parentItem.isAttachment()) {
-      const parentID = parentItem.parentItemID;
-      if (parentID) {
-        const realParent = Zotero.Items.get(parentID);
-        if (realParent) {
-          parentItem = realParent;
-        }
-      }
+    const parentItem = resolveParentItemForNote(targetItemKey);
+    if (typeof parentItem === "string") {
+      return parentItem;
     }
-
-    if (parentItem && !parentItem.isAttachment()) {
-      note.parentID = parentItem.id;
-    } else if (targetItemKey) {
-      return `Error: Item with key "${targetItemKey}" not found or is an attachment without parent.`;
-    }
+    note.parentID = parentItem.id;
   }
 
   // Reuse Zotero's transaction helper so create_note does not collide with
@@ -745,19 +812,78 @@ export async function executeCreateNote(
     await note.save();
 
     if (tags) {
-      const tagList = tags
-        .split(",")
-        .map((t) => t.trim())
-        .filter((t) => t);
-      for (const tag of tagList) {
-        note.addTag(tag);
-      }
+      addTagsToNote(note, tags);
       await note.save();
     }
   });
 
   const parentInfo = targetItemKey ? ` under item "${targetItemKey}"` : "";
   return `Note created successfully!\nNote key: ${note.key}${parentInfo}${tags ? `\nTags: ${tags}` : ""}`;
+}
+
+// ==================== append_to_note ====================
+
+/**
+ * 执行 append_to_note - 追加内容到已有笔记，或当前条目的子笔记
+ */
+export async function executeAppendToNote(
+  args: AppendToNoteArgs,
+  currentItemKey: string | null,
+): Promise<string> {
+  const { content, format = "plain", noteKey, tags } = args;
+  const targetItemKey = args.itemKey ?? currentItemKey;
+
+  if (!content || content.trim() === "") {
+    return `Error: Note content is required.`;
+  }
+
+  let note: Zotero.Item | null = null;
+  let created = false;
+  let parentInfo = "";
+
+  if (noteKey) {
+    const noteItem = getItemByKey(noteKey);
+    if (!noteItem || !noteItem.isNote?.()) {
+      return `Error: Note with key "${noteKey}" not found.`;
+    }
+    note = noteItem;
+    parentInfo = ` existing note "${noteKey}"`;
+  } else {
+    if (!targetItemKey) {
+      return `Error: append_to_note requires noteKey or itemKey/current item context.`;
+    }
+
+    const parentItem = resolveParentItemForNote(targetItemKey);
+    if (typeof parentItem === "string") {
+      return parentItem;
+    }
+
+    note = findDedicatedPaperChatNote(parentItem);
+
+    if (!note) {
+      note = new Zotero.Item("note");
+      note.libraryID = parentItem.libraryID;
+      note.parentID = parentItem.id;
+      note.setNote(`<h1>${escapeHtml(PAPERCHAT_NOTES_TITLE)}</h1>`);
+      created = true;
+    }
+    parentInfo = ` under item "${targetItemKey}"`;
+  }
+
+  const currentHtml = note.getNote?.() || "";
+  const appendHtml = noteContentToHtml(content, format);
+  const separator = currentHtml.trim() ? "\n<hr/>\n" : "";
+  note.setNote(`${currentHtml}${separator}${appendHtml}`);
+
+  await Zotero.DB.executeTransaction(async () => {
+    await note!.save();
+    if (created && tags) {
+      addTagsToNote(note!, tags);
+      await note!.save();
+    }
+  });
+
+  return `Note appended successfully!\nNote key: ${note.key}${parentInfo}\nCreated new note: ${created ? "yes" : "no"}${created && tags ? `\nTags: ${tags}` : ""}`;
 }
 
 // ==================== batch_update_tags ====================
@@ -912,11 +1038,10 @@ export async function executeAddItem(args: AddItemArgs): Promise<string> {
       const title = getItemTitleSmart(item);
       const creators = item.getCreators();
       const authors = creators
-        .map(
-          (c: { firstName?: string; lastName?: string; name?: string }) =>
-            c.lastName
-              ? `${c.lastName}${c.firstName ? ", " + c.firstName : ""}`
-              : c.name || "",
+        .map((c: { firstName?: string; lastName?: string; name?: string }) =>
+          c.lastName
+            ? `${c.lastName}${c.firstName ? ", " + c.firstName : ""}`
+            : c.name || "",
         )
         .filter(Boolean);
       const year = item.getField("year") || "";

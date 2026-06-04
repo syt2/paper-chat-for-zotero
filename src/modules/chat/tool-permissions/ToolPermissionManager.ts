@@ -172,6 +172,11 @@ const TOOL_PERMISSION_DESCRIPTORS: Record<
     "write",
     "Create a new Zotero note.",
   ),
+  append_to_note: createDescriptor(
+    "append_to_note",
+    "write",
+    "Append content to a Zotero note.",
+  ),
   batch_update_tags: createDescriptor(
     "batch_update_tags",
     "write",

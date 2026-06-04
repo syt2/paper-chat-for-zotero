@@ -21,9 +21,7 @@ function truncate(text: string, maxLength: number): string {
 }
 
 function isTerminalStepStatus(status: ExecutionPlanStepStatus): boolean {
-  return (
-    status === "completed" || status === "failed" || status === "denied"
-  );
+  return status === "completed" || status === "failed" || status === "denied";
 }
 
 function isRecoveryStep(stepId: string | undefined): boolean {
@@ -61,6 +59,7 @@ function getToolIntentTitle(toolName: string): string {
     case "web_search":
       return "Check information outside Zotero";
     case "create_note":
+    case "append_to_note":
       return "Write findings to a Zotero note";
     case "batch_update_tags":
       return "Update Zotero tags";
@@ -85,8 +84,12 @@ function summarizeRecoveryResult(result: ToolExecutionResult): string {
 }
 
 function getRecoveryStepTitle(results: ToolExecutionResult[]): string {
-  const deniedCount = results.filter((result) => result.status === "denied").length;
-  const failedCount = results.filter((result) => result.status === "failed").length;
+  const deniedCount = results.filter(
+    (result) => result.status === "denied",
+  ).length;
+  const failedCount = results.filter(
+    (result) => result.status === "failed",
+  ).length;
 
   if (deniedCount > 0 && failedCount > 0) {
     return "Revise plan after blocked or failed tool calls";
@@ -107,7 +110,10 @@ export class ExecutionPlanManager {
     return {
       id: `plan-${now}`,
       sourceMessageId: lastUserMessage?.id,
-      summary: truncate(lastUserMessage?.content || "Handle current user request", 120),
+      summary: truncate(
+        lastUserMessage?.content || "Handle current user request",
+        120,
+      ),
       status: "in_progress",
       steps: [],
       createdAt: now,
@@ -115,12 +121,18 @@ export class ExecutionPlanManager {
     };
   }
 
-  startPlan(session: ChatSession, currentMessages: ChatMessage[]): ExecutionPlan {
+  startPlan(
+    session: ChatSession,
+    currentMessages: ChatMessage[],
+  ): ExecutionPlan {
     session.executionPlan = this.createInitialPlan(currentMessages);
     return session.executionPlan;
   }
 
-  ensurePlan(session: ChatSession, currentMessages: ChatMessage[]): ExecutionPlan {
+  ensurePlan(
+    session: ChatSession,
+    currentMessages: ChatMessage[],
+  ): ExecutionPlan {
     if (!session.executionPlan) {
       session.executionPlan = this.createInitialPlan(currentMessages);
     }
@@ -169,8 +181,7 @@ export class ExecutionPlanManager {
       plan.steps.push(newStep);
     }
 
-    plan.activeStepId =
-      status === "in_progress" ? toolCallId : undefined;
+    plan.activeStepId = status === "in_progress" ? toolCallId : undefined;
     plan.updatedAt = now;
     plan.status = "in_progress";
 
@@ -192,7 +203,9 @@ export class ExecutionPlanManager {
 
     const now = Date.now();
     const detail = truncate(
-      affectedResults.map((result) => summarizeRecoveryResult(result)).join(" | "),
+      affectedResults
+        .map((result) => summarizeRecoveryResult(result))
+        .join(" | "),
       220,
     );
 

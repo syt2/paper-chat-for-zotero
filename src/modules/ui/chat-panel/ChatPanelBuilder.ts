@@ -4,6 +4,7 @@
 
 import { config } from "../../../../package.json";
 import { getString } from "../../../utils/locale";
+import { getPref } from "../../../utils/prefs";
 import type { ThemeColors } from "./types";
 import { HTML_NS } from "./types";
 
@@ -530,6 +531,23 @@ export function createChatContainer(
   toolbarButtons.appendChild(newChatBtn);
   toolbarButtons.appendChild(uploadFileBtn);
   toolbarButtons.appendChild(historyBtn);
+  if (getPref("debugContextExportEnabled") === true) {
+    // Internal debug-only export button. The pref defaults to false and is not exposed in settings.
+    const debugContextBtn = createElement(doc, "button", btnStyle, {
+      id: "chat-debug-context-btn",
+      title: getString("chat-debug-context-export"),
+    });
+    debugContextBtn.textContent = "CTX";
+    Object.assign(debugContextBtn.style, {
+      minWidth: "32px",
+      paddingLeft: "7px",
+      paddingRight: "7px",
+      fontSize: "11px",
+      fontWeight: "700",
+      lineHeight: "16px",
+    });
+    toolbarButtons.appendChild(debugContextBtn);
+  }
 
   toolbar.appendChild(toolbarButtons);
 

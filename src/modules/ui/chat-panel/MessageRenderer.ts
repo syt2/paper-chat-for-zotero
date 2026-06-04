@@ -16,6 +16,7 @@ import type { ThemeColors } from "./types";
 import { HTML_NS } from "./types";
 import {
   formatMarkdownForMessageCopy,
+  type MarkdownRenderOptions,
   renderMarkdownToElement,
 } from "./MarkdownRenderer";
 
@@ -244,6 +245,10 @@ interface ExecutionBannerState {
   approvalRequest?: ToolApprovalState["pendingRequests"][number];
 }
 
+export interface MessageRenderOptions {
+  markdown?: MarkdownRenderOptions;
+}
+
 type ExecutionInsetPanelElement = HTMLElement & {
   __executionInsetResizeObserver?: ResizeObserver;
 };
@@ -430,6 +435,7 @@ export function createMessageElement(
   showReroll: boolean = false,
   onReroll?: () => void | Promise<void>,
   onRerollError?: (error: Error) => void,
+  renderOptions: MessageRenderOptions = {},
 ): HTMLElement {
   // Handle system notices specially
   if (msg.isSystemNotice) {
@@ -534,7 +540,12 @@ export function createMessageElement(
       content.textContent = msg.content;
       ensureStreamingTypingIndicator(content, theme);
     } else {
-      renderMarkdownToElement(content, msg.content, msg.id);
+      renderMarkdownToElement(
+        content,
+        msg.content,
+        msg.id,
+        renderOptions.markdown,
+      );
     }
   }
 
@@ -872,6 +883,7 @@ export function renderMessages(
   retryableErrorMessageId?: string,
   onReroll?: () => void | Promise<void>,
   onRerollError?: (error: Error) => void,
+  renderOptions: MessageRenderOptions = {},
 ): void {
   const doc = chatHistory.ownerDocument;
   if (!doc) return;
@@ -914,6 +926,7 @@ export function renderMessages(
         msg.role === "error" && retryableErrorMessageId === msg.id,
         onReroll,
         onRerollError,
+        renderOptions,
       ),
     );
   }

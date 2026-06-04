@@ -48,6 +48,7 @@ import type {
   SearchByTagArgs,
   GetRecentArgs,
   SearchNotesArgs,
+  AppendToNoteArgs,
   CreateNoteArgs,
   BatchUpdateTagsArgs,
   AddItemArgs,
@@ -88,6 +89,7 @@ import {
   executeGetRecent,
   executeSearchNotes,
   executeCreateNote,
+  executeAppendToNote,
   executeBatchUpdateTags,
   executeAddItem,
 } from "./libraryExecutors";
@@ -660,11 +662,53 @@ export class PdfToolManager {
               content: {
                 type: "string",
                 description:
-                  "The note content. Can be plain text or HTML. Required.",
+                  "The note content. Required. Interpreted as plain text unless format is explicitly html.",
+              },
+              format: {
+                type: "string",
+                enum: ["plain", "html"],
+                description:
+                  "Content format. Defaults to plain, which escapes HTML. Use html only when content is trusted Zotero note HTML.",
               },
               tags: {
                 type: "string",
                 description: "Comma-separated list of tags to add. Optional.",
+              },
+            },
+            required: ["content"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "append_to_note",
+          description:
+            "Append content to an existing Zotero note, or to the dedicated PaperChat Notes child note of the current/specified item. If that dedicated child note does not exist, create it and append the content. Use this when the user asks to write, save, or add findings to a note.",
+          parameters: {
+            type: "object",
+            properties: {
+              ...itemKeyProp,
+              noteKey: {
+                type: "string",
+                description:
+                  "Optional Zotero note key. If provided, append to this exact note.",
+              },
+              content: {
+                type: "string",
+                description:
+                  "The content to append. Required. Interpreted as plain text unless format is explicitly html.",
+              },
+              format: {
+                type: "string",
+                enum: ["plain", "html"],
+                description:
+                  "Content format. Defaults to plain, which escapes HTML. Use html only when content is trusted Zotero note HTML.",
+              },
+              tags: {
+                type: "string",
+                description:
+                  "Comma-separated tags to add only if a new note is created. Optional.",
               },
             },
             required: ["content"],
@@ -1096,6 +1140,14 @@ export class PdfToolManager {
     );
   }
 
+  private isAppendToNoteArgs(args: unknown): args is AppendToNoteArgs {
+    return (
+      typeof args === "object" &&
+      args !== null &&
+      typeof (args as AppendToNoteArgs).content === "string"
+    );
+  }
+
   private isBatchUpdateTagsArgs(args: unknown): args is BatchUpdateTagsArgs {
     return (
       typeof args === "object" &&
@@ -1250,6 +1302,13 @@ export class PdfToolManager {
           return "Error: Invalid arguments for create_note. Required: content (string)";
         }
         return executeCreateNote(args, this.currentItemKey);
+      }
+
+      case "append_to_note": {
+        if (!this.isAppendToNoteArgs(args)) {
+          return "Error: Invalid arguments for append_to_note. Required: content (string)";
+        }
+        return executeAppendToNote(args, this.currentItemKey);
       }
 
       case "batch_update_tags": {

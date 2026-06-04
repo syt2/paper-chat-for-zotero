@@ -1,6 +1,9 @@
 import type { ChatMessage } from "../../../types/chat";
 import type { ToolExecutionResult } from "../../../types/tool";
-import type { ToolErrorCategory, ParsedToolError } from "../tool-errors/ToolErrorFormatter";
+import type {
+  ToolErrorCategory,
+  ParsedToolError,
+} from "../tool-errors/ToolErrorFormatter";
 import { parseToolError } from "../tool-errors/ToolErrorFormatter";
 
 export interface ToolRecoveryDirective {
@@ -48,7 +51,9 @@ export function summarizeRecoveryDirectives(
   limit: number = 3,
 ): string[] {
   return results
-    .filter((result) => result.status === "failed" || result.status === "denied")
+    .filter(
+      (result) => result.status === "failed" || result.status === "denied",
+    )
     .slice(-limit)
     .map((result) => {
       const directive = getRecoveryDirective(result);
@@ -60,7 +65,9 @@ export function summarizeRecoveryDirectives(
     });
 }
 
-export function formatRecoveryNotice(results: ToolExecutionResult[]): string | null {
+export function formatRecoveryNotice(
+  results: ToolExecutionResult[],
+): string | null {
   const affectedResults = results.filter(
     (result) => result.status === "failed" || result.status === "denied",
   );
@@ -68,7 +75,9 @@ export function formatRecoveryNotice(results: ToolExecutionResult[]): string | n
     return null;
   }
 
-  const directives = affectedResults.map((result) => getRecoveryDirective(result));
+  const directives = affectedResults.map((result) =>
+    getRecoveryDirective(result),
+  );
   const groupedInstructions = dedupeStrings(
     directives.map((directive) => directive.planningInstruction),
   );
@@ -306,7 +315,10 @@ function getRecommendedTools(
     case "unavailable":
       return toolName === "web_search"
         ? ["search_items", "search_notes", "list_all_items"]
-        : dedupeStrings([...getReadOnlyNeighborTools(toolName), "list_all_items"]);
+        : dedupeStrings([
+            ...getReadOnlyNeighborTools(toolName),
+            "list_all_items",
+          ]);
     case "unknown_tool":
       return ["search_items", "get_item_metadata", "list_all_items"];
     case "execution_failed":
@@ -339,6 +351,7 @@ function getReaderIndependentFallbacks(toolName: string): string[] {
 function getReadOnlyNeighborTools(toolName: string): string[] {
   switch (toolName) {
     case "create_note":
+    case "append_to_note":
       return ["get_item_metadata", "get_item_notes", "get_note_content"];
     case "batch_update_tags":
       return ["get_tags", "search_by_tag", "search_items"];

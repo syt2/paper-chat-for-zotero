@@ -245,6 +245,14 @@ const sourceGroupStyles = {
   },
 };
 
+export interface MarkdownRenderOptions {
+  blockquoteAction?: {
+    label: string;
+    title: string;
+    onClick: (quoteText: string) => void | Promise<void>;
+  };
+}
+
 /**
  * Unescape XML entities back to original characters
  * This reverses the escaping done in ChatManager.formatToolCallCard
@@ -578,12 +586,13 @@ function renderMarkdownFragment(
   doc: Document,
   parent: HTMLElement,
   content: string,
+  options: MarkdownRenderOptions = {},
 ): void {
   const normalized = content.trim();
   if (!normalized) return;
 
   const tokens = md.parse(preprocessMathDelimiters(normalized), {});
-  const builtContent = buildDOMFromTokens(doc, tokens);
+  const builtContent = buildDOMFromTokens(doc, tokens, options);
   while (builtContent.firstChild) {
     parent.appendChild(builtContent.firstChild);
   }
@@ -705,6 +714,7 @@ function renderSourceGroupCard(
   doc: Document,
   parent: HTMLElement,
   group: Extract<SourceGroupFragment, { kind: "source-group" }>,
+  options: MarkdownRenderOptions = {},
 ): void {
   const dark = isDarkMode();
   const colors = dark ? sourceGroupStyles.dark : sourceGroupStyles.light;
@@ -751,7 +761,7 @@ function renderSourceGroupCard(
   const body = doc.createElementNS(HTML_NS, "div") as HTMLElement;
   body.style.padding = "10px 12px";
   body.style.color = colors.bodyText;
-  renderMarkdownFragment(doc, body, group.content);
+  renderMarkdownFragment(doc, body, group.content, options);
   card.appendChild(body);
 
   parent.appendChild(card);
@@ -761,6 +771,7 @@ function renderSourceGroupBlocks(
   doc: Document,
   parent: HTMLElement,
   content: string,
+  options: MarkdownRenderOptions = {},
 ): boolean {
   const fragments = extractSourceGroupFragments(content);
   const hasSourceGroups = fragments.some(
@@ -773,11 +784,11 @@ function renderSourceGroupBlocks(
 
   for (const fragment of fragments) {
     if (fragment.kind === "markdown") {
-      renderMarkdownFragment(doc, parent, fragment.content);
+      renderMarkdownFragment(doc, parent, fragment.content, options);
       continue;
     }
 
-    renderSourceGroupCard(doc, parent, fragment);
+    renderSourceGroupCard(doc, parent, fragment, options);
   }
 
   return true;
@@ -985,6 +996,7 @@ export function renderMarkdownToElement(
   element: HTMLElement,
   markdownContent: string,
   messageId?: string,
+  options: MarkdownRenderOptions = {},
 ): void {
   element.textContent = "";
   const doc = element.ownerDocument;
@@ -1002,11 +1014,69 @@ export function renderMarkdownToElement(
     return;
   }
 
-  if (renderSourceGroupBlocks(doc, element, remainingContent)) {
+  if (renderSourceGroupBlocks(doc, element, remainingContent, options)) {
     return;
   }
 
-  renderMarkdownFragment(doc, element, remainingContent);
+  renderMarkdownFragment(doc, element, remainingContent, options);
+}
+
+function appendBlockquoteAction(
+  doc: Document,
+  blockquote: HTMLElement,
+  action: NonNullable<MarkdownRenderOptions["blockquoteAction"]>,
+): void {
+  const quoteText = getBlockquoteActionText(blockquote).trim();
+  if (!quoteText) {
+    return;
+  }
+
+  const dark = isDarkMode();
+  const button = doc.createElementNS(HTML_NS, "button") as HTMLElement;
+  button.setAttribute("type", "button");
+  button.setAttribute("title", action.title);
+  button.setAttribute("data-blockquote-action", "true");
+  button.textContent = action.label;
+  Object.assign(button.style, {
+    display: "inline-flex",
+    alignItems: "center",
+    marginTop: "6px",
+    padding: "2px 7px",
+    border: `1px solid ${dark ? "#4b5563" : "#d0d7de"}`,
+    borderRadius: "6px",
+    background: dark ? "#21262d" : "#f6f8fa",
+    color: dark ? "#c9d1d9" : "#57606a",
+    cursor: "pointer",
+    fontSize: "11px",
+    lineHeight: "1.4",
+  });
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void action.onClick(quoteText);
+  });
+  blockquote.appendChild(button);
+}
+
+function getBlockquoteActionText(node: Node): string {
+  if (
+    node.nodeType === node.ELEMENT_NODE &&
+    (node as Element).getAttribute("data-blockquote-action") === "true"
+  ) {
+    return "";
+  }
+
+  if (node.nodeType === node.TEXT_NODE) {
+    return node.textContent || "";
+  }
+
+  let text = "";
+  for (const child of Array.from(node.childNodes)) {
+    if (child) {
+      text += getBlockquoteActionText(child);
+    }
+  }
+  return text;
 }
 
 /**
@@ -1015,6 +1085,7 @@ export function renderMarkdownToElement(
 export function buildDOMFromTokens(
   doc: Document,
   tokens: ReturnType<typeof md.parse>,
+  options: MarkdownRenderOptions = {},
 ): HTMLElement {
   const container = doc.createElementNS(HTML_NS, "div") as HTMLElement;
   const stack: HTMLElement[] = [container];
@@ -1084,9 +1155,13 @@ export function buildDOMFromTokens(
         stack.push(bq);
         break;
       }
-      case "blockquote_close":
-        stack.pop();
+      case "blockquote_close": {
+        const blockquote = stack.pop();
+        if (blockquote && options.blockquoteAction) {
+          appendBlockquoteAction(doc, blockquote, options.blockquoteAction);
+        }
         break;
+      }
 
       case "code_block":
       case "fence": {

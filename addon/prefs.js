@@ -27,6 +27,7 @@ pref("uploadRawPdfOnFailure", false);
 
 // UI Settings
 pref("panelMode", "sidebar");
+pref("debugContextExportEnabled", false);
 
 // Guide Settings
 pref("firstInstalledVersion", "");

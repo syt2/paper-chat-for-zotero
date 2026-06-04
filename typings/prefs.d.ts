@@ -25,6 +25,7 @@ declare namespace _ZoteroTypes {
       "paperchatSuppressHighTierWarning": boolean;
       "uploadRawPdfOnFailure": boolean;
       "panelMode": string;
+      "debugContextExportEnabled": boolean;
       "firstInstalledVersion": string;
       "guideStatus": number;
       "contextMaxRecentPairs": number;

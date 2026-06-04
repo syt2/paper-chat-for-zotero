@@ -43,6 +43,7 @@ import {
   renderMarkdownToElement,
   stripIncompleteTrailingToolCall,
 } from "./MarkdownRenderer";
+import { navigateToPdfQuote } from "./PdfQuoteNavigator";
 import {
   setupEventHandlers,
   updateAttachmentsPreviewDisplay,
@@ -1673,6 +1674,20 @@ function createContext(container: HTMLElement): ChatPanelContext {
             },
             (error) => {
               context.appendError(error.message);
+            },
+            {
+              markdown: {
+                blockquoteAction: {
+                  label: getString("chat-jump-to-quote"),
+                  title: getString("chat-jump-to-quote-title"),
+                  onClick: async (quoteText) => {
+                    await navigateToPdfQuote(
+                      quoteText,
+                      context.getCurrentItem(),
+                    );
+                  },
+                },
+              },
             },
           );
         }

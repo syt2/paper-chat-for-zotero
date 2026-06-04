@@ -81,6 +81,7 @@ import {
   repairPaperChatSessionAfterHardFailureWithRollback,
   rerollPaperChatFailureAndReplay,
 } from "./paperchat-retry-orchestration";
+import { saveDebugContextSnapshot } from "./DebugContextExporter";
 import { MemoryManager } from "./memory/MemoryManager";
 import { SessionTitleService } from "./SessionTitleService";
 import {
@@ -792,6 +793,137 @@ export class ChatManager {
    */
   getActiveSession(): ChatSession | null {
     return this.currentSession;
+  }
+
+  async exportCurrentDebugContext(item?: Zotero.Item | null): Promise<string> {
+    const session = this.currentSession;
+    if (!session) {
+      throw new Error("No active chat session to export.");
+    }
+
+    const provider = this.getActiveProvider();
+    const supportsToolCalling = provider
+      ? providerSupportsToolCalling(provider)
+      : false;
+    const providerConfig = provider?.config;
+    const providerModel =
+      providerConfig?.type === "paperchat"
+        ? providerConfig.resolvedModelOverride || providerConfig.defaultModel
+        : providerConfig?.defaultModel;
+    const providerSystemPrompt =
+      providerConfig && "systemPrompt" in providerConfig
+        ? providerConfig.systemPrompt
+        : undefined;
+
+    const contextManager = getContextManager();
+    const { messages: filteredMessages } =
+      contextManager.filterMessages(session);
+    const messagesForApi = filteredMessages.filter(
+      (message) =>
+        !(
+          message.role === "assistant" &&
+          message.streamingState === "in_progress" &&
+          !message.content
+        ),
+    );
+
+    const withProviderSystemPrompt = (
+      messages: ChatMessage[],
+    ): ChatMessage[] => {
+      if (!providerSystemPrompt) {
+        return messages;
+      }
+      return [
+        {
+          id: "provider-system-prompt",
+          role: "system",
+          content: providerSystemPrompt,
+          timestamp: Date.now(),
+        },
+        ...messages,
+      ];
+    };
+
+    let messagesWithContext = withProviderSystemPrompt(messagesForApi);
+    let paperContextPrompt: string | undefined;
+    let runtimeContextPrompt: string | undefined;
+    let toolDefinitions: ToolDefinition[] | undefined;
+
+    if (supportsToolCalling) {
+      const hasCurrentItem = !!item?.key && !!item.id;
+      const pdfToolManager = getPdfToolManager();
+      toolDefinitions = pdfToolManager
+        .getToolDefinitions(hasCurrentItem)
+        .slice()
+        .sort((left, right) =>
+          left.function.name.localeCompare(right.function.name),
+        );
+      const paperStructure = hasCurrentItem
+        ? await pdfToolManager.extractAndParsePaper(item.key)
+        : undefined;
+      const lastUserMessage = messagesForApi
+        .filter((message) => message.role === "user")
+        .at(-1);
+      const memoryContext = await this.memoryManager.buildPromptContext(
+        lastUserMessage?.content,
+      );
+
+      paperContextPrompt = this.buildToolCallingStableSystemPrompt({
+        paperStructure,
+        hasCurrentItem,
+        item: hasCurrentItem ? item : undefined,
+      });
+      runtimeContextPrompt = this.buildToolCallingRuntimeSystemPrompt({
+        memoryContext,
+        sendingSession: session,
+        runtimeState: {
+          maxIterations: normalizeAgentMaxPlanningIterations(
+            getPref("agentMaxPlanningIterations") as number | undefined,
+          ),
+          forceFinalAnswer: false,
+        },
+      });
+
+      messagesWithContext = withProviderSystemPrompt([
+        {
+          id: "paper-context",
+          role: "system",
+          content: paperContextPrompt,
+          timestamp: Date.now(),
+        },
+        ...messagesForApi,
+        {
+          id: "cache-checkpoint",
+          role: "system",
+          content:
+            "Prompt cache checkpoint. This is not user content or an instruction.",
+          timestamp: Date.now(),
+        },
+        {
+          id: "runtime-context",
+          role: "system",
+          content: runtimeContextPrompt,
+          timestamp: Date.now(),
+        },
+      ]);
+    }
+
+    return saveDebugContextSnapshot({
+      session,
+      provider: {
+        id: providerConfig?.id,
+        type: providerConfig?.type,
+        model: providerModel,
+        supportsToolCalling,
+      },
+      currentItem: item,
+      filteredMessages: messagesForApi,
+      messagesWithContext,
+      providerSystemPrompt,
+      paperContextPrompt,
+      runtimeContextPrompt,
+      toolDefinitions,
+    });
   }
 
   listPendingToolApprovals(sessionId?: string): ToolApprovalRequest[] {

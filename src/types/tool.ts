@@ -209,6 +209,7 @@ export type PaperToolName =
   | "get_recent"
   | "search_notes"
   | "create_note"
+  | "append_to_note"
   | "batch_update_tags"
   | "add_item"
   // Memory tool
@@ -395,8 +396,17 @@ export interface SearchNotesArgs {
 
 // 创建笔记的参数
 export interface CreateNoteArgs extends BaseToolArgs {
-  content: string; // 笔记内容 (支持 HTML)
+  content: string; // 笔记内容
+  format?: "plain" | "html"; // 默认 plain；只有 html 时原样写入
   tags?: string; // 逗号分隔的标签
+}
+
+// 追加到笔记的参数
+export interface AppendToNoteArgs extends BaseToolArgs {
+  content: string; // 要追加的内容
+  format?: "plain" | "html"; // 默认 plain；只有 html 时原样写入
+  noteKey?: string; // 可选，指定已有 Zotero 笔记 key
+  tags?: string; // 新建笔记时添加的逗号分隔标签
 }
 
 // 批量更新标签的参数

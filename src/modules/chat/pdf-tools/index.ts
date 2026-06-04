@@ -47,6 +47,7 @@ export {
   executeGetRecent,
   executeSearchNotes,
   executeCreateNote,
+  executeAppendToNote,
   executeBatchUpdateTags,
 } from "./libraryExecutors";
 

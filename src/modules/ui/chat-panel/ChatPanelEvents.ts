@@ -557,6 +557,9 @@ export function setupEventHandlers(context: ChatPanelContext): void {
   const historyBtn = container.querySelector(
     "#chat-history-btn",
   ) as HTMLButtonElement;
+  const debugContextBtn = container.querySelector(
+    "#chat-debug-context-btn",
+  ) as HTMLButtonElement;
   const historyDropdown = container.querySelector(
     "#chat-history-dropdown",
   ) as HTMLElement;
@@ -791,6 +794,36 @@ export function setupEventHandlers(context: ChatPanelContext): void {
     updateModelSelectorDisplay(container);
 
     ztoolkit.log("New session created:", newSession.id);
+  });
+
+  debugContextBtn?.addEventListener("click", async () => {
+    const originalText = debugContextBtn.textContent || "CTX";
+    debugContextBtn.disabled = true;
+    debugContextBtn.textContent = "...";
+    let resetImmediately = true;
+    try {
+      const filePath = await chatManager.exportCurrentDebugContext(
+        context.getCurrentItem(),
+      );
+      copyToClipboard(filePath);
+      debugContextBtn.textContent = "\u2713";
+      debugContextBtn.title = getString("chat-debug-context-exported");
+      resetImmediately = false;
+      setTimeout(() => {
+        debugContextBtn.textContent = originalText;
+        debugContextBtn.title = getString("chat-debug-context-export");
+        debugContextBtn.disabled = false;
+      }, 1600);
+    } catch (error) {
+      context.appendError(
+        error instanceof Error ? error.message : String(error),
+      );
+      debugContextBtn.textContent = originalText;
+    } finally {
+      if (resetImmediately) {
+        debugContextBtn.disabled = false;
+      }
+    }
   });
 
   // Upload file button - supports both images and text files

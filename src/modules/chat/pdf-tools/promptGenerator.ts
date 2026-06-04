@@ -89,6 +89,7 @@ ${webSearchLine}
 - get_recent: List recently added items
 - search_notes: Search across note contents
 - create_note: Create a Zotero note when approved by the user or current approval policy
+- append_to_note: Append findings to an existing noteKey or the dedicated "PaperChat Notes" child note when approved; content defaults to plain text, use format=html only for trusted Zotero note HTML
 - batch_update_tags: Update tags on multiple items when approved by the user or current approval policy
 - add_item: Add a new Zotero item when approved by the user or current approval policy
 
@@ -184,6 +185,7 @@ ${webSearchLine}
 - get_recent: List recently added items
 - search_notes: Search across note contents
 - create_note: Create a Zotero note when approved by the user or current approval policy
+- append_to_note: Append findings to an existing noteKey or the dedicated "PaperChat Notes" child note when approved; content defaults to plain text, use format=html only for trusted Zotero note HTML
 - batch_update_tags: Update tags on multiple items when approved by the user or current approval policy
 - add_item: Add a new Zotero item when approved by the user or current approval policy
 

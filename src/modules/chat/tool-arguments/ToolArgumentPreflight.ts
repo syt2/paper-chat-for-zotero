@@ -128,6 +128,7 @@ function applyToolSpecificRepairs(
 ): void {
   switch (toolName) {
     case "create_note":
+    case "append_to_note":
       moveIfMissing(args, "content", ["text", "body", "note"]);
       break;
     case "save_memory":
