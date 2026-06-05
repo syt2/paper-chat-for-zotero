@@ -28,6 +28,9 @@ const REDEEM_CODE_INFO_PATH = "/ext/paperchat/redeem-code-info";
 const PURCHASE_POLL_INTERVAL_MS = 3000;
 const PURCHASE_POLL_MAX_ATTEMPTS = 200;
 const PURCHASE_POLL_FAILURE_NOTICE_ATTEMPTS = 3;
+type PaperChatProductCategory = "quota" | "subscription";
+
+const PURCHASE_DIALOG_MAX_WIDTH = "446px";
 
 interface RedeemCodeInfo {
   qrImageUrl: string | null;
@@ -294,6 +297,9 @@ export function updateUserDisplay(
   const getRedeemCodeBtn = doc.getElementById(
     "pref-get-redeem-code-btn",
   ) as HTMLElement | null;
+  const getRedeemCodeRow = doc.getElementById(
+    "pref-get-redeem-code-row",
+  ) as HTMLElement | null;
   const topupAttention = shouldHighlightTopup(authManager);
 
   if (authManager.isLoggedIn()) {
@@ -366,6 +372,9 @@ export function updateUserDisplay(
     if (getRedeemCodeBtn) {
       getRedeemCodeBtn.style.display = "inline-block";
     }
+    if (getRedeemCodeRow) {
+      getRedeemCodeRow.style.display = "";
+    }
   } else {
     if (userStatusEl) {
       userStatusEl.setAttribute("value", getString("user-panel-not-logged-in"));
@@ -395,6 +404,9 @@ export function updateUserDisplay(
     // Hide get redeem code button
     if (getRedeemCodeBtn) {
       getRedeemCodeBtn.style.display = "none";
+    }
+    if (getRedeemCodeRow) {
+      getRedeemCodeRow.style.display = "none";
     }
   }
 
@@ -530,7 +542,7 @@ async function showRedeemCodeDialog(
       flexDirection: "column",
       alignItems: "center",
       padding: "20px",
-      gap: "16px",
+      gap: "14px",
       minWidth: "280px",
     },
     children: showProducts
@@ -568,6 +580,9 @@ async function showRedeemCodeDialog(
     });
 
     const doc = dialogWin.document;
+    if (showProducts) {
+      installProductPurchaseTheme(doc);
+    }
     if (showHtml && redeemInfo.html) {
       const bodyEl = doc.getElementById(
         "redeem-code-info-body",
@@ -619,7 +634,18 @@ async function showRedeemCodeDialog(
 function buildProductPurchaseChildren(
   products: PaperChatProduct[],
 ): TagElementProps[] {
-  const selectedProduct = products[0];
+  const quotaProducts = products.filter(
+    (product) => getProductCategory(product) === "quota",
+  );
+  const subscriptionProducts = products.filter(
+    (product) => getProductCategory(product) === "subscription",
+  );
+  const initialCategory: PaperChatProductCategory =
+    quotaProducts.length > 0 ? "quota" : "subscription";
+  const selectedProduct =
+    initialCategory === "quota"
+      ? quotaProducts[0]
+      : subscriptionProducts[0] || products[0];
   const children: TagElementProps[] = [
     {
       tag: "div",
@@ -629,9 +655,9 @@ function buildProductPurchaseChildren(
       },
       styles: {
         minHeight: "18px",
-        maxWidth: "430px",
+        maxWidth: PURCHASE_DIALOG_MAX_WIDTH,
         fontSize: "13px",
-        color: "#555",
+        color: "var(--paperchat-purchase-muted)",
         lineHeight: "1.5",
         textAlign: "center",
       },
@@ -641,7 +667,7 @@ function buildProductPurchaseChildren(
       id: "paperchat-product-picker",
       styles: {
         width: "100%",
-        maxWidth: "430px",
+        maxWidth: PURCHASE_DIALOG_MAX_WIDTH,
         borderRadius: "8px",
         boxSizing: "border-box",
         display: "flex",
@@ -651,24 +677,59 @@ function buildProductPurchaseChildren(
       children: [
         {
           tag: "div",
-          properties: {
-            textContent: getString("pref-paperchat-select-plan"),
+          id: "paperchat-product-tabs",
+          attributes: {
+            role: "tablist",
           },
-          styles: {
-            fontSize: "13px",
-            fontWeight: "700",
-            color: "#555",
-          },
-        },
-        {
-          tag: "div",
           styles: {
             display: "grid",
             gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-            gap: "8px",
+            gap: "6px",
+            padding: "4px",
+            border: "1px solid var(--paperchat-purchase-border)",
+            borderRadius: "8px",
+            background: "var(--paperchat-purchase-tab-bg)",
+            boxSizing: "border-box",
           },
-          children: products.map((product, index) =>
-            buildProductOption(product, index === 0),
+          children: [
+            buildProductTab(
+              "quota",
+              "Token 额度",
+              quotaProducts.length,
+              initialCategory === "quota",
+            ),
+            buildProductTab(
+              "subscription",
+              "订阅计划",
+              subscriptionProducts.length,
+              initialCategory === "subscription",
+            ),
+          ],
+        },
+        {
+          tag: "div",
+          id: "paperchat-product-grid-quota",
+          styles: {
+            display: initialCategory === "quota" ? "grid" : "none",
+            gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+            gap: "8px",
+            alignItems: "stretch",
+          },
+          children: quotaProducts.map((product) =>
+            buildProductOption(product, product.sku === selectedProduct?.sku),
+          ),
+        },
+        {
+          tag: "div",
+          id: "paperchat-product-grid-subscription",
+          styles: {
+            display: initialCategory === "subscription" ? "grid" : "none",
+            gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+            gap: "8px",
+            alignItems: "stretch",
+          },
+          children: subscriptionProducts.map((product) =>
+            buildProductOption(product, product.sku === selectedProduct?.sku),
           ),
         },
         {
@@ -679,10 +740,10 @@ function buildProductPurchaseChildren(
             alignItems: "center",
             justifyContent: "space-between",
             gap: "14px",
-            border: "1px solid #dbe3f0",
+            border: "1px solid var(--paperchat-purchase-panel-border)",
             borderRadius: "8px",
             padding: "12px",
-            background: "#f8fafc",
+            background: "var(--paperchat-purchase-panel-bg)",
             boxSizing: "border-box",
           },
           children: [
@@ -708,7 +769,7 @@ function buildProductPurchaseChildren(
                     whiteSpace: "nowrap",
                     fontSize: "13px",
                     fontWeight: "700",
-                    color: "#334155",
+                    color: "var(--paperchat-purchase-panel-muted)",
                   },
                 },
                 {
@@ -722,7 +783,7 @@ function buildProductPurchaseChildren(
                   styles: {
                     fontSize: "20px",
                     fontWeight: "800",
-                    color: "#111827",
+                    color: "var(--paperchat-purchase-text)",
                     letterSpacing: "0",
                   },
                 },
@@ -740,8 +801,8 @@ function buildProductPurchaseChildren(
                 minHeight: "38px",
                 padding: "8px 16px",
                 borderRadius: "7px",
-                border: "1px solid #2563eb",
-                background: "#2563eb",
+                border: "1px solid var(--paperchat-purchase-accent)",
+                background: "var(--paperchat-purchase-accent)",
                 color: "#fff",
                 cursor: "pointer",
                 fontSize: "14px",
@@ -755,6 +816,132 @@ function buildProductPurchaseChildren(
   ];
 
   return children;
+}
+
+function installProductPurchaseTheme(doc: Document): void {
+  try {
+    if (doc.getElementById("paperchat-product-purchase-theme")) {
+      return;
+    }
+    const style = doc.createElement("style");
+    style.id = "paperchat-product-purchase-theme";
+    style.textContent = `
+    :root {
+      --paperchat-purchase-bg: #f7f8fa;
+      --paperchat-purchase-text: #111827;
+      --paperchat-purchase-muted: #64748b;
+      --paperchat-purchase-disabled: #94a3b8;
+      --paperchat-purchase-border: #dbe3f0;
+      --paperchat-purchase-panel-bg: #f8fafc;
+      --paperchat-purchase-panel-border: #dbe3f0;
+      --paperchat-purchase-panel-muted: #334155;
+      --paperchat-purchase-tab-bg: #f1f5f9;
+      --paperchat-purchase-tab-text: #475569;
+      --paperchat-purchase-tab-selected-bg: #ffffff;
+      --paperchat-purchase-tab-selected-border: #c7d7fe;
+      --paperchat-purchase-option-bg: #ffffff;
+      --paperchat-purchase-option-border: #d0d7de;
+      --paperchat-purchase-option-selected-bg: #eff6ff;
+      --paperchat-purchase-badge-bg: #e2e8f0;
+      --paperchat-purchase-badge-selected-bg: rgba(37, 99, 235, 0.14);
+      --paperchat-purchase-accent: #2563eb;
+      --paperchat-purchase-accent-strong: #1d4ed8;
+      --paperchat-purchase-shadow: rgba(15, 23, 42, 0.08);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --paperchat-purchase-bg: #161b22;
+        --paperchat-purchase-text: #f3f4f6;
+        --paperchat-purchase-muted: #9ca3af;
+        --paperchat-purchase-disabled: #6b7280;
+        --paperchat-purchase-border: #303947;
+        --paperchat-purchase-panel-bg: #1f2937;
+        --paperchat-purchase-panel-border: #374151;
+        --paperchat-purchase-panel-muted: #cbd5e1;
+        --paperchat-purchase-tab-bg: #111827;
+        --paperchat-purchase-tab-text: #cbd5e1;
+        --paperchat-purchase-tab-selected-bg: #1f2937;
+        --paperchat-purchase-tab-selected-border: #3b82f6;
+        --paperchat-purchase-option-bg: #111827;
+        --paperchat-purchase-option-border: #374151;
+        --paperchat-purchase-option-selected-bg: rgba(37, 99, 235, 0.18);
+        --paperchat-purchase-badge-bg: #374151;
+        --paperchat-purchase-badge-selected-bg: rgba(96, 165, 250, 0.2);
+        --paperchat-purchase-accent: #3b82f6;
+        --paperchat-purchase-accent-strong: #93c5fd;
+        --paperchat-purchase-shadow: rgba(0, 0, 0, 0.3);
+      }
+      #redeem-code-info-body {
+        background: var(--paperchat-purchase-bg);
+        color: var(--paperchat-purchase-text);
+      }
+    }
+  `;
+    (doc.head || doc.documentElement).appendChild(style);
+  } catch (error) {
+    ztoolkit.log("[Preferences] Failed to install purchase theme:", error);
+  }
+}
+
+function buildProductTab(
+  category: PaperChatProductCategory,
+  label: string,
+  count: number,
+  selected: boolean,
+): TagElementProps {
+  const disabled = count === 0;
+  return {
+    tag: "button",
+    id: `paperchat-product-tab-${category}`,
+    attributes: {
+      "aria-selected": selected ? "true" : "false",
+      "data-category": category,
+      role: "tab",
+      type: "button",
+    },
+    properties: {
+      disabled,
+    },
+    styles: getProductTabStyles(selected, disabled),
+    children: [
+      {
+        tag: "span",
+        properties: {
+          textContent: label,
+        },
+        styles: {
+          minWidth: "0",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        },
+      },
+      {
+        tag: "span",
+        properties: {
+          textContent: String(count),
+        },
+        styles: {
+          flex: "0 0 auto",
+          minWidth: "18px",
+          minHeight: "18px",
+          padding: "1px 5px",
+          borderRadius: "999px",
+          background: selected
+            ? "var(--paperchat-purchase-badge-selected-bg)"
+            : "var(--paperchat-purchase-badge-bg)",
+          color: selected
+            ? "var(--paperchat-purchase-accent-strong)"
+            : "var(--paperchat-purchase-muted)",
+          fontSize: "11px",
+          fontWeight: "800",
+          lineHeight: "16px",
+          textAlign: "center",
+          boxSizing: "border-box",
+        },
+      },
+    ],
+  };
 }
 
 function buildProductOption(
@@ -778,12 +965,16 @@ function buildProductOption(
         },
         styles: {
           minWidth: "0",
-          overflow: "hidden",
+          overflow: "visible",
           textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
+          whiteSpace: "normal",
           fontSize: "14px",
           fontWeight: "800",
-          color: selected ? "#1d4ed8" : "#111827",
+          lineHeight: "1.25",
+          color: selected
+            ? "var(--paperchat-purchase-accent-strong)"
+            : "var(--paperchat-purchase-text)",
+          wordBreak: "break-word",
         },
       },
       {
@@ -794,7 +985,10 @@ function buildProductOption(
         styles: {
           fontSize: "12px",
           fontWeight: "700",
-          color: selected ? "#2563eb" : "#64748b",
+          lineHeight: "1.25",
+          color: selected
+            ? "var(--paperchat-purchase-accent)"
+            : "var(--paperchat-purchase-muted)",
         },
       },
     ],
@@ -805,20 +999,58 @@ function getProductOptionStyles(selected: boolean): Record<string, string> {
   return {
     position: "relative",
     minWidth: "0",
-    minHeight: "54px",
-    padding: "8px 10px",
+    minHeight: "66px",
+    padding: "9px 12px 10px",
     borderRadius: "8px",
-    border: selected ? "2px solid #2563eb" : "2px solid #d0d7de",
-    background: selected ? "#eff6ff" : "#fff",
+    border: selected
+      ? "2px solid var(--paperchat-purchase-accent)"
+      : "2px solid var(--paperchat-purchase-option-border)",
+    background: selected
+      ? "var(--paperchat-purchase-option-selected-bg)"
+      : "var(--paperchat-purchase-option-bg)",
     boxSizing: "border-box",
     display: "flex",
     flexDirection: "column",
     alignItems: "flex-start",
     justifyContent: "center",
-    gap: "3px",
+    gap: "5px",
     cursor: "pointer",
     textAlign: "left",
     outline: "none",
+    overflow: "visible",
+  };
+}
+
+function getProductTabStyles(
+  selected: boolean,
+  disabled: boolean,
+): Record<string, string> {
+  return {
+    minWidth: "0",
+    minHeight: "34px",
+    padding: "7px 10px",
+    borderRadius: "6px",
+    border: selected
+      ? "1px solid var(--paperchat-purchase-tab-selected-border)"
+      : "1px solid transparent",
+    background: selected
+      ? "var(--paperchat-purchase-tab-selected-bg)"
+      : "transparent",
+    color: disabled
+      ? "var(--paperchat-purchase-disabled)"
+      : selected
+        ? "var(--paperchat-purchase-accent-strong)"
+        : "var(--paperchat-purchase-tab-text)",
+    boxShadow: selected ? "0 1px 2px var(--paperchat-purchase-shadow)" : "none",
+    cursor: disabled ? "default" : "pointer",
+    fontSize: "13px",
+    fontWeight: "800",
+    lineHeight: "1.2",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "6px",
+    boxSizing: "border-box",
   };
 }
 
@@ -833,11 +1065,58 @@ function applyProductOptionStyles(
   option.setAttribute("aria-pressed", selected ? "true" : "false");
   const [labelEl, priceEl] = Array.from(option.children) as HTMLElement[];
   if (labelEl) {
-    labelEl.style.color = selected ? "#1d4ed8" : "#111827";
+    labelEl.style.color = selected
+      ? "var(--paperchat-purchase-accent-strong)"
+      : "var(--paperchat-purchase-text)";
   }
   if (priceEl) {
-    priceEl.style.color = selected ? "#2563eb" : "#64748b";
+    priceEl.style.color = selected
+      ? "var(--paperchat-purchase-accent)"
+      : "var(--paperchat-purchase-muted)";
   }
+}
+
+function applyProductTabStyles(
+  tab: HTMLElement,
+  selected: boolean,
+  disabled: boolean,
+): void {
+  const styles = getProductTabStyles(selected, disabled);
+  for (const [key, value] of Object.entries(styles)) {
+    tab.style.setProperty(toKebabCase(key), value);
+  }
+  tab.setAttribute("aria-selected", selected ? "true" : "false");
+  const countEl = tab.children[1] as HTMLElement | undefined;
+  if (countEl) {
+    countEl.style.background = selected
+      ? "var(--paperchat-purchase-badge-selected-bg)"
+      : "var(--paperchat-purchase-badge-bg)";
+    countEl.style.color = selected
+      ? "var(--paperchat-purchase-accent-strong)"
+      : "var(--paperchat-purchase-muted)";
+  }
+}
+
+function getProductCategory(
+  product: PaperChatProduct,
+): PaperChatProductCategory {
+  const haystack = [
+    product.sku,
+    product.name,
+    product.description,
+    product.quotaLabel || "",
+  ]
+    .join(" ")
+    .toLowerCase();
+  if (
+    product.sku.startsWith("newapi_subscription_plan_") ||
+    haystack.includes("subscription") ||
+    haystack.includes("订阅") ||
+    /\/\s*(daily|weekly|monthly|yearly|day|week|month|year)\b/.test(haystack)
+  ) {
+    return "subscription";
+  }
+  return "quota";
 }
 
 function formatProductPrice(product: PaperChatProduct): string {
@@ -865,13 +1144,26 @@ function bindProductPurchaseEvents(
   const buyButton = doc.getElementById(
     "paperchat-buy-selected",
   ) as HTMLButtonElement | null;
+  const initialSelectedProduct =
+    products.find((product) => getProductCategory(product) === "quota") ??
+    products.find(
+      (product) => getProductCategory(product) === "subscription",
+    ) ??
+    products[0];
   let pollTimer: number | null = null;
-  let selectedSku = products[0]?.sku ?? "";
+  let selectedSku = initialSelectedProduct?.sku ?? "";
+  let activeCategory: PaperChatProductCategory =
+    initialSelectedProduct &&
+    getProductCategory(initialSelectedProduct) === "quota"
+      ? "quota"
+      : "subscription";
 
   const setStatus = (message: string, isError = false) => {
     if (!statusEl) return;
     statusEl.textContent = message;
-    statusEl.style.color = isError ? prefColors.testError : "#555";
+    statusEl.style.color = isError
+      ? prefColors.testError
+      : "var(--paperchat-purchase-muted)";
   };
 
   const stopPolling = () => {
@@ -889,6 +1181,22 @@ function bindProductPurchaseEvents(
       buyButton.style.opacity = disabled ? "0.6" : "1";
       buyButton.style.cursor = disabled ? "default" : "pointer";
     }
+    for (const category of ["quota", "subscription"] as const) {
+      const tab = doc.getElementById(
+        `paperchat-product-tab-${category}`,
+      ) as HTMLButtonElement | null;
+      if (tab) {
+        const hasProducts = products.some(
+          (product) => getProductCategory(product) === category,
+        );
+        tab.disabled = disabled || !hasProducts;
+        applyProductTabStyles(
+          tab,
+          category === activeCategory,
+          disabled || !hasProducts,
+        );
+      }
+    }
     for (const product of products) {
       const option = doc.getElementById(
         getProductOptionId(product.sku),
@@ -900,8 +1208,41 @@ function bindProductPurchaseEvents(
     }
   };
 
+  const showCategory = (category: PaperChatProductCategory) => {
+    activeCategory = category;
+    const quotaGrid = doc.getElementById(
+      "paperchat-product-grid-quota",
+    ) as HTMLElement | null;
+    const subscriptionGrid = doc.getElementById(
+      "paperchat-product-grid-subscription",
+    ) as HTMLElement | null;
+    if (quotaGrid) {
+      quotaGrid.style.display = category === "quota" ? "grid" : "none";
+    }
+    if (subscriptionGrid) {
+      subscriptionGrid.style.display =
+        category === "subscription" ? "grid" : "none";
+    }
+
+    for (const tabCategory of ["quota", "subscription"] as const) {
+      const tab = doc.getElementById(
+        `paperchat-product-tab-${tabCategory}`,
+      ) as HTMLButtonElement | null;
+      if (tab) {
+        const hasProducts = products.some(
+          (product) => getProductCategory(product) === tabCategory,
+        );
+        applyProductTabStyles(tab, tabCategory === category, !hasProducts);
+      }
+    }
+  };
+
   const selectProduct = (product: PaperChatProduct) => {
     selectedSku = product.sku;
+    const category = getProductCategory(product);
+    if (category !== activeCategory) {
+      showCategory(category);
+    }
     for (const item of products) {
       const option = doc.getElementById(
         getProductOptionId(item.sku),
@@ -918,6 +1259,27 @@ function bindProductPurchaseEvents(
     }
     setStatus("");
   };
+
+  for (const category of ["quota", "subscription"] as const) {
+    const tab = doc.getElementById(
+      `paperchat-product-tab-${category}`,
+    ) as HTMLButtonElement | null;
+    tab?.addEventListener("click", (event: Event) => {
+      event.preventDefault();
+      if (tab.disabled) {
+        return;
+      }
+      showCategory(category);
+      const firstProduct = products.find(
+        (product) => getProductCategory(product) === category,
+      );
+      if (firstProduct) {
+        selectProduct(firstProduct);
+      }
+    });
+  }
+
+  showCategory(activeCategory);
 
   const startPolling = (order: PaperChatPurchaseOrder) => {
     let attempts = 0;
