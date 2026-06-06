@@ -450,9 +450,22 @@ export function bindUserAuthEvents(
       return;
     }
 
+    getAnalyticsService().track(ANALYTICS_EVENTS.paperChatRedeemCodeSubmitted, {
+      logged_in: authManager.isLoggedIn(),
+    });
+
     if (!authManager.isLoggedIn()) {
       const success = await showAuthDialog("login");
-      if (!success) return;
+      if (!success) {
+        getAnalyticsService().track(
+          ANALYTICS_EVENTS.paperChatRedeemCodeCompleted,
+          {
+            success: false,
+            reason: "auth_cancelled",
+          },
+        );
+        return;
+      }
       updateUserDisplay(doc, authManager);
     }
 
@@ -460,10 +473,24 @@ export function bindUserAuthEvents(
     try {
       const result = await authManager.redeemCode(code);
       if (result.success) {
+        getAnalyticsService().track(
+          ANALYTICS_EVENTS.paperChatRedeemCodeCompleted,
+          {
+            success: true,
+            added_quota: result.addedQuota,
+          },
+        );
         showMessage(doc, result.message, false);
         redeemInput.value = "";
         updateUserDisplay(doc, authManager);
       } else {
+        getAnalyticsService().track(
+          ANALYTICS_EVENTS.paperChatRedeemCodeCompleted,
+          {
+            success: false,
+            reason: "redeem_failed",
+          },
+        );
         showMessage(doc, result.message, true);
       }
     } finally {
@@ -474,9 +501,14 @@ export function bindUserAuthEvents(
   // Get redemption code button - show QR code dialog
   const getRedeemCodeBtn = doc.getElementById("pref-get-redeem-code-btn");
   getRedeemCodeBtn?.addEventListener("click", async () => {
-    getAnalyticsService().track(ANALYTICS_EVENTS.paperChatRedeemCodeClicked, {
-      low_balance: isPaperChatLowBalance(authManager),
-    });
+    getAnalyticsService().track(
+      ANALYTICS_EVENTS.paperChatPurchaseEntryClicked,
+      {
+        low_balance: isPaperChatLowBalance(authManager),
+        logged_in: authManager.isLoggedIn(),
+        source: "preferences",
+      },
+    );
     await showRedeemCodeDialog(doc, authManager);
   });
 
@@ -533,6 +565,21 @@ async function showRedeemCodeDialog(
     !redeemInfo.purchaseUrl;
   const canCopyPurchaseUrl =
     !showProducts && !showHtml && !!redeemInfo.purchaseUrl;
+  const quotaProductCount = products.filter(
+    (product) => getProductCategory(product) === "quota",
+  ).length;
+  const subscriptionProductCount = products.filter(
+    (product) => getProductCategory(product) === "subscription",
+  ).length;
+
+  getAnalyticsService().track(ANALYTICS_EVENTS.paperChatPurchaseDialogViewed, {
+    products_loaded: productsResult.success,
+    product_count: products.length,
+    quota_product_count: quotaProductCount,
+    subscription_product_count: subscriptionProductCount,
+    mode: showProducts ? "products" : showHtml ? "html" : "legacy",
+    unavailable: showUnavailable,
+  });
 
   const dialogHelper = new ztoolkit.Dialog(1, 1).addCell(0, 0, {
     tag: "div",
@@ -1119,6 +1166,18 @@ function getProductCategory(
   return "quota";
 }
 
+function getProductAnalyticsProps(product: PaperChatProduct): {
+  sku: string;
+  product_category: PaperChatProductCategory;
+  money: string;
+} {
+  return {
+    sku: product.sku,
+    product_category: getProductCategory(product),
+    money: product.money,
+  };
+}
+
 function formatProductPrice(product: PaperChatProduct): string {
   return product.quotaLabel
     ? `¥${product.money} · ${product.quotaLabel}`
@@ -1269,6 +1328,12 @@ function bindProductPurchaseEvents(
       if (tab.disabled) {
         return;
       }
+      getAnalyticsService().track(
+        ANALYTICS_EVENTS.paperChatPurchaseTabSelected,
+        {
+          product_category: category,
+        },
+      );
       showCategory(category);
       const firstProduct = products.find(
         (product) => getProductCategory(product) === category,
@@ -1285,12 +1350,18 @@ function bindProductPurchaseEvents(
     let attempts = 0;
     let consecutiveFailures = 0;
     let lastGrantFailed = false;
+    let grantFailureTracked = false;
     stopPolling();
     pollTimer = dialogWin.setInterval(async () => {
       attempts += 1;
       if (attempts > PURCHASE_POLL_MAX_ATTEMPTS) {
         stopPolling();
         setButtonsDisabled(false);
+        getAnalyticsService().track(ANALYTICS_EVENTS.paperChatPurchaseTimeout, {
+          ...getProductAnalyticsProps(order.product),
+          attempts,
+          last_grant_failed: lastGrantFailed,
+        });
         setStatus(
           lastGrantFailed
             ? getString("pref-paperchat-purchase-grant-failed")
@@ -1314,11 +1385,33 @@ function bindProductPurchaseEvents(
         if (result.order.grantStatus === "manual_review") {
           stopPolling();
           setButtonsDisabled(false);
+          if (!grantFailureTracked) {
+            grantFailureTracked = true;
+            getAnalyticsService().track(
+              ANALYTICS_EVENTS.paperChatPurchaseGrantFailed,
+              {
+                ...getProductAnalyticsProps(result.order.product),
+                grant_status: "manual_review",
+                attempts,
+              },
+            );
+          }
           setStatus(getString("pref-paperchat-purchase-grant-failed"), true);
           return;
         }
         if (result.order.grantStatus === "failed") {
           lastGrantFailed = true;
+          if (!grantFailureTracked) {
+            grantFailureTracked = true;
+            getAnalyticsService().track(
+              ANALYTICS_EVENTS.paperChatPurchaseGrantFailed,
+              {
+                ...getProductAnalyticsProps(result.order.product),
+                grant_status: "failed",
+                attempts,
+              },
+            );
+          }
           setStatus(getString("pref-paperchat-purchase-check-failed"), true);
           return;
         }
@@ -1329,6 +1422,13 @@ function bindProductPurchaseEvents(
 
         stopPolling();
         setButtonsDisabled(false);
+        getAnalyticsService().track(
+          ANALYTICS_EVENTS.paperChatPurchaseCompleted,
+          {
+            ...getProductAnalyticsProps(result.order.product),
+            attempts,
+          },
+        );
         setStatus(getString("pref-paperchat-purchase-paid"));
         await authManager.refreshUserInfo().catch((error) => {
           ztoolkit.log(
@@ -1349,6 +1449,13 @@ function bindProductPurchaseEvents(
       event.preventDefault();
       if (!option.disabled) {
         selectProduct(product);
+        getAnalyticsService().track(
+          ANALYTICS_EVENTS.paperChatPurchaseProductSelected,
+          {
+            ...getProductAnalyticsProps(product),
+            source: "product_grid",
+          },
+        );
       }
     });
   }
@@ -1357,14 +1464,31 @@ function bindProductPurchaseEvents(
     event.preventDefault();
     const product = products.find((item) => item.sku === selectedSku);
     if (!product) {
+      getAnalyticsService().track(
+        ANALYTICS_EVENTS.paperChatPurchaseOrderCreateFailed,
+        {
+          reason: "selected_product_missing",
+        },
+      );
       setStatus(getString("pref-paperchat-purchase-failed"), true);
       return;
     }
     setButtonsDisabled(true);
     setStatus(getString("pref-paperchat-purchase-creating"));
+    getAnalyticsService().track(
+      ANALYTICS_EVENTS.paperChatPurchaseOrderCreateStarted,
+      getProductAnalyticsProps(product),
+    );
     const result = await authManager.createPaperChatOrder(product.sku);
     if (!result.success || !result.order) {
       setButtonsDisabled(false);
+      getAnalyticsService().track(
+        ANALYTICS_EVENTS.paperChatPurchaseOrderCreateFailed,
+        {
+          ...getProductAnalyticsProps(product),
+          reason: "api_failed",
+        },
+      );
       setStatus(
         result.message || getString("pref-paperchat-purchase-failed"),
         true,
@@ -1372,8 +1496,19 @@ function bindProductPurchaseEvents(
       return;
     }
 
+    getAnalyticsService().track(
+      ANALYTICS_EVENTS.paperChatPurchaseOrderCreated,
+      {
+        ...getProductAnalyticsProps(product),
+        has_payment_url: Boolean(result.order.paymentUrl),
+      },
+    );
     if (result.order.paymentUrl) {
       Zotero.launchURL(result.order.paymentUrl);
+      getAnalyticsService().track(
+        ANALYTICS_EVENTS.paperChatPurchasePaymentOpened,
+        getProductAnalyticsProps(product),
+      );
     }
     setStatus(getString("pref-paperchat-purchase-opened"));
     startPolling(result.order);

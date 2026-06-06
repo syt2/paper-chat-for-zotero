@@ -1093,6 +1093,13 @@ export function setupEventHandlers(context: ChatPanelContext): void {
         source: "chat_user_bar_balance",
         low_balance: true,
       });
+      getAnalyticsService().track(
+        ANALYTICS_EVENTS.paperChatPurchaseEntryClicked,
+        {
+          source: "chat_user_bar_balance",
+          low_balance: true,
+        },
+      );
       void import("../../preferences/UserAuthUI")
         .then((module) => module.openPaperChatSettingsForTopup())
         .catch((error) => {
@@ -1124,9 +1131,12 @@ export function setupEventHandlers(context: ChatPanelContext): void {
       ) {
         return;
       }
-      getAnalyticsService().track(ANALYTICS_EVENTS.paperChatQuotaTopupClicked, {
-        source: "chat_user_bar_subscription",
-      });
+      getAnalyticsService().track(
+        ANALYTICS_EVENTS.paperChatPurchaseEntryClicked,
+        {
+          source: "chat_user_bar_subscription",
+        },
+      );
       void import("../../preferences/UserAuthUI")
         .then((module) => module.openPaperChatSettingsForTopup())
         .catch((error) => {

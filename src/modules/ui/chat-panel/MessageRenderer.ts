@@ -292,9 +292,12 @@ function createTopupButton(doc: Document): HTMLElement {
   btn.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
-    getAnalyticsService().track(ANALYTICS_EVENTS.paperChatQuotaTopupClicked, {
-      source: "quota_error_card",
-    });
+    getAnalyticsService().track(
+      ANALYTICS_EVENTS.paperChatPurchaseEntryClicked,
+      {
+        source: "quota_error_card",
+      },
+    );
     void import("../../preferences/UserAuthUI")
       .then((module) => module.openPaperChatSettingsForTopup())
       .catch((error) => {
