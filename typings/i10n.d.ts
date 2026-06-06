@@ -242,6 +242,8 @@ export type FluentMessageId =
   | 'pref-models-loaded'
   | 'pref-official-website'
   | 'pref-paperchat-buy-btn'
+  | 'pref-paperchat-buy-loading'
+  | 'pref-paperchat-buy-waiting'
   | 'pref-paperchat-description'
   | 'pref-paperchat-lite-model'
   | 'pref-paperchat-model-auto'

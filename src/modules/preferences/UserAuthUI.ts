@@ -28,6 +28,8 @@ const REDEEM_CODE_INFO_PATH = "/ext/paperchat/redeem-code-info";
 const PURCHASE_POLL_INTERVAL_MS = 3000;
 const PURCHASE_POLL_MAX_ATTEMPTS = 200;
 const PURCHASE_POLL_FAILURE_NOTICE_ATTEMPTS = 3;
+const REDEEM_DIALOG_BIND_MAX_ATTEMPTS = 30;
+const REDEEM_DIALOG_BIND_RETRY_DELAY_MS = 100;
 type PaperChatProductCategory = "quota" | "subscription";
 
 const PURCHASE_DIALOG_MAX_WIDTH = "446px";
@@ -297,9 +299,6 @@ export function updateUserDisplay(
   const getRedeemCodeBtn = doc.getElementById(
     "pref-get-redeem-code-btn",
   ) as HTMLElement | null;
-  const getRedeemCodeRow = doc.getElementById(
-    "pref-get-redeem-code-row",
-  ) as HTMLElement | null;
   const topupAttention = shouldHighlightTopup(authManager);
 
   if (authManager.isLoggedIn()) {
@@ -368,12 +367,8 @@ export function updateUserDisplay(
     if (loginBtn) {
       loginBtn.setAttribute("label", getString("user-panel-logout-btn"));
     }
-    // Show get redeem code button
     if (getRedeemCodeBtn) {
-      getRedeemCodeBtn.style.display = "inline-block";
-    }
-    if (getRedeemCodeRow) {
-      getRedeemCodeRow.style.display = "";
+      getRedeemCodeBtn.style.display = "";
     }
   } else {
     if (userStatusEl) {
@@ -401,12 +396,8 @@ export function updateUserDisplay(
     if (loginBtn) {
       loginBtn.setAttribute("label", getString("user-panel-login-btn"));
     }
-    // Hide get redeem code button
     if (getRedeemCodeBtn) {
       getRedeemCodeBtn.style.display = "none";
-    }
-    if (getRedeemCodeRow) {
-      getRedeemCodeRow.style.display = "none";
     }
   }
 
@@ -610,34 +601,95 @@ async function showRedeemCodeDialog(
     fitContent: true,
   });
 
-  // Bind events after dialog opens
-  setTimeout(() => {
+  bindRedeemDialogWhenReady({
+    dialogHelper,
+    prefsDoc,
+    authManager,
+    products,
+    showProducts,
+    showHtml,
+    redeemInfo,
+  });
+}
+
+function bindRedeemDialogWhenReady(options: {
+  dialogHelper: { window?: Window | null };
+  prefsDoc: Document;
+  authManager: AuthManagerType;
+  products: PaperChatProduct[];
+  showProducts: boolean;
+  showHtml: boolean;
+  redeemInfo: RedeemCodeInfo;
+}): void {
+  let attempts = 0;
+
+  const tryBind = () => {
+    attempts += 1;
+    const {
+      dialogHelper,
+      prefsDoc,
+      authManager,
+      products,
+      showProducts,
+      showHtml,
+      redeemInfo,
+    } = options;
     const dialogWin = dialogHelper.window;
-    if (!dialogWin) {
+    const doc = dialogWin?.document;
+    const bodyEl = doc?.getElementById(
+      "redeem-code-info-body",
+    ) as HTMLElement | null;
+    const productPickerEl = doc?.getElementById(
+      "paperchat-product-picker",
+    ) as HTMLElement | null;
+    const buyButtonEl = doc?.getElementById(
+      "paperchat-buy-selected",
+    ) as HTMLButtonElement | null;
+    const isReady =
+      !!dialogWin &&
+      !dialogWin.closed &&
+      !!doc &&
+      !!bodyEl &&
+      (!showProducts || (!!productPickerEl && !!buyButtonEl));
+
+    if (!isReady) {
+      if (attempts < REDEEM_DIALOG_BIND_MAX_ATTEMPTS) {
+        setTimeout(tryBind, REDEEM_DIALOG_BIND_RETRY_DELAY_MS);
+      } else {
+        ztoolkit.log("[Preferences] Redeem dialog did not become ready.");
+        redeemDialogWindow = null;
+      }
+      return;
+    }
+
+    if (!dialogWin || !doc || !bodyEl) {
       redeemDialogWindow = null;
       return;
     }
+    if (bodyEl.getAttribute("data-paperchat-dialog-bound") === "true") {
+      redeemDialogWindow = dialogWin;
+      return;
+    }
+    bodyEl.setAttribute("data-paperchat-dialog-bound", "true");
 
     // Save window reference
     redeemDialogWindow = dialogWin;
 
     // Clear reference when dialog closes
-    dialogWin.addEventListener("unload", () => {
-      redeemDialogWindow = null;
-    });
+    dialogWin.addEventListener(
+      "unload",
+      () => {
+        redeemDialogWindow = null;
+      },
+      { once: true },
+    );
 
-    const doc = dialogWin.document;
     if (showProducts) {
       installProductPurchaseTheme(doc);
     }
     if (showHtml && redeemInfo.html) {
-      const bodyEl = doc.getElementById(
-        "redeem-code-info-body",
-      ) as HTMLElement | null;
-      if (bodyEl) {
-        bodyEl.style.alignItems = "stretch";
-        renderSanitizedHtmlToElement(bodyEl, redeemInfo.html);
-      }
+      bodyEl.style.alignItems = "stretch";
+      renderSanitizedHtmlToElement(bodyEl, redeemInfo.html);
     }
 
     if (showProducts) {
@@ -675,7 +727,9 @@ async function showRedeemCodeDialog(
         });
       }
     });
-  }, 100);
+  };
+
+  setTimeout(tryBind, 0);
 }
 
 function buildProductPurchaseChildren(
@@ -839,6 +893,9 @@ function buildProductPurchaseChildren(
             {
               tag: "button",
               id: "paperchat-buy-selected",
+              attributes: {
+                type: "button",
+              },
               properties: {
                 textContent: getString("pref-paperchat-buy-btn"),
               },
@@ -1203,6 +1260,7 @@ function bindProductPurchaseEvents(
   const buyButton = doc.getElementById(
     "paperchat-buy-selected",
   ) as HTMLButtonElement | null;
+  const buyButtonDefaultText = getString("pref-paperchat-buy-btn");
   const initialSelectedProduct =
     products.find((product) => getProductCategory(product) === "quota") ??
     products.find(
@@ -1234,9 +1292,15 @@ function bindProductPurchaseEvents(
 
   dialogWin.addEventListener("unload", stopPolling);
 
-  const setButtonsDisabled = (disabled: boolean) => {
+  const setButtonsDisabled = (disabled: boolean, buyButtonText?: string) => {
     if (buyButton) {
       buyButton.disabled = disabled;
+      buyButton.textContent = buyButtonText ?? buyButtonDefaultText;
+      if (disabled) {
+        buyButton.setAttribute("aria-busy", "true");
+      } else {
+        buyButton.removeAttribute("aria-busy");
+      }
       buyButton.style.opacity = disabled ? "0.6" : "1";
       buyButton.style.cursor = disabled ? "default" : "pointer";
     }
@@ -1473,7 +1537,7 @@ function bindProductPurchaseEvents(
       setStatus(getString("pref-paperchat-purchase-failed"), true);
       return;
     }
-    setButtonsDisabled(true);
+    setButtonsDisabled(true, getString("pref-paperchat-buy-loading"));
     setStatus(getString("pref-paperchat-purchase-creating"));
     getAnalyticsService().track(
       ANALYTICS_EVENTS.paperChatPurchaseOrderCreateStarted,
@@ -1510,6 +1574,7 @@ function bindProductPurchaseEvents(
         getProductAnalyticsProps(product),
       );
     }
+    setButtonsDisabled(true, getString("pref-paperchat-buy-waiting"));
     setStatus(getString("pref-paperchat-purchase-opened"));
     startPolling(result.order);
   });
