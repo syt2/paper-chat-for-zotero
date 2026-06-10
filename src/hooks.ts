@@ -158,17 +158,33 @@ async function onShutdown(): Promise<void> {
   // Destroy Embedding/RAG
   destroyRAGService();
   destroyEmbeddingProviderFactory();
-  destroyVectorStore();
+  await destroyVectorStore();
   // Destroy Memory stores
   destroyMemoryStores();
   destroyMemoryIndexers();
   // Destroy StorageDatabase
-  destroyStorageDatabase();
+  await destroyStorageDatabase();
   await destroyAnalyticsService();
   addon.data.dialog?.window?.close();
   addon.data.alive = false;
   // @ts-expect-error - Plugin instance is not typed
   delete Zotero[addon.data.config.addonInstance];
+}
+
+async function onAppShutdown(): Promise<void> {
+  // Full UI/service teardown during APP_SHUTDOWN can add work to Zotero's own
+  // shutdown path. Close only DB connections that otherwise block shutdown.
+  try {
+    await destroyVectorStore();
+  } catch (error) {
+    ztoolkit.log("[Shutdown] Failed to close VectorStore:", error);
+  }
+
+  try {
+    await destroyStorageDatabase();
+  } catch (error) {
+    ztoolkit.log("[Shutdown] Failed to close StorageDatabase:", error);
+  }
 }
 
 /**
@@ -190,6 +206,7 @@ async function onPrefsEvent(type: string, data: { [key: string]: unknown }) {
 export default {
   onStartup,
   onShutdown,
+  onAppShutdown,
   onMainWindowLoad,
   onMainWindowUnload,
   onPrefsEvent,

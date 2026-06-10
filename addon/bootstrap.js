@@ -44,6 +44,7 @@ async function onMainWindowUnload({ window }, reason) {
 
 async function shutdown({ id, version, resourceURI, rootURI }, reason) {
   if (reason === APP_SHUTDOWN) {
+    await Zotero.__addonInstance__?.hooks.onAppShutdown?.();
     return;
   }
 

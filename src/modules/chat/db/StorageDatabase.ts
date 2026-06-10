@@ -34,6 +34,7 @@ function parseColumnName(spec: string): string {
  */
 interface ZoteroDBConnection {
   queryAsync(sql: string, params?: unknown[]): Promise<any[] | undefined>;
+  closeDatabase(permanent: boolean): Promise<void>;
 }
 
 export class StorageDatabase {
@@ -852,28 +853,44 @@ export class StorageDatabase {
   /**
    * Close the database connection
    */
-  close(): void {
-    if (this.db) {
-      this.db = null;
-      this.initPromise = null;
-      ztoolkit.log("[StorageDatabase] Database reference cleared");
+  async close(): Promise<void> {
+    if (this.initPromise) {
+      try {
+        await this.initPromise;
+      } catch {
+        // A failed init has already reset state; close remains best-effort.
+      }
+    }
+
+    const db = this.db;
+    this.db = null;
+    this.initPromise = null;
+
+    if (db) {
+      await db.closeDatabase(false);
+      ztoolkit.log("[StorageDatabase] Database connection closed");
     }
   }
 }
 
 // Singleton instance
 let storageDatabase: StorageDatabase | null = null;
+let storageDatabaseDestroyed = false;
 
 export function getStorageDatabase(): StorageDatabase {
+  if (storageDatabaseDestroyed) {
+    throw new Error("StorageDatabase has been destroyed");
+  }
   if (!storageDatabase) {
     storageDatabase = new StorageDatabase();
   }
   return storageDatabase;
 }
 
-export function destroyStorageDatabase(): void {
+export async function destroyStorageDatabase(): Promise<void> {
+  storageDatabaseDestroyed = true;
   if (storageDatabase) {
-    storageDatabase.close();
+    await storageDatabase.close();
     storageDatabase = null;
   }
 }

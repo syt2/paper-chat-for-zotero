@@ -30,6 +30,7 @@ function getDBPath(): string {
  */
 interface ZoteroDBConnection {
   queryAsync(sql: string, params?: unknown[]): Promise<any[] | undefined>;
+  closeDatabase(permanent: boolean): Promise<void>;
 }
 
 export class VectorStore {
@@ -556,30 +557,44 @@ export class VectorStore {
   /**
    * Close the database connection
    */
-  close(): void {
-    if (this.db) {
-      // Zotero.DBConnection doesn't have an explicit close method
-      // but we can clear our reference
-      this.db = null;
-      this.initPromise = null;
-      ztoolkit.log("[VectorStore] Database reference cleared");
+  async close(): Promise<void> {
+    if (this.initPromise) {
+      try {
+        await this.initPromise;
+      } catch {
+        // A failed init has already reset state; close remains best-effort.
+      }
+    }
+
+    const db = this.db;
+    this.db = null;
+    this.initPromise = null;
+
+    if (db) {
+      await db.closeDatabase(false);
+      ztoolkit.log("[VectorStore] Database connection closed");
     }
   }
 }
 
 // Singleton instance
 let vectorStore: VectorStore | null = null;
+let vectorStoreDestroyed = false;
 
 export function getVectorStore(): VectorStore {
+  if (vectorStoreDestroyed) {
+    throw new Error("VectorStore has been destroyed");
+  }
   if (!vectorStore) {
     vectorStore = new VectorStore();
   }
   return vectorStore;
 }
 
-export function destroyVectorStore(): void {
+export async function destroyVectorStore(): Promise<void> {
+  vectorStoreDestroyed = true;
   if (vectorStore) {
-    vectorStore.close();
+    await vectorStore.close();
     vectorStore = null;
   }
 }
