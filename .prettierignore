@@ -3,6 +3,7 @@ build
 logs
 node_modules
 api
+mobile_api
 package-lock.json
 yarn.lock
 pnpm-lock.yaml

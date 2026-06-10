@@ -1,3 +1,6 @@
 [submodule "api"]
 	path = api
 	url = git@github.com:syt2/paperchat-api.git
+[submodule "mobile_api"]
+	path = mobile_api
+	url = git@github.com:syt2/paperchat-mobile-api.git

@@ -3,7 +3,7 @@
 import zotero from "@zotero-plugin/eslint-config";
 
 export default zotero({
-  ignores: ["api"],
+  ignores: ["api", "mobile_api"],
   overrides: [
     {
       files: ["**/*.ts"],
