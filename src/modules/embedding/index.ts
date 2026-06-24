@@ -17,17 +17,14 @@ export {
   VectorStore,
   getVectorStore,
   destroyVectorStore,
+  resetVectorStoreForTests,
 } from "./VectorStore";
 
 // Chunk splitter
 export { ChunkSplitter, splitText, splitTextWithPages } from "./ChunkSplitter";
 
 // Providers
-export {
-  GeminiEmbedding,
-  OpenAIEmbedding,
-  OllamaEmbedding,
-} from "./providers";
+export { GeminiEmbedding, OpenAIEmbedding, OllamaEmbedding } from "./providers";
 
 // Utils
 export { cosineSimilarity, findTopKSimilar } from "./utils/cosine";

@@ -328,10 +328,11 @@ export class VectorStore {
    */
   async has(itemKey: string, modelId: string): Promise<boolean> {
     const db = await this.ensureInit();
-    const result = (await db.queryAsync(
-      "SELECT COUNT(*) as count FROM vectors WHERE item_key = ? AND model_id = ?",
-      [itemKey, modelId],
-    )) || [];
+    const result =
+      (await db.queryAsync(
+        "SELECT COUNT(*) as count FROM vectors WHERE item_key = ? AND model_id = ?",
+        [itemKey, modelId],
+      )) || [];
     return result[0]?.count > 0;
   }
 
@@ -343,10 +344,11 @@ export class VectorStore {
     modelId: string,
   ): Promise<ItemIndexStatus> {
     const db = await this.ensureInit();
-    const rows = (await db.queryAsync(
-      "SELECT created_at FROM vectors WHERE item_key = ? AND model_id = ?",
-      [itemKey, modelId],
-    )) || [];
+    const rows =
+      (await db.queryAsync(
+        "SELECT created_at FROM vectors WHERE item_key = ? AND model_id = ?",
+        [itemKey, modelId],
+      )) || [];
 
     if (rows.length === 0) {
       return { indexed: false, chunkCount: 0 };
@@ -369,10 +371,11 @@ export class VectorStore {
     modelId: string,
   ): Promise<Map<number, string>> {
     const db = await this.ensureInit();
-    const rows = (await db.queryAsync(
-      "SELECT chunk_index, metadata FROM vectors WHERE item_key = ? AND model_id = ?",
-      [itemKey, modelId],
-    )) || [];
+    const rows =
+      (await db.queryAsync(
+        "SELECT chunk_index, metadata FROM vectors WHERE item_key = ? AND model_id = ?",
+        [itemKey, modelId],
+      )) || [];
 
     const hashes = new Map<number, string>();
     for (const row of rows) {
@@ -402,7 +405,8 @@ export class VectorStore {
    */
   async count(): Promise<number> {
     const db = await this.ensureInit();
-    const result = (await db.queryAsync("SELECT COUNT(*) as count FROM vectors")) || [];
+    const result =
+      (await db.queryAsync("SELECT COUNT(*) as count FROM vectors")) || [];
     return result[0]?.count || 0;
   }
 
@@ -411,10 +415,11 @@ export class VectorStore {
    */
   async countByModel(modelId: string): Promise<number> {
     const db = await this.ensureInit();
-    const result = (await db.queryAsync(
-      "SELECT COUNT(*) as count FROM vectors WHERE model_id = ?",
-      [modelId],
-    )) || [];
+    const result =
+      (await db.queryAsync(
+        "SELECT COUNT(*) as count FROM vectors WHERE model_id = ?",
+        [modelId],
+      )) || [];
     return result[0]?.count || 0;
   }
 
@@ -435,10 +440,11 @@ export class VectorStore {
     const id = `${itemKey}_${modelId}`;
 
     // Check if record exists
-    const existing = (await db.queryAsync(
-      "SELECT indexed_at FROM access_records WHERE id = ?",
-      [id],
-    )) || [];
+    const existing =
+      (await db.queryAsync(
+        "SELECT indexed_at FROM access_records WHERE id = ?",
+        [id],
+      )) || [];
 
     const indexedAt = existing[0]?.indexed_at ?? now;
 
@@ -525,10 +531,10 @@ export class VectorStore {
     const db = await this.ensureInit();
     const id = `${itemKey}_${modelId}`;
 
-    const rows = (await db.queryAsync(
-      "SELECT * FROM access_records WHERE id = ?",
-      [id],
-    )) || [];
+    const rows =
+      (await db.queryAsync("SELECT * FROM access_records WHERE id = ?", [
+        id,
+      ])) || [];
 
     if (rows.length === 0) {
       return null;
@@ -597,4 +603,12 @@ export async function destroyVectorStore(): Promise<void> {
     await vectorStore.close();
     vectorStore = null;
   }
+}
+
+export async function resetVectorStoreForTests(): Promise<void> {
+  if (vectorStore) {
+    await vectorStore.close();
+    vectorStore = null;
+  }
+  vectorStoreDestroyed = false;
 }

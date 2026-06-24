@@ -894,3 +894,11 @@ export async function destroyStorageDatabase(): Promise<void> {
     storageDatabase = null;
   }
 }
+
+export async function resetStorageDatabaseForTests(): Promise<void> {
+  if (storageDatabase) {
+    await storageDatabase.close();
+    storageDatabase = null;
+  }
+  storageDatabaseDestroyed = false;
+}

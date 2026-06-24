@@ -8,8 +8,8 @@ import {
 import { SessionStorageService } from "../src/modules/chat/SessionStorageService.ts";
 import {
   StorageDatabase,
-  destroyStorageDatabase,
   getStorageDatabase,
+  resetStorageDatabaseForTests,
 } from "../src/modules/chat/db/StorageDatabase.ts";
 import { destroyPdfToolManager } from "../src/modules/chat/pdf-tools/index.ts";
 import {
@@ -99,22 +99,22 @@ describe("paperchat storage and chat manager", function () {
   let originalAddon: unknown;
   let prefStore: Map<string, unknown>;
 
-  beforeEach(function () {
+  beforeEach(async function () {
     originalZotero = (globalThis as any).Zotero;
     originalZtoolkit = (globalThis as any).ztoolkit;
     originalServices = (globalThis as any).Services;
     originalCi = (globalThis as any).Ci;
     originalAddon = (globalThis as any).addon;
     prefStore = createPrefEnvironment();
-    destroyStorageDatabase();
+    await resetStorageDatabaseForTests();
     destroyAuthManager();
     destroyContextManager();
     destroyPdfToolManager();
     destroyProviderManager();
   });
 
-  afterEach(function () {
-    destroyStorageDatabase();
+  afterEach(async function () {
+    await resetStorageDatabaseForTests();
     destroyAuthManager();
     destroyContextManager();
     destroyPdfToolManager();
@@ -176,6 +176,14 @@ describe("paperchat storage and chat manager", function () {
           "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
       ),
     );
+  });
+
+  it("allows tests to reset and recreate the storage singleton", async function () {
+    const first = getStorageDatabase();
+    await resetStorageDatabaseForTests();
+    const second = getStorageDatabase();
+
+    assert.notStrictEqual(second, first);
   });
 
   it("stores paperchat session metadata in the companion table on save", async function () {
