@@ -8,6 +8,7 @@
 import {
   AuthService,
   type PaperChatOrderResult,
+  type PaperChatPricingResult,
   type PaperChatProductsResult,
 } from "./AuthService";
 import type {
@@ -878,7 +879,7 @@ export class AuthManager {
     }
   }
 
-  async getPricing(): Promise<ApiResponse<Array<Record<string, unknown>>>> {
+  async getPricing(): Promise<PaperChatPricingResult> {
     return this.withSessionRetry(
       () => this.authService.getPricing(),
       "getPricing",

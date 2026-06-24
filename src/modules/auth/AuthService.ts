@@ -57,6 +57,14 @@ export interface PaperChatOrderResult {
   order?: PaperChatPurchaseOrder;
 }
 
+export interface PaperChatPricingResult extends ApiResponse<
+  Array<Record<string, unknown>>
+> {
+  group_ratio?: Record<string, unknown>;
+  usable_group?: Record<string, unknown>;
+  auto_groups?: unknown[];
+}
+
 // 临时存储从 HTTP Observer 捕获的 session cookie
 let pendingSessionCookie: string | null = null;
 
@@ -548,11 +556,9 @@ export class AuthService {
     return result.data;
   }
 
-  async getPricing(): Promise<ApiResponse<Array<Record<string, unknown>>>> {
+  async getPricing(): Promise<PaperChatPricingResult> {
     const url = `${this.baseUrl}/api/pricing`;
-    const result = await this.request<
-      ApiResponse<Array<Record<string, unknown>>>
-    >("GET", url);
+    const result = await this.request<PaperChatPricingResult>("GET", url);
 
     if (result.error) {
       return { success: false, message: result.error };

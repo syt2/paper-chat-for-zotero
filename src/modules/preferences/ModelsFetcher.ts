@@ -11,6 +11,7 @@ import {
   parseModelRoutingConfig,
   type PaperChatModelRoutingMeta,
 } from "../providers/paperchat-routing-metadata";
+import { getEffectivePricingModelRatio } from "./paperchat-effective-ratio";
 
 // Store model ratios for PaperChat
 let paperchatModelRatios: Record<string, number> = {};
@@ -141,20 +142,6 @@ function getPricingModelName(
   return undefined;
 }
 
-function getPricingModelRatio(
-  item: Record<string, unknown>,
-): number | undefined {
-  const value = item.model_ratio ?? item.ModelRatio;
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string" && value.trim().length > 0) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  return undefined;
-}
-
 /**
  * Fetch model ratios from PaperChat pricing API
  */
@@ -172,12 +159,17 @@ export async function fetchPaperchatRatios(): Promise<void> {
     }
 
     if (result.data && Array.isArray(result.data)) {
-      // Build model_name -> model_ratio mapping. Routing metadata is fetched
-      // from a separate static JSON endpoint so newapi can stay unmodified.
+      // Build model_name -> effective ratio mapping. NewAPI pricing returns
+      // user-scoped usable groups, auto groups, and group ratios, so PaperChat
+      // can route by the user's estimated real cost instead of raw model_ratio.
       paperchatModelRatios = {};
       for (const item of result.data) {
         const modelName = getPricingModelName(item);
-        const ratio = getPricingModelRatio(item);
+        const ratio = getEffectivePricingModelRatio(item, {
+          groupRatio: result.group_ratio,
+          usableGroup: result.usable_group,
+          autoGroups: result.auto_groups,
+        });
         if (!modelName || ratio === undefined) {
           continue;
         }
@@ -187,7 +179,7 @@ export async function fetchPaperchatRatios(): Promise<void> {
       // Cache ratios to prefs.
       setPref("paperchatRatiosCache", JSON.stringify(paperchatModelRatios));
       ztoolkit.log(
-        "[Preferences] Loaded ratios for",
+        "[Preferences] Loaded effective ratios for",
         Object.keys(paperchatModelRatios).length,
         "models",
       );
