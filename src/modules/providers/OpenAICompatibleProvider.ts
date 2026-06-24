@@ -60,7 +60,7 @@ export function supportsOpenAITemperature(config: {
   return !/^(?:o\d|gpt-5)(?:[-.]|$)/i.test(config.defaultModel);
 }
 
-const DSML_TAG_PREFIX = String.raw`[|｜]\s*DSML\s*[|｜]`;
+const DSML_TAG_PREFIX = String.raw`[|｜]+\s*DSML\s*[|｜]+`;
 const DSML_TOOL_CALLS_START_REGEX = new RegExp(
   String.raw`<\s*${DSML_TAG_PREFIX}\s*tool_calls\s*>`,
   "i",
@@ -78,7 +78,7 @@ const DSML_PARAMETER_REGEX = new RegExp(
   "gi",
 );
 const XML_ATTRIBUTE_REGEX =
-  /([A-Za-z_:][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+  /([A-Za-z_:][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>=`]+))/g;
 const DSML_DETECTION_TAIL_LENGTH = 64;
 
 function decodeXmlEntities(value: string): string {
@@ -93,10 +93,15 @@ function decodeXmlEntities(value: string): string {
 function parseXmlAttributes(rawAttributes: string): Record<string, string> {
   const attributes: Record<string, string> = {};
   let match: RegExpExecArray | null;
+  const normalizedAttributes = rawAttributes
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'");
   XML_ATTRIBUTE_REGEX.lastIndex = 0;
 
-  while ((match = XML_ATTRIBUTE_REGEX.exec(rawAttributes)) !== null) {
-    attributes[match[1]] = decodeXmlEntities(match[2] ?? match[3] ?? "");
+  while ((match = XML_ATTRIBUTE_REGEX.exec(normalizedAttributes)) !== null) {
+    attributes[match[1]] = decodeXmlEntities(
+      match[2] ?? match[3] ?? match[4] ?? "",
+    );
   }
 
   return attributes;

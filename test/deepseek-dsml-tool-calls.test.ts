@@ -48,4 +48,40 @@ outro`;
 
     assert.equal(stripDsmlToolCallBlocks(content), "intro\n\noutro");
   });
+
+  it("recovers doubled fullwidth delimiters and typographic quotes", function () {
+    const content = `before
+<｜｜DSML｜｜tool_calls>
+<｜｜DSML｜｜invoke name=“get_pages”>
+<｜｜DSML｜｜parameter name=“pages” string=“true”>3-5</｜｜DSML｜｜parameter>
+</｜｜DSML｜｜invoke>
+</｜｜DSML｜｜tool_calls>
+after`;
+
+    const toolCalls = parseDsmlToolCallsFromContent(content);
+
+    assert.lengthOf(toolCalls, 1);
+    assert.equal(toolCalls[0].function.name, "get_pages");
+    assert.deepEqual(JSON.parse(toolCalls[0].function.arguments), {
+      pages: "3-5",
+    });
+    assert.equal(stripDsmlToolCallBlocks(content), "before\n\nafter");
+  });
+
+  it("accepts simple unquoted DSML attributes", function () {
+    const content = `<||DSML||tool_calls>
+<||DSML||invoke name=get_pages>
+<||DSML||parameter name=pages string=true>7</||DSML||parameter>
+</||DSML||invoke>
+</||DSML||tool_calls>`;
+
+    const toolCalls = parseDsmlToolCallsFromContent(content);
+
+    assert.lengthOf(toolCalls, 1);
+    assert.equal(toolCalls[0].function.name, "get_pages");
+    assert.deepEqual(JSON.parse(toolCalls[0].function.arguments), {
+      pages: "7",
+    });
+    assert.equal(stripDsmlToolCallBlocks(content), "");
+  });
 });
