@@ -28,6 +28,7 @@ pref("uploadRawPdfOnFailure", false);
 // UI Settings
 pref("panelMode", "sidebar");
 pref("debugContextExportEnabled", false);
+pref("readingLoopEnabled", true);
 
 // Guide Settings
 pref("firstInstalledVersion", "");

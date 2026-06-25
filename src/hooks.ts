@@ -4,7 +4,11 @@ import {
   togglePaperChatNoticeUI,
 } from "./modules/preferences";
 import { createZToolkit } from "./utils/ztoolkit";
-import { registerToolbarButton, unregisterChatPanel, togglePanel } from "./modules/ui";
+import {
+  registerToolbarButton,
+  unregisterChatPanel,
+  togglePanel,
+} from "./modules/ui";
 import { getAuthManager, destroyAuthManager } from "./modules/auth";
 import { destroyProviderManager } from "./modules/providers";
 import {
@@ -20,16 +24,26 @@ import {
   destroyVectorStore,
   destroyEmbeddingProviderFactory,
 } from "./modules/embedding";
-import { getStorageDatabase, destroyStorageDatabase } from "./modules/chat/db/StorageDatabase";
+import {
+  getStorageDatabase,
+  destroyStorageDatabase,
+} from "./modules/chat/db/StorageDatabase";
 import { checkAndMigrateToV3 } from "./modules/chat/migration/migrateToSQLite";
 import { destroyMemoryStores } from "./modules/chat/memory/MemoryStore";
-import { destroyMemoryIndexers, getMemoryIndexer } from "./modules/chat/memory/MemoryIndexer";
+import {
+  destroyMemoryIndexers,
+  getMemoryIndexer,
+} from "./modules/chat/memory/MemoryIndexer";
 import { getTaskManager } from "./modules/chat/task-manager";
 import {
   ANALYTICS_EVENTS,
   destroyAnalyticsService,
   getAnalyticsService,
 } from "./modules/analytics";
+import {
+  destroyReadingLoopService,
+  initReadingLoopService,
+} from "./modules/reading-loop";
 import { updateSelfIfNeed } from "./utils/selfUpdate";
 
 async function onStartup() {
@@ -64,11 +78,16 @@ async function onStartup() {
       ztoolkit.log("[Startup] Task recovery failed:", recoverErr);
     }
     // Kick off memory embedding check after DB is ready (fire-and-forget)
-    getMemoryIndexer().checkAndReindex().catch((err) => {
-      ztoolkit.log("[Startup] Memory reindex failed:", err);
-    });
+    getMemoryIndexer()
+      .checkAndReindex()
+      .catch((err) => {
+        ztoolkit.log("[Startup] Memory reindex failed:", err);
+      });
   } catch (error) {
-    ztoolkit.log("[Startup] StorageDatabase init failed (will retry on first use):", error);
+    ztoolkit.log(
+      "[Startup] StorageDatabase init failed (will retry on first use):",
+      error,
+    );
   }
 
   // Initialize auth manager
@@ -82,6 +101,12 @@ async function onStartup() {
     getAISummaryService().setOnOpenTaskWindow(openTaskWindow);
   } catch (error) {
     ztoolkit.log("[Startup] AISummary init failed:", error);
+  }
+
+  try {
+    initReadingLoopService();
+  } catch (error) {
+    ztoolkit.log("[Startup] Reading Loop init failed:", error);
   }
 
   // Register UI (toolbar button, menus) — must always run
@@ -155,6 +180,7 @@ async function onShutdown(): Promise<void> {
   // Destroy AISummary
   destroyAISummaryService();
   getAISummaryManager().destroy();
+  destroyReadingLoopService();
   // Destroy Embedding/RAG
   destroyRAGService();
   destroyEmbeddingProviderFactory();

@@ -128,6 +128,12 @@ paperchat-chat-interrupted = Interrupted
 paperchat-chat-turn-cancelled = Request cancelled.
 paperchat-chat-thinking = Thinking
 paperchat-chat-history-title = Chat { $time }
+paperchat-reading-loop-execute = Run
+paperchat-reading-loop-dismiss = Dismiss
+paperchat-reading-loop-view = View
+paperchat-reading-loop-retry = Retry
+paperchat-reading-loop-processing = Processing
+paperchat-reading-loop-tooltip = 1 reading suggestion: { $title }
 
 # Guide
 paperchat-guide-toolbar-title = Start Chatting with AI

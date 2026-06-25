@@ -148,6 +148,15 @@ export function applyThemeToContainer(container: HTMLElement): void {
     emptyState.style.color = theme.textMuted;
   }
 
+  const readingLoopStrip = container.querySelector(
+    "#reading-loop-suggestion-strip",
+  ) as HTMLElement;
+  if (readingLoopStrip) {
+    readingLoopStrip.style.background = theme.toolbarBg;
+    readingLoopStrip.style.borderBottomColor = theme.borderColor;
+    readingLoopStrip.style.color = theme.textPrimary;
+  }
+
   // Toolbar
   const toolbar = container.querySelector("#chat-toolbar") as HTMLElement;
   if (toolbar) {

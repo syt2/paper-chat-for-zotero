@@ -124,6 +124,11 @@ pref-tool-permission-mode-auto-allow = 自动允许
 pref-tool-permission-mode-ask = 每次询问
 pref-tool-permission-mode-deny = 始终拒绝
 
+# Reading Loop Settings
+pref-reading-loop-settings = 阅读伴随建议
+pref-reading-loop-enabled = 阅读时自动显示 PaperChat 建议
+pref-reading-loop-desc = 根据选中文本和高亮等本地阅读行为，在 PaperChat 入口和面板内显示轻量建议。
+
 # AISummary Settings
 pref-aisummary-settings = AI摘要
 pref-aisummary-template = 模板

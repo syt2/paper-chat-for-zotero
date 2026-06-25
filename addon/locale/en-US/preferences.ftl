@@ -124,6 +124,11 @@ pref-tool-permission-mode-auto-allow = Auto allow
 pref-tool-permission-mode-ask = Ask every time
 pref-tool-permission-mode-deny = Always deny
 
+# Reading Loop Settings
+pref-reading-loop-settings = Reading Suggestions
+pref-reading-loop-enabled = Show PaperChat suggestions while reading
+pref-reading-loop-desc = Shows lightweight suggestions in the PaperChat entry and panel based on local reading actions such as text selection and highlights.
+
 # AISummary Settings
 pref-aisummary-settings = AI Summary
 pref-aisummary-template = Template

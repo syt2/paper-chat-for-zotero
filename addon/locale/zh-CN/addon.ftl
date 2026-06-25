@@ -128,6 +128,12 @@ paperchat-chat-interrupted = 已中断
 paperchat-chat-turn-cancelled = 已取消本次请求。
 paperchat-chat-thinking = 思考中
 paperchat-chat-history-title = 对话 { $time }
+paperchat-reading-loop-execute = 执行
+paperchat-reading-loop-dismiss = 关闭
+paperchat-reading-loop-view = 查看
+paperchat-reading-loop-retry = 重试
+paperchat-reading-loop-processing = 处理中
+paperchat-reading-loop-tooltip = 有 1 个阅读建议：{ $title }
 
 # Guide
 paperchat-guide-toolbar-title = 开始与 AI 对话

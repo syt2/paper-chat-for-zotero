@@ -17,7 +17,7 @@ import { getProviderManager } from "../../providers";
 import { isPaperChatQuotaError } from "../../providers/paperchat-errors";
 import { getPref, setPref } from "../../../utils/prefs";
 
-import type { AttachmentState, ChatPanelContext } from "./types";
+import { HTML_NS, type AttachmentState, type ChatPanelContext } from "./types";
 import { chatColors } from "../../../utils/colors";
 import {
   getCurrentTheme,
@@ -61,6 +61,12 @@ import { loadCachedRatios } from "../../preferences/ModelsFetcher";
 import { Guide } from "../Guide";
 import { ANALYTICS_EVENTS, getAnalyticsService } from "../../analytics";
 import { refreshPaperChatNotice } from "../../providers/PaperChatNoticeService";
+import {
+  getReadingLoopService,
+  type ReadingLoopSnapshot,
+  type ReadingLoopState,
+  type ReadingSuggestion,
+} from "../../reading-loop";
 
 // Panel display mode: 'sidebar' or 'floating'
 export type PanelMode = "sidebar" | "floating";
@@ -633,6 +639,9 @@ let floatingTabNotifierID: string | null = null;
 let panelVisibleSince: number | null = null;
 let panelOpenSource: ChatPanelOpenSource = "unknown";
 let suppressFloatingUnloadTracking = false;
+const readingLoopPanelSubscriptions = new WeakMap<HTMLElement, () => void>();
+let readingLoopExecutorOwner: HTMLElement | null = null;
+let readingLoopToolbarUnsubscribe: (() => void) | null = null;
 
 // Attachment state
 let pendingImages: ImageAttachment[] = [];
@@ -878,6 +887,7 @@ function openFloatingWindow(): boolean {
         trackChatPanelClosed();
       }
       suppressFloatingUnloadTracking = false;
+      cleanupReadingLoopIntegration(floatingContainer);
       // Immediately reset state
       floatingWindow = null;
       floatingContainer = null;
@@ -987,6 +997,7 @@ async function initializeChatContentCommon(
   // Set up chat manager callbacks
   const manager = getChatManager();
   setupChatManagerCallbacks(manager, context, container);
+  setupReadingLoopIntegration(container, context);
 
   // Initialize ChatManager (handles migration and session loading)
   await manager.init();
@@ -996,9 +1007,11 @@ async function initializeChatContentCommon(
   if (activeItem) {
     moduleCurrentItem = activeItem;
     manager.setCurrentItemKey(activeItem.key);
+    getReadingLoopService().setCurrentItem(activeItem);
   } else {
     moduleCurrentItem = null;
     manager.setCurrentItemKey(null);
+    getReadingLoopService().setCurrentItem(null);
   }
 
   // Update PDF checkbox visibility
@@ -1015,6 +1028,228 @@ async function initializeChatContentCommon(
   focusInput(container);
 }
 
+function setupReadingLoopIntegration(
+  container: HTMLElement,
+  context: ChatPanelContext,
+): void {
+  const service = getReadingLoopService();
+  readingLoopExecutorOwner = container;
+  service.setExecutor(async ({ suggestion, currentItem }) => {
+    if (!container.isConnected) {
+      throw new Error("PaperChat panel is not available.");
+    }
+    const targetItem =
+      currentItem || getActiveReaderItem() || context.getCurrentItem();
+    if (targetItem) {
+      context.setCurrentItem(targetItem);
+    }
+
+    const selectedText =
+      typeof suggestion.payload?.selectedText === "string"
+        ? suggestion.payload.selectedText
+        : undefined;
+    const content = buildReadingLoopPrompt(suggestion);
+    const didSend = await context.chatManager.sendMessage(content, {
+      item: targetItem,
+      attachPdf: !!targetItem,
+      selectedText,
+    });
+    if (!didSend) {
+      throw new Error(getString("chat-error-no-provider"));
+    }
+    return {
+      title: "已发送到 PaperChat",
+    };
+  });
+
+  const existingUnsubscribe = readingLoopPanelSubscriptions.get(container);
+  existingUnsubscribe?.();
+  const unsubscribe = service.subscribe((snapshot) => {
+    if (!container.isConnected) {
+      return;
+    }
+    renderReadingLoopSuggestionStrip(container, snapshot);
+    updateReadingLoopEntryIndicator(snapshot);
+  });
+  readingLoopPanelSubscriptions.set(container, unsubscribe);
+}
+
+function cleanupReadingLoopIntegration(container: HTMLElement | null): void {
+  if (!container) {
+    return;
+  }
+
+  const unsubscribe = readingLoopPanelSubscriptions.get(container);
+  unsubscribe?.();
+  readingLoopPanelSubscriptions.delete(container);
+
+  const strip = container.querySelector(
+    "#reading-loop-suggestion-strip",
+  ) as HTMLElement | null;
+  if (strip) {
+    strip.style.display = "none";
+    strip.replaceChildren();
+  }
+
+  if (readingLoopExecutorOwner === container) {
+    readingLoopExecutorOwner = null;
+    getReadingLoopService().setExecutor(null);
+  }
+}
+
+function buildReadingLoopPrompt(suggestion: ReadingSuggestion): string {
+  switch (suggestion.kind) {
+    case "highlight_digest":
+      return [
+        "请读取当前论文的高亮和批注，将这些标注整理成一份简洁的阅读笔记。",
+        "要求：",
+        "1. 提炼 3-6 条关键观点或证据。",
+        "2. 保留必要的页码或原文线索。",
+        "3. 将结果追加到这篇论文的 PaperChat Notes 子笔记中。",
+        "4. 完成后简要告诉我写入结果。",
+      ].join("\n");
+    case "save_selection_note":
+      return [
+        "请将当前选中的文本整理成一条简洁阅读笔记，并追加到这篇论文的 PaperChat Notes 子笔记中。",
+        "请先概括要点，再保留必要的原文线索。",
+      ].join("\n");
+    case "explain_selection":
+    default:
+      return "解释当前选中的文本，并结合这篇论文的上下文说明它为什么重要。";
+  }
+}
+
+function renderReadingLoopSuggestionStrip(
+  container: HTMLElement,
+  snapshot: ReadingLoopSnapshot,
+): void {
+  const strip = container.querySelector(
+    "#reading-loop-suggestion-strip",
+  ) as HTMLElement | null;
+  if (!strip) {
+    return;
+  }
+
+  const suggestion = snapshot.activeSuggestion;
+  if (!snapshot.enabled || !suggestion || snapshot.state === "idle") {
+    strip.style.display = "none";
+    strip.textContent = "";
+    return;
+  }
+
+  const theme = getCurrentTheme();
+  strip.textContent = "";
+  strip.style.display = "flex";
+  strip.style.background = theme.toolbarBg;
+  strip.style.borderBottomColor = theme.borderColor;
+  strip.style.color = theme.textPrimary;
+
+  const dot = strip.ownerDocument.createElementNS(HTML_NS, "span");
+  Object.assign(dot.style, {
+    width: "7px",
+    height: "7px",
+    borderRadius: "999px",
+    background: getReadingLoopAccent(snapshot.state),
+    flexShrink: "0",
+  } satisfies Partial<CSSStyleDeclaration>);
+
+  const title = strip.ownerDocument.createElementNS(HTML_NS, "span");
+  title.textContent = suggestion.title;
+  Object.assign(title.style, {
+    flex: "1",
+    minWidth: "0",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    fontSize: "12px",
+    lineHeight: "18px",
+  } satisfies Partial<CSSStyleDeclaration>);
+
+  const primary = strip.ownerDocument.createElementNS(
+    HTML_NS,
+    "button",
+  ) as HTMLButtonElement;
+  primary.type = "button";
+  primary.textContent = getReadingLoopPrimaryActionLabel(snapshot.state);
+  primary.disabled = snapshot.state === "running";
+  Object.assign(primary.style, {
+    border: "none",
+    background: "transparent",
+    color: getReadingLoopAccent(snapshot.state),
+    cursor: snapshot.state === "running" ? "default" : "pointer",
+    padding: "2px 4px",
+    fontSize: "12px",
+    fontWeight: "600",
+    flexShrink: "0",
+    opacity: snapshot.state === "running" ? "0.75" : "1",
+  } satisfies Partial<CSSStyleDeclaration>);
+  primary.addEventListener("click", () => {
+    if (snapshot.state === "running") {
+      return;
+    }
+    if (snapshot.state === "completed") {
+      getReadingLoopService().viewResult(suggestion.id);
+      return;
+    }
+    void getReadingLoopService().acceptSuggestion(suggestion.id);
+  });
+
+  const close = strip.ownerDocument.createElementNS(
+    HTML_NS,
+    "button",
+  ) as HTMLButtonElement;
+  close.type = "button";
+  close.textContent = "×";
+  close.title = getString("reading-loop-dismiss");
+  Object.assign(close.style, {
+    border: "none",
+    background: "transparent",
+    color: theme.textMuted,
+    cursor: "pointer",
+    padding: "2px 3px",
+    fontSize: "14px",
+    lineHeight: "16px",
+    flexShrink: "0",
+  } satisfies Partial<CSSStyleDeclaration>);
+  close.addEventListener("click", () => {
+    getReadingLoopService().dismissSuggestion(suggestion.id);
+  });
+
+  strip.appendChild(dot);
+  strip.appendChild(title);
+  strip.appendChild(primary);
+  if (snapshot.state !== "running") {
+    strip.appendChild(close);
+  }
+}
+
+function getReadingLoopPrimaryActionLabel(state: ReadingLoopState): string {
+  switch (state) {
+    case "completed":
+      return getString("reading-loop-view");
+    case "attention":
+      return getString("reading-loop-retry");
+    case "running":
+      return getString("reading-loop-processing");
+    case "suggested":
+    default:
+      return getString("reading-loop-execute");
+  }
+}
+
+function getReadingLoopAccent(state: ReadingLoopState): string {
+  switch (state) {
+    case "completed":
+      return "#16a34a";
+    case "attention":
+      return "#f97316";
+    case "running":
+    case "suggested":
+    default:
+      return "#2563eb";
+  }
+}
+
 /**
  * Refresh chat for current item (works for both sidebar and floating)
  * Note: This updates the current item tracking but does NOT switch sessions
@@ -1027,9 +1262,11 @@ async function refreshChatForContainer(container: HTMLElement): Promise<void> {
   if (activeItem) {
     moduleCurrentItem = activeItem;
     manager.setCurrentItemKey(activeItem.key);
+    getReadingLoopService().setCurrentItem(activeItem);
   } else {
     moduleCurrentItem = null;
     manager.setCurrentItemKey(null);
+    getReadingLoopService().setCurrentItem(null);
   }
 
   // Update PDF checkbox visibility
@@ -1098,6 +1335,7 @@ function closeFloatingWindow(): void {
 
   if (floatingContainer) {
     cancelPendingStreamingTextRender(floatingContainer);
+    cleanupReadingLoopIntegration(floatingContainer);
   }
 
   if (floatingWindow && !floatingWindow.closed) {
@@ -1239,6 +1477,7 @@ function showSidebarPanel(): boolean {
     const manager = getChatManager();
     const context = createContext(chatContainer);
     setupChatManagerCallbacks(manager, context, chatContainer);
+    setupReadingLoopIntegration(chatContainer, context);
     refreshChatForCurrentItem();
   }
 
@@ -1251,6 +1490,7 @@ function showSidebarPanel(): boolean {
  */
 function hideSidebarPanel(): void {
   if (chatContainer) {
+    cleanupReadingLoopIntegration(chatContainer);
     chatContainer.style.display = "none";
   }
 
@@ -1490,6 +1730,93 @@ function updateToolbarButtonState(pressed: boolean): void {
   }
 }
 
+function updateReadingLoopEntryIndicator(snapshot: ReadingLoopSnapshot): void {
+  const doc = Zotero.getMainWindow().document;
+  const button = doc.getElementById(
+    `${config.addonRef}-toolbar-button`,
+  ) as HTMLElement | null;
+  if (!button) {
+    return;
+  }
+
+  let indicator = button.querySelector(
+    "#paperchat-reading-loop-indicator",
+  ) as HTMLElement | null;
+  if (
+    !snapshot.enabled ||
+    snapshot.state === "idle" ||
+    !snapshot.activeSuggestion
+  ) {
+    indicator?.remove();
+    button.setAttribute(
+      "title",
+      getString(
+        "chat-toolbar-button-tooltip" as Parameters<typeof getString>[0],
+      ),
+    );
+    return;
+  }
+
+  if (!indicator) {
+    indicator = doc.createElementNS(HTML_NS, "span");
+    indicator.id = "paperchat-reading-loop-indicator";
+    button.appendChild(indicator);
+  }
+
+  button.setAttribute(
+    "title",
+    getString("reading-loop-tooltip", {
+      args: { title: snapshot.activeSuggestion.title },
+    }),
+  );
+
+  Object.assign(indicator.style, {
+    position: "absolute",
+    pointerEvents: "none",
+    boxSizing: "border-box",
+  } satisfies Partial<CSSStyleDeclaration>);
+
+  if (snapshot.state === "running") {
+    Object.assign(indicator.style, {
+      left: "4px",
+      top: "4px",
+      right: "4px",
+      bottom: "4px",
+      width: "auto",
+      height: "auto",
+      borderRadius: "999px",
+      border: "1.5px solid #2563eb",
+      background: "transparent",
+      color: "transparent",
+      fontSize: "0",
+      lineHeight: "0",
+    } satisfies Partial<CSSStyleDeclaration>);
+    indicator.textContent = "";
+    return;
+  }
+
+  Object.assign(indicator.style, {
+    top: "3px",
+    right: "3px",
+    left: "auto",
+    bottom: "auto",
+    minWidth: "7px",
+    width: snapshot.state === "completed" ? "12px" : "7px",
+    height: snapshot.state === "completed" ? "12px" : "7px",
+    borderRadius: "999px",
+    border: "1px solid var(--material-background, #fff)",
+    background: getReadingLoopAccent(snapshot.state),
+    color: "#fff",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: "9px",
+    lineHeight: "12px",
+    fontWeight: "700",
+  } satisfies Partial<CSSStyleDeclaration>);
+  indicator.textContent = snapshot.state === "completed" ? "✓" : "";
+}
+
 /**
  * Sync sidebar state based on panel visibility and mode
  */
@@ -1579,6 +1906,7 @@ export function registerToolbarButton(): void {
         backgroundPosition: "center",
         backgroundSize: "18px",
         display: "flex",
+        position: "relative",
         width: "28px",
         height: "28px",
         alignItems: "center",
@@ -1612,6 +1940,11 @@ export function registerToolbarButton(): void {
     anchor.nextElementSibling as Element,
   ) as HTMLElement;
 
+  readingLoopToolbarUnsubscribe?.();
+  readingLoopToolbarUnsubscribe = getReadingLoopService().subscribe(
+    updateReadingLoopEntryIndicator,
+  );
+
   // Register global tab notifier for sidebar sync across tabs
   registerGlobalTabNotifier();
 
@@ -1628,6 +1961,9 @@ export function registerToolbarButton(): void {
  * Unregister toolbar button
  */
 export function unregisterToolbarButton(): void {
+  readingLoopToolbarUnsubscribe?.();
+  readingLoopToolbarUnsubscribe = null;
+
   const doc = Zotero.getMainWindow().document;
   const button = doc.getElementById(`${config.addonRef}-toolbar-button`);
   if (button) {
@@ -1854,6 +2190,7 @@ export async function unregisterAll(): Promise<void> {
   // Remove container
   if (chatContainer) {
     cancelPendingStreamingTextRender(chatContainer);
+    cleanupReadingLoopIntegration(chatContainer);
     chatContainer.remove();
     chatContainer = null;
   }

@@ -185,6 +185,9 @@ export async function refreshPrefsUI(
   // Initialize AI tools settings checkbox
   initAIToolsSettingsCheckbox(doc);
 
+  // Initialize Reading Loop settings
+  initReadingLoopSettings(doc);
+
   // Initialize AISummary settings
   initAISummarySettings(doc);
 }
@@ -315,6 +318,9 @@ export function bindPrefEvents(): void {
 
   // Bind AI tools settings checkbox event
   bindAIToolsSettingsEvent(doc);
+
+  // Bind Reading Loop settings event
+  bindReadingLoopSettingsEvents(doc);
 
   // Bind AISummary settings events
   bindAISummarySettingsEvents(doc);
@@ -518,6 +524,36 @@ function getToolPermissionPopupId(riskLevel: ToolPermissionRiskLevel): string {
 
 function isToolPermissionMode(value: string): value is ToolPermissionMode {
   return value === "auto_allow" || value === "ask" || value === "deny";
+}
+
+function initReadingLoopSettings(doc: Document): void {
+  const enabledCheckbox = doc.getElementById(
+    "pref-reading-loop-enabled",
+  ) as XUL.Checkbox | null;
+  if (enabledCheckbox) {
+    enabledCheckbox.checked = getPref("readingLoopEnabled") !== false;
+  }
+}
+
+function bindReadingLoopSettingsEvents(doc: Document): void {
+  const enabledCheckbox = doc.getElementById(
+    "pref-reading-loop-enabled",
+  ) as XUL.Checkbox | null;
+  if (enabledCheckbox) {
+    enabledCheckbox.addEventListener("command", () => {
+      setPref("readingLoopEnabled", enabledCheckbox.checked);
+      void import("../reading-loop")
+        .then(({ getReadingLoopService }) => {
+          getReadingLoopService().refreshEnabledFromPrefs();
+        })
+        .catch((error) => {
+          ztoolkit.log(
+            "[Preferences] Failed to refresh Reading Loop setting:",
+            error,
+          );
+        });
+    });
+  }
 }
 
 /**

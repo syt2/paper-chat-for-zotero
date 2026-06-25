@@ -26,6 +26,7 @@ declare namespace _ZoteroTypes {
       "uploadRawPdfOnFailure": boolean;
       "panelMode": string;
       "debugContextExportEnabled": boolean;
+      "readingLoopEnabled": boolean;
       "firstInstalledVersion": string;
       "guideStatus": number;
       "contextMaxRecentPairs": number;
