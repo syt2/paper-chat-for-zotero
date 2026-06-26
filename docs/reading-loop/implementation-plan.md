@@ -77,9 +77,6 @@ export type ReadingSuggestionKind =
   | "explain_visual_context"
   | "explain_formula"
   | "trace_reference"
-  | "method_extraction"
-  | "evidence_lookup"
-  | "related_work_lookup"
   | "section_checkpoint"
   | "reading_checkpoint"
   | "followup_questions";
@@ -174,7 +171,10 @@ Preferred first implementation:
 - use the existing `get_pdf_selection` capability when executing
 - for suggestion creation, observe selection changes in the active reader iframe
   if available
-- debounce selection changes by about 300ms
+- wait until the selected text stays unchanged for about 2 seconds before
+  creating the suggestion
+- reset the delay when the selection changes, and cancel it when the selection
+  clears
 - ignore empty selections and very short noise
 
 Rules:
@@ -185,10 +185,6 @@ Rules:
 - classify selected figure/table/image references as `explain_visual_context`
 - classify selected formulas or math symbols as `explain_formula`
 - classify selected numeric or author-year references as `trace_reference`
-- classify selected method/experiment setup text as `method_extraction`
-- classify selected result/evaluation claims as `evidence_lookup`
-- classify selected related-work phrases or grouped citations as
-  `related_work_lookup`
 
 ### Highlights
 
@@ -308,9 +304,8 @@ will create/update a reading note.
 
 ### Specialized Selection Suggestions
 
-`explain_visual_context`, `explain_formula`, `trace_reference`,
-`method_extraction`, `evidence_lookup`, and `related_work_lookup` reuse the same
-execution path as `explain_selection`, but send a more specific prompt to
+`explain_visual_context`, `explain_formula`, and `trace_reference` reuse the
+same execution path as `explain_selection`, but send a more specific prompt to
 PaperChat.
 
 ### Checkpoint Suggestions
@@ -351,9 +346,9 @@ Manual verification:
 - turning setting off hides badge and strip
 - clicking PaperChat icon still opens the panel normally
 - no suggestion strip appears while the panel is closed
-- selecting text creates a blue badge
+- selecting text creates a blue badge only after the selection stays unchanged
+  for the configured delay
 - selecting figure/table/formula/citation text creates a specialized suggestion
-- selecting method/result/related-work text creates a specialized suggestion
 - opening panel shows the strip under the header
 - hovering the toolbar entry with an active suggestion shows a tiny popover
 - dismissing strip clears badge

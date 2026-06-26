@@ -1135,21 +1135,6 @@ function buildReadingLoopPrompt(suggestion: ReadingSuggestion): string {
         "请追踪当前选中的引用或参考文献线索。",
         "要求说明这条引用在当前论文中的作用，并尽量结合参考文献信息或上下文解释它为什么重要。",
       ].join("\n");
-    case "method_extraction":
-      return [
-        "请提取当前选中内容里的方法、实验设置或实现细节。",
-        "要求整理成：模型/方法结构、数据与训练设置、关键超参数、和论文结论的关系。",
-      ].join("\n");
-    case "evidence_lookup":
-      return [
-        "请围绕当前选中的结论或实验表述查找支撑证据。",
-        "要求指出论文中对应的实验、表格、图或上下文，并判断这条结论是否被充分支持。",
-      ].join("\n");
-    case "related_work_lookup":
-      return [
-        "请梳理当前选中内容涉及的相关工作线索。",
-        "要求区分每个相关工作的作用、和当前论文方法的差异，以及后续最值得追的引用。",
-      ].join("\n");
     case "section_checkpoint":
       return [
         "请基于当前论文的阅读位置附近内容，生成一个非常简洁的段落 checkpoint。",

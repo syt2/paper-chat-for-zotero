@@ -15,9 +15,6 @@ export type ReadingSuggestionKind =
   | "explain_visual_context"
   | "explain_formula"
   | "trace_reference"
-  | "method_extraction"
-  | "evidence_lookup"
-  | "related_work_lookup"
   | "section_checkpoint"
   | "reading_checkpoint"
   | "followup_questions";
@@ -71,6 +68,7 @@ const SELECTION_POLL_INTERVAL_MS = 800;
 const SUGGESTION_BADGE_COOLDOWN_MS = 5 * 60 * 1000;
 const DISMISS_SILENCE_MS = 30 * 60 * 1000;
 const MAX_SELECTED_TEXT_LENGTH = 4000;
+const SELECTION_SUGGESTION_DELAY_MS = 2 * 1000;
 const SELECTION_CLEAR_GRACE_MS = 15 * 1000;
 const HIGHLIGHT_SESSION_THRESHOLD = 3;
 const HIGHLIGHT_TOTAL_THRESHOLD = 5;
@@ -84,9 +82,6 @@ const SUGGESTION_PRIORITY: Record<ReadingSuggestionKind, number> = {
   explain_visual_context: 80,
   explain_formula: 80,
   trace_reference: 75,
-  related_work_lookup: 74,
-  evidence_lookup: 72,
-  method_extraction: 72,
   explain_selection: 70,
   followup_questions: 65,
   save_selection_note: 60,
@@ -116,6 +111,12 @@ type ReaderPageState = {
   suggestedDwellKeys: Set<string>;
 };
 
+type PendingSelectionState = {
+  itemKey: string;
+  text: string;
+  firstSeenAt: number;
+};
+
 export class ReadingLoopService {
   private enabled = true;
   private currentItem: Zotero.Item | null = null;
@@ -126,6 +127,7 @@ export class ReadingLoopService {
   private selectionPollTimer: ReturnType<typeof setInterval> | null = null;
   private itemNotifierID: string | null = null;
   private lastSelectionText = "";
+  private pendingSelection: PendingSelectionState | null = null;
   private highlightSessionCounts = new Map<string, number>();
   private lastCreatedByKind = new Map<string, number>();
   private dismissStates = new Map<string, DismissState>();
@@ -161,6 +163,7 @@ export class ReadingLoopService {
     this.currentPaperKey = null;
     this.activeSuggestion = undefined;
     this.lastSelectionText = "";
+    this.pendingSelection = null;
     this.highlightSessionCounts.clear();
     this.lastCreatedByKind.clear();
     this.dismissStates.clear();
@@ -176,6 +179,7 @@ export class ReadingLoopService {
     if (!this.enabled) {
       this.activeSuggestion = undefined;
       this.lastSelectionText = "";
+      this.pendingSelection = null;
     }
     this.notify();
   }
@@ -217,6 +221,7 @@ export class ReadingLoopService {
     this.currentPaperKey = paperKey;
     this.currentItemStartedAt = paperKey ? Date.now() : 0;
     this.lastSelectionText = "";
+    this.pendingSelection = null;
 
     if (
       this.activeSuggestion &&
@@ -246,6 +251,26 @@ export class ReadingLoopService {
       return;
     }
 
+    const now = Date.now();
+    const pending = this.pendingSelection;
+    if (
+      !pending ||
+      pending.text !== normalized ||
+      pending.itemKey !== this.currentPaperKey
+    ) {
+      this.pendingSelection = {
+        itemKey: this.currentPaperKey,
+        text: normalized,
+        firstSeenAt: now,
+      };
+      this.clearPendingSelectionSuggestion(normalized);
+      return;
+    }
+    if (now - pending.firstSeenAt < SELECTION_SUGGESTION_DELAY_MS) {
+      return;
+    }
+
+    this.pendingSelection = null;
     this.lastSelectionText = normalized;
     const classified = this.classifySelection(normalized);
     this.recordPaperActivity(this.currentPaperKey, "selectionCount");
@@ -264,6 +289,7 @@ export class ReadingLoopService {
   }
 
   handleSelectionCleared(): void {
+    this.pendingSelection = null;
     this.lastSelectionText = "";
     if (!this.activeSuggestion) {
       return;
@@ -601,6 +627,8 @@ export class ReadingLoopService {
       this.handleTextSelected(selectedText);
     } else if (this.lastSelectionText) {
       this.handleSelectionCleared();
+    } else if (this.pendingSelection) {
+      this.handleSelectionCleared();
     }
   }
 
@@ -710,35 +738,11 @@ export class ReadingLoopService {
       };
     }
 
-    if (this.looksLikeRelatedWorkLookup(text)) {
-      return {
-        kind: "related_work_lookup",
-        title: "梳理这组相关工作",
-        reason: "来自当前 PDF 选中的相关工作线索",
-      };
-    }
-
-    if (this.looksLikeMethodExtraction(text)) {
-      return {
-        kind: "method_extraction",
-        title: "提取这处方法设置",
-        reason: "来自当前 PDF 选中的方法/实验设置",
-      };
-    }
-
     if (this.looksLikeCitation(text)) {
       return {
         kind: "trace_reference",
         title: "追踪这处引用线索",
         reason: "来自当前 PDF 选中的引用或参考文献",
-      };
-    }
-
-    if (this.looksLikeEvidenceLookup(text)) {
-      return {
-        kind: "evidence_lookup",
-        title: "查找这条结论的证据",
-        reason: "来自当前 PDF 选中的结论或实验表述",
       };
     }
 
@@ -771,30 +775,6 @@ export class ReadingLoopService {
       /\((?:[A-Z][A-Za-z-]+(?:\s+et\s+al\.)?,\s*)?(?:19|20)\d{2}[a-z]?\)/.test(
         text,
       )
-    );
-  }
-
-  private looksLikeRelatedWorkLookup(text: string): boolean {
-    const citationMatches =
-      text.match(
-        /\[(?:\d{1,3})(?:\s*[,;]\s*\d{1,3}){1,}\]|\b[A-Z][A-Za-z-]+(?:\s+et\s+al\.)?,\s*(?:19|20)\d{2}\b/g,
-      ) || [];
-    return (
-      /(related work|prior work|previous work|previous studies|existing methods|literature|state-of-the-art|baseline methods|相关工作|已有研究|前人工作|现有方法)/i.test(
-        text,
-      ) || citationMatches.length >= 2
-    );
-  }
-
-  private looksLikeMethodExtraction(text: string): boolean {
-    return /(method|approach|architecture|pipeline|implementation|training|dataset|hyperparameter|optimizer|learning rate|batch size|baseline|ablation|实验设置|方法|模型结构|训练|数据集|超参数|消融|基线)/i.test(
-      text,
-    );
-  }
-
-  private looksLikeEvidenceLookup(text: string): boolean {
-    return /(result|results show|demonstrate|indicate|outperform|improve|increase|decrease|significant|accuracy|performance|experiment|evaluation|结果|表明|证明|提升|降低|显著|性能|实验|评估)/i.test(
-      text,
     );
   }
 
@@ -1094,9 +1074,6 @@ export class ReadingLoopService {
       "explain_visual_context",
       "explain_formula",
       "trace_reference",
-      "method_extraction",
-      "evidence_lookup",
-      "related_work_lookup",
     ].includes(kind);
   }
 
@@ -1127,12 +1104,6 @@ export class ReadingLoopService {
         return "正在解释公式...";
       case "trace_reference":
         return "正在追踪引用线索...";
-      case "method_extraction":
-        return "正在提取方法设置...";
-      case "evidence_lookup":
-        return "正在查找证据...";
-      case "related_work_lookup":
-        return "正在梳理相关工作...";
       case "save_selection_note":
         return "正在保存选中文本...";
       case "explain_selection":
@@ -1152,11 +1123,20 @@ export class ReadingLoopService {
       case "explain_visual_context":
       case "explain_formula":
       case "trace_reference":
-      case "method_extraction":
-      case "evidence_lookup":
-      case "related_work_lookup":
       default:
         return "已发送到 PaperChat";
+    }
+  }
+
+  private clearPendingSelectionSuggestion(nextText: string): void {
+    if (
+      this.activeSuggestion?.status === "suggested" &&
+      this.isSelectionSuggestion(this.activeSuggestion.kind) &&
+      this.activeSuggestion.payload?.selectedText !== nextText
+    ) {
+      this.activeSuggestion = undefined;
+      this.lastSelectionText = "";
+      this.notify();
     }
   }
 

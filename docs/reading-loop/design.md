@@ -182,9 +182,6 @@ type ReadingSuggestionKind =
   | "trace_reference"
   | "reading_checkpoint"
   | "section_checkpoint"
-  | "method_extraction"
-  | "evidence_lookup"
-  | "related_work_lookup"
   | "followup_questions";
 
 interface ReadingSuggestion {
@@ -285,24 +282,24 @@ second signal before showing a badge.
 
 ### Text Selection
 
-| Behavior                              | Event               | Suggested Action                     | MVP |
-| ------------------------------------- | ------------------- | ------------------------------------ | --- |
-| User selects meaningful text          | `text_selected`     | suggest explaining selection         | Yes |
-| Selected text is short phrase or term | `text_selected`     | suggest definition / evidence lookup | Yes |
-| Selected text is long paragraph       | `text_selected`     | suggest summarize or save as note    | Yes |
-| Selected text looks like figure/table | `text_selected`     | suggest visual-context explanation   | Yes |
-| Selected text looks like formula      | `text_selected`     | suggest formula explanation          | Yes |
-| Selected text looks like citation     | `text_selected`     | suggest reference tracing            | Yes |
-| Selection is cleared quickly          | `selection_cleared` | expire selection suggestion          | Yes |
+| Behavior                              | Event               | Suggested Action                   | MVP |
+| ------------------------------------- | ------------------- | ---------------------------------- | --- |
+| User selects meaningful text          | `text_selected`     | suggest explaining selection       | Yes |
+| Selected text is stable for N seconds | `text_selected`     | suggest explaining selection       | Yes |
+| Selected text is long paragraph       | `text_selected`     | suggest summarize or save as note  | Yes |
+| Selected text looks like figure/table | `text_selected`     | suggest visual-context explanation | Yes |
+| Selected text looks like formula      | `text_selected`     | suggest formula explanation        | Yes |
+| Selected text looks like citation     | `text_selected`     | suggest reference tracing          | Yes |
+| Selection is cleared quickly          | `selection_cleared` | expire selection suggestion        | Yes |
 
 Selection is the safest first trigger because it is already an intentional user
-signal.
+signal. The UI should wait until the selected text remains unchanged for about
+two seconds before surfacing a suggestion; changing or clearing the selection
+resets the timer.
 
 Suggested mapping:
 
-- short selection, under about 120 chars:
-  `explain_selection` or `evidence_lookup`
-- medium selection:
+- normal selection:
   `explain_selection`
 - long selection:
   `save_selection_note` or `explain_selection`
@@ -312,12 +309,6 @@ Suggested mapping:
   `explain_formula`
 - numeric or author-year citation references:
   `trace_reference`
-- method, experiment, dataset, baseline, or hyperparameter text:
-  `method_extraction`
-- result, performance, evaluation, or conclusion text:
-  `evidence_lookup`
-- related-work phrasing or grouped citations:
-  `related_work_lookup`
 
 Strip examples:
 
@@ -419,9 +410,8 @@ The first implementation should include only these suggestion sources:
 4. Special selection patterns
    - events: `text_selected`
    - suggestions: `explain_visual_context`, `explain_formula`,
-     `trace_reference`, `method_extraction`, `evidence_lookup`,
-     `related_work_lookup`
-   - action: explain or route the selected figure/table/formula/citation/method/evidence/related-work context
+     `trace_reference`
+   - action: explain or route the selected figure/table/formula/citation context
 
 5. Reading progress
    - events: `reading_dwell`, `reader_progress_tick`, `page_dwelled`,
