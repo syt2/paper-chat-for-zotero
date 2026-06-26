@@ -642,6 +642,8 @@ let suppressFloatingUnloadTracking = false;
 const readingLoopPanelSubscriptions = new WeakMap<HTMLElement, () => void>();
 let readingLoopExecutorOwner: HTMLElement | null = null;
 let readingLoopToolbarUnsubscribe: (() => void) | null = null;
+let readingLoopLatestSnapshot: ReadingLoopSnapshot | null = null;
+let readingLoopPopoverHideTimer: number | null = null;
 
 // Attachment state
 let pendingImages: ImageAttachment[] = [];
@@ -1112,6 +1114,36 @@ function buildReadingLoopPrompt(suggestion: ReadingSuggestion): string {
       return [
         "请将当前选中的文本整理成一条简洁阅读笔记，并追加到这篇论文的 PaperChat Notes 子笔记中。",
         "请先概括要点，再保留必要的原文线索。",
+      ].join("\n");
+    case "explain_visual_context":
+      return [
+        "请解释当前选中的图表、图片或算法线索，并结合论文上下文说明它支撑了什么结论。",
+        "如果需要，请优先读取附近页面、图注、表注或相关段落。",
+      ].join("\n");
+    case "explain_formula":
+      return [
+        "请解释当前选中的公式或数学符号。",
+        "要求说明每个关键变量的含义、公式在论文方法中的作用，以及它和实验/结论的关系。",
+      ].join("\n");
+    case "trace_reference":
+      return [
+        "请追踪当前选中的引用或参考文献线索。",
+        "要求说明这条引用在当前论文中的作用，并尽量结合参考文献信息或上下文解释它为什么重要。",
+      ].join("\n");
+    case "section_checkpoint":
+      return [
+        "请基于当前论文的阅读位置附近内容，生成一个非常简洁的段落 checkpoint。",
+        "包括：这一段在解决什么问题、已有结论、下一步阅读时要注意什么。",
+      ].join("\n");
+    case "reading_checkpoint":
+      return [
+        "请基于当前论文、已有标注和最近对话，生成本次阅读 checkpoint。",
+        "包括：当前已理解的主线、仍未解决的问题、接下来最值得读的部分。",
+      ].join("\n");
+    case "followup_questions":
+      return [
+        "我刚才围绕这篇论文连续提出了一些问题。请把这些问题整理成一条清晰的阅读路线。",
+        "要求区分：概念澄清、方法细节、证据/实验、下一步需要查的内容。",
       ].join("\n");
     case "explain_selection":
     default:
@@ -1731,6 +1763,7 @@ function updateToolbarButtonState(pressed: boolean): void {
 }
 
 function updateReadingLoopEntryIndicator(snapshot: ReadingLoopSnapshot): void {
+  readingLoopLatestSnapshot = snapshot;
   const doc = Zotero.getMainWindow().document;
   const button = doc.getElementById(
     `${config.addonRef}-toolbar-button`,
@@ -1748,6 +1781,7 @@ function updateReadingLoopEntryIndicator(snapshot: ReadingLoopSnapshot): void {
     !snapshot.activeSuggestion
   ) {
     indicator?.remove();
+    hideReadingLoopPopover(doc, 0);
     button.setAttribute(
       "title",
       getString(
@@ -1755,6 +1789,13 @@ function updateReadingLoopEntryIndicator(snapshot: ReadingLoopSnapshot): void {
       ),
     );
     return;
+  }
+
+  const visiblePopover = doc.getElementById(
+    "paperchat-reading-loop-popover",
+  ) as HTMLElement | null;
+  if (visiblePopover?.style.display === "block") {
+    showReadingLoopPopover(button);
   }
 
   if (!indicator) {
@@ -1815,6 +1856,131 @@ function updateReadingLoopEntryIndicator(snapshot: ReadingLoopSnapshot): void {
     fontWeight: "700",
   } satisfies Partial<CSSStyleDeclaration>);
   indicator.textContent = snapshot.state === "completed" ? "✓" : "";
+}
+
+function ensureReadingLoopToolbarSubscription(): void {
+  readingLoopToolbarUnsubscribe?.();
+  readingLoopToolbarUnsubscribe = getReadingLoopService().subscribe(
+    updateReadingLoopEntryIndicator,
+  );
+}
+
+function getReadingLoopPopover(doc: Document): HTMLElement {
+  let popover = doc.getElementById(
+    "paperchat-reading-loop-popover",
+  ) as HTMLElement | null;
+  if (popover) {
+    return popover;
+  }
+
+  popover = doc.createElementNS(HTML_NS, "div") as HTMLElement;
+  popover.id = "paperchat-reading-loop-popover";
+  Object.assign(popover.style, {
+    position: "fixed",
+    zIndex: "10004",
+    display: "none",
+    minWidth: "180px",
+    maxWidth: "260px",
+    padding: "8px 10px",
+    borderRadius: "6px",
+    boxSizing: "border-box",
+    boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+    pointerEvents: "none",
+  } satisfies Partial<CSSStyleDeclaration>);
+  doc.documentElement.appendChild(popover);
+  return popover;
+}
+
+function showReadingLoopPopover(anchor: HTMLElement): void {
+  const win = anchor.ownerDocument.defaultView;
+  if (!win) {
+    return;
+  }
+  if (readingLoopPopoverHideTimer != null) {
+    win.clearTimeout(readingLoopPopoverHideTimer);
+    readingLoopPopoverHideTimer = null;
+  }
+
+  const snapshot = readingLoopLatestSnapshot;
+  const suggestion = snapshot?.activeSuggestion;
+  if (!snapshot?.enabled || !suggestion || snapshot.state === "idle") {
+    hideReadingLoopPopover(anchor.ownerDocument, 0);
+    return;
+  }
+
+  const doc = anchor.ownerDocument;
+  const theme = getCurrentTheme();
+  const popover = getReadingLoopPopover(doc);
+  popover.replaceChildren();
+
+  const title = doc.createElementNS(HTML_NS, "div") as HTMLElement;
+  title.textContent = suggestion.title;
+  Object.assign(title.style, {
+    color: theme.textPrimary,
+    fontSize: "12px",
+    fontWeight: "600",
+    lineHeight: "16px",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  } satisfies Partial<CSSStyleDeclaration>);
+
+  const meta = doc.createElementNS(HTML_NS, "div") as HTMLElement;
+  meta.textContent =
+    snapshot.state === "running"
+      ? getString("reading-loop-processing")
+      : suggestion.reason ||
+        getString("reading-loop-tooltip", {
+          args: { title: suggestion.title },
+        });
+  Object.assign(meta.style, {
+    color: theme.textMuted,
+    fontSize: "11px",
+    lineHeight: "15px",
+    marginTop: "2px",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  } satisfies Partial<CSSStyleDeclaration>);
+
+  popover.appendChild(title);
+  popover.appendChild(meta);
+  Object.assign(popover.style, {
+    display: "block",
+    background: theme.dropdownBg,
+    border: `1px solid ${theme.borderColor}`,
+  } satisfies Partial<CSSStyleDeclaration>);
+
+  const anchorRect = anchor.getBoundingClientRect();
+  const popoverRect = popover.getBoundingClientRect();
+  const viewportWidth = doc.defaultView?.innerWidth || anchorRect.right + 260;
+  const left = Math.max(
+    8,
+    Math.min(
+      anchorRect.right - popoverRect.width,
+      viewportWidth - popoverRect.width - 8,
+    ),
+  );
+  const top = anchorRect.bottom + 6;
+  popover.style.left = `${left}px`;
+  popover.style.top = `${top}px`;
+}
+
+function hideReadingLoopPopover(doc: Document, delayMs = 120): void {
+  const win = doc.defaultView;
+  if (!win) {
+    return;
+  }
+  if (readingLoopPopoverHideTimer != null) {
+    win.clearTimeout(readingLoopPopoverHideTimer);
+  }
+  readingLoopPopoverHideTimer = win.setTimeout(() => {
+    const popover = doc.getElementById("paperchat-reading-loop-popover");
+    if (popover) {
+      (popover as HTMLElement).style.display = "none";
+    }
+    readingLoopPopoverHideTimer = null;
+  }, delayMs);
 }
 
 /**
@@ -1878,7 +2044,12 @@ export function togglePanel(source: ChatPanelOpenSource = "unknown"): void {
 export function registerToolbarButton(): void {
   const doc = Zotero.getMainWindow().document;
 
-  if (doc.getElementById(`${config.addonRef}-toolbar-button`)) {
+  const existingButton = doc.getElementById(
+    `${config.addonRef}-toolbar-button`,
+  ) as HTMLElement | null;
+  if (existingButton) {
+    existingButton.style.position = "relative";
+    ensureReadingLoopToolbarSubscription();
     return;
   }
 
@@ -1923,6 +2094,7 @@ export function registerToolbarButton(): void {
           listener: (e: Event) => {
             (e.currentTarget as HTMLElement).style.backgroundColor =
               "var(--fill-quinary)";
+            showReadingLoopPopover(e.currentTarget as HTMLElement);
           },
         },
         {
@@ -1933,6 +2105,23 @@ export function registerToolbarButton(): void {
               (e.currentTarget as HTMLElement).style.backgroundColor =
                 "transparent";
             }
+            hideReadingLoopPopover(
+              (e.currentTarget as HTMLElement).ownerDocument,
+            );
+          },
+        },
+        {
+          type: "focus",
+          listener: (e: Event) => {
+            showReadingLoopPopover(e.currentTarget as HTMLElement);
+          },
+        },
+        {
+          type: "blur",
+          listener: (e: Event) => {
+            hideReadingLoopPopover(
+              (e.currentTarget as HTMLElement).ownerDocument,
+            );
           },
         },
       ],
@@ -1940,10 +2129,7 @@ export function registerToolbarButton(): void {
     anchor.nextElementSibling as Element,
   ) as HTMLElement;
 
-  readingLoopToolbarUnsubscribe?.();
-  readingLoopToolbarUnsubscribe = getReadingLoopService().subscribe(
-    updateReadingLoopEntryIndicator,
-  );
+  ensureReadingLoopToolbarSubscription();
 
   // Register global tab notifier for sidebar sync across tabs
   registerGlobalTabNotifier();
@@ -1969,6 +2155,7 @@ export function unregisterToolbarButton(): void {
   if (button) {
     button.remove();
   }
+  doc.getElementById("paperchat-reading-loop-popover")?.remove();
 
   // Unregister global tab notifier
   unregisterGlobalTabNotifier();

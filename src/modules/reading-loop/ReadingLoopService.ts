@@ -11,7 +11,13 @@ export type ReadingLoopState =
 export type ReadingSuggestionKind =
   | "explain_selection"
   | "save_selection_note"
-  | "highlight_digest";
+  | "highlight_digest"
+  | "explain_visual_context"
+  | "explain_formula"
+  | "trace_reference"
+  | "section_checkpoint"
+  | "reading_checkpoint"
+  | "followup_questions";
 
 export interface ReadingSuggestion {
   id: string;
@@ -64,11 +70,20 @@ const DISMISS_SILENCE_MS = 30 * 60 * 1000;
 const MAX_SELECTED_TEXT_LENGTH = 4000;
 const HIGHLIGHT_SESSION_THRESHOLD = 3;
 const HIGHLIGHT_TOTAL_THRESHOLD = 5;
+const DWELL_CHECKPOINT_MS = 4 * 60 * 1000;
+const FOLLOWUP_QUESTION_WINDOW_MS = 10 * 60 * 1000;
+const FOLLOWUP_QUESTION_THRESHOLD = 3;
 
 const SUGGESTION_PRIORITY: Record<ReadingSuggestionKind, number> = {
+  explain_visual_context: 80,
+  explain_formula: 80,
+  trace_reference: 75,
   explain_selection: 70,
+  followup_questions: 65,
   save_selection_note: 60,
   highlight_digest: 50,
+  section_checkpoint: 45,
+  reading_checkpoint: 40,
 };
 
 type DismissState = {
@@ -89,6 +104,9 @@ export class ReadingLoopService {
   private highlightSessionCounts = new Map<string, number>();
   private lastCreatedByKind = new Map<string, number>();
   private dismissStates = new Map<string, DismissState>();
+  private currentItemStartedAt = 0;
+  private lastReaderProgressBucket = new Map<string, number>();
+  private recentQuestionSignals = new Map<string, number[]>();
   private initialized = false;
 
   init(): void {
@@ -159,6 +177,7 @@ export class ReadingLoopService {
 
     this.currentItem = item;
     this.currentPaperKey = paperKey;
+    this.currentItemStartedAt = paperKey ? Date.now() : 0;
     this.lastSelectionText = "";
 
     if (
@@ -169,6 +188,10 @@ export class ReadingLoopService {
     ) {
       this.activeSuggestion = undefined;
       this.notify();
+    }
+
+    if (paperKey) {
+      this.maybeSuggestExistingHighlightDigest(paperKey);
     }
   }
 
@@ -187,18 +210,13 @@ export class ReadingLoopService {
     }
 
     this.lastSelectionText = normalized;
-    const kind: ReadingSuggestionKind =
-      normalized.length > 800 ? "save_selection_note" : "explain_selection";
-    const title =
-      kind === "save_selection_note"
-        ? "保存选中文本到笔记"
-        : "解释当前选中文本";
+    const classified = this.classifySelection(normalized);
 
     this.createSuggestion({
-      kind,
+      kind: classified.kind,
       itemKey: this.currentPaperKey,
-      title,
-      reason: "来自当前 PDF 选中文本",
+      title: classified.title,
+      reason: classified.reason,
       payload: {
         selectedText: normalized.slice(0, MAX_SELECTED_TEXT_LENGTH),
         selectedTextLength: normalized.length,
@@ -211,7 +229,10 @@ export class ReadingLoopService {
     this.lastSelectionText = "";
     if (
       this.activeSuggestion?.kind === "explain_selection" ||
-      this.activeSuggestion?.kind === "save_selection_note"
+      this.activeSuggestion?.kind === "save_selection_note" ||
+      this.activeSuggestion?.kind === "explain_visual_context" ||
+      this.activeSuggestion?.kind === "explain_formula" ||
+      this.activeSuggestion?.kind === "trace_reference"
     ) {
       this.activeSuggestion = undefined;
       this.notify();
@@ -255,6 +276,40 @@ export class ReadingLoopService {
       payload: {
         sessionHighlightCount: nextCount,
         totalHighlightCount: totalCount,
+      },
+    });
+  }
+
+  handleChatMessageSent(text: string, item?: Zotero.Item | null): void {
+    if (!this.enabled) {
+      return;
+    }
+    const paperKey = this.resolvePaperKey(item || this.currentItem);
+    if (!paperKey || paperKey !== this.currentPaperKey) {
+      return;
+    }
+    if (!this.looksLikeQuestionOrConfusion(text)) {
+      return;
+    }
+
+    const now = Date.now();
+    const recent = (this.recentQuestionSignals.get(paperKey) || []).filter(
+      (timestamp) => now - timestamp <= FOLLOWUP_QUESTION_WINDOW_MS,
+    );
+    recent.push(now);
+    this.recentQuestionSignals.set(paperKey, recent);
+
+    if (recent.length < FOLLOWUP_QUESTION_THRESHOLD) {
+      return;
+    }
+
+    this.createSuggestion({
+      kind: "followup_questions",
+      itemKey: paperKey,
+      title: "整理刚才的问题为阅读路线",
+      reason: "来自连续提问",
+      payload: {
+        recentQuestionCount: recent.length,
       },
     });
   }
@@ -363,6 +418,9 @@ export class ReadingLoopService {
       this.activeSuggestion.kind === input.kind &&
       this.activeSuggestion.status === "suggested"
     ) {
+      if (this.isCreationCoolingDown(input.kind, kindKey, now)) {
+        return;
+      }
       this.activeSuggestion = {
         ...this.activeSuggestion,
         title: input.title,
@@ -371,15 +429,13 @@ export class ReadingLoopService {
         expiresAt: input.expiresAt,
         updatedAt: now,
       };
+      this.lastCreatedByKind.set(kindKey, now);
       this.notify();
       return;
     }
 
-    if (input.kind === "highlight_digest") {
-      const lastCreatedAt = this.lastCreatedByKind.get(kindKey) || 0;
-      if (now - lastCreatedAt < SUGGESTION_BADGE_COOLDOWN_MS) {
-        return;
-      }
+    if (this.isCreationCoolingDown(input.kind, kindKey, now)) {
+      return;
     }
 
     if (
@@ -477,6 +533,7 @@ export class ReadingLoopService {
 
     const activeItem = this.getActiveReaderItem();
     this.setCurrentItem(activeItem);
+    this.handleReaderProgressSignals();
 
     const selectedText = await this.readActivePdfSelection();
     if (selectedText) {
@@ -548,6 +605,187 @@ export class ReadingLoopService {
     return text.replace(/\s+/g, " ").trim();
   }
 
+  private classifySelection(text: string): {
+    kind: ReadingSuggestionKind;
+    title: string;
+    reason: string;
+  } {
+    if (text.length > 800) {
+      return {
+        kind: "save_selection_note",
+        title: "保存选中文本到笔记",
+        reason: "来自较长 PDF 选中文本",
+      };
+    }
+
+    if (this.looksLikeVisualReference(text)) {
+      return {
+        kind: "explain_visual_context",
+        title: "解释这处图表线索",
+        reason: "来自当前 PDF 选中的图表/图片线索",
+      };
+    }
+
+    if (this.looksLikeFormula(text)) {
+      return {
+        kind: "explain_formula",
+        title: "解释当前公式",
+        reason: "来自当前 PDF 选中的公式或符号",
+      };
+    }
+
+    if (this.looksLikeCitation(text)) {
+      return {
+        kind: "trace_reference",
+        title: "追踪这处引用线索",
+        reason: "来自当前 PDF 选中的引用或参考文献",
+      };
+    }
+
+    return {
+      kind: "explain_selection",
+      title: "解释当前选中文本",
+      reason: "来自当前 PDF 选中文本",
+    };
+  }
+
+  private looksLikeVisualReference(text: string): boolean {
+    return /\b(fig(?:ure)?|table|scheme|algorithm|image|panel)\s*\.?\s*\d+[a-z]?\b/i.test(
+      text,
+    );
+  }
+
+  private looksLikeFormula(text: string): boolean {
+    return (
+      /\b(eq(?:uation)?|formula)\s*\.?\s*\(?\d+[a-z]?\)?\b/i.test(text) ||
+      /[=≈≃≤≥∑∫√∞±×÷∂∇α-ωΑ-Ω]/u.test(text)
+    );
+  }
+
+  private looksLikeCitation(text: string): boolean {
+    return (
+      /\[(?:\d{1,3}|[A-Z][A-Za-z-]+(?:\s+et\s+al\.)?)(?:\s*[,;]\s*(?:\d{1,3}|[A-Z][A-Za-z-]+(?:\s+et\s+al\.)?))*\]/.test(
+        text,
+      ) ||
+      /\b[A-Z][A-Za-z-]+(?:\s+et\s+al\.)?,\s*(?:19|20)\d{2}\b/.test(text) ||
+      /\((?:[A-Z][A-Za-z-]+(?:\s+et\s+al\.)?,\s*)?(?:19|20)\d{2}[a-z]?\)/.test(
+        text,
+      )
+    );
+  }
+
+  private looksLikeQuestionOrConfusion(text: string): boolean {
+    return (
+      /[?？]/.test(text) ||
+      /(不懂|没懂|困惑|为什么|怎么|如何|区别|含义|意思|解释|看不明白|confus|unclear|why|how|what does|difference|meaning)/i.test(
+        text,
+      )
+    );
+  }
+
+  private maybeSuggestExistingHighlightDigest(paperKey: string): void {
+    const totalCount = this.getHighlightCountForPaper(paperKey);
+    if (totalCount < HIGHLIGHT_TOTAL_THRESHOLD) {
+      return;
+    }
+
+    this.createSuggestion({
+      kind: "highlight_digest",
+      itemKey: paperKey,
+      title: `整理已有 ${totalCount} 条高亮为阅读笔记`,
+      reason: "来自当前论文已有高亮",
+      payload: {
+        sessionHighlightCount: this.highlightSessionCounts.get(paperKey) || 0,
+        totalHighlightCount: totalCount,
+      },
+    });
+  }
+
+  private handleReaderProgressSignals(): void {
+    if (!this.enabled || !this.currentPaperKey || !this.currentItemStartedAt) {
+      return;
+    }
+
+    const now = Date.now();
+    if (now - this.currentItemStartedAt >= DWELL_CHECKPOINT_MS) {
+      this.createSuggestion({
+        kind: "reading_checkpoint",
+        itemKey: this.currentPaperKey,
+        title: "生成当前阅读 checkpoint",
+        reason: "来自当前论文的持续阅读",
+        payload: {
+          dwellMs: now - this.currentItemStartedAt,
+        },
+      });
+    }
+
+    const progress = this.readActiveReaderProgress();
+    if (!progress || progress.pageCount <= 0) {
+      return;
+    }
+
+    const ratio = (progress.pageIndex + 1) / progress.pageCount;
+    const bucket = Math.floor(ratio * 4);
+    const lastBucket = this.lastReaderProgressBucket.get(this.currentPaperKey);
+    if (typeof lastBucket === "undefined") {
+      this.lastReaderProgressBucket.set(this.currentPaperKey, bucket);
+      return;
+    }
+    if (bucket > 0 && bucket !== lastBucket) {
+      this.lastReaderProgressBucket.set(this.currentPaperKey, bucket);
+      this.createSuggestion({
+        kind: bucket >= 3 ? "reading_checkpoint" : "section_checkpoint",
+        itemKey: this.currentPaperKey,
+        title: bucket >= 3 ? "收束这篇论文的阅读进展" : "总结当前阅读段落",
+        reason: `来自阅读进度约 ${Math.min(100, Math.round(ratio * 100))}%`,
+        payload: {
+          pageIndex: progress.pageIndex,
+          pageCount: progress.pageCount,
+          progressRatio: ratio,
+        },
+      });
+    }
+  }
+
+  private readActiveReaderProgress(): {
+    pageIndex: number;
+    pageCount: number;
+  } | null {
+    try {
+      const mainWindow = Zotero.getMainWindow() as Window & {
+        Zotero_Tabs?: { selectedID: string };
+      };
+      const selectedID = mainWindow.Zotero_Tabs?.selectedID;
+      const reader = selectedID ? Zotero.Reader?.getByTabID(selectedID) : null;
+      const iframeWindow = (reader as any)?._iframeWindow as
+        | (Window & {
+            PDFViewerApplication?: {
+              page?: number;
+              pagesCount?: number;
+              pdfViewer?: {
+                currentPageNumber?: number;
+                pagesCount?: number;
+              };
+            };
+          })
+        | undefined;
+      const pdfApp = iframeWindow?.PDFViewerApplication;
+      const pageNumber =
+        pdfApp?.pdfViewer?.currentPageNumber || pdfApp?.page || 0;
+      const pageCount =
+        pdfApp?.pdfViewer?.pagesCount || pdfApp?.pagesCount || 0;
+      if (pageNumber < 1 || pageCount < 1) {
+        return null;
+      }
+      return {
+        pageIndex: pageNumber - 1,
+        pageCount,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   private resolvePaperKey(item: Zotero.Item | null | undefined): string | null {
     if (!item?.key) {
       return null;
@@ -613,10 +851,43 @@ export class ReadingLoopService {
     return `${itemKey}:${kind}`;
   }
 
+  private shouldApplyCreationCooldown(kind: ReadingSuggestionKind): boolean {
+    return ![
+      "explain_selection",
+      "save_selection_note",
+      "explain_visual_context",
+      "explain_formula",
+      "trace_reference",
+    ].includes(kind);
+  }
+
+  private isCreationCoolingDown(
+    kind: ReadingSuggestionKind,
+    kindKey: string,
+    now: number,
+  ): boolean {
+    if (!this.shouldApplyCreationCooldown(kind)) {
+      return false;
+    }
+    const lastCreatedAt = this.lastCreatedByKind.get(kindKey) || 0;
+    return now - lastCreatedAt < SUGGESTION_BADGE_COOLDOWN_MS;
+  }
+
   private getRunningTitle(suggestion: ReadingSuggestion): string {
     switch (suggestion.kind) {
       case "highlight_digest":
         return "正在整理高亮...";
+      case "section_checkpoint":
+      case "reading_checkpoint":
+        return "正在整理阅读进展...";
+      case "followup_questions":
+        return "正在整理提问线索...";
+      case "explain_visual_context":
+        return "正在解释图表线索...";
+      case "explain_formula":
+        return "正在解释公式...";
+      case "trace_reference":
+        return "正在追踪引用线索...";
       case "save_selection_note":
         return "正在保存选中文本...";
       case "explain_selection":
@@ -628,10 +899,14 @@ export class ReadingLoopService {
   private getCompletedTitle(suggestion: ReadingSuggestion): string {
     switch (suggestion.kind) {
       case "highlight_digest":
-        return "已发送到 PaperChat";
       case "save_selection_note":
-        return "已发送到 PaperChat";
       case "explain_selection":
+      case "section_checkpoint":
+      case "reading_checkpoint":
+      case "followup_questions":
+      case "explain_visual_context":
+      case "explain_formula":
+      case "trace_reference":
       default:
         return "已发送到 PaperChat";
     }

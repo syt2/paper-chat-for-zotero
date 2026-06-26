@@ -50,6 +50,7 @@ import {
   extractStatusCode,
   isNetworkErrorMessage,
 } from "../../analytics/errorClassify";
+import { getReadingLoopService } from "../../reading-loop";
 
 // Import getActiveReaderItem from the manager module to avoid circular dependency
 // This is set by ChatPanelManager during initialization
@@ -1545,6 +1546,8 @@ async function sendMessage(
       }
       return;
     }
+
+    getReadingLoopService().handleChatMessageSent(content, targetItem);
 
     // Composer was already cleared before the async send began.
   } catch (error) {

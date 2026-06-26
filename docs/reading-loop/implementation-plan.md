@@ -172,7 +172,10 @@ Rules:
 
 - selection under 3 visible chars: ignore
 - selection over a safe preview limit: store a preview only before acceptance
-- selection cleared: expire `explain_selection`
+- selection cleared: expire selection-driven suggestions
+- classify selected figure/table/image references as `explain_visual_context`
+- classify selected formulas or math symbols as `explain_formula`
+- classify selected numeric or author-year references as `trace_reference`
 
 ### Highlights
 
@@ -182,7 +185,26 @@ Rules:
 
 - increment per-item session highlight count on new highlight annotations
 - create `highlight_digest` after 3 highlights in the current reading session
+- create `highlight_digest` when opening a paper that already has 5 highlights
 - do not run annotation summarization until accepted
+
+### Reading Progress
+
+Use reader polling only for low-priority, local signals:
+
+- create `reading_checkpoint` after sustained dwell on the current paper
+- create `section_checkpoint` when the reader crosses coarse progress buckets
+- upgrade to `reading_checkpoint` near the end of the paper
+- apply cooldown so progress suggestions do not repeatedly repaint the UI
+
+### Chat Follow-Up
+
+After a user message is accepted by `ChatManager`, count lightweight question or
+confusion signals for the current paper:
+
+- question marks and common Chinese/English confusion phrases count as signals
+- three signals within ten minutes create `followup_questions`
+- normal one-off messages do not create suggestions
 
 ## UI Integration
 
@@ -267,6 +289,19 @@ Reuse existing tools where possible:
 Writing to Zotero is allowed here because the strip action explicitly says it
 will create/update a reading note.
 
+### Specialized Selection Suggestions
+
+`explain_visual_context`, `explain_formula`, and `trace_reference` reuse the same
+execution path as `explain_selection`, but send a more specific prompt to
+PaperChat.
+
+### Checkpoint Suggestions
+
+`section_checkpoint`, `reading_checkpoint`, and `followup_questions` send a
+PaperChat prompt that summarizes local reading progress or recent questions.
+They do not write to Zotero unless the resulting PaperChat turn explicitly asks
+for a tool action and the existing permission flow allows it.
+
 ## Rate Limits
 
 MVP limits:
@@ -299,10 +334,15 @@ Manual verification:
 - clicking PaperChat icon still opens the panel normally
 - no suggestion strip appears while the panel is closed
 - selecting text creates a blue badge
+- selecting figure/table/formula/citation text creates a specialized suggestion
 - opening panel shows the strip under the header
+- hovering the toolbar entry with an active suggestion shows a tiny popover
 - dismissing strip clears badge
 - clearing selection expires selection suggestion
 - creating enough highlights creates a digest suggestion
+- opening a paper with enough existing highlights creates a digest suggestion
+- sustained reading/progress creates checkpoint suggestions
+- repeated questions create a follow-up reading-route suggestion
 - accepting digest shows running state, then completed state
 - completed result view clears check badge
 - switching papers clears stale suggestions
