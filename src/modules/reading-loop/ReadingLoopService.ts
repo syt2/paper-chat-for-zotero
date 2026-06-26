@@ -1,68 +1,13 @@
 import { getPref } from "../../utils/prefs";
 import { generateTimestampId, getErrorMessage } from "../../utils/common";
-
-export type ReadingLoopState =
-  | "idle"
-  | "suggested"
-  | "running"
-  | "completed"
-  | "attention";
-
-export type ReadingSuggestionKind =
-  | "explain_selection"
-  | "save_selection_note"
-  | "highlight_digest"
-  | "explain_visual_context"
-  | "explain_formula"
-  | "trace_reference"
-  | "section_checkpoint"
-  | "reading_checkpoint"
-  | "followup_questions";
-
-export interface ReadingSuggestion {
-  id: string;
-  kind: ReadingSuggestionKind;
-  itemKey: string;
-  title: string;
-  reason: string;
-  priority: number;
-  status: ReadingLoopState;
-  sourceEventIds: string[];
-  createdAt: number;
-  updatedAt: number;
-  expiresAt?: number;
-  dismissedUntil?: number;
-  payload?: Record<string, unknown>;
-  result?: {
-    title: string;
-    detail?: string;
-    noteKey?: string;
-  };
-  error?: string;
-}
-
-export interface ReadingLoopSnapshot {
-  enabled: boolean;
-  state: ReadingLoopState;
-  activeSuggestion?: ReadingSuggestion;
-}
-
-export type ReadingLoopListener = (snapshot: ReadingLoopSnapshot) => void;
-
-export interface ReadingLoopExecutionContext {
-  suggestion: ReadingSuggestion;
-  currentItem: Zotero.Item | null;
-}
-
-export interface ReadingLoopExecutionResult {
-  title?: string;
-  detail?: string;
-  noteKey?: string;
-}
-
-export type ReadingLoopExecutor = (
-  context: ReadingLoopExecutionContext,
-) => Promise<ReadingLoopExecutionResult | void>;
+import { ReadingLoopHistoryRegistry } from "./ReadingLoopHistoryRegistry";
+import type {
+  ReadingLoopExecutor,
+  ReadingLoopListener,
+  ReadingLoopSnapshot,
+  ReadingSuggestion,
+  ReadingSuggestionKind,
+} from "./ReadingLoopTypes";
 
 const SELECTION_POLL_INTERVAL_MS = 800;
 const SUGGESTION_BADGE_COOLDOWN_MS = 5 * 60 * 1000;
@@ -75,6 +20,7 @@ const HIGHLIGHT_TOTAL_THRESHOLD = 5;
 const CLOSE_CHECKPOINT_MIN_ACTIVITY_MS = 2 * 60 * 1000;
 const DWELL_CHECKPOINT_MS = 4 * 60 * 1000;
 const PAGE_DWELL_MS = 90 * 1000;
+const PROGRESS_BUCKET_STABLE_MS = 12 * 1000;
 const FOLLOWUP_QUESTION_WINDOW_MS = 10 * 60 * 1000;
 const FOLLOWUP_QUESTION_THRESHOLD = 3;
 
@@ -117,6 +63,17 @@ type PendingSelectionState = {
   firstSeenAt: number;
 };
 
+type PendingProgressBucketState = {
+  itemKey: string;
+  bucket: number;
+  firstSeenAt: number;
+};
+
+type HighlightStats = {
+  count: number;
+  lastAnnotationMarker: string;
+};
+
 export class ReadingLoopService {
   private enabled = true;
   private currentItem: Zotero.Item | null = null;
@@ -132,10 +89,14 @@ export class ReadingLoopService {
   private lastCreatedByKind = new Map<string, number>();
   private dismissStates = new Map<string, DismissState>();
   private currentItemStartedAt = 0;
+  private currentReaderSessionId: string | null = null;
+  private readerSessionCounter = 0;
   private lastReaderProgressBucket = new Map<string, number>();
+  private pendingProgressBucket: PendingProgressBucketState | null = null;
   private readerPageStates = new Map<string, ReaderPageState>();
   private paperActivityStates = new Map<string, PaperActivityState>();
   private recentQuestionSignals = new Map<string, number[]>();
+  private historyRegistry = new ReadingLoopHistoryRegistry();
   private initialized = false;
 
   init(): void {
@@ -164,13 +125,16 @@ export class ReadingLoopService {
     this.activeSuggestion = undefined;
     this.lastSelectionText = "";
     this.pendingSelection = null;
+    this.currentReaderSessionId = null;
     this.highlightSessionCounts.clear();
     this.lastCreatedByKind.clear();
     this.dismissStates.clear();
     this.lastReaderProgressBucket.clear();
+    this.pendingProgressBucket = null;
     this.readerPageStates.clear();
     this.paperActivityStates.clear();
     this.recentQuestionSignals.clear();
+    this.historyRegistry.resetMemory();
     this.initialized = false;
   }
 
@@ -180,6 +144,7 @@ export class ReadingLoopService {
       this.activeSuggestion = undefined;
       this.lastSelectionText = "";
       this.pendingSelection = null;
+      this.pendingProgressBucket = null;
     }
     this.notify();
   }
@@ -219,7 +184,7 @@ export class ReadingLoopService {
 
     this.currentItem = item;
     this.currentPaperKey = paperKey;
-    this.currentItemStartedAt = paperKey ? Date.now() : 0;
+    this.beginReaderSession(paperKey);
     this.lastSelectionText = "";
     this.pendingSelection = null;
 
@@ -280,6 +245,9 @@ export class ReadingLoopService {
       itemKey: this.currentPaperKey,
       title: classified.title,
       reason: classified.reason,
+      triggerSignature: `selection:${normalized.length}:${this.hashText(
+        normalized,
+      )}`,
       payload: {
         selectedText: normalized.slice(0, MAX_SELECTED_TEXT_LENGTH),
         selectedTextLength: normalized.length,
@@ -332,7 +300,8 @@ export class ReadingLoopService {
     this.highlightSessionCounts.set(paperKey, nextCount);
     this.recordPaperActivity(paperKey, "highlightCount");
 
-    const totalCount = this.getHighlightCountForPaper(paperKey);
+    const highlightStats = this.getHighlightStatsForPaper(paperKey);
+    const totalCount = highlightStats.count;
     if (
       nextCount < HIGHLIGHT_SESSION_THRESHOLD &&
       totalCount < HIGHLIGHT_TOTAL_THRESHOLD
@@ -345,6 +314,7 @@ export class ReadingLoopService {
       itemKey: paperKey,
       title: `整理 ${Math.max(nextCount, totalCount)} 条高亮为阅读笔记`,
       reason: "来自当前论文的高亮",
+      triggerSignature: this.getHighlightTriggerSignature(highlightStats),
       payload: {
         sessionHighlightCount: nextCount,
         totalHighlightCount: totalCount,
@@ -381,10 +351,14 @@ export class ReadingLoopService {
       itemKey: paperKey,
       title: "整理刚才的问题为阅读路线",
       reason: "来自连续提问",
+      triggerSignature: `followup:${recent[0]}:${recent[recent.length - 1]}:${
+        recent.length
+      }`,
       payload: {
         recentQuestionCount: recent.length,
       },
     });
+    this.recentQuestionSignals.set(paperKey, []);
   }
 
   dismissSuggestion(id: string): void {
@@ -426,6 +400,7 @@ export class ReadingLoopService {
       title: this.getRunningTitle(suggestion),
       updatedAt: Date.now(),
     };
+    this.historyRegistry.recordStatus(suggestion, "accepted");
     this.notify();
 
     try {
@@ -436,7 +411,7 @@ export class ReadingLoopService {
       if (!this.isCurrentRunningSuggestion(suggestion)) {
         return;
       }
-      this.activeSuggestion = {
+      const completedSuggestion: ReadingSuggestion = {
         ...suggestion,
         status: "completed",
         title: result?.title || this.getCompletedTitle(suggestion),
@@ -451,6 +426,8 @@ export class ReadingLoopService {
               title: this.getCompletedTitle(suggestion),
             },
       };
+      this.activeSuggestion = completedSuggestion;
+      this.historyRegistry.recordStatus(completedSuggestion, "completed");
       this.notify();
     } catch (error) {
       this.markAttention(suggestion, getErrorMessage(error), {
@@ -475,15 +452,28 @@ export class ReadingLoopService {
     itemKey: string;
     title: string;
     reason: string;
+    triggerSignature?: string;
     payload?: Record<string, unknown>;
     expiresAt?: number;
-  }): void {
+  }): boolean {
     if (!this.enabled || this.isSilenced(input.itemKey, input.kind)) {
-      return;
+      return false;
     }
 
     const now = Date.now();
     const kindKey = this.getKindItemKey(input.itemKey, input.kind);
+    const triggerSignature = input.triggerSignature;
+
+    if (
+      triggerSignature &&
+      this.historyRegistry.isSuppressed(
+        input.itemKey,
+        input.kind,
+        triggerSignature,
+      )
+    ) {
+      return false;
+    }
 
     if (
       this.activeSuggestion &&
@@ -492,23 +482,25 @@ export class ReadingLoopService {
       this.activeSuggestion.status === "suggested"
     ) {
       if (this.isCreationCoolingDown(input.kind, kindKey, now)) {
-        return;
+        return false;
       }
       this.activeSuggestion = {
         ...this.activeSuggestion,
         title: input.title,
         reason: input.reason,
         payload: input.payload,
+        triggerSignature,
         expiresAt: input.expiresAt,
         updatedAt: now,
       };
       this.lastCreatedByKind.set(kindKey, now);
+      this.historyRegistry.recordStatus(this.activeSuggestion, "suggested");
       this.notify();
-      return;
+      return true;
     }
 
     if (this.isCreationCoolingDown(input.kind, kindKey, now)) {
-      return;
+      return false;
     }
 
     if (
@@ -516,7 +508,7 @@ export class ReadingLoopService {
       this.activeSuggestion.status !== "suggested" &&
       this.activeSuggestion.status !== "idle"
     ) {
-      return;
+      return false;
     }
 
     const candidate: ReadingSuggestion = {
@@ -531,6 +523,7 @@ export class ReadingLoopService {
       createdAt: now,
       updatedAt: now,
       expiresAt: input.expiresAt,
+      triggerSignature,
       payload: input.payload,
     };
 
@@ -538,12 +531,14 @@ export class ReadingLoopService {
       this.activeSuggestion &&
       this.activeSuggestion.priority > candidate.priority
     ) {
-      return;
+      return false;
     }
 
     this.activeSuggestion = candidate;
     this.lastCreatedByKind.set(kindKey, now);
+    this.historyRegistry.recordStatus(candidate, "suggested");
     this.notify();
+    return true;
   }
 
   private markAttention(
@@ -788,7 +783,8 @@ export class ReadingLoopService {
   }
 
   private maybeSuggestExistingHighlightDigest(paperKey: string): void {
-    const totalCount = this.getHighlightCountForPaper(paperKey);
+    const highlightStats = this.getHighlightStatsForPaper(paperKey);
+    const totalCount = highlightStats.count;
     if (totalCount < HIGHLIGHT_TOTAL_THRESHOLD) {
       return;
     }
@@ -798,6 +794,7 @@ export class ReadingLoopService {
       itemKey: paperKey,
       title: `整理已有 ${totalCount} 条高亮为阅读笔记`,
       reason: "来自当前论文已有高亮",
+      triggerSignature: this.getHighlightTriggerSignature(highlightStats),
       payload: {
         sessionHighlightCount: this.highlightSessionCounts.get(paperKey) || 0,
         totalHighlightCount: totalCount,
@@ -811,25 +808,39 @@ export class ReadingLoopService {
     }
 
     const now = Date.now();
+    const progress = this.readActiveReaderProgress();
+    if (progress && progress.pageCount > 0) {
+      this.handlePageDwellSignal(progress);
+      this.handleProgressBucketSignal(progress, now);
+    }
+
     if (now - this.currentItemStartedAt >= DWELL_CHECKPOINT_MS) {
+      if (progress && !this.isCurrentProgressPositionStable(progress, now)) {
+        return;
+      }
       this.createSuggestion({
         kind: "reading_checkpoint",
         itemKey: this.currentPaperKey,
         title: "生成当前阅读 checkpoint",
         reason: "来自当前论文的持续阅读",
+        triggerSignature: `dwell:${this.getProgressTriggerSignature(progress)}`,
         payload: {
           dwellMs: now - this.currentItemStartedAt,
         },
       });
     }
+  }
 
-    const progress = this.readActiveReaderProgress();
-    if (!progress || progress.pageCount <= 0) {
+  private handleProgressBucketSignal(
+    progress: {
+      pageIndex: number;
+      pageCount: number;
+    },
+    now: number,
+  ): void {
+    if (!this.currentPaperKey) {
       return;
     }
-
-    this.handlePageDwellSignal(progress);
-
     const ratio = (progress.pageIndex + 1) / progress.pageCount;
     const bucket = Math.floor(ratio * 4);
     const lastBucket = this.lastReaderProgressBucket.get(this.currentPaperKey);
@@ -837,21 +848,70 @@ export class ReadingLoopService {
       this.lastReaderProgressBucket.set(this.currentPaperKey, bucket);
       return;
     }
-    if (bucket > 0 && bucket !== lastBucket) {
-      this.lastReaderProgressBucket.set(this.currentPaperKey, bucket);
-      this.recordPaperActivity(this.currentPaperKey, "progressChangeCount");
-      this.createSuggestion({
-        kind: bucket >= 3 ? "reading_checkpoint" : "section_checkpoint",
-        itemKey: this.currentPaperKey,
-        title: bucket >= 3 ? "收束这篇论文的阅读进展" : "总结当前阅读段落",
-        reason: `来自阅读进度约 ${Math.min(100, Math.round(ratio * 100))}%`,
-        payload: {
-          pageIndex: progress.pageIndex,
-          pageCount: progress.pageCount,
-          progressRatio: ratio,
-        },
-      });
+    if (bucket === lastBucket) {
+      this.pendingProgressBucket = null;
+      return;
     }
+    if (bucket <= 0) {
+      this.lastReaderProgressBucket.set(this.currentPaperKey, bucket);
+      this.pendingProgressBucket = null;
+      return;
+    }
+
+    const pending = this.pendingProgressBucket;
+    if (
+      !pending ||
+      pending.itemKey !== this.currentPaperKey ||
+      pending.bucket !== bucket
+    ) {
+      this.pendingProgressBucket = {
+        itemKey: this.currentPaperKey,
+        bucket,
+        firstSeenAt: now,
+      };
+      return;
+    }
+    if (now - pending.firstSeenAt < PROGRESS_BUCKET_STABLE_MS) {
+      return;
+    }
+
+    this.pendingProgressBucket = null;
+    this.lastReaderProgressBucket.set(this.currentPaperKey, bucket);
+    this.recordPaperActivity(this.currentPaperKey, "progressChangeCount");
+    this.createSuggestion({
+      kind: bucket >= 3 ? "reading_checkpoint" : "section_checkpoint",
+      itemKey: this.currentPaperKey,
+      title: bucket >= 3 ? "收束这篇论文的阅读进展" : "总结当前阅读段落",
+      reason: `来自阅读进度约 ${Math.min(100, Math.round(ratio * 100))}%`,
+      triggerSignature: `progress-bucket:${bucket}`,
+      payload: {
+        pageIndex: progress.pageIndex,
+        pageCount: progress.pageCount,
+        progressRatio: ratio,
+      },
+    });
+  }
+
+  private isCurrentProgressPositionStable(
+    progress: {
+      pageIndex: number;
+      pageCount: number;
+    },
+    now: number,
+  ): boolean {
+    if (
+      this.pendingProgressBucket &&
+      this.pendingProgressBucket.itemKey === this.currentPaperKey
+    ) {
+      return false;
+    }
+    const pageState = this.currentPaperKey
+      ? this.readerPageStates.get(this.currentPaperKey)
+      : undefined;
+    if (!pageState || pageState.pageIndex !== progress.pageIndex) {
+      return false;
+    }
+    return now - pageState.pageStartedAt >= PROGRESS_BUCKET_STABLE_MS;
   }
 
   private handlePageDwellSignal(progress: {
@@ -901,6 +961,7 @@ export class ReadingLoopService {
       itemKey: this.currentPaperKey,
       title: "总结当前页面重点",
       reason: `来自第 ${progress.pageIndex + 1} 页的停留`,
+      triggerSignature: `page-dwell:${progress.pageIndex}`,
       payload: {
         pageIndex: progress.pageIndex,
         pageCount: progress.pageCount,
@@ -940,6 +1001,7 @@ export class ReadingLoopService {
       itemKey: paperKey,
       title: "生成刚才的阅读 checkpoint",
       reason: "来自刚结束的论文阅读",
+      triggerSignature: `reader-close:${this.currentReaderSessionId || now}`,
       payload: {
         activeDurationMs,
         closedAt: now,
@@ -1027,13 +1089,17 @@ export class ReadingLoopService {
     return this.resolvePaperKey(attachment as Zotero.Item);
   }
 
-  private getHighlightCountForPaper(paperKey: string): number {
+  private getHighlightStatsForPaper(paperKey: string): HighlightStats {
     const libraryID = Zotero.Libraries.userLibraryID;
     const item = Zotero.Items.getByLibraryAndKey(libraryID, paperKey);
     if (!item) {
-      return 0;
+      return {
+        count: 0,
+        lastAnnotationMarker: "",
+      };
     }
     let count = 0;
+    let lastAnnotationMarker = "";
     const attachmentIDs = item.getAttachments?.() || [];
     for (const attachmentID of attachmentIDs) {
       const attachment = Zotero.Items.get(attachmentID);
@@ -1042,10 +1108,17 @@ export class ReadingLoopService {
         const type = String(annotation?.annotationType || "");
         if (type === "highlight" || type === "underline") {
           count++;
+          const marker = this.getAnnotationHistoryMarker(annotation);
+          if (marker > lastAnnotationMarker) {
+            lastAnnotationMarker = marker;
+          }
         }
       }
     }
-    return count;
+    return {
+      count,
+      lastAnnotationMarker,
+    };
   }
 
   private isSilenced(itemKey: string, kind: ReadingSuggestionKind): boolean {
@@ -1085,7 +1158,10 @@ export class ReadingLoopService {
     if (!this.shouldApplyCreationCooldown(kind)) {
       return false;
     }
-    const lastCreatedAt = this.lastCreatedByKind.get(kindKey) || 0;
+    const lastCreatedAt = this.lastCreatedByKind.get(kindKey);
+    if (typeof lastCreatedAt !== "number") {
+      return false;
+    }
     return now - lastCreatedAt < SUGGESTION_BADGE_COOLDOWN_MS;
   }
 
@@ -1144,7 +1220,33 @@ export class ReadingLoopService {
     paperKey: string,
     field: keyof Omit<PaperActivityState, "lastActiveAt">,
   ): void {
-    const existing = this.paperActivityStates.get(paperKey) || {
+    const existing =
+      this.paperActivityStates.get(paperKey) ||
+      this.createEmptyPaperActivityState();
+    existing[field] += 1;
+    existing.lastActiveAt = Date.now();
+    this.paperActivityStates.set(paperKey, existing);
+  }
+
+  private beginReaderSession(paperKey: string | null): void {
+    this.currentItemStartedAt = paperKey ? Date.now() : 0;
+    this.currentReaderSessionId = paperKey
+      ? `${paperKey}:${this.currentItemStartedAt}:${++this.readerSessionCounter}`
+      : null;
+    this.pendingProgressBucket = null;
+    if (!paperKey) {
+      return;
+    }
+    this.paperActivityStates.set(
+      paperKey,
+      this.createEmptyPaperActivityState(),
+    );
+    this.readerPageStates.delete(paperKey);
+    this.lastReaderProgressBucket.delete(paperKey);
+  }
+
+  private createEmptyPaperActivityState(): PaperActivityState {
+    return {
       selectionCount: 0,
       highlightCount: 0,
       progressChangeCount: 0,
@@ -1152,9 +1254,51 @@ export class ReadingLoopService {
       questionSignalCount: 0,
       lastActiveAt: Date.now(),
     };
-    existing[field] += 1;
-    existing.lastActiveAt = Date.now();
-    this.paperActivityStates.set(paperKey, existing);
+  }
+
+  private getHighlightTriggerSignature(stats: HighlightStats): string {
+    return `highlights:${stats.count}:${stats.lastAnnotationMarker || "none"}`;
+  }
+
+  private getProgressTriggerSignature(
+    progress: { pageIndex: number; pageCount: number } | null,
+  ): string {
+    if (!progress || progress.pageCount <= 0) {
+      return "paper";
+    }
+    const ratio = (progress.pageIndex + 1) / progress.pageCount;
+    const bucket = Math.floor(ratio * 4);
+    return `page:${progress.pageIndex}:bucket:${bucket}`;
+  }
+
+  private getAnnotationHistoryMarker(annotation: unknown): string {
+    const candidate = annotation as {
+      key?: unknown;
+      id?: unknown;
+      dateModified?: unknown;
+      dateAdded?: unknown;
+      getField?: (field: string) => unknown;
+    };
+    const rawDate =
+      candidate.dateModified ||
+      candidate.dateAdded ||
+      candidate.getField?.("dateModified") ||
+      candidate.getField?.("dateAdded") ||
+      "";
+    const parsedDate = Date.parse(String(rawDate));
+    const datePart = Number.isFinite(parsedDate)
+      ? String(parsedDate).padStart(13, "0")
+      : String(rawDate);
+    return `${datePart}:${String(candidate.key || candidate.id || "")}`;
+  }
+
+  private hashText(text: string): string {
+    let hash = 2166136261;
+    for (let index = 0; index < text.length; index++) {
+      hash ^= text.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(36);
   }
 
   private openNoteByKey(noteKey: string): void {

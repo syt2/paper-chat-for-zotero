@@ -13,10 +13,9 @@ Implement the first Reading Loop MVP:
 7. Hover popover on the existing toolbar entry.
 8. Low-priority progress, page dwell, reader-close, and chat follow-up
    suggestions.
+9. Persistent suggestion history / suppression registry so the same paper is
+   not interrupted multiple times for the same trigger reason.
 
-Out of scope for MVP:
-
-- persistent suggestion history across app restarts
 - separate PDF-surface mini toolbar
 
 ## Preferences
@@ -25,6 +24,7 @@ Add a boolean preference:
 
 ```ts
 readingLoopEnabled: boolean;
+readingLoopHistory: string;
 ```
 
 Default:
@@ -32,6 +32,10 @@ Default:
 ```ts
 true;
 ```
+
+`readingLoopHistory` stores a compact JSON registry of recently suggested,
+accepted, and completed Reading Loop triggers. It is internal state and is not
+shown directly in settings.
 
 Settings page:
 
@@ -97,8 +101,8 @@ export interface ReadingSuggestion {
 }
 ```
 
-MVP can keep these in memory. Persistence can be added later if completed
-results should survive app restart.
+Suggestion visibility is transient, but trigger suppression is persisted in
+`readingLoopHistory`.
 
 ## Service
 
@@ -115,6 +119,7 @@ Responsibilities:
 - track current reader item key
 - accept lightweight events
 - create, update, expire, dismiss, and prioritize suggestions
+- suppress repeated suggestions by `paperKey + suggestionKind + triggerSignature`
 - notify UI subscribers
 - expose accept/dismiss/view methods
 - dispatch accepted tasks to existing chat / note functionality
@@ -182,6 +187,10 @@ Rules:
 - selection under 3 visible chars: ignore
 - selection over a safe preview limit: store a preview only before acceptance
 - selection cleared: expire selection-driven suggestions
+- selected text must remain stable for about 2 seconds before a suggestion is
+  created
+- use a text hash as the selection trigger signature so the same selected text
+  is not suggested repeatedly for the same paper
 - classify selected figure/table/image references as `explain_visual_context`
 - classify selected formulas or math symbols as `explain_formula`
 - classify selected numeric or author-year references as `trace_reference`
@@ -195,6 +204,9 @@ Rules:
 - increment per-item session highlight count on new highlight annotations
 - create `highlight_digest` after 3 highlights in the current reading session
 - create `highlight_digest` when opening a paper that already has 5 highlights
+- use `totalHighlightCount + lastAnnotationMarker` as the trigger signature;
+  after one prompt, only newly added/modified highlights should create another
+  digest suggestion
 - do not run annotation summarization until accepted
 
 ### Reading Progress
@@ -209,6 +221,19 @@ Use reader polling only for low-priority, local signals:
 - create `reading_checkpoint` when the user closes or leaves a reader after
   meaningful activity
 - apply cooldown so progress suggestions do not repeatedly repaint the UI
+- when a progress bucket changes, keep it as pending until the reader remains
+  in the new bucket for about 12 seconds; quick scrolling should reset the
+  pending bucket instead of creating a checkpoint
+- sustained reading checkpoints should not bypass this stability check when the
+  current reader position has just changed
+- persist trigger signatures for progress suggestions:
+  - coarse progress: `progress-bucket:<bucket>`
+  - page dwell: `page-dwell:<pageIndex>`
+  - sustained dwell: current page/bucket when available, otherwise paper-level
+  - reader close: current reader session id
+- track meaningful close activity per current reader session, not as an
+  unbounded per-paper counter, so frequent switching does not inherit old
+  activity and retrigger close suggestions
 
 ### Chat Follow-Up
 
@@ -217,7 +242,39 @@ confusion signals for the current paper:
 
 - question marks and common Chinese/English confusion phrases count as signals
 - three signals within ten minutes create `followup_questions`
+- after a follow-up suggestion attempt, clear/advance the counted question
+  window so the fourth or fifth question does not keep refreshing the same
+  suggestion
 - normal one-off messages do not create suggestions
+
+## Suppression Registry
+
+Persist a compact JSON object in `readingLoopHistory`:
+
+```ts
+type ReadingLoopHistoryStatus = "suggested" | "accepted" | "completed";
+
+interface ReadingLoopHistoryRecord {
+  itemKey: string;
+  kind: ReadingSuggestionKind;
+  triggerSignature: string;
+  status: ReadingLoopHistoryStatus;
+  firstSuggestedAt: number;
+  lastUpdatedAt: number;
+  acceptedAt?: number;
+  completedAt?: number;
+  suggestionId?: string;
+}
+```
+
+Rules:
+
+- before creating a suggestion, check
+  `itemKey + kind + triggerSignature`
+- if a matching record exists, suppress the suggestion
+- create a record as soon as a suggestion becomes visible (`suggested`)
+- update the same record on accept and completion
+- cap stored records to a bounded recent set so prefs do not grow indefinitely
 
 ## UI Integration
 

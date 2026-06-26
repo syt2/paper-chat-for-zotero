@@ -27,6 +27,7 @@ declare namespace _ZoteroTypes {
       "panelMode": string;
       "debugContextExportEnabled": boolean;
       "readingLoopEnabled": boolean;
+      "readingLoopHistory": string;
       "firstInstalledVersion": string;
       "guideStatus": number;
       "contextMaxRecentPairs": number;

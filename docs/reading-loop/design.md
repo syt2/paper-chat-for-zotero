@@ -198,6 +198,7 @@ interface ReadingSuggestion {
   expiresAt?: number;
   dismissedUntil?: number;
   payload?: Record<string, unknown>;
+  triggerSignature?: string;
 }
 ```
 
@@ -206,6 +207,10 @@ Rules:
 - At most one active visible suggestion per paper in MVP.
 - Suggestions should expire when the underlying context becomes stale.
 - Dismissal is scoped to the current paper by default.
+- Suggestions are also suppressed by persistent
+  `paperKey + suggestionKind + triggerSignature` history. Once the same reason
+  has been suggested, accepted, or completed, it should not reappear for the
+  same paper.
 - The strip title is user-facing; `reason` is for tooltip or debugging and
   should stay short.
 - `payload` may contain selected text, annotation keys, page index, or target
@@ -432,6 +437,16 @@ The first implementation should include only these suggestion sources:
 Reading checkpoint and page dwell suggestions are lower-priority and throttled.
 They should never auto-open PaperChat.
 
+Trigger signatures:
+
+- selection: normalized selected-text hash
+- highlight digest: `totalHighlightCount + lastAnnotationMarker`
+- progress bucket: coarse progress bucket
+- page dwell: page index
+- sustained dwell: current page/bucket, or paper-level if progress is unknown
+- reader close: current reader session id
+- repeated questions: the current question-signal window
+
 ## Priority Rules
 
 When multiple suggestions exist, show the highest-priority suggestion only.
@@ -461,6 +476,18 @@ To keep the loop lightweight:
 - no PDF-surface card
 - no more than one visible suggestion per paper
 - no more than one new badge per paper every 5 minutes
+- no repeated visible suggestion for the same
+  `paperKey + suggestionKind + triggerSignature`
+- opening a paper with existing highlights should not keep suggesting the same
+  digest unless the highlight count or latest annotation marker changes
+- progress/page dwell suggestions should be one-shot for the same bucket/page
+- crossing a progress bucket should only create a suggestion after the reader
+  remains in the new bucket for about 12 seconds, so quick PDF skimming does not
+  trigger checkpoints
+- sustained reading checkpoints should also wait for the current page/progress
+  position to be stable before surfacing
+- repeated PaperChat question suggestions should advance the counted window
+  after firing
 - dismissing a suggestion silences the same kind for the current paper for at
   least 30 minutes
 - dismissing two suggestions in one paper silences Reading Loop for that paper

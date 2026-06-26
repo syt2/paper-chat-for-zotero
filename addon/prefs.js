@@ -29,6 +29,7 @@ pref("uploadRawPdfOnFailure", false);
 pref("panelMode", "sidebar");
 pref("debugContextExportEnabled", false);
 pref("readingLoopEnabled", true);
+pref("readingLoopHistory", "");
 
 // Guide Settings
 pref("firstInstalledVersion", "");
