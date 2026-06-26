@@ -28,6 +28,7 @@ declare namespace _ZoteroTypes {
       "debugContextExportEnabled": boolean;
       "readingLoopEnabled": boolean;
       "readingLoopHistory": string;
+      "nextQuestionHintEnabled": boolean;
       "firstInstalledVersion": string;
       "guideStatus": number;
       "contextMaxRecentPairs": number;

@@ -187,6 +187,7 @@ export async function refreshPrefsUI(
 
   // Initialize Reading Loop settings
   initReadingLoopSettings(doc);
+  initNextQuestionHintSettings(doc);
 
   // Initialize AISummary settings
   initAISummarySettings(doc);
@@ -321,6 +322,7 @@ export function bindPrefEvents(): void {
 
   // Bind Reading Loop settings event
   bindReadingLoopSettingsEvents(doc);
+  bindNextQuestionHintSettingsEvents(doc);
 
   // Bind AISummary settings events
   bindAISummarySettingsEvents(doc);
@@ -552,6 +554,26 @@ function bindReadingLoopSettingsEvents(doc: Document): void {
             error,
           );
         });
+    });
+  }
+}
+
+function initNextQuestionHintSettings(doc: Document): void {
+  const enabledCheckbox = doc.getElementById(
+    "pref-next-question-hint-enabled",
+  ) as XUL.Checkbox | null;
+  if (enabledCheckbox) {
+    enabledCheckbox.checked = getPref("nextQuestionHintEnabled") !== false;
+  }
+}
+
+function bindNextQuestionHintSettingsEvents(doc: Document): void {
+  const enabledCheckbox = doc.getElementById(
+    "pref-next-question-hint-enabled",
+  ) as XUL.Checkbox | null;
+  if (enabledCheckbox) {
+    enabledCheckbox.addEventListener("command", () => {
+      setPref("nextQuestionHintEnabled", enabledCheckbox.checked);
     });
   }
 }

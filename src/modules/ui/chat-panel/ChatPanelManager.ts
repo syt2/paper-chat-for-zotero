@@ -68,6 +68,10 @@ import {
   type ReadingSuggestion,
 } from "../../reading-loop";
 import { bindReadingLoopToolbarButtonEvents } from "./ReadingLoopToolbarEvents";
+import {
+  NextQuestionHintController,
+  requestNextQuestionHintAfterRecentRender,
+} from "./NextQuestionHintController";
 
 // Panel display mode: 'sidebar' or 'floating'
 export type PanelMode = "sidebar" | "floating";
@@ -647,6 +651,18 @@ let readingLoopLatestSnapshot: ReadingLoopSnapshot | null = null;
 let readingLoopPopoverHideTimer: number | null = null;
 const readingLoopToolbarBoundButtons = new WeakSet<HTMLElement>();
 
+function removeStaleSidebarContainers(doc: Document): void {
+  const containers = Array.from(
+    doc.querySelectorAll(`#${config.addonRef}-chat-container`),
+  ) as HTMLElement[];
+  for (const container of containers) {
+    if (container !== chatContainer) {
+      cleanupPanelIntegrations(container);
+      container.remove();
+    }
+  }
+}
+
 // Attachment state
 let pendingImages: ImageAttachment[] = [];
 let pendingFiles: FileAttachment[] = [];
@@ -891,7 +907,7 @@ function openFloatingWindow(): boolean {
         trackChatPanelClosed();
       }
       suppressFloatingUnloadTracking = false;
-      cleanupReadingLoopIntegration(floatingContainer);
+      cleanupPanelIntegrations(floatingContainer);
       // Immediately reset state
       floatingWindow = null;
       floatingContainer = null;
@@ -997,6 +1013,7 @@ async function initializeChatContentCommon(
 
   // Setup event handlers
   setupEventHandlers(context);
+  NextQuestionHintController.attach(context);
 
   // Set up chat manager callbacks
   const manager = getChatManager();
@@ -1102,6 +1119,14 @@ function cleanupReadingLoopIntegration(container: HTMLElement | null): void {
     readingLoopExecutorOwner = null;
     getReadingLoopService().setExecutor(null);
   }
+}
+
+function cleanupPanelIntegrations(container: HTMLElement | null): void {
+  if (!container) {
+    return;
+  }
+  NextQuestionHintController.detach(container);
+  cleanupReadingLoopIntegration(container);
 }
 
 function buildReadingLoopPrompt(suggestion: ReadingSuggestion): string {
@@ -1372,7 +1397,7 @@ function closeFloatingWindow(): void {
 
   if (floatingContainer) {
     cancelPendingStreamingTextRender(floatingContainer);
-    cleanupReadingLoopIntegration(floatingContainer);
+    cleanupPanelIntegrations(floatingContainer);
   }
 
   if (floatingWindow && !floatingWindow.closed) {
@@ -1393,6 +1418,8 @@ function showSidebarPanel(): boolean {
   const doc = Zotero.getMainWindow().document;
   const win = Zotero.getMainWindow();
   const manager = getChatManager();
+
+  removeStaleSidebarContainers(doc);
 
   // Create container if not exists
   if (!chatContainer || !chatContainer.isConnected) {
@@ -1513,6 +1540,7 @@ function showSidebarPanel(): boolean {
     // (they may have been redirected to a floating window container)
     const manager = getChatManager();
     const context = createContext(chatContainer);
+    NextQuestionHintController.attach(context);
     setupChatManagerCallbacks(manager, context, chatContainer);
     setupReadingLoopIntegration(chatContainer, context);
     refreshChatForCurrentItem();
@@ -1527,7 +1555,7 @@ function showSidebarPanel(): boolean {
  */
 function hideSidebarPanel(): void {
   if (chatContainer) {
-    cleanupReadingLoopIntegration(chatContainer);
+    cleanupPanelIntegrations(chatContainer);
     chatContainer.style.display = "none";
   }
 
@@ -1664,10 +1692,19 @@ function setupChatManagerCallbacks(
     onMessageComplete: async () => {
       const providerManager = getProviderManager();
       if (providerManager.getActiveProviderId() === "paperchat") {
-        ztoolkit.log("[Balance] Refreshing balance after message completion");
-        await authManager.refreshUserInfo();
-        context.updateUserBar();
+        try {
+          ztoolkit.log("[Balance] Refreshing balance after message completion");
+          await authManager.refreshUserInfo();
+          context.updateUserBar();
+        } catch (error) {
+          ztoolkit.log("[Balance] Failed to refresh after completion:", error);
+        }
       }
+      void NextQuestionHintController.get(container)
+        ?.requestForLatestCompletion()
+        .catch((error) => {
+          ztoolkit.log("[NextQuestionHint] request failed:", error);
+        });
     },
     onFallbackNotice: (fromProvider: string, toProvider: string) => {
       ztoolkit.log(
@@ -2311,6 +2348,10 @@ function createContext(container: HTMLElement): ChatPanelContext {
             manager.getActiveSession()?.executionPlan,
           );
         }
+        if (!NextQuestionHintController.get(container)) {
+          NextQuestionHintController.attach(context);
+        }
+        requestNextQuestionHintAfterRecentRender(container);
       }
     },
     renderExecutionPlan: (plan?: ExecutionPlan) => {
@@ -2400,7 +2441,7 @@ export async function unregisterAll(): Promise<void> {
   // Remove container
   if (chatContainer) {
     cancelPendingStreamingTextRender(chatContainer);
-    cleanupReadingLoopIntegration(chatContainer);
+    cleanupPanelIntegrations(chatContainer);
     chatContainer.remove();
     chatContainer = null;
   }

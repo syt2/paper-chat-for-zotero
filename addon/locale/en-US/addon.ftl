@@ -85,6 +85,7 @@ paperchat-chat-history = Chat History
 paperchat-chat-debug-context-export = Export Debug Context
 paperchat-chat-debug-context-exported = Debug context exported; path copied
 paperchat-chat-input-placeholder = Ask a question about the PDF...
+paperchat-chat-next-question-hint-tab = Tab to fill
 paperchat-chat-send = Send
 paperchat-chat-stop-generating = Stop Turn
 paperchat-chat-no-messages = (no messages)

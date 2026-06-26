@@ -85,6 +85,7 @@ paperchat-chat-history = 聊天记录
 paperchat-chat-debug-context-export = 导出调试上下文
 paperchat-chat-debug-context-exported = 已导出调试上下文，路径已复制
 paperchat-chat-input-placeholder = 询问关于PDF的问题...
+paperchat-chat-next-question-hint-tab = Tab 填入
 paperchat-chat-send = 发送
 paperchat-chat-stop-generating = 停止本轮
 paperchat-chat-no-messages = (无消息)

@@ -1,13 +1,8 @@
 import type { ChatMessage, ChatSession } from "../../types/chat";
-import type { AIProvider, PaperChatProviderConfig } from "../../types/provider";
+import type { AIProvider } from "../../types/provider";
 import { getErrorMessage } from "../../utils/common";
 import { getProviderManager } from "../providers";
-import { PaperChatProvider } from "../providers/PaperChatProvider";
-import { deriveTierPools } from "../providers/paperchat-tier-routing";
-import {
-  getModelRatios,
-  getModelRoutingMeta,
-} from "../preferences/ModelsFetcher";
+import { createPaperChatLightweightProvider } from "../providers/PaperChatLightweightProvider";
 
 const TITLE_SYSTEM_PROMPT =
   "Generate a concise title for this chat session. Return only the title, with no quotes, no markdown, and no trailing punctuation. Use the conversation language when obvious. Limit to 8 English words or 16 Chinese characters.";
@@ -66,43 +61,12 @@ function sanitizeTitle(raw: string): string {
     .trim();
 }
 
-function pickLowestRatioModel(
-  models: string[],
-  ratios: Record<string, number>,
-) {
-  return [...models].sort((a, b) => {
-    const ratioA = ratios[a] ?? Number.POSITIVE_INFINITY;
-    const ratioB = ratios[b] ?? Number.POSITIVE_INFINITY;
-    if (ratioA !== ratioB) {
-      return ratioA - ratioB;
-    }
-    return a.localeCompare(b);
-  })[0];
-}
-
 function createPaperChatTitleProvider(): AIProvider | null {
-  const providerManager = getProviderManager();
-  const config = providerManager.getProviderConfig("paperchat");
-  if (!config || config.type !== "paperchat") {
-    return null;
-  }
-
-  const availableModels = config.availableModels || [];
-  const ratios = getModelRatios();
-  const pools = deriveTierPools(availableModels, ratios, getModelRoutingMeta());
-  const modelId = pickLowestRatioModel(pools["paperchat-lite"], ratios);
-  if (!modelId) {
-    return null;
-  }
-
-  const titleConfig: PaperChatProviderConfig = {
-    ...config,
-    resolvedModelOverride: modelId,
+  return createPaperChatLightweightProvider({
     maxTokens: TITLE_MAX_TOKENS,
     temperature: 0.2,
     systemPrompt: "",
-  };
-  return new PaperChatProvider(titleConfig);
+  });
 }
 
 function getTitleProvider(): AIProvider | null {

@@ -127,6 +127,7 @@ pref-tool-permission-mode-deny = Always deny
 # Reading Loop Settings
 pref-reading-loop-settings = Reading Suggestions
 pref-reading-loop-enabled = Show PaperChat suggestions while reading
+pref-next-question-hint-enabled = Suggest the next question after AI replies
 pref-reading-loop-desc = Shows lightweight suggestions in the PaperChat entry and panel based on local reading actions such as text selection and highlights.
 
 # AISummary Settings

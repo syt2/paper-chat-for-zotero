@@ -30,6 +30,7 @@ pref("panelMode", "sidebar");
 pref("debugContextExportEnabled", false);
 pref("readingLoopEnabled", true);
 pref("readingLoopHistory", "");
+pref("nextQuestionHintEnabled", true);
 
 // Guide Settings
 pref("firstInstalledVersion", "");
