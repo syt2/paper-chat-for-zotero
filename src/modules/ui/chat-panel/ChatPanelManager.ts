@@ -1890,21 +1890,27 @@ function bindReadingLoopToolbarEvents(button: HTMLElement): void {
   }
 
   readingLoopToolbarBoundButtons.add(button);
-  button.addEventListener("click", () => {
-    togglePanel("toolbar");
-  });
-  button.addEventListener("mouseover", (event: Event) => {
+  const showPopover = (event: Event) => {
     const target = event.currentTarget as HTMLElement;
     target.style.backgroundColor = "var(--fill-quinary)";
     showReadingLoopPopover(target);
-  });
-  button.addEventListener("mouseout", (event: Event) => {
+  };
+  const hidePopover = (event: Event) => {
     const target = event.currentTarget as HTMLElement;
     if (!isPanelShown()) {
       target.style.backgroundColor = "transparent";
     }
     hideReadingLoopPopover(target.ownerDocument);
+  };
+
+  button.addEventListener("click", () => {
+    togglePanel("toolbar");
   });
+  button.addEventListener("mouseenter", showPopover);
+  button.addEventListener("mouseover", showPopover);
+  button.addEventListener("mousemove", showPopover);
+  button.addEventListener("mouseleave", hidePopover);
+  button.addEventListener("mouseout", hidePopover);
   button.addEventListener("focus", (event: Event) => {
     showReadingLoopPopover(event.currentTarget as HTMLElement);
   });
