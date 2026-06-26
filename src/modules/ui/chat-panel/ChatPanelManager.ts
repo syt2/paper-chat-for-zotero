@@ -644,6 +644,7 @@ let readingLoopExecutorOwner: HTMLElement | null = null;
 let readingLoopToolbarUnsubscribe: (() => void) | null = null;
 let readingLoopLatestSnapshot: ReadingLoopSnapshot | null = null;
 let readingLoopPopoverHideTimer: number | null = null;
+const readingLoopToolbarBoundButtons = new WeakSet<HTMLElement>();
 
 // Attachment state
 let pendingImages: ImageAttachment[] = [];
@@ -1041,7 +1042,10 @@ function setupReadingLoopIntegration(
       throw new Error("PaperChat panel is not available.");
     }
     const targetItem =
-      currentItem || getActiveReaderItem() || context.getCurrentItem();
+      currentItem ||
+      getActiveReaderItem() ||
+      context.getCurrentItem() ||
+      getItemByLibraryKey(suggestion.itemKey);
     if (targetItem) {
       context.setCurrentItem(targetItem);
     }
@@ -1129,6 +1133,21 @@ function buildReadingLoopPrompt(suggestion: ReadingSuggestion): string {
       return [
         "请追踪当前选中的引用或参考文献线索。",
         "要求说明这条引用在当前论文中的作用，并尽量结合参考文献信息或上下文解释它为什么重要。",
+      ].join("\n");
+    case "method_extraction":
+      return [
+        "请提取当前选中内容里的方法、实验设置或实现细节。",
+        "要求整理成：模型/方法结构、数据与训练设置、关键超参数、和论文结论的关系。",
+      ].join("\n");
+    case "evidence_lookup":
+      return [
+        "请围绕当前选中的结论或实验表述查找支撑证据。",
+        "要求指出论文中对应的实验、表格、图或上下文，并判断这条结论是否被充分支持。",
+      ].join("\n");
+    case "related_work_lookup":
+      return [
+        "请梳理当前选中内容涉及的相关工作线索。",
+        "要求区分每个相关工作的作用、和当前论文方法的差异，以及后续最值得追的引用。",
       ].join("\n");
     case "section_checkpoint":
       return [
@@ -1865,6 +1884,35 @@ function ensureReadingLoopToolbarSubscription(): void {
   );
 }
 
+function bindReadingLoopToolbarEvents(button: HTMLElement): void {
+  if (readingLoopToolbarBoundButtons.has(button)) {
+    return;
+  }
+
+  readingLoopToolbarBoundButtons.add(button);
+  button.addEventListener("click", () => {
+    togglePanel("toolbar");
+  });
+  button.addEventListener("mouseover", (event: Event) => {
+    const target = event.currentTarget as HTMLElement;
+    target.style.backgroundColor = "var(--fill-quinary)";
+    showReadingLoopPopover(target);
+  });
+  button.addEventListener("mouseout", (event: Event) => {
+    const target = event.currentTarget as HTMLElement;
+    if (!isPanelShown()) {
+      target.style.backgroundColor = "transparent";
+    }
+    hideReadingLoopPopover(target.ownerDocument);
+  });
+  button.addEventListener("focus", (event: Event) => {
+    showReadingLoopPopover(event.currentTarget as HTMLElement);
+  });
+  button.addEventListener("blur", (event: Event) => {
+    hideReadingLoopPopover((event.currentTarget as HTMLElement).ownerDocument);
+  });
+}
+
 function getReadingLoopPopover(doc: Document): HTMLElement {
   let popover = doc.getElementById(
     "paperchat-reading-loop-popover",
@@ -2050,6 +2098,7 @@ export function registerToolbarButton(): void {
   if (existingButton) {
     existingButton.style.position = "relative";
     ensureReadingLoopToolbarSubscription();
+    bindReadingLoopToolbarEvents(existingButton);
     return;
   }
 
@@ -2084,52 +2133,12 @@ export function registerToolbarButton(): void {
         borderRadius: "5px",
         cursor: "pointer",
       },
-      listeners: [
-        {
-          type: "click",
-          listener: () => togglePanel("toolbar"),
-        },
-        {
-          type: "mouseover",
-          listener: (e: Event) => {
-            (e.currentTarget as HTMLElement).style.backgroundColor =
-              "var(--fill-quinary)";
-            showReadingLoopPopover(e.currentTarget as HTMLElement);
-          },
-        },
-        {
-          type: "mouseout",
-          listener: (e: Event) => {
-            // Keep pressed state if panel is open
-            if (!isPanelShown()) {
-              (e.currentTarget as HTMLElement).style.backgroundColor =
-                "transparent";
-            }
-            hideReadingLoopPopover(
-              (e.currentTarget as HTMLElement).ownerDocument,
-            );
-          },
-        },
-        {
-          type: "focus",
-          listener: (e: Event) => {
-            showReadingLoopPopover(e.currentTarget as HTMLElement);
-          },
-        },
-        {
-          type: "blur",
-          listener: (e: Event) => {
-            hideReadingLoopPopover(
-              (e.currentTarget as HTMLElement).ownerDocument,
-            );
-          },
-        },
-      ],
     },
     anchor.nextElementSibling as Element,
   ) as HTMLElement;
 
   ensureReadingLoopToolbarSubscription();
+  bindReadingLoopToolbarEvents(button);
 
   // Register global tab notifier for sidebar sync across tabs
   registerGlobalTabNotifier();

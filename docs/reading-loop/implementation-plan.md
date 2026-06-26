@@ -10,12 +10,12 @@ Implement the first Reading Loop MVP:
 4. Text-selection suggestion.
 5. Highlight-threshold suggestion.
 6. Accepted suggestion execution through existing PaperChat capabilities.
+7. Hover popover on the existing toolbar entry.
+8. Low-priority progress, page dwell, reader-close, and chat follow-up
+   suggestions.
 
 Out of scope for MVP:
 
-- page dwell suggestions
-- reader-close checkpoint suggestions
-- related-work lookup suggestions
 - persistent suggestion history across app restarts
 - separate PDF-surface mini toolbar
 
@@ -73,7 +73,16 @@ export type ReadingLoopState =
 export type ReadingSuggestionKind =
   | "explain_selection"
   | "save_selection_note"
-  | "highlight_digest";
+  | "highlight_digest"
+  | "explain_visual_context"
+  | "explain_formula"
+  | "trace_reference"
+  | "method_extraction"
+  | "evidence_lookup"
+  | "related_work_lookup"
+  | "section_checkpoint"
+  | "reading_checkpoint"
+  | "followup_questions";
 
 export interface ReadingSuggestion {
   id: string;
@@ -176,6 +185,10 @@ Rules:
 - classify selected figure/table/image references as `explain_visual_context`
 - classify selected formulas or math symbols as `explain_formula`
 - classify selected numeric or author-year references as `trace_reference`
+- classify selected method/experiment setup text as `method_extraction`
+- classify selected result/evaluation claims as `evidence_lookup`
+- classify selected related-work phrases or grouped citations as
+  `related_work_lookup`
 
 ### Highlights
 
@@ -195,6 +208,10 @@ Use reader polling only for low-priority, local signals:
 - create `reading_checkpoint` after sustained dwell on the current paper
 - create `section_checkpoint` when the reader crosses coarse progress buckets
 - upgrade to `reading_checkpoint` near the end of the paper
+- create `section_checkpoint` after repeated page dwell or page dwell combined
+  with selection/highlight activity
+- create `reading_checkpoint` when the user closes or leaves a reader after
+  meaningful activity
 - apply cooldown so progress suggestions do not repeatedly repaint the UI
 
 ### Chat Follow-Up
@@ -291,7 +308,8 @@ will create/update a reading note.
 
 ### Specialized Selection Suggestions
 
-`explain_visual_context`, `explain_formula`, and `trace_reference` reuse the same
+`explain_visual_context`, `explain_formula`, `trace_reference`,
+`method_extraction`, `evidence_lookup`, and `related_work_lookup` reuse the same
 execution path as `explain_selection`, but send a more specific prompt to
 PaperChat.
 
@@ -335,6 +353,7 @@ Manual verification:
 - no suggestion strip appears while the panel is closed
 - selecting text creates a blue badge
 - selecting figure/table/formula/citation text creates a specialized suggestion
+- selecting method/result/related-work text creates a specialized suggestion
 - opening panel shows the strip under the header
 - hovering the toolbar entry with an active suggestion shows a tiny popover
 - dismissing strip clears badge
@@ -342,6 +361,8 @@ Manual verification:
 - creating enough highlights creates a digest suggestion
 - opening a paper with enough existing highlights creates a digest suggestion
 - sustained reading/progress creates checkpoint suggestions
+- repeated page dwell creates a page checkpoint suggestion
+- leaving a reader after meaningful activity creates a reading checkpoint
 - repeated questions create a follow-up reading-route suggestion
 - accepting digest shows running state, then completed state
 - completed result view clears check badge

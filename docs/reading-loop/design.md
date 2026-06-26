@@ -177,10 +177,15 @@ type ReadingSuggestionKind =
   | "explain_selection"
   | "save_selection_note"
   | "highlight_digest"
+  | "explain_visual_context"
+  | "explain_formula"
+  | "trace_reference"
   | "reading_checkpoint"
+  | "section_checkpoint"
   | "method_extraction"
   | "evidence_lookup"
-  | "related_work_lookup";
+  | "related_work_lookup"
+  | "followup_questions";
 
 interface ReadingSuggestion {
   id: string;
@@ -256,24 +261,24 @@ interface ReadingLoopEvent {
 
 ### Reader Lifecycle
 
-| Behavior                                               | Event                 | Suggested Action                                               | MVP   |
-| ------------------------------------------------------ | --------------------- | -------------------------------------------------------------- | ----- |
-| User opens a PDF reader tab                            | `reader_opened`       | start passive observation window                               | Yes   |
-| Active reader item changes                             | `reader_item_changed` | reset per-paper visible suggestion state                       | Yes   |
-| User closes or leaves reader after meaningful activity | `reader_closed`       | suggest reading checkpoint                                     | Later |
-| User idles on the same paper                           | `reader_idle`         | avoid new prompts; allow checkpoint only after enough activity | Later |
-| User resumes reading                                   | `reader_resumed`      | clear idle timers                                              | Later |
+| Behavior                                               | Event                 | Suggested Action                            | MVP   |
+| ------------------------------------------------------ | --------------------- | ------------------------------------------- | ----- |
+| User opens a PDF reader tab                            | `reader_opened`       | start passive observation window            | Yes   |
+| Active reader item changes                             | `reader_item_changed` | reset per-paper visible suggestion state    | Yes   |
+| User closes or leaves reader after meaningful activity | `reader_closed`       | suggest reading checkpoint                  | Yes   |
+| User idles on the same paper                           | `reader_idle`         | allow checkpoint only after enough activity | Yes   |
+| User resumes reading                                   | `reader_resumed`      | clear idle timers                           | Later |
 
 Lifecycle triggers should not create AI suggestions immediately. They mostly
 start, reset, or end observation windows.
 
 ### Page And Dwell Signals
 
-| Behavior                               | Event          | Suggested Action                                                                  | MVP   |
-| -------------------------------------- | -------------- | --------------------------------------------------------------------------------- | ----- |
-| User changes pages                     | `page_changed` | update current page context                                                       | Later |
-| User stays on one page for N seconds   | `page_dwelled` | suggest explaining current page only if combined with selection or repeated dwell | Later |
-| User dwells near Methods/Results pages | `page_dwelled` | suggest extracting methods or experiments                                         | Later |
+| Behavior                               | Event          | Suggested Action                                                                  | MVP |
+| -------------------------------------- | -------------- | --------------------------------------------------------------------------------- | --- |
+| User changes pages                     | `page_changed` | update current page context                                                       | Yes |
+| User stays on one page for N seconds   | `page_dwelled` | suggest explaining current page only if combined with selection or repeated dwell | Yes |
+| User dwells near Methods/Results pages | `page_dwelled` | suggest extracting methods or experiments through selected text                   | Yes |
 
 Page dwell is risky because it can feel speculative. It should require a
 second signal before showing a badge.
@@ -307,6 +312,12 @@ Suggested mapping:
   `explain_formula`
 - numeric or author-year citation references:
   `trace_reference`
+- method, experiment, dataset, baseline, or hyperparameter text:
+  `method_extraction`
+- result, performance, evaluation, or conclusion text:
+  `evidence_lookup`
+- related-work phrasing or grouped citations:
+  `related_work_lookup`
 
 Strip examples:
 
@@ -408,11 +419,13 @@ The first implementation should include only these suggestion sources:
 4. Special selection patterns
    - events: `text_selected`
    - suggestions: `explain_visual_context`, `explain_formula`,
-     `trace_reference`
-   - action: explain the selected figure/table/formula/citation in context
+     `trace_reference`, `method_extraction`, `evidence_lookup`,
+     `related_work_lookup`
+   - action: explain or route the selected figure/table/formula/citation/method/evidence/related-work context
 
 5. Reading progress
-   - events: `reading_dwell`, `reader_progress_tick`
+   - events: `reading_dwell`, `reader_progress_tick`, `page_dwelled`,
+     `reader_closed`
    - suggestions: `section_checkpoint`, `reading_checkpoint`
    - action: generate a concise checkpoint for the current reading position
 
@@ -426,8 +439,8 @@ The first implementation should include only these suggestion sources:
    - suggestion state: `completed`
    - action: view result in PaperChat or Zotero note
 
-Reading checkpoint and page dwell suggestions should wait until the first two
-triggers prove useful.
+Reading checkpoint and page dwell suggestions are lower-priority and throttled.
+They should never auto-open PaperChat.
 
 ## Priority Rules
 
