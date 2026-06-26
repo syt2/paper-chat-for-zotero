@@ -358,6 +358,8 @@ describe("reading loop service", function () {
       const suggestion = service.getSnapshot().activeSuggestion;
       assert.equal(suggestion?.kind, "explain_selection");
       await service.acceptSuggestion(suggestion!.id);
+      assert.equal(service.getSnapshot().state, "completed");
+      assert.isNumber(service.getSnapshot().activeSuggestion?.expiresAt);
 
       const rawHistory = prefStore.get(
         `${PREFS_PREFIX}.readingLoopHistory`,
@@ -372,6 +374,10 @@ describe("reading loop service", function () {
       assert.equal(parsed.records[0]?.status, "completed");
       assert.isNumber(parsed.records[0]?.acceptedAt);
       assert.isNumber(parsed.records[0]?.completedAt);
+
+      now += 6001;
+      (service as any).expireStaleSuggestion();
+      assert.isUndefined(service.getSnapshot().activeSuggestion);
       service.destroy();
     } finally {
       Date.now = originalNow;

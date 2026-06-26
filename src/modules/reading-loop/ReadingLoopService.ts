@@ -15,6 +15,7 @@ const DISMISS_SILENCE_MS = 30 * 60 * 1000;
 const MAX_SELECTED_TEXT_LENGTH = 4000;
 const SELECTION_SUGGESTION_DELAY_MS = 2 * 1000;
 const SELECTION_CLEAR_GRACE_MS = 15 * 1000;
+const COMPLETED_SUGGESTION_VISIBLE_MS = 6 * 1000;
 const HIGHLIGHT_SESSION_THRESHOLD = 3;
 const HIGHLIGHT_TOTAL_THRESHOLD = 5;
 const CLOSE_CHECKPOINT_MIN_ACTIVITY_MS = 2 * 60 * 1000;
@@ -411,11 +412,13 @@ export class ReadingLoopService {
       if (!this.isCurrentRunningSuggestion(suggestion)) {
         return;
       }
+      const completedAt = Date.now();
       const completedSuggestion: ReadingSuggestion = {
         ...suggestion,
         status: "completed",
         title: result?.title || this.getCompletedTitle(suggestion),
-        updatedAt: Date.now(),
+        updatedAt: completedAt,
+        expiresAt: completedAt + COMPLETED_SUGGESTION_VISIBLE_MS,
         result: result
           ? {
               title: result.title || this.getCompletedTitle(suggestion),

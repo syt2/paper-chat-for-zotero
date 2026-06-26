@@ -1796,6 +1796,8 @@ function updateReadingLoopEntryIndicator(snapshot: ReadingLoopSnapshot): void {
     return;
   }
 
+  ensureReadingLoopIndicatorStyles(doc);
+
   const visiblePopover = doc.getElementById(
     "paperchat-reading-loop-popover",
   ) as HTMLElement | null;
@@ -1808,6 +1810,7 @@ function updateReadingLoopEntryIndicator(snapshot: ReadingLoopSnapshot): void {
     indicator.id = "paperchat-reading-loop-indicator";
     button.appendChild(indicator);
   }
+  indicator.setAttribute("data-reading-loop-state", snapshot.state);
 
   button.setAttribute(
     "title",
@@ -1824,16 +1827,19 @@ function updateReadingLoopEntryIndicator(snapshot: ReadingLoopSnapshot): void {
 
   if (snapshot.state === "running") {
     Object.assign(indicator.style, {
-      left: "4px",
-      top: "4px",
-      right: "4px",
-      bottom: "4px",
-      width: "auto",
-      height: "auto",
+      top: "2px",
+      right: "2px",
+      left: "auto",
+      bottom: "auto",
+      minWidth: "0",
+      width: "12px",
+      height: "12px",
       borderRadius: "999px",
-      border: "1.5px solid #2563eb",
+      border: "2px solid rgba(37, 99, 235, 0.95)",
+      borderTopColor: "rgba(37, 99, 235, 0.18)",
       background: "transparent",
       color: "transparent",
+      display: "block",
       fontSize: "0",
       lineHeight: "0",
     } satisfies Partial<CSSStyleDeclaration>);
@@ -1846,7 +1852,7 @@ function updateReadingLoopEntryIndicator(snapshot: ReadingLoopSnapshot): void {
     right: "3px",
     left: "auto",
     bottom: "auto",
-    minWidth: "7px",
+    minWidth: "0",
     width: snapshot.state === "completed" ? "12px" : "7px",
     height: snapshot.state === "completed" ? "12px" : "7px",
     borderRadius: "999px",
@@ -1861,6 +1867,42 @@ function updateReadingLoopEntryIndicator(snapshot: ReadingLoopSnapshot): void {
     fontWeight: "700",
   } satisfies Partial<CSSStyleDeclaration>);
   indicator.textContent = snapshot.state === "completed" ? "✓" : "";
+}
+
+function ensureReadingLoopIndicatorStyles(doc: Document): void {
+  if (doc.getElementById("paperchat-reading-loop-indicator-style")) {
+    return;
+  }
+
+  const style = doc.createElementNS(HTML_NS, "style") as HTMLStyleElement;
+  style.id = "paperchat-reading-loop-indicator-style";
+  style.textContent = `
+    #paperchat-reading-loop-indicator[data-reading-loop-state="suggested"] {
+      animation: paperchat-reading-loop-pulse 1.6s ease-in-out infinite;
+    }
+
+    #paperchat-reading-loop-indicator[data-reading-loop-state="running"] {
+      animation: paperchat-reading-loop-spin 0.85s linear infinite;
+    }
+
+    @keyframes paperchat-reading-loop-pulse {
+      0%, 100% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.38);
+      }
+      50% {
+        transform: scale(1.14);
+        box-shadow: 0 0 0 5px rgba(37, 99, 235, 0);
+      }
+    }
+
+    @keyframes paperchat-reading-loop-spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+  `;
+  doc.documentElement.appendChild(style);
 }
 
 function ensureReadingLoopToolbarSubscription(): void {
@@ -2136,6 +2178,7 @@ export function unregisterToolbarButton(): void {
     button.remove();
   }
   doc.getElementById("paperchat-reading-loop-popover")?.remove();
+  doc.getElementById("paperchat-reading-loop-indicator-style")?.remove();
 
   // Unregister global tab notifier
   unregisterGlobalTabNotifier();
