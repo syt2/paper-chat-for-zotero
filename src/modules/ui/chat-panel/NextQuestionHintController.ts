@@ -5,7 +5,10 @@ import {
 } from "../../../utils/abort";
 import { getNextQuestionHintService } from "../../chat/next-question-hint";
 import type { ChatMessage } from "../../../types/chat";
-import type { NextQuestionHint } from "../../chat/next-question-hint";
+import type {
+  NextQuestionHint,
+  NextQuestionHintReadingContext,
+} from "../../chat/next-question-hint";
 import type { ChatPanelContext } from "./types";
 
 const CONTROLLER_KEY = "__paperchatNextQuestionHintController";
@@ -193,6 +196,7 @@ export class NextQuestionHintController {
     const outcome = await this.service.generateForCompletion({
       session: sessionAtRequest,
       currentInputValue: this.input.value,
+      readingContext: buildReadingContext(this.context, sessionAtRequest),
       signal: generationController.signal,
     });
 
@@ -246,6 +250,7 @@ export class NextQuestionHintController {
     );
     this.input?.removeEventListener("compositionend", this.onCompositionEnd);
     this.input?.removeEventListener("focus", this.onFocus);
+    this.restorePlaceholder();
     this.hintLayer?.remove();
     this.hint = null;
   }
@@ -305,7 +310,6 @@ export class NextQuestionHintController {
     if (this.hintTextEl) {
       this.hintTextEl.textContent = "";
     }
-    this.restorePlaceholder();
     this.syncVisibility();
   }
 
@@ -324,7 +328,7 @@ export class NextQuestionHintController {
       !this.input?.value &&
       !this.isMentionPopupVisible();
     this.hintLayer.style.display = visible ? "flex" : "none";
-    this.syncPlaceholder(visible);
+    this.syncNativePlaceholder(visible);
   }
 
   private isMentionPopupVisible(): boolean {
@@ -391,16 +395,11 @@ export class NextQuestionHintController {
     return layer;
   }
 
-  private syncPlaceholder(visible: boolean): void {
+  private syncNativePlaceholder(visible: boolean): void {
     if (!this.input) {
       return;
     }
-    if (!visible || !this.hint) {
-      this.restorePlaceholder();
-      return;
-    }
-    const action = getString("chat-next-question-hint-tab");
-    this.input.placeholder = `${this.hint.text}    ${action}`;
+    this.input.placeholder = visible ? "" : this.originalPlaceholder;
   }
 
   private restorePlaceholder(): void {
@@ -492,4 +491,227 @@ function hasLatestAssistantResponseInProgress(
     }
   }
   return false;
+}
+
+function buildReadingContext(
+  context: ChatPanelContext,
+  session: NonNullable<
+    ReturnType<ChatPanelContext["chatManager"]["getActiveSession"]>
+  >,
+): NextQuestionHintReadingContext | undefined {
+  const activeReaderContext = readActiveReaderContext();
+  const item =
+    getItemByLibraryKey(session.lastActiveItemKey) ||
+    resolveTopLevelItem(context.getCurrentItem()) ||
+    activeReaderContext.item;
+  const canUseActiveReaderContext =
+    !!activeReaderContext.item &&
+    (!item?.key || activeReaderContext.item.key === item.key);
+  const readerProgress = canUseActiveReaderContext
+    ? activeReaderContext.progress
+    : undefined;
+  const selectedText =
+    (canUseActiveReaderContext ? activeReaderContext.selectedText : null) ||
+    getRecentSelectedText(session.messages) ||
+    context.getAttachmentState().pendingSelectedText ||
+    undefined;
+
+  const metadata = item ? buildItemReadingContext(item) : {};
+  const readingContext: NextQuestionHintReadingContext = {
+    ...metadata,
+    selectedText,
+    currentPage: readerProgress?.currentPage,
+    pageCount: readerProgress?.pageCount,
+  };
+
+  return hasReadingContext(readingContext) ? readingContext : undefined;
+}
+
+function buildItemReadingContext(
+  item: Zotero.Item,
+): NextQuestionHintReadingContext {
+  const target = resolveTopLevelItem(item) || item;
+  const title =
+    readItemField(target, "title") || target.attachmentFilename || undefined;
+  const authors = readItemAuthors(target);
+  const year =
+    readItemField(target, "year") || readItemField(target, "date")?.slice(0, 4);
+  const abstract = readItemField(target, "abstractNote");
+  const tags = readItemTags(target);
+
+  return {
+    itemKey: target.key || item.key,
+    title,
+    authors: authors.length ? authors : undefined,
+    year,
+    abstract,
+    tags: tags.length ? tags : undefined,
+  };
+}
+
+function getItemByLibraryKey(
+  itemKey: string | null | undefined,
+): Zotero.Item | null {
+  if (!itemKey) {
+    return null;
+  }
+  try {
+    const libraryID = Zotero.Libraries.userLibraryID;
+    const item = Zotero.Items.getByLibraryAndKey(libraryID, itemKey) as
+      | Zotero.Item
+      | false;
+    return resolveTopLevelItem(item || null);
+  } catch (error) {
+    ztoolkit.log("[NextQuestionHint] failed to resolve item context:", error);
+    return null;
+  }
+}
+
+function resolveTopLevelItem(
+  item: Zotero.Item | null | undefined,
+): Zotero.Item | null {
+  if (!item) {
+    return null;
+  }
+  if ((item.isAttachment?.() || item.isNote?.()) && item.parentItemID) {
+    const parent = Zotero.Items.get(item.parentItemID) as Zotero.Item | false;
+    return parent || item;
+  }
+  return item;
+}
+
+function readItemField(item: Zotero.Item, field: string): string | undefined {
+  const value = item.getField?.(field) as string | undefined;
+  return value?.trim() || undefined;
+}
+
+function readItemAuthors(item: Zotero.Item): string[] {
+  try {
+    const creators = item.getCreators?.() || [];
+    return creators
+      .map(
+        (creator: { name?: string; firstName?: string; lastName?: string }) =>
+          creator.name ||
+          `${creator.firstName || ""} ${creator.lastName || ""}`,
+      )
+      .map((name) => name.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function readItemTags(item: Zotero.Item): string[] {
+  try {
+    return (item.getTags?.() || [])
+      .map((tag: { tag?: string }) => tag.tag?.trim() || "")
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function getRecentSelectedText(messages: ChatMessage[]): string | null {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    const selectedText = message.selectedText?.trim();
+    if (message.role === "user" && !message.apiOnly && selectedText) {
+      return selectedText;
+    }
+  }
+  return null;
+}
+
+interface ActiveReaderContext {
+  item: Zotero.Item | null;
+  selectedText: string | null;
+  progress?: {
+    currentPage?: number;
+    pageCount?: number;
+  };
+}
+
+function readActiveReaderContext(): ActiveReaderContext {
+  try {
+    const reader = getActiveReader();
+    const item = getReaderTopLevelItem(reader);
+    const toolkitSelectedText = reader
+      ? ztoolkit.Reader.getSelectedText(reader)
+      : "";
+    const iframeSelection = (reader as any)?._iframeWindow
+      ?.getSelection?.()
+      ?.toString?.();
+    return {
+      item,
+      selectedText: normalizeContextText(
+        toolkitSelectedText || iframeSelection,
+      ),
+      progress: readReaderProgress(reader),
+    };
+  } catch {
+    return {
+      item: null,
+      selectedText: null,
+    };
+  }
+}
+
+function getReaderTopLevelItem(
+  reader: _ZoteroTypes.ReaderInstance | null,
+): Zotero.Item | null {
+  if (!reader?.itemID) {
+    return null;
+  }
+  const item = Zotero.Items.get(reader.itemID) as Zotero.Item | false;
+  return resolveTopLevelItem(item || null);
+}
+
+function readReaderProgress(reader: _ZoteroTypes.ReaderInstance | null):
+  | {
+      currentPage?: number;
+      pageCount?: number;
+    }
+  | undefined {
+  try {
+    const pdfApp = (reader as any)?._iframeWindow?.PDFViewerApplication;
+    const currentPage = Number(
+      pdfApp?.pdfViewer?.currentPageNumber || pdfApp?.page || 0,
+    );
+    const pageCount = Number(
+      pdfApp?.pdfViewer?.pagesCount || pdfApp?.pagesCount || 0,
+    );
+    if (!Number.isFinite(currentPage) || currentPage <= 0) {
+      return undefined;
+    }
+    return {
+      currentPage,
+      pageCount:
+        Number.isFinite(pageCount) && pageCount > 0 ? pageCount : undefined,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function getActiveReader(): _ZoteroTypes.ReaderInstance | null {
+  const selectedID = Zotero.getMainWindow().Zotero_Tabs?.selectedID;
+  return selectedID ? Zotero.Reader?.getByTabID(selectedID) || null : null;
+}
+
+function normalizeContextText(text: string | null | undefined): string | null {
+  const normalized = text?.replace(/\s+/g, " ").trim();
+  return normalized || null;
+}
+
+function hasReadingContext(context: NextQuestionHintReadingContext): boolean {
+  return Boolean(
+    context.itemKey ||
+    context.title ||
+    context.authors?.length ||
+    context.year ||
+    context.abstract ||
+    context.tags?.length ||
+    context.selectedText ||
+    context.currentPage,
+  );
 }

@@ -1,7 +1,6 @@
 import type { ChatMessage, ChatSession } from "../../../types/chat";
 import type { AIProvider } from "../../../types/provider";
 import { getProviderManager } from "../../providers";
-import { createPaperChatLightweightProvider } from "../../providers/PaperChatLightweightProvider";
 import { getPref } from "../../../utils/prefs";
 import { createAbortController } from "../../../utils/abort";
 
@@ -18,17 +17,34 @@ export type NextQuestionHintOutcome =
   | { status: "generated"; hint: NextQuestionHint }
   | { status: "skipped"; reason: string };
 
+export interface NextQuestionHintReadingContext {
+  itemKey?: string;
+  title?: string;
+  authors?: string[];
+  year?: string;
+  abstract?: string;
+  tags?: string[];
+  selectedText?: string;
+  currentPage?: number;
+  pageCount?: number;
+}
+
 export interface NextQuestionHintRequest {
   session: ChatSession | null;
   currentInputValue: string;
+  readingContext?: NextQuestionHintReadingContext;
   signal?: AbortSignal;
 }
 
 const MIN_ASSISTANT_CONTENT_LENGTH = 80;
 const MAX_ASSISTANT_CONTEXT_CHARS = 2400;
 const MAX_USER_CONTEXT_CHARS = 900;
+const MAX_RECENT_CONTEXT_CHARS = 1800;
+const MAX_SESSION_SUMMARY_CHARS = 1200;
+const MAX_READING_CONTEXT_CHARS = 2600;
+const MAX_READING_ABSTRACT_CHARS = 1600;
+const MAX_SELECTED_TEXT_CHARS = 1200;
 const MAX_HINT_CHARS = 80;
-const HINT_MAX_TOKENS = 128;
 const HINT_TTL_MS = 2 * 60 * 1000;
 const GENERATION_TIMEOUT_MS = 15000;
 const SESSION_IGNORED_LIMIT = 3;
@@ -84,20 +100,6 @@ class NextQuestionHintService {
 
     const provider = this.getHintProvider();
     if (!provider?.isReady()) {
-      const fallback = buildFallbackHint(
-        this.cleanMessageContent(userMessage.content),
-        assistantContent,
-      );
-      if (fallback) {
-        rememberSetValue(
-          this.requestedAssistantMessageIds,
-          assistantMessage.id,
-        );
-        return {
-          status: "generated",
-          hint: this.createHint(session.id, assistantMessage.id, fallback),
-        };
-      }
       return { status: "skipped", reason: "provider_not_ready" };
     }
 
@@ -119,6 +121,7 @@ class NextQuestionHintService {
             userMessage,
             assistantMessage,
             session,
+            readingContext: request.readingContext,
           }),
           generationController.signal,
         ),
@@ -130,18 +133,7 @@ class NextQuestionHintService {
       );
       const text = normalizeHintText(raw);
       if (!text) {
-        const fallback = buildFallbackHint(
-          this.cleanMessageContent(userMessage.content),
-          assistantContent,
-        );
-        if (!fallback) {
-          this.requestedAssistantMessageIds.delete(assistantMessage.id);
-          return { status: "skipped", reason: "invalid_hint" };
-        }
-        return {
-          status: "generated",
-          hint: this.createHint(session.id, assistantMessage.id, fallback),
-        };
+        return { status: "skipped", reason: "invalid_hint" };
       }
 
       return {
@@ -152,20 +144,14 @@ class NextQuestionHintService {
       if (!timedOut && !abortedByRequest && !request.signal?.aborted) {
         ztoolkit.log("[NextQuestionHint] generation skipped:", error);
       }
-      if (!abortedByRequest && !request.signal?.aborted) {
-        const fallback = buildFallbackHint(
-          this.cleanMessageContent(userMessage.content),
-          assistantContent,
-        );
-        if (fallback) {
-          return {
-            status: "generated",
-            hint: this.createHint(session.id, assistantMessage.id, fallback),
-          };
-        }
+      if (abortedByRequest || request.signal?.aborted) {
+        this.requestedAssistantMessageIds.delete(assistantMessage.id);
+        return { status: "skipped", reason: "generation_aborted" };
       }
-      this.requestedAssistantMessageIds.delete(assistantMessage.id);
-      return { status: "skipped", reason: "generation_failed" };
+      return {
+        status: "skipped",
+        reason: timedOut ? "generation_timeout" : "generation_failed",
+      };
     } finally {
       request.signal?.removeEventListener("abort", abortForwarder);
     }
@@ -217,10 +203,26 @@ class NextQuestionHintService {
     session: ChatSession;
     userMessage: ChatMessage;
     assistantMessage: ChatMessage;
+    readingContext?: NextQuestionHintReadingContext;
   }): ChatMessage[] {
-    const { session, userMessage, assistantMessage } = input;
+    const { session, userMessage, assistantMessage, readingContext } = input;
     const title = session.title?.trim();
     const paperContext = title ? `\nCurrent paper/session title: ${title}` : "";
+    const readingContextText = buildReadingContextText(readingContext);
+    const recentConversationText = this.buildRecentConversationContext(
+      session.messages,
+      userMessage.id,
+    );
+    const sessionSummaryText = session.contextSummary?.content
+      ? truncate(
+          this.cleanMessageContent(session.contextSummary.content),
+          MAX_SESSION_SUMMARY_CHARS,
+        )
+      : "";
+    const selectedText = truncate(
+      readingContext?.selectedText || userMessage.selectedText || "",
+      MAX_SELECTED_TEXT_CHARS,
+    );
     const userText = truncate(
       this.cleanMessageContent(userMessage.content),
       MAX_USER_CONTEXT_CHARS,
@@ -251,6 +253,18 @@ class NextQuestionHintService {
         content: [
           "Based on the last user question and assistant answer, propose exactly one natural next question the reader may ask.",
           paperContext,
+          readingContextText
+            ? `\nCurrent reading context:\n${readingContextText}`
+            : "",
+          sessionSummaryText
+            ? `\nPrevious conversation summary:\n${sessionSummaryText}`
+            : "",
+          recentConversationText
+            ? `\nRecent conversation before the last turn:\n${recentConversationText}`
+            : "",
+          selectedText
+            ? `\nPDF text selected or referenced by the reader:\n${selectedText}`
+            : "",
           "\nLast user question:",
           userText,
           "\nAssistant answer:",
@@ -263,17 +277,37 @@ class NextQuestionHintService {
   }
 
   private getHintProvider(): AIProvider | null {
-    const providerManager = getProviderManager();
-    if (providerManager.getActiveProviderId() === "paperchat") {
-      return (
-        createPaperChatLightweightProvider({
-          maxTokens: HINT_MAX_TOKENS,
-          temperature: 0.2,
-          systemPrompt: "",
-        }) || providerManager.getActiveProvider()
-      );
+    return getProviderManager().getActiveProvider();
+  }
+
+  private buildRecentConversationContext(
+    messages: ChatMessage[],
+    beforeMessageId: string,
+  ): string {
+    const beforeIndex = messages.findIndex(
+      (message) => message.id === beforeMessageId,
+    );
+    if (beforeIndex <= 0) {
+      return "";
     }
-    return providerManager.getActiveProvider();
+
+    const recentMessages = messages
+      .slice(0, beforeIndex)
+      .filter(isConversationalContextMessage)
+      .slice(-6);
+    let text = "";
+    for (const message of recentMessages) {
+      const role = message.role === "assistant" ? "Assistant" : "User";
+      const entry = `${role}: ${truncate(
+        this.cleanMessageContent(message.content),
+        600,
+      )}\n`;
+      if (text.length + entry.length > MAX_RECENT_CONTEXT_CHARS) {
+        break;
+      }
+      text += entry;
+    }
+    return text.trim();
   }
 
   private createHint(
@@ -300,61 +334,52 @@ class NextQuestionHintService {
   }
 }
 
-function buildFallbackHint(
-  userText: string,
-  assistantText: string,
-): string | null {
-  const isChinese = /[\u4e00-\u9fff]/.test(userText);
-  const text = assistantText.toLowerCase();
+function isConversationalContextMessage(message: ChatMessage): boolean {
+  return (
+    (message.role === "user" || message.role === "assistant") &&
+    !message.apiOnly &&
+    !message.isSystemNotice &&
+    !message.streamingState &&
+    message.content.trim().length > 0
+  );
+}
 
-  if (text.includes("one-sentence") || text.includes("一句话")) {
-    return isChinese
-      ? "可以用一句话直觉解释吗？"
-      : "Can you give a one-sentence intuition?";
-  }
-  if (
-    text.includes("step-by-step") ||
-    text.includes("mathematically") ||
-    text.includes("math") ||
-    text.includes("公式")
-  ) {
-    return isChinese
-      ? "可以按步骤解释公式吗？"
-      : "Can you walk through the math step by step?";
-  }
-  if (
-    text.includes("experiment") ||
-    text.includes("results") ||
-    text.includes("performance") ||
-    text.includes("实验") ||
-    text.includes("结果")
-  ) {
-    return isChinese
-      ? "实验结果如何支撑这个结论？"
-      : "How do the experiments support this?";
-  }
-  if (
-    text.includes("advantage") ||
-    text.includes("benefit") ||
-    text.includes("优点") ||
-    text.includes("优势")
-  ) {
-    return isChinese ? "它的主要优势是什么？" : "What are its main advantages?";
-  }
-  if (
-    text.includes("method") ||
-    text.includes("module") ||
-    text.includes("architecture") ||
-    text.includes("mechanism") ||
-    text.includes("方法") ||
-    text.includes("模块")
-  ) {
-    return isChinese
-      ? "可以分步骤讲机制吗？"
-      : "Can you break down the mechanism step by step?";
+function buildReadingContextText(
+  context?: NextQuestionHintReadingContext,
+): string {
+  if (!context) {
+    return "";
   }
 
-  return isChinese ? "这部分最关键的结论是什么？" : "What is the key takeaway?";
+  const parts: string[] = [];
+  if (context.title) {
+    parts.push(`Paper title: ${context.title}`);
+  }
+  if (context.authors?.length) {
+    parts.push(`Authors: ${context.authors.slice(0, 6).join(", ")}`);
+  }
+  if (context.year) {
+    parts.push(`Year: ${context.year}`);
+  }
+  if (context.itemKey) {
+    parts.push(`Zotero item key: ${context.itemKey}`);
+  }
+  if (context.currentPage) {
+    const pageText = context.pageCount
+      ? `${context.currentPage} of ${context.pageCount}`
+      : `${context.currentPage}`;
+    parts.push(`Current reader page: ${pageText}`);
+  }
+  if (context.tags?.length) {
+    parts.push(`Tags: ${context.tags.slice(0, 8).join(", ")}`);
+  }
+  if (context.abstract) {
+    parts.push(
+      `Abstract: ${truncate(context.abstract, MAX_READING_ABSTRACT_CHARS)}`,
+    );
+  }
+
+  return truncate(parts.join("\n"), MAX_READING_CONTEXT_CHARS);
 }
 
 function normalizeHintText(raw: string): string | null {
