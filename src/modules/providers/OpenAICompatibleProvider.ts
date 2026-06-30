@@ -112,6 +112,11 @@ export function stripDsmlToolCallBlocks(content: string): string {
   return content.replace(DSML_TOOL_CALLS_BLOCK_REGEX, "").trim();
 }
 
+export function hasDsmlToolCallBlock(content: string): boolean {
+  DSML_TOOL_CALLS_BLOCK_REGEX.lastIndex = 0;
+  return DSML_TOOL_CALLS_BLOCK_REGEX.test(content);
+}
+
 export function parseDsmlToolCallsFromContent(content: string): ToolCall[] {
   const toolCalls: ToolCall[] = [];
   let blockMatch: RegExpExecArray | null;
@@ -171,6 +176,30 @@ function filterToolCallsByAllowedTools(
   return toolCalls.filter((toolCall) =>
     allowedToolNames.has(toolCall.function.name),
   );
+}
+
+export function resolveDsmlFallbackContent(
+  content: string,
+  tools: ToolDefinition[] | undefined,
+  allowDsmlFallback: boolean,
+): { cleanContent: string; hasDsmlBlock: boolean; toolCalls: ToolCall[] } {
+  if (!allowDsmlFallback) {
+    return {
+      cleanContent: content,
+      hasDsmlBlock: false,
+      toolCalls: [],
+    };
+  }
+
+  const hasDsmlBlock = hasDsmlToolCallBlock(content);
+  return {
+    cleanContent: hasDsmlBlock ? stripDsmlToolCallBlocks(content) : content,
+    hasDsmlBlock,
+    toolCalls: filterToolCallsByAllowedTools(
+      parseDsmlToolCallsFromContent(content),
+      tools,
+    ),
+  };
 }
 
 function mergeExtraRequestBody(
@@ -513,30 +542,29 @@ export class OpenAICompatibleProvider extends BaseProvider {
       }
     }
 
-    const dsmlToolCalls = allowDsmlFallback
-      ? filterToolCallsByAllowedTools(
-          parseDsmlToolCallsFromContent(rawContent),
-          tools,
-        )
-      : [];
-    if (dsmlToolCalls.length > 0) {
+    const dsmlFallback = resolveDsmlFallbackContent(
+      rawContent,
+      tools,
+      allowDsmlFallback,
+    );
+    if (dsmlFallback.toolCalls.length > 0) {
       ztoolkit.log(
         "[chatCompletionWithTools] Parsed",
-        dsmlToolCalls.length,
+        dsmlFallback.toolCalls.length,
         "tool calls from DSML fallback",
       );
       return {
-        content: stripDsmlToolCallBlocks(rawContent),
+        content: dsmlFallback.cleanContent,
         reasoning: message?.reasoning_content || undefined,
         toolCalls:
           structuredToolCalls && structuredToolCalls.length > 0
             ? structuredToolCalls
-            : dsmlToolCalls,
+            : dsmlFallback.toolCalls,
       };
     }
 
     return {
-      content: rawContent,
+      content: dsmlFallback.cleanContent,
       reasoning: message?.reasoning_content || undefined,
       toolCalls: structuredToolCalls,
     };
@@ -774,32 +802,27 @@ export class OpenAICompatibleProvider extends BaseProvider {
         });
       }
 
-      const dsmlToolCalls = allowDsmlFallback
-        ? filterToolCallsByAllowedTools(
-            parseDsmlToolCallsFromContent(fullContent),
-            tools,
-          )
-        : [];
-      const cleanContent =
-        dsmlToolCalls.length > 0
-          ? stripDsmlToolCallBlocks(fullContent)
-          : fullContent;
+      const dsmlFallback = resolveDsmlFallbackContent(
+        fullContent,
+        tools,
+        allowDsmlFallback,
+      );
 
-      if (dsmlToolCalls.length === 0) {
+      if (!dsmlFallback.hasDsmlBlock) {
         flushPendingTextDelta();
       }
 
       onComplete({
-        content: cleanContent,
+        content: dsmlFallback.cleanContent,
         reasoning: fullReasoning || undefined,
         toolCalls:
           toolCalls.length > 0
             ? toolCalls
-            : dsmlToolCalls.length > 0
-              ? dsmlToolCalls
+            : dsmlFallback.toolCalls.length > 0
+              ? dsmlFallback.toolCalls
               : undefined,
         stopReason:
-          dsmlToolCalls.length > 0
+          dsmlFallback.toolCalls.length > 0
             ? "tool_calls"
             : (stopReason as "tool_calls" | "end_turn" | "max_tokens" | "stop"),
       });

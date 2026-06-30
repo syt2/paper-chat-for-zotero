@@ -1,8 +1,29 @@
 import { assert } from "chai";
 import {
   parseDsmlToolCallsFromContent,
+  resolveDsmlFallbackContent,
   stripDsmlToolCallBlocks,
 } from "../src/modules/providers/OpenAICompatibleProvider.ts";
+import type { ToolDefinition } from "../src/types/tool.ts";
+
+const allowedTools: ToolDefinition[] = [
+  {
+    type: "function",
+    function: {
+      name: "search_paper_content",
+      description: "Search paper text",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "Search query",
+          },
+        },
+      },
+    },
+  },
+];
 
 describe("DeepSeek DSML tool call fallback", function () {
   it("parses leaked DSML tool calls from message content", function () {
@@ -83,5 +104,41 @@ after`;
       pages: "7",
     });
     assert.equal(stripDsmlToolCallBlocks(content), "");
+  });
+
+  it("strips disallowed DSML blocks without executing them", function () {
+    const content = `before
+<｜｜DSML｜｜tool_calls>
+<｜｜DSML｜｜invoke name=“search_with_regex”>
+<｜｜DSML｜｜parameter name=“pattern” string=“true”>scores based on 100 utterances</｜｜DSML｜｜parameter>
+</｜｜DSML｜｜invoke>
+</｜｜DSML｜｜tool_calls>
+after`;
+
+    const fallback = resolveDsmlFallbackContent(content, allowedTools, true);
+
+    assert.isTrue(fallback.hasDsmlBlock);
+    assert.deepEqual(fallback.toolCalls, []);
+    assert.equal(fallback.cleanContent, "before\n\nafter");
+  });
+
+  it("keeps allowed DSML tool calls while stripping display content", function () {
+    const content = `before
+<｜｜DSML｜｜tool_calls>
+<｜｜DSML｜｜invoke name=“search_paper_content”>
+<｜｜DSML｜｜parameter name=“query” string=“true”>neural activity</｜｜DSML｜｜parameter>
+</｜｜DSML｜｜invoke>
+</｜｜DSML｜｜tool_calls>
+after`;
+
+    const fallback = resolveDsmlFallbackContent(content, allowedTools, true);
+
+    assert.isTrue(fallback.hasDsmlBlock);
+    assert.lengthOf(fallback.toolCalls, 1);
+    assert.equal(fallback.toolCalls[0].function.name, "search_paper_content");
+    assert.deepEqual(JSON.parse(fallback.toolCalls[0].function.arguments), {
+      query: "neural activity",
+    });
+    assert.equal(fallback.cleanContent, "before\n\nafter");
   });
 });
