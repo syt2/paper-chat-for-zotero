@@ -11,7 +11,10 @@ import type {
   FileAttachment,
   ToolApprovalState,
 } from "../../../types/chat";
-import type { ToolApprovalResolution } from "../../../types/tool";
+import type {
+  RequestUserInputResponse,
+  ToolApprovalResolution,
+} from "../../../types/tool";
 import { getAuthManager } from "../../auth";
 import { getProviderManager } from "../../providers";
 import { isPaperChatQuotaError } from "../../providers/paperchat-errors";
@@ -37,6 +40,7 @@ import {
   updateChatHistoryScrollBottomButton,
   updateExecutionPlanView,
   updateApprovalView,
+  updateUserInputRequestView,
   type ApprovalViewTransitionState,
 } from "./MessageRenderer";
 import {
@@ -387,6 +391,19 @@ function buildApprovalActionsForContainer(
   };
 }
 
+function buildUserInputActionsForContainer(manager: ChatManager): {
+  onResolveUserInput: (
+    requestId: string,
+    response: RequestUserInputResponse,
+  ) => void;
+} {
+  return {
+    onResolveUserInput: (requestId, response) => {
+      manager.resolveUserInputRequest(requestId, response);
+    },
+  };
+}
+
 function updateExecutionInsetsForContainer(
   container: HTMLElement,
   manager: ChatManager,
@@ -396,7 +413,9 @@ function updateExecutionInsetsForContainer(
   const activeSession = manager.getActiveSession();
   const activeSessionId = activeSession?.id || null;
   const toolApprovalState = activeSession?.toolApprovalState;
+  const userInputRequestState = activeSession?.userInputRequestState;
   const approvalActions = buildApprovalActionsForContainer(manager, container);
+  const userInputActions = buildUserInputActionsForContainer(manager);
   const planPanel = container.querySelector(
     "#chat-execution-plan-panel",
   ) as HTMLElement | null;
@@ -419,14 +438,23 @@ function updateExecutionInsetsForContainer(
     updateExecutionPlanView(planPanel, theme, executionPlan, toolApprovalState);
   }
   if (approvalPanel) {
-    updateApprovalView(
-      approvalPanel,
-      theme,
-      executionPlan,
-      toolApprovalState,
-      approvalActions,
-      approvalPanelTransitions.get(approvalPanel),
-    );
+    if (toolApprovalState?.pendingRequests.length || transitionState) {
+      updateApprovalView(
+        approvalPanel,
+        theme,
+        executionPlan,
+        toolApprovalState,
+        approvalActions,
+        approvalPanelTransitions.get(approvalPanel),
+      );
+    } else {
+      updateUserInputRequestView(
+        approvalPanel,
+        theme,
+        userInputRequestState,
+        userInputActions,
+      );
+    }
   }
 }
 
@@ -1653,7 +1681,9 @@ function setupChatManagerCallbacks(
       }
       if (
         event.type === "approval_requested" ||
-        event.type === "approval_resolved"
+        event.type === "approval_resolved" ||
+        event.type === "user_input_requested" ||
+        event.type === "user_input_resolved"
       ) {
         context.renderExecutionPlan(manager.getActiveSession()?.executionPlan);
       }

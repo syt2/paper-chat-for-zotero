@@ -24,6 +24,7 @@ import type {
   ToolApprovalResolution,
   ToolDefinition,
   ToolPermissionDecision,
+  RequestUserInputResponse,
 } from "../../types/tool";
 import type {
   ToolCallingProvider,
@@ -355,6 +356,7 @@ export class ChatManager {
     }
     await this.sessionStorage.cleanupAbandonedDraftSessions();
     this.reconcileApprovalState(this.currentSession);
+    this.reconcileUserInputRequestState(this.currentSession);
     this.applySessionItemContext(this.currentSession);
 
     this.initialized = true;
@@ -942,6 +944,13 @@ export class ChatManager {
     );
   }
 
+  resolveUserInputRequest(
+    requestId: string,
+    response: RequestUserInputResponse,
+  ): boolean {
+    return this.agentRuntime.resolveUserInputRequest(requestId, response);
+  }
+
   /**
    * 创建新 session
    */
@@ -958,6 +967,7 @@ export class ChatManager {
     await this.sessionStorage.cleanupAbandonedDraftSessions();
     this.applySessionItemContext(this.currentSession);
     this.reconcileApprovalState(this.currentSession);
+    this.reconcileUserInputRequestState(this.currentSession);
     return this.currentSession;
   }
 
@@ -985,6 +995,7 @@ export class ChatManager {
         await this.sessionStorage.setActiveSession(sessionId);
         this.applySessionItemContext(session);
         this.reconcileApprovalState(session);
+        this.reconcileUserInputRequestState(session);
       }
       return session;
     } catch (error) {
@@ -1015,6 +1026,7 @@ export class ChatManager {
       reason:
         "Pending tool approvals were denied because the session was deleted.",
     });
+    this.agentRuntime.cancelPendingUserInputRequests(sessionId);
     getToolPermissionManager().clearSessionPolicies(sessionId);
 
     this.invalidateSessionRun(sessionId, { abort: true });
@@ -1055,6 +1067,7 @@ export class ChatManager {
         }
       }
       this.reconcileApprovalState(this.currentSession);
+      this.reconcileUserInputRequestState(this.currentSession);
     }
 
     this.applySessionItemContext(this.currentSession);
@@ -1562,6 +1575,12 @@ export class ChatManager {
     // This ensures DB writes and in-memory mutations target the correct
     // session even if the user switches sessions mid-stream.
     const sendingSession = this.currentSession;
+    if (sendingSession.userInputRequestState?.pendingRequests.length) {
+      this.onError?.(
+        new Error("Please answer the pending PaperChat question first."),
+      );
+      return false;
+    }
     const { runId: sessionRunId, abortSignal } =
       this.beginSessionRun(sendingSession);
     const ensureSendingSessionTracked = () => {
@@ -2756,6 +2775,8 @@ export class ChatManager {
     const hasActiveRun = this.activeSessionRunIds.has(session.id);
     const pendingApprovalCount =
       session.toolApprovalState?.pendingRequests.length || 0;
+    const pendingUserInputCount =
+      session.userInputRequestState?.pendingRequests.length || 0;
     const interruptedMessages = session.messages.filter(
       (message) =>
         message.role === "assistant" &&
@@ -2767,7 +2788,8 @@ export class ChatManager {
       !hasActiveRun &&
       interruptedMessages.length === 0 &&
       !session.executionPlan &&
-      pendingApprovalCount === 0
+      pendingApprovalCount === 0 &&
+      pendingUserInputCount === 0
     ) {
       return false;
     }
@@ -2780,6 +2802,9 @@ export class ChatManager {
         reason:
           "Pending tool approvals were denied because the user cancelled the current turn.",
       });
+    }
+    if (pendingUserInputCount > 0) {
+      this.agentRuntime.cancelPendingUserInputRequests(session.id);
     }
 
     const now = Date.now();
@@ -2805,6 +2830,7 @@ export class ChatManager {
     session.executionPlan = undefined;
     session.toolExecutionState = undefined;
     session.toolApprovalState = undefined;
+    session.userInputRequestState = undefined;
     session.updatedAt = now;
     await this.sessionStorage.updateSessionMeta(session);
 
@@ -2828,6 +2854,7 @@ export class ChatManager {
       reason:
         "Pending tool approvals were denied because the session was cleared.",
     });
+    this.agentRuntime.cancelPendingUserInputRequests(clearedSession.id);
     this.invalidateSessionRun(clearedSession.id, { abort: true });
     this.currentSession = clearedSession;
     this.applySessionItemContext(clearedSession);
@@ -2970,6 +2997,7 @@ export class ChatManager {
       executionPlan: undefined,
       toolExecutionState: undefined,
       toolApprovalState: undefined,
+      userInputRequestState: undefined,
       memoryExtractedAt: undefined,
       memoryExtractedMsgCount: undefined,
       selectedTier: session.selectedTier,
@@ -3021,6 +3049,24 @@ export class ChatManager {
 
     session.toolApprovalState = normalizedState;
     this.persistApprovalState(session);
+  }
+
+  private reconcileUserInputRequestState(session: ChatSession | null): void {
+    if (!session?.userInputRequestState?.pendingRequests.length) {
+      return;
+    }
+    if (this.activeSessionRunIds.has(session.id)) {
+      return;
+    }
+    session.userInputRequestState = undefined;
+    this.sessionStorage
+      .updateSessionUserInputRequestState(session)
+      .catch((error) => {
+        ztoolkit.log(
+          "[ChatManager] Failed to clear stale user-input request state:",
+          error,
+        );
+      });
   }
 
   private persistApprovalState(session: ChatSession): void {

@@ -54,6 +54,12 @@ const TOOL_PERMISSION_DESCRIPTORS: Record<
   PaperToolName,
   ToolPermissionDescriptor
 > = {
+  request_user_input: createDescriptor(
+    "request_user_input",
+    "read",
+    "Ask the user for a blocking structured decision.",
+    "auto_allow",
+  ),
   web_search: {
     ...createDescriptor(
       "web_search",

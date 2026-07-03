@@ -10,7 +10,11 @@ import type {
   ImageAttachment,
   ToolApprovalState,
 } from "../../chat";
-import type { ToolApprovalResolution } from "../../../types/tool";
+import type { UserInputRequestState } from "../../../types/chat";
+import type {
+  RequestUserInputResponse,
+  ToolApprovalResolution,
+} from "../../../types/tool";
 import { chatColors } from "../../../utils/colors";
 import type { ThemeColors } from "./types";
 import { HTML_NS } from "./types";
@@ -39,6 +43,10 @@ const CHAT_HISTORY_AUTO_SCROLL_ATTR = "data-auto-scroll";
 const CHAT_SCROLL_BOTTOM_BUTTON_ID = "chat-scroll-bottom-btn";
 const STREAMING_TYPING_INDICATOR_ATTR = "data-streaming-typing-indicator";
 const MESSAGE_ACTION_ICON_SIZE = "15px";
+const userInputCountdownTimers = new WeakMap<
+  HTMLElement,
+  ReturnType<typeof setInterval>
+>();
 
 function getChatHistoryBottomOffset(chatHistory: HTMLElement): number {
   return (
@@ -988,6 +996,67 @@ export function updateApprovalView(
   });
 }
 
+export function updateUserInputRequestView(
+  panel: HTMLElement,
+  theme: ThemeColors,
+  userInputRequestState?: UserInputRequestState,
+  actions?: {
+    onResolveUserInput: (
+      requestId: string,
+      response: RequestUserInputResponse,
+    ) => void | Promise<void>;
+  },
+): void {
+  const doc = panel.ownerDocument;
+  if (!doc) return;
+  const request = userInputRequestState?.pendingRequests[0];
+  if (!request) {
+    const existing = panel.querySelector(
+      ".chat-user-input-request-banner",
+    ) as HTMLElement | null;
+    if (existing) {
+      clearUserInputCountdownTimer(existing);
+    }
+    panel.replaceChildren();
+    updateExecutionInsetPanel(
+      panel,
+      theme,
+      {
+        kind: "idle",
+        icon: "",
+        title: "",
+        detail: "",
+      },
+      {
+        placement: "bottom",
+        showApprovalActions: false,
+      },
+    );
+    return;
+  }
+
+  const existing = panel.querySelector(
+    ".chat-user-input-request-banner",
+  ) as HTMLElement | null;
+  const wrapper =
+    existing ||
+    createExecutionBannerElement(doc, {
+      className: "chat-user-input-request-banner",
+      placement: "bottom",
+    });
+  clearUserInputCountdownTimer(wrapper);
+  populateUserInputRequestElement(wrapper, doc, theme, request, actions);
+  if (!existing) {
+    panel.replaceChildren(wrapper);
+  }
+  panel.style.pointerEvents = "auto";
+  panel.style.opacity = "1";
+  panel.style.transform = "translateY(0)";
+  syncExecutionInsetHeight(panel, wrapper);
+  attachExecutionInsetResizeObserver(panel, wrapper);
+  syncExecutionInsets(panel);
+}
+
 function updateExecutionInsetPanel(
   panel: HTMLElement,
   theme: ThemeColors,
@@ -1689,6 +1758,548 @@ function createApprovalActionsRow(
   }
 
   return actions;
+}
+
+function populateUserInputRequestElement(
+  wrapper: HTMLElement,
+  doc: Document,
+  theme: ThemeColors,
+  request: UserInputRequestState["pendingRequests"][number],
+  actions?: {
+    onResolveUserInput: (
+      requestId: string,
+      response: RequestUserInputResponse,
+    ) => void | Promise<void>;
+  },
+): void {
+  wrapper.replaceChildren();
+  const questions = request.args.questions;
+  if (questions.length === 0) {
+    return;
+  }
+
+  const form = createElement(doc, "form", {
+    border: `1px solid ${theme.borderColor}`,
+    background: theme.assistantBubbleBg,
+    borderRadius: "16px",
+    padding: "8px 10px",
+    boxShadow: "0 8px 22px rgba(0, 0, 0, 0.1)",
+    display: "flex",
+    flexDirection: "column",
+    gap: "7px",
+    minWidth: "0",
+    boxSizing: "border-box",
+  }) as HTMLFormElement;
+
+  const header = createElement(doc, "div", {
+    display: "flex",
+    alignItems: "flex-start",
+    gap: "7px",
+    minWidth: "0",
+  });
+
+  const badge = createElement(doc, "span", {
+    width: "20px",
+    height: "20px",
+    minWidth: "20px",
+    borderRadius: "999px",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    background: "rgba(37, 99, 235, 0.14)",
+    color: "#1d4ed8",
+    fontSize: "12px",
+    fontWeight: "700",
+    flexShrink: "0",
+  });
+  badge.textContent = "?";
+
+  const textGroup = createElement(doc, "div", {
+    display: "flex",
+    flexDirection: "column",
+    gap: "2px",
+    minWidth: "0",
+    flex: "1 1 auto",
+  });
+
+  const title = createElement(doc, "div", {
+    fontSize: "12px",
+    fontWeight: "700",
+    color: theme.textPrimary,
+    lineHeight: "1.25",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  });
+  title.textContent =
+    questions.length === 1
+      ? questions[0].header || getString("chat-user-input-title")
+      : getString("chat-user-input-title");
+
+  const detail = createElement(doc, "div", {
+    fontSize: "10px",
+    color: theme.textSecondary,
+    lineHeight: "1.3",
+    whiteSpace: "normal",
+    overflowWrap: "anywhere",
+  });
+  detail.textContent =
+    questions.length === 1
+      ? questions[0].question
+      : request.args.reason || questions.map((item) => item.header).join(" · ");
+
+  textGroup.appendChild(title);
+  textGroup.appendChild(detail);
+  header.appendChild(badge);
+  header.appendChild(textGroup);
+  form.appendChild(header);
+
+  if (request.expiresAt) {
+    const autoLabel = createElement(doc, "div", {
+      color: theme.textMuted,
+      fontSize: "9px",
+      lineHeight: "1.2",
+    });
+    updateUserInputCountdownLabel(autoLabel, request.expiresAt);
+    attachUserInputCountdownTimer(wrapper, autoLabel, request.expiresAt);
+    form.appendChild(autoLabel);
+  }
+
+  for (const question of questions) {
+    form.appendChild(
+      createUserInputQuestionControl(doc, theme, request.id, question),
+    );
+  }
+
+  const error = createElement(
+    doc,
+    "div",
+    {
+      display: "none",
+      color: "#b91c1c",
+      fontSize: "10px",
+      lineHeight: "1.25",
+    },
+    { "data-user-input-error": "true" },
+  );
+  form.appendChild(error);
+
+  const actionsRow = createElement(doc, "div", {
+    display: "flex",
+    alignItems: "stretch",
+    justifyContent: "flex-end",
+    gap: "5px",
+    width: "100%",
+  });
+
+  const cancelButton = createElement(doc, "button", {
+    border: `1px solid ${theme.borderColor}`,
+    background: theme.buttonBg,
+    color: theme.textSecondary,
+    borderRadius: "9px",
+    padding: "5px 8px",
+    fontSize: "10px",
+    fontWeight: "600",
+    lineHeight: "1.15",
+    cursor: actions ? "pointer" : "default",
+    opacity: actions ? "1" : "0.6",
+    minHeight: "28px",
+  }) as HTMLButtonElement;
+  cancelButton.type = "button";
+  cancelButton.textContent = getString("chat-user-input-cancel");
+  cancelButton.disabled = !actions;
+  if (actions) {
+    cancelButton.addEventListener("click", () => {
+      void actions.onResolveUserInput(
+        request.id,
+        createCancelledUserInputUiResponse(request),
+      );
+    });
+  }
+
+  const submitButton = createElement(doc, "button", {
+    border: `1px solid ${theme.borderColor}`,
+    background: theme.inputBg,
+    color: theme.textPrimary,
+    borderRadius: "9px",
+    padding: "5px 10px",
+    fontSize: "10px",
+    fontWeight: "700",
+    lineHeight: "1.15",
+    cursor: actions ? "pointer" : "default",
+    opacity: actions ? "1" : "0.6",
+    minHeight: "28px",
+  }) as HTMLButtonElement;
+  submitButton.type = "submit";
+  submitButton.textContent = getString("chat-user-input-submit");
+  submitButton.disabled = !actions;
+  actionsRow.appendChild(cancelButton);
+  actionsRow.appendChild(submitButton);
+  form.appendChild(actionsRow);
+
+  if (actions) {
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const collected = collectUserInputResponse(form, request);
+      if (!collected.ok) {
+        error.textContent = collected.error;
+        error.style.display = "block";
+        syncExecutionInsetHeight(wrapper.parentElement as HTMLElement, wrapper);
+        return;
+      }
+      void actions.onResolveUserInput(request.id, collected.response);
+    });
+  }
+
+  wrapper.appendChild(form);
+}
+
+function clearUserInputCountdownTimer(scope: HTMLElement): void {
+  const timer = userInputCountdownTimers.get(scope);
+  if (!timer) {
+    return;
+  }
+  clearInterval(timer);
+  userInputCountdownTimers.delete(scope);
+}
+
+function attachUserInputCountdownTimer(
+  scope: HTMLElement,
+  label: HTMLElement,
+  expiresAt: number,
+): void {
+  clearUserInputCountdownTimer(scope);
+  const timer = setInterval(() => {
+    updateUserInputCountdownLabel(label, expiresAt);
+    if (expiresAt <= Date.now()) {
+      clearUserInputCountdownTimer(scope);
+    }
+  }, 1000);
+  userInputCountdownTimers.set(scope, timer);
+}
+
+function updateUserInputCountdownLabel(
+  label: HTMLElement,
+  expiresAt: number,
+): void {
+  const seconds = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
+  label.textContent = getString("chat-user-input-auto", {
+    args: { seconds },
+  });
+}
+
+type UserInputRequestViewModel =
+  UserInputRequestState["pendingRequests"][number];
+type UserInputQuestionViewModel =
+  UserInputRequestViewModel["args"]["questions"][number];
+
+function createUserInputQuestionControl(
+  doc: Document,
+  theme: ThemeColors,
+  requestId: string,
+  question: UserInputQuestionViewModel,
+): HTMLElement {
+  const field = createElement(doc, "div", {
+    display: "flex",
+    flexDirection: "column",
+    gap: "5px",
+    minWidth: "0",
+  });
+
+  const labelRow = createElement(doc, "div", {
+    display: "flex",
+    alignItems: "center",
+    gap: "5px",
+    minWidth: "0",
+  });
+  const label = createElement(doc, "label", {
+    color: theme.textPrimary,
+    fontSize: "10px",
+    fontWeight: "700",
+    lineHeight: "1.25",
+    overflowWrap: "anywhere",
+  });
+  label.textContent = question.question;
+  labelRow.appendChild(label);
+  if (question.required === false) {
+    const optional = createElement(doc, "span", {
+      color: theme.textMuted,
+      fontSize: "9px",
+      lineHeight: "1.2",
+      whiteSpace: "nowrap",
+    });
+    optional.textContent = getString("chat-user-input-optional");
+    labelRow.appendChild(optional);
+  }
+  field.appendChild(labelRow);
+
+  if (
+    question.type === "single_choice" ||
+    question.type === "confirm" ||
+    question.type === "multi_choice"
+  ) {
+    field.appendChild(
+      createChoiceQuestionControl(doc, theme, requestId, question),
+    );
+    return field;
+  }
+
+  const input = createElement(
+    doc,
+    question.type === "secret" ? "input" : "textarea",
+    {
+      border: `1px solid ${theme.borderColor}`,
+      background: theme.inputBg,
+      color: theme.textPrimary,
+      borderRadius: "9px",
+      padding: "6px 7px",
+      fontSize: "11px",
+      lineHeight: "1.35",
+      minHeight: question.type === "secret" ? "30px" : "54px",
+      resize: question.type === "secret" ? "none" : "vertical",
+      boxSizing: "border-box",
+      width: "100%",
+    },
+  ) as HTMLInputElement | HTMLTextAreaElement;
+  input.setAttribute("data-question-id", question.id);
+  input.setAttribute("data-question-type", question.type || "text");
+  input.placeholder = question.placeholder || "";
+  if (question.type === "secret") {
+    const secretInput = input as HTMLInputElement;
+    secretInput.type = "password";
+    secretInput.autocomplete = "off";
+  }
+  if (typeof question.defaultValue === "string" && question.type !== "secret") {
+    input.value = question.defaultValue;
+  }
+  field.appendChild(input);
+  return field;
+}
+
+function createChoiceQuestionControl(
+  doc: Document,
+  theme: ThemeColors,
+  requestId: string,
+  question: UserInputQuestionViewModel,
+): HTMLElement {
+  const optionsWrap = createElement(doc, "div", {
+    display: "flex",
+    flexDirection: "column",
+    gap: "4px",
+    minWidth: "0",
+  });
+  const inputType = question.type === "multi_choice" ? "checkbox" : "radio";
+  const groupName = `user-input-${requestId}-${question.id}`;
+  const defaultValues = getQuestionDefaultValues(question);
+
+  for (const option of question.options || []) {
+    const value = option.value || option.label;
+    const optionLabel = createElement(doc, "label", {
+      border: `1px solid ${theme.borderColor}`,
+      background: option.recommended ? theme.inputBg : theme.buttonBg,
+      color: theme.textPrimary,
+      borderRadius: "9px",
+      padding: "6px 7px",
+      display: "flex",
+      alignItems: "flex-start",
+      gap: "6px",
+      cursor: "pointer",
+      minWidth: "0",
+    });
+    const input = doc.createElement("input") as HTMLInputElement;
+    input.type = inputType;
+    input.name = groupName;
+    input.value = value;
+    input.checked = defaultValues.has(value) || option.recommended === true;
+    input.setAttribute("data-question-id", question.id);
+    input.setAttribute("data-question-type", question.type || "single_choice");
+    input.style.margin = "1px 0 0 0";
+    input.style.flexShrink = "0";
+
+    const textGroup = createElement(doc, "span", {
+      display: "flex",
+      flexDirection: "column",
+      gap: "2px",
+      minWidth: "0",
+      flex: "1 1 auto",
+    });
+    const optionTitle = createElement(doc, "span", {
+      fontSize: "10px",
+      fontWeight: option.recommended ? "700" : "600",
+      lineHeight: "1.2",
+      overflowWrap: "anywhere",
+    });
+    optionTitle.textContent = option.label;
+    textGroup.appendChild(optionTitle);
+    if (option.description) {
+      const optionDetail = createElement(doc, "span", {
+        color: theme.textSecondary,
+        fontSize: "9px",
+        lineHeight: "1.25",
+        overflowWrap: "anywhere",
+      });
+      optionDetail.textContent = option.description;
+      textGroup.appendChild(optionDetail);
+    }
+
+    optionLabel.appendChild(input);
+    optionLabel.appendChild(textGroup);
+    optionsWrap.appendChild(optionLabel);
+  }
+
+  if (question.allowOther) {
+    const otherRow = createElement(doc, "label", {
+      border: `1px solid ${theme.borderColor}`,
+      background: theme.buttonBg,
+      color: theme.textPrimary,
+      borderRadius: "9px",
+      padding: "6px 7px",
+      display: "flex",
+      alignItems: "center",
+      gap: "6px",
+      cursor: "pointer",
+      minWidth: "0",
+    });
+    const input = doc.createElement("input") as HTMLInputElement;
+    input.type = inputType;
+    input.name = groupName;
+    input.value = "__other__";
+    input.setAttribute("data-question-id", question.id);
+    input.setAttribute("data-question-type", question.type || "single_choice");
+    const otherInput = doc.createElement("input") as HTMLInputElement;
+    otherInput.type = "text";
+    otherInput.placeholder = getString("chat-user-input-other");
+    otherInput.setAttribute("data-other-for", question.id);
+    otherInput.style.flex = "1 1 auto";
+    otherInput.style.minWidth = "0";
+    otherInput.style.border = "none";
+    otherInput.style.outline = "none";
+    otherInput.style.background = "transparent";
+    otherInput.style.color = theme.textPrimary;
+    otherInput.style.fontSize = "10px";
+    otherInput.addEventListener("focus", () => {
+      input.checked = true;
+    });
+    otherRow.appendChild(input);
+    otherRow.appendChild(otherInput);
+    optionsWrap.appendChild(otherRow);
+  }
+
+  return optionsWrap;
+}
+
+function getQuestionDefaultValues(
+  question: UserInputQuestionViewModel,
+): Set<string> {
+  if (Array.isArray(question.defaultValue)) {
+    return new Set(question.defaultValue);
+  }
+  if (typeof question.defaultValue === "string") {
+    return new Set([question.defaultValue]);
+  }
+  return new Set();
+}
+
+function createCancelledUserInputUiResponse(
+  request: UserInputRequestViewModel,
+): RequestUserInputResponse {
+  const answers: RequestUserInputResponse["answers"] = {};
+  for (const question of request.args.questions) {
+    answers[question.id] = { cancelled: true };
+  }
+  return { answers, cancelled: true };
+}
+
+function collectUserInputResponse(
+  form: HTMLFormElement,
+  request: UserInputRequestViewModel,
+):
+  | { ok: true; response: RequestUserInputResponse }
+  | { ok: false; error: string } {
+  const answers: RequestUserInputResponse["answers"] = {};
+
+  for (const question of request.args.questions) {
+    const type = question.type || "single_choice";
+    if (type === "text" || type === "secret") {
+      const input = form.querySelector(
+        `[data-question-id="${question.id}"][data-question-type="${type}"]`,
+      ) as HTMLInputElement | HTMLTextAreaElement | null;
+      const text = (input?.value || "").trim();
+      if (question.required !== false && !text) {
+        return {
+          ok: false,
+          error: getString("chat-user-input-required"),
+        };
+      }
+      answers[question.id] =
+        type === "secret"
+          ? {
+              secretRef: text
+                ? `secret-${request.id}-${question.id}-${Date.now()}`
+                : undefined,
+            }
+          : { text };
+      continue;
+    }
+
+    const checked = [
+      ...form.querySelectorAll(
+        `[data-question-id="${question.id}"][data-question-type="${type}"]`,
+      ),
+    ].filter((input): input is HTMLInputElement => {
+      const candidate = input as HTMLInputElement;
+      return typeof candidate.checked === "boolean" && candidate.checked;
+    });
+    const values = checked
+      .filter((input) => input.value !== "__other__")
+      .map((input) => input.value);
+    const otherChecked = checked.some((input) => input.value === "__other__");
+    const otherInput = form.querySelector(
+      `[data-other-for="${question.id}"]`,
+    ) as HTMLInputElement | null;
+    const other = otherChecked ? (otherInput?.value || "").trim() : "";
+    const totalSelections = values.length + (other ? 1 : 0);
+
+    if (question.required !== false && totalSelections === 0) {
+      return {
+        ok: false,
+        error: getString("chat-user-input-required"),
+      };
+    }
+    if (
+      type === "multi_choice" &&
+      question.minSelections !== undefined &&
+      totalSelections < question.minSelections
+    ) {
+      return {
+        ok: false,
+        error: getString("chat-user-input-too-few", {
+          args: { count: question.minSelections },
+        }),
+      };
+    }
+    if (
+      type === "multi_choice" &&
+      question.maxSelections !== undefined &&
+      totalSelections > question.maxSelections
+    ) {
+      return {
+        ok: false,
+        error: getString("chat-user-input-too-many", {
+          args: { count: question.maxSelections },
+        }),
+      };
+    }
+    answers[question.id] = {
+      answers: values,
+      other: other || undefined,
+    };
+  }
+
+  return {
+    ok: true,
+    response: { answers },
+  };
 }
 
 function getActiveExecutionStep(

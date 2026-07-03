@@ -279,6 +279,138 @@ export class PdfToolManager {
       {
         type: "function" as const,
         function: {
+          name: "request_user_input",
+          description:
+            "Ask the user a blocking clarification or decision question and wait for their answer before continuing. Use this only when multiple materially different next steps are possible, required context is missing, or user confirmation is needed. Prefer concrete options over free-form questions. Do not use this for minor style choices or when a safe default is obvious. Use the same language as the user.",
+          parameters: {
+            type: "object" as const,
+            properties: {
+              reason: {
+                type: "string" as const,
+                description:
+                  "Optional internal reason for asking. Keep it short and user-respectful.",
+              },
+              questions: {
+                type: "array" as const,
+                description:
+                  "Structured questions to ask. Use at most 3 concise questions.",
+                minItems: 1,
+                maxItems: 3,
+                items: {
+                  type: "object",
+                  description: "A single user-facing question.",
+                  properties: {
+                    id: {
+                      type: "string",
+                      description:
+                        "Stable snake_case identifier used in the answer object.",
+                    },
+                    header: {
+                      type: "string",
+                      description:
+                        "Short label for the request, usually 1-3 words.",
+                    },
+                    question: {
+                      type: "string",
+                      description:
+                        "The concrete question shown to the user. Use the user's language.",
+                    },
+                    type: {
+                      type: "string",
+                      enum: [
+                        "single_choice",
+                        "multi_choice",
+                        "text",
+                        "secret",
+                        "confirm",
+                      ],
+                      description:
+                        "Question type. Prefer single_choice or confirm. Use text only when options cannot capture the answer. Use secret only when the user explicitly needs to provide a private key/token.",
+                    },
+                    options: {
+                      type: "array",
+                      description:
+                        "Choice options. Use 2-4 concrete options and mark one recommended when possible.",
+                      minItems: 2,
+                      maxItems: 4,
+                      items: {
+                        type: "object",
+                        description: "A selectable answer option.",
+                        properties: {
+                          label: {
+                            type: "string",
+                            description:
+                              "Short option label. Add '(Recommended)' to the recommended option label when appropriate.",
+                          },
+                          description: {
+                            type: "string",
+                            description:
+                              "One short sentence explaining the tradeoff.",
+                          },
+                          value: {
+                            type: "string",
+                            description:
+                              "Stable machine-readable answer value.",
+                          },
+                          recommended: {
+                            type: "boolean",
+                            description:
+                              "Whether this option is the recommended default.",
+                          },
+                        },
+                        required: ["label", "description"],
+                      },
+                    },
+                    allowOther: {
+                      type: "boolean",
+                      description:
+                        "Whether the user may provide a custom Other answer.",
+                    },
+                    required: {
+                      type: "boolean",
+                      description:
+                        "Whether an answer is required. Defaults to true.",
+                    },
+                    placeholder: {
+                      type: "string",
+                      description:
+                        "Placeholder for text-style questions in the full form UI.",
+                    },
+                    defaultValue: {
+                      type: "string",
+                      description:
+                        "Default value for text/auto-resolution. Never provide this for secret questions. For choice questions, prefer recommended=true on an option.",
+                    },
+                    minSelections: {
+                      type: "number",
+                      description: "Minimum selections for multi_choice.",
+                    },
+                    maxSelections: {
+                      type: "number",
+                      description: "Maximum selections for multi_choice.",
+                    },
+                    isSecret: {
+                      type: "boolean",
+                      description:
+                        "Whether the answer contains a secret and must not be shown in chat history.",
+                    },
+                  },
+                  required: ["id", "header", "question", "type"],
+                },
+              },
+              autoResolutionMs: {
+                type: "number" as const,
+                description:
+                  "Optional auto-resolution timeout in milliseconds. Must be 60000-240000 and requires a recommended option or defaultValue.",
+              },
+            },
+            required: ["questions"],
+          },
+        },
+      },
+      {
+        type: "function" as const,
+        function: {
           name: "web_search",
           description:
             "Search external sources beyond the local Zotero library. Use this for recent information, related papers, broader literature discovery, biomedical lookup, or general websites. Prefer scholarly sources unless the task is clearly general web browsing.",

@@ -33,6 +33,7 @@ type SessionRow = {
   execution_plan?: string | null;
   tool_execution_state?: string | null;
   tool_approval_state?: string | null;
+  user_input_request_state?: string | null;
   memory_extracted_at: number | null;
   memory_extracted_msg_count: number | null;
   selected_tier: string | null;
@@ -118,6 +119,9 @@ export function mapSessionRowToChatSession(
       : undefined,
     toolApprovalState: row.tool_approval_state
       ? JSON.parse(row.tool_approval_state)
+      : undefined,
+    userInputRequestState: row.user_input_request_state
+      ? JSON.parse(row.user_input_request_state)
       : undefined,
     memoryExtractedAt:
       row.memory_extracted_at != null
@@ -465,7 +469,8 @@ export class SessionStorageService {
             context_state = ?,
             execution_plan = ?,
             tool_execution_state = ?,
-            tool_approval_state = ?
+            tool_approval_state = ?,
+            user_input_request_state = ?
           WHERE id = ?`,
           [
             nextUpdatedAt,
@@ -486,6 +491,9 @@ export class SessionStorageService {
               : null,
             session.toolApprovalState
               ? JSON.stringify(session.toolApprovalState)
+              : null,
+            session.userInputRequestState
+              ? JSON.stringify(session.userInputRequestState)
               : null,
             session.id,
           ],
@@ -577,6 +585,46 @@ export class SessionStorageService {
   }
 
   /**
+   * Persist user-input request state without a transaction. This mirrors the
+   * approval-state path because resolving a blocking request immediately
+   * resumes the model loop.
+   */
+  async updateSessionUserInputRequestState(
+    session: ChatSession,
+  ): Promise<void> {
+    await this.init();
+
+    try {
+      const db = await getStorageDatabase().ensureInit();
+      const nextUpdatedAt = Date.now();
+      await db.queryAsync(
+        `UPDATE sessions SET
+          updated_at = ?,
+          user_input_request_state = ?
+        WHERE id = ?`,
+        [
+          nextUpdatedAt,
+          session.userInputRequestState
+            ? JSON.stringify(session.userInputRequestState)
+            : null,
+          session.id,
+        ],
+      );
+      await db.queryAsync(
+        "UPDATE session_meta SET updated_at = ? WHERE id = ?",
+        [nextUpdatedAt, session.id],
+      );
+      session.updatedAt = nextUpdatedAt;
+    } catch (error) {
+      ztoolkit.log(
+        "[SessionStorageService] Update session user-input request state error:",
+        error,
+      );
+      throw error;
+    }
+  }
+
+  /**
    * Persist memory extraction state for a session (called after successful extraction).
    */
   async updateMemoryExtractionState(
@@ -652,8 +700,8 @@ export class SessionStorageService {
         // Upsert session (no messages column)
         await db.queryAsync(
           `INSERT INTO sessions
-           (id, created_at, updated_at, last_active_item_key, title, title_source, title_generated_at, title_edited_at, context_summary, context_state, execution_plan, tool_execution_state, tool_approval_state, memory_extracted_at, memory_extracted_msg_count)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           (id, created_at, updated_at, last_active_item_key, title, title_source, title_generated_at, title_edited_at, context_summary, context_state, execution_plan, tool_execution_state, tool_approval_state, user_input_request_state, memory_extracted_at, memory_extracted_msg_count)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              created_at = excluded.created_at,
              updated_at = excluded.updated_at,
@@ -667,6 +715,7 @@ export class SessionStorageService {
              execution_plan = excluded.execution_plan,
              tool_execution_state = excluded.tool_execution_state,
              tool_approval_state = excluded.tool_approval_state,
+             user_input_request_state = excluded.user_input_request_state,
              memory_extracted_at = excluded.memory_extracted_at,
              memory_extracted_msg_count = excluded.memory_extracted_msg_count`,
           [
@@ -690,6 +739,9 @@ export class SessionStorageService {
               : null,
             session.toolApprovalState
               ? JSON.stringify(session.toolApprovalState)
+              : null,
+            session.userInputRequestState
+              ? JSON.stringify(session.userInputRequestState)
               : null,
             session.memoryExtractedAt ?? null,
             session.memoryExtractedMsgCount ?? null,
@@ -830,6 +882,10 @@ export class SessionStorageService {
         tool_approval_state:
           typeof baseRowRaw.tool_approval_state === "string"
             ? baseRowRaw.tool_approval_state
+            : null,
+        user_input_request_state:
+          typeof baseRowRaw.user_input_request_state === "string"
+            ? baseRowRaw.user_input_request_state
             : null,
         memory_extracted_at:
           typeof baseRowRaw.memory_extracted_at === "number"

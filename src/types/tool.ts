@@ -17,10 +17,15 @@ export interface ToolDefinition {
 }
 
 export interface ToolParameterProperty {
-  type: "string" | "number" | "boolean" | "array";
+  type: "string" | "number" | "boolean" | "array" | "object";
   description: string;
   enum?: string[];
-  items?: { type: string };
+  items?: ToolParameterProperty | { type: string };
+  properties?: Record<string, ToolParameterProperty>;
+  required?: string[];
+  additionalProperties?: boolean;
+  minItems?: number;
+  maxItems?: number;
 }
 
 // AI 返回的工具调用请求
@@ -152,6 +157,56 @@ export interface ToolExecutionResult {
   error?: string;
 }
 
+export type RequestUserInputQuestionType =
+  | "single_choice"
+  | "multi_choice"
+  | "text"
+  | "secret"
+  | "confirm";
+
+export interface RequestUserInputOption {
+  label: string;
+  description: string;
+  value?: string;
+  recommended?: boolean;
+}
+
+export interface RequestUserInputQuestion {
+  id: string;
+  header: string;
+  question: string;
+  type?: RequestUserInputQuestionType;
+  options?: RequestUserInputOption[];
+  allowOther?: boolean;
+  required?: boolean;
+  placeholder?: string;
+  defaultValue?: string | string[] | boolean;
+  minSelections?: number;
+  maxSelections?: number;
+  isSecret?: boolean;
+}
+
+export interface RequestUserInputArgs {
+  reason?: string;
+  questions: RequestUserInputQuestion[];
+  autoResolutionMs?: number;
+}
+
+export interface RequestUserInputAnswer {
+  answers?: string[];
+  other?: string;
+  text?: string;
+  secretRef?: string;
+  autoResolved?: boolean;
+  cancelled?: boolean;
+}
+
+export interface RequestUserInputResponse {
+  answers: Record<string, RequestUserInputAnswer>;
+  cancelled?: boolean;
+  autoResolved?: boolean;
+}
+
 // 工具调用结果
 export interface ToolResult {
   tool_call_id: string;
@@ -184,6 +239,7 @@ export interface PaperSection {
 
 // 工具名称枚举
 export type PaperToolName =
+  | "request_user_input"
   | "web_search"
   | "get_paper_section"
   | "search_paper_content"

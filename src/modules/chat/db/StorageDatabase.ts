@@ -11,7 +11,7 @@ import { getErrorMessage } from "../../../utils/common";
 
 const DB_DIR = "paper-chat";
 const DB_FILE = "storage";
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 
 /** Build absolute DB path so Zotero.DBConnection doesn't parse subdirectory names */
 function getDBPath(): string {
@@ -127,6 +127,7 @@ export class StorageDatabase {
         execution_plan TEXT,
         tool_execution_state TEXT,
         tool_approval_state TEXT,
+        user_input_request_state TEXT,
         memory_extracted_at INTEGER,
         memory_extracted_msg_count INTEGER,
         selected_tier TEXT,
@@ -337,6 +338,10 @@ export class StorageDatabase {
       if (currentVersion < 7) {
         await this.upgradeToV7(db);
         currentVersion = 7;
+      }
+      if (currentVersion < 8) {
+        await this.upgradeToV8(db);
+        currentVersion = 8;
       }
     }
   }
@@ -612,6 +617,7 @@ export class StorageDatabase {
         "execution_plan TEXT",
         "tool_execution_state TEXT",
         "tool_approval_state TEXT",
+        "user_input_request_state TEXT",
         "selected_tier TEXT",
         "resolved_model_id TEXT",
         "last_retryable_user_message_id TEXT",
@@ -833,6 +839,36 @@ export class StorageDatabase {
     } catch (error) {
       ztoolkit.log(
         "[StorageDatabase] Failed to upgrade to v7:",
+        getErrorMessage(error),
+      );
+      throw error;
+    }
+  }
+
+  private async upgradeToV8(db: ZoteroDBConnection): Promise<void> {
+    ztoolkit.log("[StorageDatabase] Upgrading schema v7 -> v8...");
+
+    try {
+      const sessionCols = new Set(
+        ((await db.queryAsync("PRAGMA table_info(sessions)")) || []).map(
+          (c: any) => String(c.name),
+        ),
+      );
+      if (!sessionCols.has("user_input_request_state")) {
+        await db.queryAsync(
+          "ALTER TABLE sessions ADD COLUMN user_input_request_state TEXT",
+        );
+      }
+
+      await db.queryAsync(
+        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
+        [8, Date.now()],
+      );
+
+      ztoolkit.log("[StorageDatabase] Schema upgraded to v8");
+    } catch (error) {
+      ztoolkit.log(
+        "[StorageDatabase] Failed to upgrade to v8:",
         getErrorMessage(error),
       );
       throw error;

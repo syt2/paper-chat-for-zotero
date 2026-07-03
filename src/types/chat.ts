@@ -21,6 +21,8 @@ import type {
   ToolApprovalRequest,
   ToolCall,
   ToolExecutionResult,
+  RequestUserInputArgs,
+  RequestUserInputResponse,
   ToolPolicyName,
   ToolPolicyOutcome,
   ToolPolicyStage,
@@ -116,6 +118,31 @@ export interface ToolApprovalState {
   updatedAt: number;
 }
 
+export type UserInputRequestStatus =
+  | "pending"
+  | "resolved"
+  | "cancelled"
+  | "expired";
+
+export interface UserInputRequest {
+  id: string;
+  sessionId: string;
+  assistantMessageId: string;
+  toolCallId: string;
+  toolName: "request_user_input";
+  args: RequestUserInputArgs;
+  status: UserInputRequestStatus;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt?: number;
+  resolution?: RequestUserInputResponse;
+}
+
+export interface UserInputRequestState {
+  pendingRequests: UserInputRequest[];
+  updatedAt: number;
+}
+
 export type TaskType =
   | "batch_update_tags"
   | "batch_note_generation"
@@ -184,6 +211,8 @@ export type AgentRuntimeEventType =
   | "tool_completed"
   | "approval_requested"
   | "approval_resolved"
+  | "user_input_requested"
+  | "user_input_resolved"
   | "turn_completed"
   | "turn_failed";
 
@@ -265,6 +294,23 @@ export interface AgentRuntimeApprovalResolvedEvent extends AgentRuntimeEventBase
   pendingCount: number;
 }
 
+export interface AgentRuntimeUserInputRequestedEvent extends AgentRuntimeEventBase {
+  type: "user_input_requested";
+  requestId: string;
+  toolCallId: string;
+  questionCount: number;
+  autoResolutionMs?: number;
+  pendingCount: number;
+}
+
+export interface AgentRuntimeUserInputResolvedEvent extends AgentRuntimeEventBase {
+  type: "user_input_resolved";
+  requestId: string;
+  toolCallId: string;
+  status: "resolved" | "cancelled" | "expired";
+  pendingCount: number;
+}
+
 export interface AgentRuntimeTurnCompletedEvent extends AgentRuntimeEventBase {
   type: "turn_completed";
   content: string;
@@ -283,6 +329,8 @@ export type AgentRuntimeEvent =
   | AgentRuntimeToolCompletedEvent
   | AgentRuntimeApprovalRequestedEvent
   | AgentRuntimeApprovalResolvedEvent
+  | AgentRuntimeUserInputRequestedEvent
+  | AgentRuntimeUserInputResolvedEvent
   | AgentRuntimeTurnCompletedEvent
   | AgentRuntimeTurnFailedEvent;
 
@@ -323,6 +371,7 @@ export interface ChatSession {
   executionPlan?: ExecutionPlan;
   toolExecutionState?: ToolExecutionState;
   toolApprovalState?: ToolApprovalState;
+  userInputRequestState?: UserInputRequestState;
   // Memory extraction tracking (persisted to DB)
   memoryExtractedAt?: number; // timestamp of last extraction
   memoryExtractedMsgCount?: number; // conversational msg count at last extraction
