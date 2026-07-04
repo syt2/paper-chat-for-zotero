@@ -3,9 +3,13 @@ import type { ToolCall } from "../src/types/tool";
 
 describe("tool scheduler execution hooks", function () {
   let originalZotero: unknown;
+  let originalPathUtils: unknown;
+  let originalIOUtils: unknown;
 
   beforeEach(function () {
     originalZotero = (globalThis as any).Zotero;
+    originalPathUtils = (globalThis as any).PathUtils;
+    originalIOUtils = (globalThis as any).IOUtils;
     const prefStore = new Map<string, unknown>();
     (globalThis as any).Zotero = {
       Prefs: {
@@ -15,24 +19,29 @@ describe("tool scheduler execution hooks", function () {
           return true;
         },
       },
+      DataDirectory: {
+        dir: "/tmp/zotero",
+      },
     };
   });
 
   afterEach(async function () {
-    const { getToolPermissionManager } = await import(
-      "../src/modules/chat/tool-permissions/index.ts"
-    );
+    const { getToolPermissionManager } =
+      await import("../src/modules/chat/tool-permissions/index.ts");
+    const { resetSessionArtifactStoreForTests } =
+      await import("../src/modules/chat/session-artifacts/index.ts");
     getToolPermissionManager().setDescriptorModeOverride("create_note", null);
+    resetSessionArtifactStoreForTests();
     (globalThis as any).Zotero = originalZotero;
+    (globalThis as any).PathUtils = originalPathUtils;
+    (globalThis as any).IOUtils = originalIOUtils;
   });
 
   it("fires execution-ready hooks only for calls that will actually execute", async function () {
-    const { getToolPermissionManager } = await import(
-      "../src/modules/chat/tool-permissions/index.ts"
-    );
-    const { ToolScheduler } = await import(
-      "../src/modules/chat/tool-scheduler/ToolScheduler.ts"
-    );
+    const { getToolPermissionManager } =
+      await import("../src/modules/chat/tool-permissions/index.ts");
+    const { ToolScheduler } =
+      await import("../src/modules/chat/tool-scheduler/ToolScheduler.ts");
 
     getToolPermissionManager().setDescriptorModeOverride("create_note", "deny");
 
@@ -78,8 +87,114 @@ describe("tool scheduler execution hooks", function () {
       "execute:get_item_metadata",
     ]);
     assert.deepEqual(
-      results.map((result) => `${result.toolCall.function.name}:${result.status}`),
+      results.map(
+        (result) => `${result.toolCall.function.name}:${result.status}`,
+      ),
       ["create_note:denied", "get_item_metadata:completed"],
     );
+  });
+
+  it("stores large completed tool results as session artifacts and reads them back", async function () {
+    const files = new Map<string, string>();
+    const dirs = new Set<string>();
+    (globalThis as any).PathUtils = {
+      join: (...parts: string[]) => parts.join("/").replace(/\/+/g, "/"),
+    };
+    (globalThis as any).IOUtils = {
+      exists: async (path: string) => files.has(path) || dirs.has(path),
+      makeDirectory: async (path: string) => {
+        dirs.add(path);
+      },
+      writeUTF8: async (path: string, content: string) => {
+        files.set(path, content);
+      },
+      readUTF8: async (path: string) => {
+        if (!files.has(path)) {
+          throw new Error(`missing file: ${path}`);
+        }
+        return files.get(path) || "";
+      },
+    };
+
+    const { ToolScheduler } =
+      await import("../src/modules/chat/tool-scheduler/ToolScheduler.ts");
+    const largeContent = "x".repeat(12_500);
+    const scheduler = new ToolScheduler(async () => largeContent);
+
+    const result = await scheduler.execute({
+      toolCall: {
+        id: "tool-large",
+        type: "function",
+        function: {
+          name: "search_paper_content",
+          arguments: JSON.stringify({ query: "method" }),
+        },
+      },
+      sessionId: "session-1",
+      assistantMessageId: "assistant-1",
+    });
+
+    assert.equal(result.status, "completed");
+    assert.isDefined(result.artifact);
+    assert.include(result.content, "Tool result saved as session artifact");
+    assert.include(result.content, "read_artifact");
+
+    const readResult = await scheduler.execute({
+      toolCall: {
+        id: "tool-read-artifact",
+        type: "function",
+        function: {
+          name: "read_artifact",
+          arguments: JSON.stringify({
+            artifactId: result.artifact!.id,
+            offset: 10,
+            maxCharacters: 20,
+          }),
+        },
+      },
+      sessionId: "session-1",
+      assistantMessageId: "assistant-1",
+    });
+
+    assert.equal(readResult.status, "completed");
+    assert.include(readResult.content, `Artifact id: ${result.artifact!.id}`);
+    assert.include(readResult.content, "Returned range: 10-30");
+    assert.include(readResult.content, "xxxxxxxxxxxxxxxxxxxx");
+  });
+
+  it("keeps successful tool results when artifact persistence fails", async function () {
+    (globalThis as any).PathUtils = {
+      join: (...parts: string[]) => parts.join("/").replace(/\/+/g, "/"),
+    };
+    (globalThis as any).IOUtils = {
+      exists: async () => false,
+      makeDirectory: async () => undefined,
+      writeUTF8: async () => {
+        throw new Error("disk full");
+      },
+      readUTF8: async () => "",
+    };
+
+    const { ToolScheduler } =
+      await import("../src/modules/chat/tool-scheduler/ToolScheduler.ts");
+    const largeContent = "x".repeat(12_500);
+    const scheduler = new ToolScheduler(async () => largeContent);
+
+    const result = await scheduler.execute({
+      toolCall: {
+        id: "tool-large",
+        type: "function",
+        function: {
+          name: "search_paper_content",
+          arguments: JSON.stringify({ query: "method" }),
+        },
+      },
+      sessionId: "session-1",
+      assistantMessageId: "assistant-1",
+    });
+
+    assert.equal(result.status, "completed");
+    assert.isUndefined(result.artifact);
+    assert.equal(result.content, largeContent);
   });
 });

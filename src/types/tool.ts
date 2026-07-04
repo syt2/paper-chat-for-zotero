@@ -150,11 +150,24 @@ export interface ToolExecutionResult {
   toolCall: ToolCall;
   args?: Record<string, unknown>;
   metadata?: ToolRuntimeMetadata;
+  artifact?: ToolResultArtifactRef;
   permissionDecision?: ToolPermissionDecision;
   policyTrace?: ToolPolicyTrace[];
   status: ToolExecutionStatus;
   content: string;
   error?: string;
+}
+
+export interface ToolResultArtifactRef {
+  id: string;
+  sessionId: string;
+  toolCallId: string;
+  toolName: string;
+  kind: "tool_result" | "paper_excerpt" | "search_result" | "generated_note";
+  title?: string;
+  originalCharacters: number;
+  preview: string;
+  createdAt: number;
 }
 
 export type RequestUserInputQuestionType =
@@ -240,6 +253,7 @@ export interface PaperSection {
 // 工具名称枚举
 export type PaperToolName =
   | "request_user_input"
+  | "read_artifact"
   | "web_search"
   | "get_paper_section"
   | "search_paper_content"

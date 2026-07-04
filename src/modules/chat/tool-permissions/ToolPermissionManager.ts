@@ -60,6 +60,11 @@ const TOOL_PERMISSION_DESCRIPTORS: Record<
     "Ask the user for a blocking structured decision.",
     "auto_allow",
   ),
+  read_artifact: createDescriptor(
+    "read_artifact",
+    "read",
+    "Read a previously saved large tool result artifact from the current session.",
+  ),
   web_search: {
     ...createDescriptor(
       "web_search",

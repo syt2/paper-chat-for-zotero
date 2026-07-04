@@ -1,11 +1,12 @@
 import { assert } from "chai";
+import { AgentRuntime } from "../src/modules/chat/agent-runtime/AgentRuntime.ts";
 import { ExecutionPlanManager } from "../src/modules/chat/agent-runtime/ExecutionPlanManager.ts";
 import {
   generateAgentRuntimeContextPrompt,
   generatePaperContextPrompt,
 } from "../src/modules/chat/pdf-tools/promptGenerator.ts";
 import type { ChatMessage, ChatSession } from "../src/types/chat";
-import type { ToolExecutionResult } from "../src/types/tool";
+import type { ToolCall, ToolExecutionResult } from "../src/types/tool";
 
 function createSession(): ChatSession {
   const messages: ChatMessage[] = [
@@ -27,6 +28,72 @@ function createSession(): ChatSession {
 }
 
 describe("agent runtime plan semantics", function () {
+  it("dedupes identical request_user_input calls in one model response", function () {
+    const runtime = new AgentRuntime(
+      {
+        updateSessionUserInputRequestState: async () => undefined,
+        updateSessionMeta: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => true,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "",
+        generateId: () => "generated-id",
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async () => [],
+      },
+    ) as any;
+    const session = createSession();
+    const assistantMessage: ChatMessage = {
+      id: "assistant-1",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+    };
+    const firstCall: ToolCall = {
+      id: "ask-1",
+      type: "function",
+      function: {
+        name: "request_user_input",
+        arguments: JSON.stringify({
+          questions: [
+            {
+              id: "scope",
+              header: "Scope",
+              question: "Which scope?",
+              type: "single_choice",
+              options: [
+                { label: "Methods", description: "Read methods." },
+                { label: "Results", description: "Read results." },
+              ],
+            },
+          ],
+        }),
+      },
+    };
+    const secondCall: ToolCall = {
+      ...firstCall,
+      id: "ask-2",
+    };
+
+    const entries = runtime.createRuntimeToolIterationEntries(
+      session,
+      assistantMessage,
+      [firstCall, secondCall],
+      {
+        maxWebSearchCallsPerTurn: 8,
+        maxFullTextCallsPerTurn: 3,
+      },
+    );
+
+    assert.equal(entries[0].kind, "user_input");
+    assert.equal(entries[1].kind, "synthetic");
+    assert.equal(entries[1].results[0].status, "failed");
+    assert.include(entries[1].results[0].content, "Duplicate user input");
+  });
+
   it("uses user-task-oriented step titles instead of raw tool names", function () {
     const manager = new ExecutionPlanManager();
     const session = createSession();

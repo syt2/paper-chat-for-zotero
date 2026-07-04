@@ -47,6 +47,8 @@ import {
   type ToolApprovalObserver,
 } from "./tool-permissions";
 import { getToolScheduler } from "./tool-scheduler";
+import { getSkillRegistry, type SelectedPaperChatSkill } from "./skills";
+import { getSessionArtifactStore } from "./session-artifacts";
 import { getProviderManager } from "../providers";
 import { getAuthManager } from "../auth";
 import { getString } from "../../utils/locale";
@@ -392,8 +394,20 @@ export class ChatManager {
     );
   }
 
+  private async selectWorkflowSkills(params: {
+    lastUserMessage?: ChatMessage;
+    item?: Zotero.Item | null;
+  }): Promise<SelectedPaperChatSkill[]> {
+    const queryParts = [params.lastUserMessage?.content || ""];
+    if (params.item) {
+      queryParts.push(getItemTitleSmart(params.item));
+    }
+    return getSkillRegistry().selectSkills(queryParts.join("\n"));
+  }
+
   private buildToolCallingRuntimeSystemPrompt(params: {
     memoryContext?: string;
+    selectedSkills?: SelectedPaperChatSkill[];
     sendingSession: ChatSession;
     runtimeState?: {
       currentIteration?: number;
@@ -402,7 +416,8 @@ export class ChatManager {
       forceFinalAnswer: boolean;
     };
   }): string {
-    const { memoryContext, sendingSession, runtimeState } = params;
+    const { memoryContext, selectedSkills, sendingSession, runtimeState } =
+      params;
     const allToolResults = sendingSession.toolExecutionState?.results || [];
     const recentToolResults = allToolResults.slice(-5);
     const hardIterationLimit =
@@ -416,6 +431,7 @@ export class ChatManager {
     return generateAgentRuntimeContextPrompt(memoryContext, {
       executionPlan: sendingSession.executionPlan,
       recentToolResults,
+      selectedSkills,
       runtimeLimits: {
         hardIterationLimit,
         currentIteration: runtimeState?.currentIteration,
@@ -869,6 +885,10 @@ export class ChatManager {
       const memoryContext = await this.memoryManager.buildPromptContext(
         lastUserMessage?.content,
       );
+      const selectedSkills = await this.selectWorkflowSkills({
+        lastUserMessage,
+        item: hasCurrentItem ? item : undefined,
+      });
 
       paperContextPrompt = this.buildToolCallingStableSystemPrompt({
         paperStructure,
@@ -877,6 +897,7 @@ export class ChatManager {
       });
       runtimeContextPrompt = this.buildToolCallingRuntimeSystemPrompt({
         memoryContext,
+        selectedSkills,
         sendingSession: session,
         runtimeState: {
           maxIterations: normalizeAgentMaxPlanningIterations(
@@ -1028,6 +1049,14 @@ export class ChatManager {
     });
     this.agentRuntime.cancelPendingUserInputRequests(sessionId);
     getToolPermissionManager().clearSessionPolicies(sessionId);
+    getSessionArtifactStore()
+      .deleteSessionArtifacts(sessionId)
+      .catch((error) => {
+        ztoolkit.log(
+          "[ChatManager] Failed to delete session artifacts:",
+          getErrorMessage(error),
+        );
+      });
 
     this.invalidateSessionRun(sessionId, { abort: true });
     if (deletingCurrentSession) {
@@ -2291,6 +2320,10 @@ export class ChatManager {
     const memoryContext = await this.memoryManager.buildPromptContext(
       lastUserMessage?.content,
     );
+    const selectedSkills = await this.selectWorkflowSkills({
+      lastUserMessage,
+      item: hasCurrentItem ? item : undefined,
+    });
     ensureSendingSessionTracked();
 
     // Keep the large stable paper/tool instructions at the start of the request,
@@ -2307,6 +2340,7 @@ export class ChatManager {
     ) =>
       this.buildToolCallingRuntimeSystemPrompt({
         memoryContext,
+        selectedSkills,
         sendingSession,
         runtimeState,
       });

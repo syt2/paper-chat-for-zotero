@@ -22,6 +22,13 @@ const TOOL_RUNTIME_METADATA: Record<PaperToolName, ToolRuntimeMetadata> = {
     targetScope: "external",
     mutatesState: false,
   },
+  read_artifact: {
+    name: "read_artifact",
+    executionClass: "read",
+    concurrency: "serial",
+    targetScope: "external",
+    mutatesState: false,
+  },
   web_search: {
     name: "web_search",
     executionClass: "network",

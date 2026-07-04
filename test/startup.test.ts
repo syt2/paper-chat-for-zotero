@@ -230,6 +230,63 @@ describe("chat agent safeguards", function () {
     assert.deepEqual(manager.listPendingApprovals(), []);
   });
 
+  it("routes ask-mode write tools through the existing approval channel", async function () {
+    Zotero.Prefs.set(
+      "extensions.zotero.paperchat.toolPermissionDefaultModes",
+      JSON.stringify({
+        write: "ask",
+      }),
+      true,
+    );
+
+    const { ToolPermissionManager } =
+      await import("../src/modules/chat/tool-permissions/ToolPermissionManager");
+    const manager = new ToolPermissionManager();
+    const requestedIds: string[] = [];
+    const resolvedVerdicts: string[] = [];
+    manager.addApprovalObserver({
+      onApprovalRequested: (approvalRequest) => {
+        requestedIds.push(approvalRequest.id);
+      },
+      onApprovalResolved: (_approvalRequest, decision) => {
+        resolvedVerdicts.push(decision.verdict);
+      },
+    });
+
+    const decisionPromise = manager.decide({
+      toolCall: {
+        id: "call-note",
+        type: "function",
+        function: {
+          name: "create_note",
+          arguments: JSON.stringify({ itemKey: "ITEM-1", content: "summary" }),
+        },
+      },
+      args: { itemKey: "ITEM-1", content: "summary" },
+      sessionId: "session-1",
+      assistantMessageId: "assistant-1",
+    });
+    const pending = manager.listPendingApprovals("session-1")[0];
+
+    assert.isDefined(pending);
+    assert.equal(pending.toolName, "create_note");
+    assert.deepEqual(requestedIds, [pending.id]);
+
+    manager.resolveApprovalRequest(pending.id, {
+      verdict: "allow",
+      scope: "once",
+      reason: "User approved the write.",
+    });
+
+    const decision = await decisionPromise;
+    assert.equal(decision.verdict, "allow");
+    assert.equal(decision.mode, "ask");
+    assert.equal(decision.scope, "once");
+    assert.include(decision.reason || "", "User approved");
+    assert.deepEqual(resolvedVerdicts, ["allow"]);
+    assert.deepEqual(manager.listPendingApprovals("session-1"), []);
+  });
+
   it("does not let a deny-once decision poison the next approval", async function () {
     Zotero.Prefs.set(
       "extensions.zotero.paperchat.toolPermissionDefaultModes",

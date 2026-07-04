@@ -411,6 +411,35 @@ export class PdfToolManager {
       {
         type: "function" as const,
         function: {
+          name: "read_artifact",
+          description:
+            "Read exact content from a large tool result saved earlier in the current session. Use this only when an artifact-backed tool result preview is insufficient and you need the full text or a later slice. You can only read artifacts from the current session by artifact id; never provide file paths.",
+          parameters: {
+            type: "object" as const,
+            properties: {
+              artifactId: {
+                type: "string" as const,
+                description:
+                  "Artifact id returned by a previous tool result, for example artifact-1730000000-abc123.",
+              },
+              offset: {
+                type: "number" as const,
+                description:
+                  "Optional zero-based character offset. Default: 0.",
+              },
+              maxCharacters: {
+                type: "number" as const,
+                description:
+                  "Optional maximum characters to return. Default and max: 20000.",
+              },
+            },
+            required: ["artifactId"],
+          },
+        },
+      },
+      {
+        type: "function" as const,
+        function: {
           name: "web_search",
           description:
             "Search external sources beyond the local Zotero library. Use this for recent information, related papers, broader literature discovery, biomedical lookup, or general websites. Prefer scholarly sources unless the task is clearly general web browsing.",

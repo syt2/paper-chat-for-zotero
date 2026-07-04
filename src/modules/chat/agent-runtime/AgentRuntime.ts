@@ -51,6 +51,7 @@ import {
 import {
   createBlockedRetryResult,
   findBlockedRetryMatch,
+  fingerprintToolCall,
 } from "../tool-retry/ToolRetryPolicy";
 import {
   createAutoResolvedUserInputResponse,
@@ -902,7 +903,11 @@ export class AgentRuntime {
           `[${logPrefix}] Result (truncated): ${toolResult.substring(0, 200)}...`,
         );
 
-        const modelToolResult = contextStrategy.compactToolResultOnCreate
+        const shouldCompactModelToolResult =
+          contextStrategy.compactToolResultOnCreate &&
+          !executionResult.artifact &&
+          toolName !== "read_artifact";
+        const modelToolResult = shouldCompactModelToolResult
           ? compactToolResultContent(
               toolResult,
               contextStrategy.compactionPolicy,
@@ -1061,6 +1066,7 @@ export class AgentRuntime {
   ): RuntimeToolIterationEntry[] {
     const entries: RuntimeToolIterationEntry[] = [];
     let runnableSegment: ToolCall[] = [];
+    const seenUserInputFingerprints = new Set<string>();
 
     const flushRunnableSegment = () => {
       if (runnableSegment.length === 0) {
@@ -1081,6 +1087,17 @@ export class AgentRuntime {
     for (const toolCall of toolCalls) {
       if (toolCall.function.name === "request_user_input") {
         flushRunnableSegment();
+        const fingerprint = fingerprintToolCall(toolCall);
+        if (seenUserInputFingerprints.has(fingerprint)) {
+          entries.push({
+            kind: "synthetic",
+            results: [
+              createDuplicateUserInputRequestResult(toolCall, fingerprint),
+            ],
+          });
+          continue;
+        }
+        seenUserInputFingerprints.add(fingerprint);
         const blockedRetry = findBlockedRetryMatch(
           toolCall,
           session.toolExecutionState?.results || [],
@@ -1913,6 +1930,43 @@ export class AgentRuntime {
       sessionRunId,
     );
   }
+}
+
+function createDuplicateUserInputRequestResult(
+  toolCall: ToolCall,
+  fingerprint: string,
+): ToolExecutionResult {
+  const cause =
+    "This exact request_user_input call was already emitted in the same model response.";
+  return {
+    toolCall,
+    args: undefined,
+    policyTrace: [
+      {
+        stage: "planner",
+        policy: "retry_block",
+        outcome: "blocked",
+        summary:
+          "Blocked duplicate request_user_input call in the same model response.",
+        detail: cause,
+        data: {
+          fingerprint,
+        },
+      },
+    ],
+    status: "failed",
+    content: formatToolError({
+      summary: "Duplicate user input request blocked.",
+      category: "invalid_arguments",
+      retryable: false,
+      cause,
+      suggestedFix:
+        "Wait for the existing user input answer or ask a materially different question.",
+      saferAlternative:
+        "Continue from the first user-input result once it is available.",
+    }),
+    error: cause,
+  };
 }
 
 function truncateToolDetail(text: string): string {

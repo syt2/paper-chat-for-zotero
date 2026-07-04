@@ -22,6 +22,10 @@ import {
   normalizeToolErrorContent,
 } from "../tool-errors/ToolErrorFormatter";
 import { getToolPermissionManager } from "../tool-permissions";
+import {
+  getSessionArtifactStore,
+  type StoredToolResultArtifact,
+} from "../session-artifacts";
 import { getToolRuntimeMetadata } from "./ToolMetadataRegistry";
 
 export interface ToolSchedulerRequest {
@@ -423,7 +427,10 @@ export class ToolScheduler {
     const message =
       cfg.message ||
       `Injected tool failure for development testing (${toolName}).`;
-    const normalizedError = normalizeToolErrorContent(toolName, `Error: ${message}`);
+    const normalizedError = normalizeToolErrorContent(
+      toolName,
+      `Error: ${message}`,
+    );
     return {
       toolCall,
       args,
@@ -436,7 +443,8 @@ export class ToolScheduler {
           policy: "fault_injection",
           outcome: "blocked",
           summary: `Failed ${toolName} via development fault injection.`,
-          detail: normalizedError.parsed.cause || normalizedError.parsed.summary,
+          detail:
+            normalizedError.parsed.cause || normalizedError.parsed.summary,
           data: {
             mode: cfg.mode || "failed",
           },
@@ -557,17 +565,25 @@ export class ToolScheduler {
     prepared: PreparedToolExecution,
   ): Promise<ToolExecutionResult> {
     try {
-      const content = await this.executor(
-        prepared.request.toolCall,
-        prepared.request.fallbackStructure,
-        prepared.args,
-      );
+      const content =
+        prepared.request.toolCall.function.name === "read_artifact"
+          ? await this.executeReadArtifact(prepared)
+          : await this.executor(
+              prepared.request.toolCall,
+              prepared.request.fallbackStructure,
+              prepared.args,
+            );
       const normalizedError = content.trimStart().startsWith("Error:")
         ? normalizeToolErrorContent(
             prepared.request.toolCall.function.name,
             content,
           )
         : null;
+      const stored =
+        normalizedError ||
+        prepared.request.toolCall.function.name === "read_artifact"
+          ? null
+          : await this.maybeStoreArtifactResult(prepared, content);
 
       return {
         toolCall: prepared.request.toolCall,
@@ -575,8 +591,11 @@ export class ToolScheduler {
         metadata: prepared.metadata,
         permissionDecision: prepared.permissionDecision,
         policyTrace: prepared.policyTrace,
+        artifact: stored?.ref,
         status: normalizedError ? "failed" : "completed",
-        content: normalizedError ? normalizedError.content : content,
+        content: normalizedError
+          ? normalizedError.content
+          : stored?.modelContent || content,
         error: normalizedError
           ? normalizedError.parsed.cause || normalizedError.parsed.summary
           : undefined,
@@ -597,6 +616,57 @@ export class ToolScheduler {
         content: normalizedError.content,
         error: normalizedError.parsed.cause || normalizedError.parsed.summary,
       };
+    }
+  }
+
+  private async executeReadArtifact(
+    prepared: PreparedToolExecution,
+  ): Promise<string> {
+    const artifactId = String(prepared.args.artifactId || "").trim();
+    if (!artifactId) {
+      return "Error: Invalid arguments for read_artifact. Required: artifactId (string)";
+    }
+    try {
+      const result = await getSessionArtifactStore().readArtifact(
+        prepared.request.sessionId,
+        artifactId,
+        {
+          offset:
+            typeof prepared.args.offset === "number"
+              ? prepared.args.offset
+              : undefined,
+          maxCharacters:
+            typeof prepared.args.maxCharacters === "number"
+              ? prepared.args.maxCharacters
+              : undefined,
+        },
+      );
+      return getSessionArtifactStore().formatReadResult(result);
+    } catch (error) {
+      return `Error: ${getErrorMessage(error)}`;
+    }
+  }
+
+  private async maybeStoreArtifactResult(
+    prepared: PreparedToolExecution,
+    content: string,
+  ): Promise<StoredToolResultArtifact | null> {
+    try {
+      return await getSessionArtifactStore().maybeStoreToolResult({
+        sessionId: prepared.request.sessionId,
+        toolCall: prepared.request.toolCall,
+        content,
+      });
+    } catch (error) {
+      try {
+        ztoolkit.log(
+          "[ToolScheduler] Failed to store tool result artifact:",
+          getErrorMessage(error),
+        );
+      } catch {
+        // Artifact persistence is best-effort; logging must not fail the tool.
+      }
+      return null;
     }
   }
 

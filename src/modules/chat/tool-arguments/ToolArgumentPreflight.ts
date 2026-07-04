@@ -50,6 +50,12 @@ const TOOL_SPECIFIC_ALIASES: Record<string, Record<string, string>> = {
   add_item: {
     collectionKey: "collection_key",
   },
+  read_artifact: {
+    artifact_id: "artifactId",
+    artifactID: "artifactId",
+    max_characters: "maxCharacters",
+    max_chars: "maxCharacters",
+  },
 };
 
 const BOOLEAN_KEYS = new Set([
@@ -69,6 +75,8 @@ const NUMBER_KEYS = new Set([
   "importance",
   "year_from",
   "year_to",
+  "offset",
+  "maxCharacters",
 ]);
 
 const STRING_ARRAY_KEYS = new Set(["domain_filter"]);
