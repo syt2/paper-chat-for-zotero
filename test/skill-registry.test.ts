@@ -63,10 +63,41 @@ describe("paper workflow skills", function () {
     assert.include(slugs, "claim-evidence-audit");
     assert.include(slugs, "method-reproduction-plan");
     assert.include(slugs, "reviewer-style-critique");
+    assert.include(slugs, "novelty-positioning");
+    assert.include(slugs, "citation-audit");
+    assert.include(slugs, "structured-extraction");
+    assert.include(slugs, "research-gap-scan");
 
     const selected = await registry.selectSkills("帮我精读并总结这篇论文");
     assert.isAtLeast(selected.length, 1);
     assert.equal(selected[0].slug, "paper-deep-reading");
+  });
+
+  it("matches lightweight paper workflow skills for common reading intents", async function () {
+    const registry = new SkillRegistry();
+
+    const novelty = await registry.selectSkills(
+      "这篇论文的创新点到底是什么，和以前工作相比新在哪",
+    );
+    assert.isAtLeast(novelty.length, 1);
+    assert.equal(novelty[0].slug, "novelty-positioning");
+
+    const citation = await registry.selectSkills(
+      "检查一下这个引用是不是真的支持作者这里的说法",
+    );
+    assert.isAtLeast(citation.length, 1);
+    assert.equal(citation[0].slug, "citation-audit");
+
+    const extraction =
+      await registry.selectSkills("帮我做一个结构化提取，整理成阅读卡片");
+    assert.isAtLeast(extraction.length, 1);
+    assert.equal(extraction[0].slug, "structured-extraction");
+
+    const gap = await registry.selectSkills(
+      "这篇论文后续还有什么研究空白和值得做的方向",
+    );
+    assert.isAtLeast(gap.length, 1);
+    assert.equal(gap[0].slug, "research-gap-scan");
   });
 
   it("parses frontmatter and markdown fallback", function () {
