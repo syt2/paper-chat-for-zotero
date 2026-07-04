@@ -124,11 +124,14 @@ pref-tool-permission-mode-auto-allow = 自动允许
 pref-tool-permission-mode-ask = 每次询问
 pref-tool-permission-mode-deny = 始终拒绝
 
-# Reading Loop Settings
-pref-reading-loop-settings = 阅读伴随建议
-pref-reading-loop-enabled = 阅读时自动显示 PaperChat 建议
-pref-next-question-hint-enabled = AI 回复后自动推荐下一问
-pref-reading-loop-desc = 根据选中文本和高亮等本地阅读行为，在 PaperChat 入口和面板内显示轻量建议。
+# Paper Skills Settings
+pref-paper-skills-settings = Paper Skills
+pref-paper-skills-desc = 在数据目录下的 paper-chat/skills/<slug>/SKILL.md 新增或覆盖本地 skill。修改后可点击“刷新 Skills”重新加载。
+pref-paper-skills-open-folder = 打开 Skills 文件夹
+pref-paper-skills-reload = 刷新 Skills
+pref-paper-skills-reloaded = 已重新加载 { $count } 个 skills
+pref-paper-skills-open-failed = 打开 Skills 文件夹失败
+pref-paper-skills-reload-failed = 刷新 Skills 失败
 
 # AISummary Settings
 pref-aisummary-settings = AI摘要

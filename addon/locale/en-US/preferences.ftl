@@ -124,11 +124,14 @@ pref-tool-permission-mode-auto-allow = Auto allow
 pref-tool-permission-mode-ask = Ask every time
 pref-tool-permission-mode-deny = Always deny
 
-# Reading Loop Settings
-pref-reading-loop-settings = Reading Suggestions
-pref-reading-loop-enabled = Show PaperChat suggestions while reading
-pref-next-question-hint-enabled = Suggest the next question after AI replies
-pref-reading-loop-desc = Shows lightweight suggestions in the PaperChat entry and panel based on local reading actions such as text selection and highlights.
+# Paper Skills Settings
+pref-paper-skills-settings = Paper Skills
+pref-paper-skills-desc = Add or override local skills under paper-chat/skills/<slug>/SKILL.md in the data directory. Click Reload Skills after editing to refresh them.
+pref-paper-skills-open-folder = Open Skills Folder
+pref-paper-skills-reload = Reload Skills
+pref-paper-skills-reloaded = Reloaded { $count } skills
+pref-paper-skills-open-failed = Failed to open skills folder
+pref-paper-skills-reload-failed = Failed to reload skills
 
 # AISummary Settings
 pref-aisummary-settings = AI Summary

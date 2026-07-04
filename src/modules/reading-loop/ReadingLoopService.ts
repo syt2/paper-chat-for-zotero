@@ -1,4 +1,3 @@
-import { getPref } from "../../utils/prefs";
 import { generateTimestampId, getErrorMessage } from "../../utils/common";
 import { ReadingLoopHistoryRegistry } from "./ReadingLoopHistoryRegistry";
 import type {
@@ -140,13 +139,7 @@ export class ReadingLoopService {
   }
 
   refreshEnabledFromPrefs(): void {
-    this.enabled = getPref("readingLoopEnabled") !== false;
-    if (!this.enabled) {
-      this.activeSuggestion = undefined;
-      this.lastSelectionText = "";
-      this.pendingSelection = null;
-      this.pendingProgressBucket = null;
-    }
+    this.enabled = true;
     this.notify();
   }
 

@@ -20,9 +20,11 @@ import {
 } from "./ProviderListUI";
 import { getPref, setPref } from "../../utils/prefs";
 import { getString } from "../../utils/locale";
+import { getDataPath, getErrorMessage } from "../../utils/common";
 import { getAISummaryManager } from "../ai-summary";
 import { getAllTemplates } from "../ai-summary/defaultTemplates";
 import { getEmbeddingProviderFactory } from "../embedding";
+import { getSkillRegistry } from "../chat/skills";
 import {
   CONFIGURABLE_TOOL_PERMISSION_RISK_LEVELS,
   getToolPermissionDefaultMode,
@@ -33,7 +35,6 @@ import {
   CONTEXT_AUTO_COMPACT_WINDOW_TOKEN_STEPS,
   normalizeContextAutoCompactWindowTokens,
 } from "../chat/ContextManager";
-import { getErrorMessage } from "../../utils/common";
 import type { PrefsRefreshOptions } from "./types";
 import type {
   ToolPermissionMode,
@@ -44,6 +45,7 @@ import { refreshPaperChatNoticeUI } from "./PaperChatNoticeRenderer";
 
 // Current selected provider ID
 let currentProviderId: string = "paperchat";
+const PAPER_SKILLS_ROOT = "skills";
 
 const TOOL_PERMISSION_MODE_L10N: Record<ToolPermissionMode, string> = {
   auto_allow: "pref-tool-permission-mode-auto-allow",
@@ -185,9 +187,7 @@ export async function refreshPrefsUI(
   // Initialize AI tools settings checkbox
   initAIToolsSettingsCheckbox(doc);
 
-  // Initialize Reading Loop settings
-  initReadingLoopSettings(doc);
-  initNextQuestionHintSettings(doc);
+  initPaperSkillSettings(doc);
 
   // Initialize AISummary settings
   initAISummarySettings(doc);
@@ -320,9 +320,7 @@ export function bindPrefEvents(): void {
   // Bind AI tools settings checkbox event
   bindAIToolsSettingsEvent(doc);
 
-  // Bind Reading Loop settings event
-  bindReadingLoopSettingsEvents(doc);
-  bindNextQuestionHintSettingsEvents(doc);
+  bindPaperSkillSettingsEvents(doc);
 
   // Bind AISummary settings events
   bindAISummarySettingsEvents(doc);
@@ -528,52 +526,99 @@ function isToolPermissionMode(value: string): value is ToolPermissionMode {
   return value === "auto_allow" || value === "ask" || value === "deny";
 }
 
-function initReadingLoopSettings(doc: Document): void {
-  const enabledCheckbox = doc.getElementById(
-    "pref-reading-loop-enabled",
-  ) as XUL.Checkbox | null;
-  if (enabledCheckbox) {
-    enabledCheckbox.checked = getPref("readingLoopEnabled") !== false;
+function getPaperSkillsFolderPath(): string {
+  return getDataPath(PAPER_SKILLS_ROOT);
+}
+
+function initPaperSkillSettings(doc: Document): void {
+  const pathLabel = doc.getElementById(
+    "pref-paper-skills-path",
+  ) as XUL.Label | null;
+  if (pathLabel) {
+    pathLabel.textContent = getPaperSkillsFolderPath();
+  }
+
+  const statusLabel = doc.getElementById(
+    "pref-paper-skills-status",
+  ) as XUL.Label | null;
+  if (statusLabel) {
+    statusLabel.textContent = "";
   }
 }
 
-function bindReadingLoopSettingsEvents(doc: Document): void {
-  const enabledCheckbox = doc.getElementById(
-    "pref-reading-loop-enabled",
-  ) as XUL.Checkbox | null;
-  if (enabledCheckbox) {
-    enabledCheckbox.addEventListener("command", () => {
-      setPref("readingLoopEnabled", enabledCheckbox.checked);
-      void import("../reading-loop")
-        .then(({ getReadingLoopService }) => {
-          getReadingLoopService().refreshEnabledFromPrefs();
+async function ensurePaperSkillsFolder(): Promise<string> {
+  const folder = getPaperSkillsFolderPath();
+  if (!(await IOUtils.exists(folder))) {
+    await IOUtils.makeDirectory(folder, { createAncestors: true });
+  }
+  return folder;
+}
+
+function setPaperSkillsStatus(doc: Document, text: string): void {
+  const statusLabel = doc.getElementById(
+    "pref-paper-skills-status",
+  ) as XUL.Label | null;
+  if (statusLabel) {
+    statusLabel.textContent = text;
+  }
+}
+
+function openFolderInSystem(path: string): void {
+  const classes = Components.classes as unknown as Record<string, any>;
+  const file = classes["@mozilla.org/file/local;1"].createInstance(
+    Components.interfaces.nsIFile,
+  );
+  file.initWithPath(path);
+  if (typeof file.launch === "function") {
+    file.launch();
+    return;
+  }
+  Zotero.launchURL(Services.io.newFileURI(file).spec);
+}
+
+function bindPaperSkillSettingsEvents(doc: Document): void {
+  const openFolderBtn = doc.getElementById(
+    "pref-paper-skills-open-folder",
+  ) as XUL.Button | null;
+  if (openFolderBtn) {
+    openFolderBtn.addEventListener("command", () => {
+      void ensurePaperSkillsFolder()
+        .then((folder) => {
+          openFolderInSystem(folder);
+          setPaperSkillsStatus(doc, folder);
         })
         .catch((error) => {
-          ztoolkit.log(
-            "[Preferences] Failed to refresh Reading Loop setting:",
-            error,
+          ztoolkit.log("[Preferences] Failed to open skills folder:", error);
+          setPaperSkillsStatus(
+            doc,
+            `${getString("pref-paper-skills-open-failed")}: ${getErrorMessage(error)}`,
           );
         });
     });
   }
-}
 
-function initNextQuestionHintSettings(doc: Document): void {
-  const enabledCheckbox = doc.getElementById(
-    "pref-next-question-hint-enabled",
-  ) as XUL.Checkbox | null;
-  if (enabledCheckbox) {
-    enabledCheckbox.checked = getPref("nextQuestionHintEnabled") !== false;
-  }
-}
-
-function bindNextQuestionHintSettingsEvents(doc: Document): void {
-  const enabledCheckbox = doc.getElementById(
-    "pref-next-question-hint-enabled",
-  ) as XUL.Checkbox | null;
-  if (enabledCheckbox) {
-    enabledCheckbox.addEventListener("command", () => {
-      setPref("nextQuestionHintEnabled", enabledCheckbox.checked);
+  const reloadBtn = doc.getElementById(
+    "pref-paper-skills-reload",
+  ) as XUL.Button | null;
+  if (reloadBtn) {
+    reloadBtn.addEventListener("command", () => {
+      void ensurePaperSkillsFolder()
+        .then(async () => {
+          const skills = await getSkillRegistry().listSkills(true);
+          setPaperSkillsStatus(
+            doc,
+            getString("pref-paper-skills-reloaded", {
+              args: { count: String(skills.length) },
+            }),
+          );
+        })
+        .catch((error) => {
+          ztoolkit.log("[Preferences] Failed to reload skills:", error);
+          setPaperSkillsStatus(
+            doc,
+            `${getString("pref-paper-skills-reload-failed")}: ${getErrorMessage(error)}`,
+          );
+        });
     });
   }
 }

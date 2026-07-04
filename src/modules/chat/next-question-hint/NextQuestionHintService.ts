@@ -1,7 +1,6 @@
 import type { ChatMessage, ChatSession } from "../../../types/chat";
 import type { AIProvider } from "../../../types/provider";
 import { getProviderManager } from "../../providers";
-import { getPref } from "../../../utils/prefs";
 import { createAbortController } from "../../../utils/abort";
 
 export interface NextQuestionHint {
@@ -60,10 +59,6 @@ class NextQuestionHintService {
   async generateForCompletion(
     request: NextQuestionHintRequest,
   ): Promise<NextQuestionHintOutcome> {
-    if (getPref("nextQuestionHintEnabled") === false) {
-      return { status: "skipped", reason: "disabled" };
-    }
-
     if (request.currentInputValue.trim()) {
       return { status: "skipped", reason: "input_not_empty" };
     }

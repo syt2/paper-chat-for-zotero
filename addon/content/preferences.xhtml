@@ -751,32 +751,41 @@
     </html:details>
   </groupbox>
 
-  <!-- Reading Loop Settings -->
+  <!-- Paper Skills Settings -->
   <groupbox style="margin-top: 16px">
-    <label><html:h3 data-l10n-id="pref-reading-loop-settings"></html:h3></label>
-
-    <hbox align="center" style="margin-bottom: 8px">
-      <label style="width: 80px"></label>
-      <checkbox
-        id="pref-reading-loop-enabled"
-        data-l10n-id="pref-reading-loop-enabled"
-        style="margin-left: 8px"
-      />
-    </hbox>
-
-    <hbox align="center" style="margin-bottom: 8px">
-      <label style="width: 80px"></label>
-      <checkbox
-        id="pref-next-question-hint-enabled"
-        data-l10n-id="pref-next-question-hint-enabled"
-        style="margin-left: 8px"
-      />
-    </hbox>
+    <label><html:h3 data-l10n-id="pref-paper-skills-settings"></html:h3></label>
 
     <label
-      data-l10n-id="pref-reading-loop-desc"
-      style="font-size: 11px; color: #666; margin-top: 8px; margin-left: 2px"
+      data-l10n-id="pref-paper-skills-desc"
+      style="font-size: 11px; color: #666; margin-top: 4px; margin-left: 2px"
     ></label>
+
+    <label
+      id="pref-paper-skills-path"
+      style="
+        margin-top: 8px;
+        margin-left: 2px;
+        font-family: monospace;
+        font-size: 11px;
+        opacity: 0.8;
+      "
+    ></label>
+
+    <hbox align="center" style="margin-top: 10px">
+      <button
+        id="pref-paper-skills-open-folder"
+        data-l10n-id="pref-paper-skills-open-folder"
+      ></button>
+      <button
+        id="pref-paper-skills-reload"
+        data-l10n-id="pref-paper-skills-reload"
+        style="margin-left: 8px"
+      ></button>
+      <label
+        id="pref-paper-skills-status"
+        style="margin-left: 10px; font-size: 11px; opacity: 0.8"
+      ></label>
+    </hbox>
   </groupbox>
 
   <!-- AISummary Settings -->
