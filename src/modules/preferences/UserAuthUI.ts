@@ -3,6 +3,7 @@
  */
 
 import type { TagElementProps } from "zotero-plugin-toolkit";
+import { openZToolkitDialog } from "../../utils/dialog";
 import { getString } from "../../utils/locale";
 import { prefColors } from "../../utils/colors";
 import { getPref } from "../../utils/prefs";
@@ -542,6 +543,12 @@ async function showRedeemCodeDialog(
     return;
   }
 
+  const mainWindow = Zotero.getMainWindow();
+  if (!mainWindow) {
+    ztoolkit.log("[Preferences] Cannot open purchase dialog: no main window.");
+    return;
+  }
+
   const productsResult = await authManager.listPaperChatProducts();
   const products = productsResult.success ? productsResult.products : [];
   const showProducts = products.length > 0;
@@ -595,11 +602,16 @@ async function showRedeemCodeDialog(
   }
   dialogHelper.addButton(getString("auth-cancel"), "cancel");
 
-  dialogHelper.open(getString("pref-get-redeem-code-title"), {
-    resizable: false,
-    centerscreen: true,
-    fitContent: true,
-  });
+  openZToolkitDialog(
+    dialogHelper,
+    mainWindow,
+    getString("pref-get-redeem-code-title"),
+    {
+      resizable: false,
+      centerscreen: true,
+      fitContent: true,
+    },
+  );
 
   bindRedeemDialogWhenReady({
     dialogHelper,

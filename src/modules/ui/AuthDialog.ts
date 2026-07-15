@@ -4,6 +4,7 @@
  * 提供用户登录和注册界面
  */
 
+import { openZToolkitDialog } from "../../utils/dialog";
 import { getString } from "../../utils/locale";
 import { authColors, colors } from "../../utils/colors";
 import { getAuthManager } from "../auth";
@@ -281,16 +282,22 @@ export async function showAuthDialog(
     return currentDialogPromise;
   }
 
-  currentDialogPromise = new Promise((resolve) => {
-    let settled = false;
-    const finish = (success: boolean) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      resolve(success);
-    };
+  let resolveDialog!: (success: boolean) => void;
+  const dialogPromise = new Promise<boolean>((resolve) => {
+    resolveDialog = resolve;
+  });
+  currentDialogPromise = dialogPromise;
 
+  let settled = false;
+  const finish = (success: boolean) => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    resolveDialog(success);
+  };
+
+  const startDialog = () => {
     const win = Zotero.getMainWindow();
     if (!win) {
       clearCurrentDialog();
@@ -600,7 +607,7 @@ export async function showAuthDialog(
       });
 
     try {
-      dialogHelper.open(getString("auth-dialog-title"), {
+      openZToolkitDialog(dialogHelper, win, getString("auth-dialog-title"), {
         resizable: true,
         centerscreen: true,
         fitContent: true,
@@ -1082,9 +1089,17 @@ export async function showAuthDialog(
         }
       });
     });
-  });
+  };
 
-  return currentDialogPromise;
+  try {
+    startDialog();
+  } catch (error) {
+    ztoolkit.log("[AuthDialog] Failed to set up auth dialog:", error);
+    clearCurrentDialog();
+    finish(false);
+  }
+
+  return dialogPromise;
 }
 
 /**
