@@ -2,8 +2,59 @@ import { assert } from "chai";
 import {
   extractSourceGroupFragments,
   formatMarkdownForMessageCopy,
+  renderMarkdownToElement,
   stripIncompleteTrailingToolCall,
 } from "../src/modules/ui/chat-panel/MarkdownRenderer.ts";
+
+class FakeElement {
+  readonly style: Record<string, string> = {};
+  readonly attributes = new Map<string, string>();
+  readonly children: FakeElement[] = [];
+  readonly listeners = new Map<string, (event: any) => void>();
+  private value = "";
+
+  constructor(
+    readonly ownerDocument: FakeDocument,
+    readonly tagName: string,
+  ) {}
+
+  get textContent(): string {
+    return this.value;
+  }
+
+  set textContent(value: string) {
+    this.value = value;
+    if (value === "") {
+      this.children.length = 0;
+    }
+  }
+
+  appendChild(child: FakeElement): FakeElement {
+    this.children.push(child);
+    return child;
+  }
+
+  setAttribute(name: string, value: string): void {
+    this.attributes.set(name, value);
+  }
+
+  addEventListener(type: string, listener: (event: any) => void): void {
+    this.listeners.set(type, listener);
+  }
+
+  dispatch(type: string): void {
+    this.listeners.get(type)?.({
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+    });
+  }
+}
+
+class FakeDocument {
+  createElementNS(_namespace: string, tagName: string): FakeElement {
+    return new FakeElement(this, tagName);
+  }
+}
 
 describe("markdown renderer source groups", function () {
   it("extracts source-group fragments while preserving surrounding markdown", function () {
@@ -16,7 +67,7 @@ Intro paragraph.
 
 Transition text.
 
-<source-group label="Lab notes" type="note">
+<source-group label="Lab notes" type="note" key="MISJCTQ9">
 - Notes mention the ablation is limited.
 </source-group>
 
@@ -42,6 +93,7 @@ Closing sentence.
     }
     assert.equal(secondGroup.label, "Lab notes");
     assert.equal(secondGroup.type, "note");
+    assert.equal(secondGroup.key, "MISJCTQ9");
   });
 
   it("leaves malformed source-group markup as normal markdown", function () {
@@ -70,6 +122,68 @@ Missing label should not be parsed.
     }
     assert.equal(fragments[0].label, "Paper B");
     assert.equal(fragments[0].type, "web");
+  });
+
+  it("renders only explicit note keys as single-line clickable headers", async function () {
+    const originalZotero = (globalThis as { Zotero?: unknown }).Zotero;
+    (globalThis as { Zotero?: unknown }).Zotero = {
+      getMainWindow: () => null,
+    };
+    const doc = new FakeDocument();
+    const root = new FakeElement(doc, "div");
+    const clickedKeys: string[] = [];
+    const errors: Error[] = [];
+    const options = {
+      sourceGroupAction: {
+        title: "Open note",
+        getTargetKey: (group: { key?: string }) => group.key || null,
+        onClick: async (key: string) => {
+          clickedKeys.push(key);
+        },
+        onError: (error: Error) => errors.push(error),
+      },
+    };
+
+    try {
+      renderMarkdownToElement(
+        root as unknown as HTMLElement,
+        '<source-group label="MISJCTQ9" type="note"></source-group>',
+        "message-1",
+        options,
+      );
+      assert.equal(root.children[0]?.children[0]?.tagName, "div");
+
+      renderMarkdownToElement(
+        root as unknown as HTMLElement,
+        '<source-group label="A very long note title" type="note" key="MISJCTQ9"></source-group>',
+        "message-1",
+        options,
+      );
+      const header = root.children[0]?.children[0];
+      const label = header?.children[1];
+      assert.equal(header?.tagName, "button");
+      assert.equal(label?.style.minWidth, "0");
+      assert.equal(label?.style.whiteSpace, "nowrap");
+      assert.equal(label?.style.overflow, "hidden");
+      assert.equal(label?.style.textOverflow, "ellipsis");
+      assert.equal(header?.style.boxSizing, "border-box");
+      assert.equal(header?.style.padding, "16px 10px");
+
+      header?.dispatch("click");
+      await Promise.resolve();
+      await Promise.resolve();
+      assert.deepEqual(clickedKeys, ["MISJCTQ9"]);
+      assert.deepEqual(errors, []);
+
+      options.sourceGroupAction.onClick = async () => {
+        throw new Error("open failed");
+      };
+      header?.dispatch("click");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.equal(errors[0]?.message, "open failed");
+    } finally {
+      (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
+    }
   });
 });
 

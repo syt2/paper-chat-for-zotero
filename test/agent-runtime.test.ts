@@ -248,6 +248,10 @@ describe("agent runtime plan semantics", function () {
     );
     assert.include(prompt, '<source-group label="Paper title or source name"');
     assert.include(prompt, 'type="paper|note|annotation|web|library|memory"');
+    assert.include(
+      prompt,
+      '<source-group label="PaperChat Notes" type="note" key="ABCD1234">',
+    );
     assert.include(prompt, "=== RETRY POLICY ===");
     assert.include(
       prompt,

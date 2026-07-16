@@ -49,6 +49,7 @@ import {
   stripIncompleteTrailingToolCall,
 } from "./MarkdownRenderer";
 import { navigateToPdfQuote } from "./PdfQuoteNavigator";
+import { normalizeNoteSourceKey, openNoteSource } from "./NoteSourceNavigator";
 import {
   setupEventHandlers,
   updateAttachmentsPreviewDisplay,
@@ -294,8 +295,14 @@ function scheduleStreamingTextRender(
   }
 }
 
-function createPdfQuoteMarkdownRenderOptions(
-  context: Pick<ChatPanelContext, "getCurrentItem">,
+interface ChatMarkdownActionContext {
+  getCurrentItem: () => Zotero.Item | null;
+  appendError?: (message: string) => void;
+  enableNoteActions?: boolean;
+}
+
+function createChatMarkdownRenderOptions(
+  context: ChatMarkdownActionContext,
 ): MarkdownRenderOptions {
   return {
     blockquoteAction: {
@@ -305,6 +312,25 @@ function createPdfQuoteMarkdownRenderOptions(
         await navigateToPdfQuote(quoteText, context.getCurrentItem());
       },
     },
+    sourceGroupAction:
+      context.enableNoteActions === false
+        ? undefined
+        : {
+            title: getString("chat-open-note"),
+            getTargetKey: (group) => {
+              if (group.type.trim().toLowerCase() !== "note") {
+                return null;
+              }
+              return normalizeNoteSourceKey(group.key);
+            },
+            onClick: openNoteSource,
+            onError: (error) => {
+              ztoolkit.log("[ChatPanel] Failed to open note source:", error);
+              context.appendError?.(
+                `${getString("chat-open-note-failed")}: ${error.message}`,
+              );
+            },
+          },
   };
 }
 
@@ -333,31 +359,37 @@ function getQuoteNavigationItem(
   );
 }
 
-function renderMessageElementsWithPdfQuoteAction(
+interface ChatMessageRenderCallbacks {
+  retryableErrorMessageId?: string;
+  onReroll?: () => void | Promise<void>;
+  onRerollError?: (error: Error) => void;
+  onFork?: (assistantMessageId: string) => void | Promise<void>;
+  onForkError?: (error: Error) => void;
+  onMarkdownError?: (message: string) => void;
+}
+
+function renderMessageElementsWithMarkdownActions(
   chatHistory: HTMLElement,
   emptyState: HTMLElement | null,
   messages: ChatMessage[],
   getNavigationItem: () => Zotero.Item | null,
-  retryableErrorMessageId?: string,
-  onReroll?: () => void | Promise<void>,
-  onRerollError?: (error: Error) => void,
-  onFork?: (assistantMessageId: string) => void | Promise<void>,
-  onForkError?: (error: Error) => void,
+  callbacks: ChatMessageRenderCallbacks = {},
 ): void {
   renderMessageElementsBase(
     chatHistory,
     emptyState,
     messages,
     getCurrentTheme(),
-    retryableErrorMessageId,
-    onReroll,
-    onRerollError,
+    callbacks.retryableErrorMessageId,
+    callbacks.onReroll,
+    callbacks.onRerollError,
     {
-      markdown: createPdfQuoteMarkdownRenderOptions({
+      markdown: createChatMarkdownRenderOptions({
         getCurrentItem: getNavigationItem,
+        appendError: callbacks.onMarkdownError,
       }),
-      onFork,
-      onForkError,
+      onFork: callbacks.onFork,
+      onForkError: callbacks.onForkError,
     },
   );
 }
@@ -1379,16 +1411,16 @@ async function refreshChatForContainer(container: HTMLElement): Promise<void> {
   ) as HTMLElement;
   if (chatHistory && session) {
     const refreshContext = createContext(container);
-    renderMessageElementsWithPdfQuoteAction(
+    renderMessageElementsWithMarkdownActions(
       chatHistory,
       emptyState,
       session.messages,
       () => getQuoteNavigationItem(session, moduleCurrentItem),
-      undefined,
-      undefined,
-      undefined,
-      (assistantMessageId) =>
-        continueInNewChatFromMessage(refreshContext, assistantMessageId),
+      {
+        onFork: (assistantMessageId) =>
+          continueInNewChatFromMessage(refreshContext, assistantMessageId),
+        onMarkdownError: refreshContext.appendError,
+      },
     );
     updateExecutionInsetsForContainer(
       container,
@@ -1646,12 +1678,14 @@ function setupChatManagerCallbacks(
           manager,
           content,
           messageId,
-          createPdfQuoteMarkdownRenderOptions({
+          createChatMarkdownRenderOptions({
             getCurrentItem: () =>
               getQuoteNavigationItem(
                 manager.getActiveSession(),
                 moduleCurrentItem,
               ),
+            appendError: context.appendError,
+            enableNoteActions: false,
           }),
         );
       }
@@ -2400,20 +2434,23 @@ function createContext(container: HTMLElement): ChatPanelContext {
             ? session?.lastRetryableErrorMessageId
             : undefined;
         if (chatHistory) {
-          renderMessageElementsWithPdfQuoteAction(
+          renderMessageElementsWithMarkdownActions(
             chatHistory,
             emptyState,
             messages,
             () => getQuoteNavigationItem(session, moduleCurrentItem),
-            retryableErrorMessageId,
-            async () => {
-              await context.rerollPaperChatTierForCurrentSession();
+            {
+              retryableErrorMessageId,
+              onReroll: async () => {
+                await context.rerollPaperChatTierForCurrentSession();
+              },
+              onRerollError: (error) => {
+                context.appendError(error.message);
+              },
+              onFork: (assistantMessageId) =>
+                continueInNewChatFromMessage(context, assistantMessageId),
+              onMarkdownError: context.appendError,
             },
-            (error) => {
-              context.appendError(error.message);
-            },
-            (assistantMessageId) =>
-              continueInNewChatFromMessage(context, assistantMessageId),
           );
         }
         if (planPanel) {

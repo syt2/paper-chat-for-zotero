@@ -59,6 +59,10 @@ import {
   formatUserInputToolResult,
   normalizeRequestUserInputArgs,
 } from "../user-input-request";
+import {
+  collectTrustedGeneratedNoteKeys,
+  sanitizeNoteSourceGroupKeys,
+} from "../note-source-provenance";
 
 interface AgentRuntimeCallbacks {
   isSessionActive: (session: ChatSession) => boolean;
@@ -1019,7 +1023,15 @@ export class AgentRuntime {
     }
 
     this.ensureSessionTracked(sendingSession, sessionRunId);
-    assistantMessage.content = accumulatedDisplay;
+    const trustedNoteKeys = collectTrustedGeneratedNoteKeys(
+      sendingSession.toolExecutionState?.results || [],
+    );
+    const sanitizedDisplay = sanitizeNoteSourceGroupKeys(
+      accumulatedDisplay,
+      trustedNoteKeys,
+    );
+
+    assistantMessage.content = sanitizedDisplay;
     assistantMessage.streamingState = "in_progress";
     await this.flushAssistantMessageCheckpoint(
       sendingSession,
@@ -1486,7 +1498,15 @@ export class AgentRuntime {
       iteration,
     } = params;
 
-    assistantMessage.content = accumulatedDisplay;
+    const trustedNoteKeys = collectTrustedGeneratedNoteKeys(
+      sendingSession.toolExecutionState?.results || [],
+    );
+    const sanitizedDisplay = sanitizeNoteSourceGroupKeys(
+      accumulatedDisplay,
+      trustedNoteKeys,
+    );
+
+    assistantMessage.content = sanitizedDisplay;
     assistantMessage.timestamp = Date.now();
     sendingSession.updatedAt = Date.now();
 
@@ -1498,7 +1518,7 @@ export class AgentRuntime {
     this.executionPlanManager.completeRespondStep(
       sendingSession,
       currentMessages,
-      truncateToolDetail(accumulatedDisplay),
+      truncateToolDetail(sanitizedDisplay),
     );
 
     await this.flushAssistantMessageCheckpoint(
@@ -1521,7 +1541,7 @@ export class AgentRuntime {
       assistantMessage,
       {
         type: "turn_completed",
-        content: accumulatedDisplay,
+        content: sanitizedDisplay,
         iteration,
       },
     );
@@ -1556,7 +1576,13 @@ export class AgentRuntime {
     accumulatedDisplay: string,
     iteration: number,
   ): Promise<void> {
-    assistantMessage.content = accumulatedDisplay;
+    const trustedNoteKeys = collectTrustedGeneratedNoteKeys(
+      sendingSession.toolExecutionState?.results || [],
+    );
+    assistantMessage.content = sanitizeNoteSourceGroupKeys(
+      accumulatedDisplay,
+      trustedNoteKeys,
+    );
     assistantMessage.timestamp = Date.now();
     sendingSession.updatedAt = Date.now();
     this.executionPlanManager.failPlan(

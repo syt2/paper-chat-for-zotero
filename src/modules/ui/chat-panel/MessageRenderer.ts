@@ -559,21 +559,18 @@ export function createMessageElement(
     rawContent = quotaDetails?.rawMessage || errorDisplay;
   } else {
     // Render assistant message as markdown
+    const markdownOptions =
+      msg.streamingState === undefined || !renderOptions.markdown
+        ? renderOptions.markdown
+        : {
+            ...renderOptions.markdown,
+            sourceGroupAction: undefined,
+          };
     if (msg.streamingState === "in_progress") {
-      renderMarkdownToElement(
-        content,
-        msg.content,
-        msg.id,
-        renderOptions.markdown,
-      );
+      renderMarkdownToElement(content, msg.content, msg.id, markdownOptions);
       ensureStreamingTypingIndicator(content, theme);
     } else {
-      renderMarkdownToElement(
-        content,
-        msg.content,
-        msg.id,
-        renderOptions.markdown,
-      );
+      renderMarkdownToElement(content, msg.content, msg.id, markdownOptions);
     }
   }
 

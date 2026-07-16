@@ -355,6 +355,7 @@ function formatAgentPromptContext(agentContext?: AgentPromptContext): string {
   section += `  <source-group label="Paper title or source name" type="paper|note|annotation|web|library|memory">\n`;
   section += `  - grounded findings for that source\n`;
   section += `  </source-group>\n`;
+  section += `- For note source groups, include the exact Zotero note key whenever a tool result provides "Note key", for example: <source-group label="PaperChat Notes" type="note" key="ABCD1234">. Omit key for other source types or when unknown.\n`;
   section += `- Use normal markdown outside the source-group blocks for the short conclusion or overall synthesis.\n`;
   section += `- If a tool was denied or failed and evidence is incomplete, state that limitation instead of guessing.\n`;
 

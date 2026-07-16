@@ -225,6 +225,7 @@ type SourceGroupFragment =
       kind: "source-group";
       label: string;
       type: string;
+      key?: string;
       content: string;
     };
 
@@ -251,6 +252,19 @@ export interface MarkdownRenderOptions {
     title: string;
     onClick: (quoteText: string) => void | Promise<void>;
   };
+  sourceGroupAction?: {
+    title: string;
+    getTargetKey: (group: SourceGroupActionContext) => string | null;
+    onClick: (targetKey: string) => void | Promise<void>;
+    onError?: (error: Error) => void;
+  };
+}
+
+export interface SourceGroupActionContext {
+  label: string;
+  type: string;
+  key?: string;
+  content: string;
 }
 
 /**
@@ -634,6 +648,7 @@ export function extractSourceGroupFragments(
     const attrs = match[1] || "";
     const label = getTagAttribute(attrs, "label");
     const type = getTagAttribute(attrs, "type") || "paper";
+    const key = getTagAttribute(attrs, "key");
 
     if (!label) {
       continue;
@@ -647,6 +662,7 @@ export function extractSourceGroupFragments(
       kind: "source-group",
       label,
       type,
+      key,
       content: match[2] || "",
     });
 
@@ -719,6 +735,8 @@ function renderSourceGroupCard(
   const dark = isDarkMode();
   const colors = dark ? sourceGroupStyles.dark : sourceGroupStyles.light;
   const palette = getSourceGroupPalette(group.type, dark);
+  const sourceGroupAction = options.sourceGroupAction;
+  const targetKey = sourceGroupAction?.getTargetKey(group) || null;
 
   const card = doc.createElementNS(HTML_NS, "div") as HTMLElement;
   card.style.margin = "10px 0";
@@ -728,13 +746,59 @@ function renderSourceGroupCard(
   card.style.background = colors.cardBg;
   card.style.overflow = "hidden";
 
-  const header = doc.createElementNS(HTML_NS, "div") as HTMLElement;
+  const header = doc.createElementNS(
+    HTML_NS,
+    targetKey ? "button" : "div",
+  ) as HTMLElement;
   header.style.display = "flex";
   header.style.alignItems = "center";
   header.style.gap = "8px";
-  header.style.padding = "8px 10px";
+  header.style.width = "100%";
+  header.style.boxSizing = "border-box";
+  header.style.padding = "16px 10px";
   header.style.background = colors.headerBg;
   header.style.borderBottom = `1px solid ${colors.cardBorder}`;
+  header.style.borderTop = "none";
+  header.style.borderLeft = "none";
+  header.style.borderRight = "none";
+  header.style.borderRadius = "0";
+  header.style.margin = "0";
+  header.style.appearance = "none";
+  header.style.fontFamily = "inherit";
+  header.style.textAlign = "left";
+
+  if (targetKey && sourceGroupAction) {
+    header.setAttribute("type", "button");
+    header.setAttribute("title", `${sourceGroupAction.title}: ${group.label}`);
+    header.setAttribute(
+      "aria-label",
+      `${sourceGroupAction.title}: ${group.label}`,
+    );
+    header.style.cursor = "pointer";
+    header.addEventListener("mouseenter", () => {
+      header.style.background = dark ? "#2d333b" : "#eef2f6";
+    });
+    header.addEventListener("mouseleave", () => {
+      header.style.background = colors.headerBg;
+    });
+    header.addEventListener("focus", () => {
+      header.style.boxShadow = `inset 0 0 0 2px ${palette.accent}`;
+    });
+    header.addEventListener("blur", () => {
+      header.style.boxShadow = "none";
+    });
+    header.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void Promise.resolve()
+        .then(() => sourceGroupAction.onClick(targetKey))
+        .catch((error: unknown) => {
+          sourceGroupAction.onError?.(
+            error instanceof Error ? error : new Error(String(error)),
+          );
+        });
+    });
+  }
 
   const badge = doc.createElementNS(HTML_NS, "span") as HTMLElement;
   badge.style.display = "inline-flex";
@@ -743,6 +807,7 @@ function renderSourceGroupCard(
   badge.style.borderRadius = "999px";
   badge.style.fontSize = "11px";
   badge.style.fontWeight = "600";
+  badge.style.flexShrink = "0";
   badge.style.background = palette.badgeBg;
   badge.style.color = palette.badgeText;
   badge.textContent = formatSourceGroupType(group.type);
@@ -753,8 +818,24 @@ function renderSourceGroupCard(
   label.style.fontWeight = "600";
   label.style.color = colors.labelText;
   label.style.flex = "1";
+  label.style.minWidth = "0";
+  label.style.whiteSpace = "nowrap";
+  label.style.overflow = "hidden";
+  label.style.textOverflow = "ellipsis";
+  label.style.lineHeight = "1.4";
+  label.setAttribute("title", group.label);
   label.textContent = group.label;
   header.appendChild(label);
+
+  if (targetKey) {
+    const openIndicator = doc.createElementNS(HTML_NS, "span") as HTMLElement;
+    openIndicator.setAttribute("aria-hidden", "true");
+    openIndicator.style.color = colors.bodyText;
+    openIndicator.style.fontSize = "12px";
+    openIndicator.style.flexShrink = "0";
+    openIndicator.textContent = "↗";
+    header.appendChild(openIndicator);
+  }
 
   card.appendChild(header);
 

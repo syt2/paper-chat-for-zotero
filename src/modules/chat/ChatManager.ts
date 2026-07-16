@@ -92,6 +92,7 @@ import {
   collectForkArtifactIds,
   resolveForkItemKey,
 } from "./session-fork";
+import { sanitizeNoteSourceGroupKeys } from "./note-source-provenance";
 import {
   AgentRuntime,
   removeApiOnlyModelContextMessagesForTurn,
@@ -2185,7 +2186,10 @@ export class ChatManager {
                     resolve();
                     return;
                   }
-                  assistantMessage.content = fullContent;
+                  assistantMessage.content = sanitizeNoteSourceGroupKeys(
+                    fullContent,
+                    new Set(),
+                  );
                   assistantMessage.streamingState = undefined;
                   assistantMessage.timestamp = Date.now();
                   sendingSession.updatedAt = Date.now();

@@ -130,6 +130,8 @@ export type FluentMessageId =
   | 'paperchat-chat-no-history'
   | 'paperchat-chat-no-messages'
   | 'paperchat-chat-no-models'
+  | 'paperchat-chat-open-note'
+  | 'paperchat-chat-open-note-failed'
   | 'paperchat-chat-open-settings'
   | 'paperchat-chat-panel-title'
   | 'paperchat-chat-reroll-model'
