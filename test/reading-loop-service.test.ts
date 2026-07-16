@@ -95,6 +95,69 @@ describe("reading loop service", function () {
     }
   });
 
+  it("removes an unaccepted selection suggestion when the selection clears", function () {
+    const service = new ReadingLoopService();
+    (service as any).currentPaperKey = "paper-key";
+
+    const originalNow = Date.now;
+    let now = 8000;
+    Date.now = () => now;
+    try {
+      const selectedText =
+        "A selected passage that should disappear when cleared.";
+      service.handleTextSelected(selectedText);
+      now += 2100;
+      service.handleTextSelected(selectedText);
+
+      assert.equal(
+        service.getSnapshot().activeSuggestion?.kind,
+        "explain_selection",
+      );
+
+      service.handleSelectionCleared();
+
+      assert.isUndefined(service.getSnapshot().activeSuggestion);
+      assert.equal(service.getSnapshot().state, "idle");
+    } finally {
+      Date.now = originalNow;
+      service.destroy();
+    }
+  });
+
+  it("keeps an already running selection task when the selection clears", function () {
+    const service = new ReadingLoopService();
+    (service as any).currentPaperKey = "paper-key";
+
+    const originalNow = Date.now;
+    let now = 12000;
+    Date.now = () => now;
+    try {
+      const selectedText = "A selected passage whose task is already running.";
+      service.handleTextSelected(selectedText);
+      now += 2100;
+      service.handleTextSelected(selectedText);
+
+      const suggestion = service.getSnapshot().activeSuggestion;
+      assert.isDefined(suggestion);
+      const expiresAt = suggestion!.expiresAt;
+      (service as any).activeSuggestion = {
+        ...suggestion,
+        status: "running",
+      };
+
+      service.handleSelectionCleared();
+
+      assert.equal(service.getSnapshot().activeSuggestion?.status, "running");
+      assert.equal(
+        service.getSnapshot().activeSuggestion?.expiresAt,
+        expiresAt,
+      );
+    } finally {
+      Date.now = originalNow;
+      service.destroy();
+    }
+  });
+
   it("persists suggestion history and suppresses the same selection reason", function () {
     const { prefStore } = prefEnvironment;
     const originalNow = Date.now;

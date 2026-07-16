@@ -13,7 +13,6 @@ const SUGGESTION_BADGE_COOLDOWN_MS = 5 * 60 * 1000;
 const DISMISS_SILENCE_MS = 30 * 60 * 1000;
 const MAX_SELECTED_TEXT_LENGTH = 4000;
 const SELECTION_SUGGESTION_DELAY_MS = 2 * 1000;
-const SELECTION_CLEAR_GRACE_MS = 15 * 1000;
 const COMPLETED_SUGGESTION_VISIBLE_MS = 6 * 1000;
 const HIGHLIGHT_SESSION_THRESHOLD = 3;
 const HIGHLIGHT_TOTAL_THRESHOLD = 5;
@@ -258,17 +257,10 @@ export class ReadingLoopService {
     }
 
     if (this.isSelectionSuggestion(this.activeSuggestion.kind)) {
-      const now = Date.now();
-      const expiresAt = Math.min(
-        this.activeSuggestion.expiresAt || now + SELECTION_CLEAR_GRACE_MS,
-        now + SELECTION_CLEAR_GRACE_MS,
-      );
-      this.activeSuggestion = {
-        ...this.activeSuggestion,
-        expiresAt,
-        updatedAt: now,
-      };
-      this.notify();
+      if (this.activeSuggestion.status === "suggested") {
+        this.activeSuggestion = undefined;
+        this.notify();
+      }
     }
   }
 
