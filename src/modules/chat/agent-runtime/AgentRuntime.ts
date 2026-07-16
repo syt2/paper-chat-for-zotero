@@ -60,8 +60,8 @@ import {
   normalizeRequestUserInputArgs,
 } from "../user-input-request";
 import {
-  collectTrustedGeneratedNoteKeys,
-  sanitizeNoteSourceGroupKeys,
+  collectTrustedSourceTargets,
+  sanitizeSourceGroupTargets,
 } from "../note-source-provenance";
 
 interface AgentRuntimeCallbacks {
@@ -1023,12 +1023,12 @@ export class AgentRuntime {
     }
 
     this.ensureSessionTracked(sendingSession, sessionRunId);
-    const trustedNoteKeys = collectTrustedGeneratedNoteKeys(
+    const trustedSourceTargets = collectTrustedSourceTargets(
       sendingSession.toolExecutionState?.results || [],
     );
-    const sanitizedDisplay = sanitizeNoteSourceGroupKeys(
+    const sanitizedDisplay = sanitizeSourceGroupTargets(
       accumulatedDisplay,
-      trustedNoteKeys,
+      trustedSourceTargets,
     );
 
     assistantMessage.content = sanitizedDisplay;
@@ -1498,12 +1498,12 @@ export class AgentRuntime {
       iteration,
     } = params;
 
-    const trustedNoteKeys = collectTrustedGeneratedNoteKeys(
+    const trustedSourceTargets = collectTrustedSourceTargets(
       sendingSession.toolExecutionState?.results || [],
     );
-    const sanitizedDisplay = sanitizeNoteSourceGroupKeys(
+    const sanitizedDisplay = sanitizeSourceGroupTargets(
       accumulatedDisplay,
-      trustedNoteKeys,
+      trustedSourceTargets,
     );
 
     assistantMessage.content = sanitizedDisplay;
@@ -1576,12 +1576,12 @@ export class AgentRuntime {
     accumulatedDisplay: string,
     iteration: number,
   ): Promise<void> {
-    const trustedNoteKeys = collectTrustedGeneratedNoteKeys(
+    const trustedSourceTargets = collectTrustedSourceTargets(
       sendingSession.toolExecutionState?.results || [],
     );
-    assistantMessage.content = sanitizeNoteSourceGroupKeys(
+    assistantMessage.content = sanitizeSourceGroupTargets(
       accumulatedDisplay,
-      trustedNoteKeys,
+      trustedSourceTargets,
     );
     assistantMessage.timestamp = Date.now();
     sendingSession.updatedAt = Date.now();

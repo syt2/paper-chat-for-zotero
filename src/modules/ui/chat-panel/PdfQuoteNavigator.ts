@@ -30,7 +30,7 @@ function getReaderItem(
   return (Zotero.Items.get(reader.itemID) as Zotero.Item | false) || null;
 }
 
-async function findPdfAttachment(
+export async function findPdfAttachment(
   item: Zotero.Item | null,
 ): Promise<Zotero.Item | null> {
   if (!item) {
@@ -120,17 +120,23 @@ async function locateQuotePageIndex(
   return null;
 }
 
-async function openOrNavigateReader(
+type ReaderNavigationLocation = _ZoteroTypes.Reader.Location & {
+  annotationID?: string;
+};
+
+export async function openOrNavigateReader(
   pdfAttachment: Zotero.Item,
   pageIndex: number | null,
+  annotationID?: string,
 ): Promise<void> {
   const activeReader = getActiveReader();
   const location =
-    pageIndex === null
+    pageIndex === null && !annotationID
       ? undefined
       : ({
-          pageIndex,
-        } satisfies _ZoteroTypes.Reader.Location);
+          ...(pageIndex === null ? {} : { pageIndex }),
+          ...(annotationID ? { annotationID } : {}),
+        } satisfies ReaderNavigationLocation);
 
   if (activeReader?.itemID === pdfAttachment.id) {
     activeReader.focus?.();
@@ -149,6 +155,10 @@ async function openOrNavigateReader(
 export async function navigateToPdfQuote(
   quoteText: string,
   currentItem: Zotero.Item | null,
+  options: {
+    allowActiveReaderFallback?: boolean;
+    fallbackPageIndex?: number;
+  } = {},
 ): Promise<boolean> {
   const quote = quoteText.trim();
   if (quote.length < MIN_QUOTE_SEARCH_LENGTH) {
@@ -160,13 +170,18 @@ export async function navigateToPdfQuote(
     const readerItem = getReaderItem(activeReader);
     const pdfAttachment =
       (await findPdfAttachment(currentItem)) ||
-      (await findPdfAttachment(readerItem));
+      (options.allowActiveReaderFallback === false
+        ? null
+        : await findPdfAttachment(readerItem));
     if (!pdfAttachment) {
       ztoolkit.log("[PdfQuoteNavigator] No PDF attachment available for quote");
       return false;
     }
 
-    const pageIndex = await locateQuotePageIndex(pdfAttachment, quote);
+    const pageIndex =
+      (await locateQuotePageIndex(pdfAttachment, quote)) ??
+      options.fallbackPageIndex ??
+      null;
     await openOrNavigateReader(pdfAttachment, pageIndex);
     return true;
   } catch (error) {

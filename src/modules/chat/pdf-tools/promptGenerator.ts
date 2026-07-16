@@ -352,10 +352,16 @@ function formatAgentPromptContext(agentContext?: AgentPromptContext): string {
   section += `- Attribute claims to the correct paper, Zotero note, annotation, or web source instead of giving unattributed summaries.\n`;
   section += `- For comparisons, keep evidence grouped by paper or source so the user can see which finding came from where.\n`;
   section += `- When synthesizing from multiple sources, prefer explicit source blocks using this exact format:\n`;
-  section += `  <source-group label="Paper title or source name" type="paper|note|annotation|web|library|memory">\n`;
+  section += `  <source-group label="Paper title or source name" type="paper|item|note|annotation|web|collection|library|memory">\n`;
   section += `  - grounded findings for that source\n`;
   section += `  </source-group>\n`;
-  section += `- For note source groups, include the exact Zotero note key whenever a tool result provides "Note key", for example: <source-group label="PaperChat Notes" type="note" key="ABCD1234">. Omit key for other source types or when unknown.\n`;
+  section += `- Add navigation attributes only when their exact values appear in completed tool results. Never infer, repair, or invent a key, page, or URL; omit any unknown attribute.\n`;
+  section += `- For a local paper, include its exact Source item key and, when the evidence identifies one, an optional 1-based page: <source-group label="Paper title" type="paper" key="ABCD1234" page="7">.\n`;
+  section += `- For another concrete Zotero library item, use type="item" with its exact item key.\n`;
+  section += `- For note source groups, include the exact Zotero note key from completed create_note or append_to_note results and from existing notes returned by get_item_notes, get_note_content, or search_notes: <source-group label="PaperChat Notes" type="note" key="ABCD1234">.\n`;
+  section += `- For annotations, use one source group per annotation and include its exact annotation key: <source-group label="Highlighted passage" type="annotation" key="ABCD1234">.\n`;
+  section += `- For web sources, include the exact result URL: <source-group label="Source title" type="web" url="https://example.com/source">.\n`;
+  section += `- For Zotero collections, include the exact collection key: <source-group label="Collection name" type="collection" key="ABCD1234">.\n`;
   section += `- Use normal markdown outside the source-group blocks for the short conclusion or overall synthesis.\n`;
   section += `- If a tool was denied or failed and evidence is incomplete, state that limitation instead of guessing.\n`;
 

@@ -210,9 +210,11 @@ type ToolCallFragment =
 
 type SourceGroupType =
   | "paper"
+  | "item"
   | "note"
   | "annotation"
   | "web"
+  | "collection"
   | "library"
   | "memory";
 
@@ -226,6 +228,8 @@ type SourceGroupFragment =
       label: string;
       type: string;
       key?: string;
+      url?: string;
+      page?: number;
       content: string;
     };
 
@@ -250,20 +254,25 @@ export interface MarkdownRenderOptions {
   blockquoteAction?: {
     label: string;
     title: string;
-    onClick: (quoteText: string) => void | Promise<void>;
+    onClick: (
+      quoteText: string,
+      sourceGroup?: SourceGroupActionContext,
+    ) => void | Promise<void>;
   };
   sourceGroupAction?: {
-    title: string;
-    getTargetKey: (group: SourceGroupActionContext) => string | null;
-    onClick: (targetKey: string) => void | Promise<void>;
+    getTitle: (group: SourceGroupActionContext) => string | null;
+    onClick: (group: SourceGroupActionContext) => void | Promise<void>;
     onError?: (error: Error) => void;
   };
+  sourceGroupContext?: SourceGroupActionContext;
 }
 
 export interface SourceGroupActionContext {
   label: string;
   type: string;
   key?: string;
+  url?: string;
+  page?: number;
   content: string;
 }
 
@@ -612,22 +621,88 @@ function renderMarkdownFragment(
   }
 }
 
-function getTagAttribute(attrs: string, name: string): string | undefined {
-  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const attrRegex = new RegExp(
-    `(?:^|\\s)${escapedName}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`,
-  );
-  const match = attrs.match(attrRegex);
-  if (!match) {
-    return undefined;
+function parseTagAttributes(attrs: string): Map<string, string> | null {
+  const parsed = new Map<string, string>();
+  let index = 0;
+
+  while (index < attrs.length) {
+    while (index < attrs.length && /\s/.test(attrs[index])) {
+      index += 1;
+    }
+    if (index >= attrs.length) {
+      break;
+    }
+
+    if (!/[A-Za-z_:]/.test(attrs[index])) {
+      return null;
+    }
+    const nameStart = index;
+    index += 1;
+    while (index < attrs.length && /[A-Za-z0-9_.:-]/.test(attrs[index])) {
+      index += 1;
+    }
+    const name = attrs.slice(nameStart, index).toLowerCase();
+
+    while (index < attrs.length && /\s/.test(attrs[index])) {
+      index += 1;
+    }
+    if (attrs[index] !== "=") {
+      return null;
+    }
+    index += 1;
+
+    while (index < attrs.length && /\s/.test(attrs[index])) {
+      index += 1;
+    }
+    const quote = attrs[index];
+    if (quote !== '"' && quote !== "'") {
+      return null;
+    }
+    index += 1;
+    const valueStart = index;
+    while (index < attrs.length && attrs[index] !== quote) {
+      index += 1;
+    }
+    if (index >= attrs.length) {
+      return null;
+    }
+    const value = unescapeXml(attrs.slice(valueStart, index));
+    index += 1;
+
+    if (!parsed.has(name)) {
+      parsed.set(name, value);
+    }
   }
-  return unescapeXml(match[1] || match[2] || "");
+
+  return parsed;
+}
+
+function findOpeningTagEnd(content: string, start: number): number | null {
+  let quote: '"' | "'" | null = null;
+  for (let index = start; index < content.length; index += 1) {
+    const character = content[index];
+    if (quote) {
+      if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (character === ">") {
+      return index;
+    }
+  }
+  return null;
 }
 
 export function extractSourceGroupFragments(
   content: string,
 ): SourceGroupFragment[] {
-  const sourceGroupRegex = /<source-group\b([^>]*)>([\s\S]*?)<\/source-group>/g;
+  const openingTagPattern = /<source-group\b/gi;
+  const closingTag = "</source-group>";
   const fragments: SourceGroupFragment[] = [];
 
   let cursor = 0;
@@ -644,13 +719,33 @@ export function extractSourceGroupFragments(
     });
   };
 
-  while ((match = sourceGroupRegex.exec(content)) !== null) {
-    const attrs = match[1] || "";
-    const label = getTagAttribute(attrs, "label");
-    const type = getTagAttribute(attrs, "type") || "paper";
-    const key = getTagAttribute(attrs, "key");
+  while ((match = openingTagPattern.exec(content)) !== null) {
+    const tagEnd = findOpeningTagEnd(content, openingTagPattern.lastIndex);
+    if (tagEnd === null) {
+      break;
+    }
+    const closingTagStart = content.indexOf(closingTag, tagEnd + 1);
+    if (closingTagStart < 0) {
+      openingTagPattern.lastIndex = tagEnd + 1;
+      continue;
+    }
+
+    const attrs = parseTagAttributes(
+      content.slice(openingTagPattern.lastIndex, tagEnd),
+    );
+    if (!attrs) {
+      openingTagPattern.lastIndex = tagEnd + 1;
+      continue;
+    }
+    const label = attrs.get("label");
+    const type = attrs.get("type") || "paper";
+    const key = attrs.get("key");
+    const url = attrs.get("url");
+    const rawPage = attrs.get("page");
+    const page = rawPage && /^\d+$/.test(rawPage) ? Number(rawPage) : undefined;
 
     if (!label) {
+      openingTagPattern.lastIndex = tagEnd + 1;
       continue;
     }
 
@@ -663,11 +758,14 @@ export function extractSourceGroupFragments(
       label,
       type,
       key,
-      content: match[2] || "",
+      url,
+      page,
+      content: content.slice(tagEnd + 1, closingTagStart),
     });
 
     hasSourceGroup = true;
-    cursor = match.index + match[0].length;
+    cursor = closingTagStart + closingTag.length;
+    openingTagPattern.lastIndex = cursor;
   }
 
   if (!hasSourceGroup) {
@@ -688,6 +786,7 @@ function getSourceGroupPalette(
   const normalizedType = type.toLowerCase() as SourceGroupType;
   switch (normalizedType) {
     case "paper":
+    case "item":
       return dark
         ? { badgeBg: "#1f6feb33", badgeText: "#79c0ff", accent: "#1f6feb" }
         : { badgeBg: "#dbeafe", badgeText: "#1d4ed8", accent: "#60a5fa" };
@@ -703,6 +802,10 @@ function getSourceGroupPalette(
       return dark
         ? { badgeBg: "#0f766e33", badgeText: "#5eead4", accent: "#14b8a6" }
         : { badgeBg: "#ccfbf1", badgeText: "#0f766e", accent: "#2dd4bf" };
+    case "collection":
+      return dark
+        ? { badgeBg: "#7e22ce33", badgeText: "#d8b4fe", accent: "#a855f7" }
+        : { badgeBg: "#f3e8ff", badgeText: "#7e22ce", accent: "#c084fc" };
     case "memory":
       return dark
         ? { badgeBg: "#16653433", badgeText: "#86efac", accent: "#22c55e" }
@@ -736,7 +839,7 @@ function renderSourceGroupCard(
   const colors = dark ? sourceGroupStyles.dark : sourceGroupStyles.light;
   const palette = getSourceGroupPalette(group.type, dark);
   const sourceGroupAction = options.sourceGroupAction;
-  const targetKey = sourceGroupAction?.getTargetKey(group) || null;
+  const actionTitle = sourceGroupAction?.getTitle(group) || null;
 
   const card = doc.createElementNS(HTML_NS, "div") as HTMLElement;
   card.style.margin = "10px 0";
@@ -748,7 +851,7 @@ function renderSourceGroupCard(
 
   const header = doc.createElementNS(
     HTML_NS,
-    targetKey ? "button" : "div",
+    actionTitle ? "button" : "div",
   ) as HTMLElement;
   header.style.display = "flex";
   header.style.alignItems = "center";
@@ -767,13 +870,10 @@ function renderSourceGroupCard(
   header.style.fontFamily = "inherit";
   header.style.textAlign = "left";
 
-  if (targetKey && sourceGroupAction) {
+  if (actionTitle && sourceGroupAction) {
     header.setAttribute("type", "button");
-    header.setAttribute("title", `${sourceGroupAction.title}: ${group.label}`);
-    header.setAttribute(
-      "aria-label",
-      `${sourceGroupAction.title}: ${group.label}`,
-    );
+    header.setAttribute("title", `${actionTitle}: ${group.label}`);
+    header.setAttribute("aria-label", `${actionTitle}: ${group.label}`);
     header.style.cursor = "pointer";
     header.addEventListener("mouseenter", () => {
       header.style.background = dark ? "#2d333b" : "#eef2f6";
@@ -791,7 +891,7 @@ function renderSourceGroupCard(
       event.preventDefault();
       event.stopPropagation();
       void Promise.resolve()
-        .then(() => sourceGroupAction.onClick(targetKey))
+        .then(() => sourceGroupAction.onClick(group))
         .catch((error: unknown) => {
           sourceGroupAction.onError?.(
             error instanceof Error ? error : new Error(String(error)),
@@ -827,7 +927,7 @@ function renderSourceGroupCard(
   label.textContent = group.label;
   header.appendChild(label);
 
-  if (targetKey) {
+  if (actionTitle) {
     const openIndicator = doc.createElementNS(HTML_NS, "span") as HTMLElement;
     openIndicator.setAttribute("aria-hidden", "true");
     openIndicator.style.color = colors.bodyText;
@@ -842,7 +942,10 @@ function renderSourceGroupCard(
   const body = doc.createElementNS(HTML_NS, "div") as HTMLElement;
   body.style.padding = "10px 12px";
   body.style.color = colors.bodyText;
-  renderMarkdownFragment(doc, body, group.content, options);
+  renderMarkdownFragment(doc, body, group.content, {
+    ...options,
+    sourceGroupContext: group,
+  });
   card.appendChild(body);
 
   parent.appendChild(card);
@@ -1108,6 +1211,7 @@ function appendBlockquoteAction(
   doc: Document,
   blockquote: HTMLElement,
   action: NonNullable<MarkdownRenderOptions["blockquoteAction"]>,
+  sourceGroup?: SourceGroupActionContext,
 ): void {
   const quoteText = getBlockquoteActionText(blockquote).trim();
   if (!quoteText) {
@@ -1136,7 +1240,7 @@ function appendBlockquoteAction(
   button.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
-    void action.onClick(quoteText);
+    void action.onClick(quoteText, sourceGroup);
   });
   blockquote.appendChild(button);
 }
@@ -1241,7 +1345,12 @@ export function buildDOMFromTokens(
       case "blockquote_close": {
         const blockquote = stack.pop();
         if (blockquote && options.blockquoteAction) {
-          appendBlockquoteAction(doc, blockquote, options.blockquoteAction);
+          appendBlockquoteAction(
+            doc,
+            blockquote,
+            options.blockquoteAction,
+            options.sourceGroupContext,
+          );
         }
         break;
       }

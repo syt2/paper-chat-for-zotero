@@ -247,11 +247,32 @@ describe("agent runtime plan semantics", function () {
       "source: Zotero library, itemKey=ITEM-1, noteKey=NOTE-1",
     );
     assert.include(prompt, '<source-group label="Paper title or source name"');
-    assert.include(prompt, 'type="paper|note|annotation|web|library|memory"');
+    assert.include(
+      prompt,
+      'type="paper|item|note|annotation|web|collection|library|memory"',
+    );
+    assert.include(
+      prompt,
+      '<source-group label="Paper title" type="paper" key="ABCD1234" page="7">',
+    );
     assert.include(
       prompt,
       '<source-group label="PaperChat Notes" type="note" key="ABCD1234">',
     );
+    assert.include(prompt, "existing notes returned by get_item_notes");
+    assert.include(
+      prompt,
+      '<source-group label="Highlighted passage" type="annotation" key="ABCD1234">',
+    );
+    assert.include(
+      prompt,
+      '<source-group label="Source title" type="web" url="https://example.com/source">',
+    );
+    assert.include(
+      prompt,
+      '<source-group label="Collection name" type="collection" key="ABCD1234">',
+    );
+    assert.include(prompt, "omit any unknown attribute");
     assert.include(prompt, "=== RETRY POLICY ===");
     assert.include(
       prompt,

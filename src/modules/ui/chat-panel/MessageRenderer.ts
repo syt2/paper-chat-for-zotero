@@ -269,6 +269,20 @@ export interface MessageRenderOptions {
   onForkError?: (error: Error) => void;
 }
 
+export function getMessageMarkdownRenderOptions(
+  markdown: MarkdownRenderOptions | undefined,
+  streamingState: ChatMessage["streamingState"],
+): MarkdownRenderOptions | undefined {
+  if (streamingState === undefined || !markdown) {
+    return markdown;
+  }
+  return {
+    ...markdown,
+    blockquoteAction: undefined,
+    sourceGroupAction: undefined,
+  };
+}
+
 type ExecutionInsetPanelElement = HTMLElement & {
   __executionInsetResizeObserver?: ResizeObserver;
 };
@@ -559,13 +573,10 @@ export function createMessageElement(
     rawContent = quotaDetails?.rawMessage || errorDisplay;
   } else {
     // Render assistant message as markdown
-    const markdownOptions =
-      msg.streamingState === undefined || !renderOptions.markdown
-        ? renderOptions.markdown
-        : {
-            ...renderOptions.markdown,
-            sourceGroupAction: undefined,
-          };
+    const markdownOptions = getMessageMarkdownRenderOptions(
+      renderOptions.markdown,
+      msg.streamingState,
+    );
     if (msg.streamingState === "in_progress") {
       renderMarkdownToElement(content, msg.content, msg.id, markdownOptions);
       ensureStreamingTypingIndicator(content, theme);

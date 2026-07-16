@@ -26,6 +26,7 @@ import {
   getSessionArtifactStore,
   type StoredToolResultArtifact,
 } from "../session-artifacts";
+import { deriveToolSourceReferences } from "./SourceReferenceExtractor";
 import { getToolRuntimeMetadata } from "./ToolMetadataRegistry";
 
 export interface ToolSchedulerRequest {
@@ -579,6 +580,13 @@ export class ToolScheduler {
             content,
           )
         : null;
+      const references = normalizedError
+        ? undefined
+        : this.deriveSourceReferences(
+            prepared.request.toolCall,
+            prepared.args,
+            content,
+          );
       const stored =
         normalizedError ||
         prepared.request.toolCall.function.name === "read_artifact"
@@ -592,6 +600,7 @@ export class ToolScheduler {
         permissionDecision: prepared.permissionDecision,
         policyTrace: prepared.policyTrace,
         artifact: stored?.ref,
+        references: references?.length ? references : undefined,
         status: normalizedError ? "failed" : "completed",
         content: normalizedError
           ? normalizedError.content
@@ -616,6 +625,26 @@ export class ToolScheduler {
         content: normalizedError.content,
         error: normalizedError.parsed.cause || normalizedError.parsed.summary,
       };
+    }
+  }
+
+  private deriveSourceReferences(
+    toolCall: ToolCall,
+    args: Record<string, unknown>,
+    rawContent: string,
+  ): ToolExecutionResult["references"] {
+    try {
+      return deriveToolSourceReferences(toolCall, args, rawContent);
+    } catch (error) {
+      try {
+        ztoolkit.log(
+          "[ToolScheduler] Failed to derive source references:",
+          getErrorMessage(error),
+        );
+      } catch {
+        // Provenance extraction is best-effort and must not fail the tool.
+      }
+      return undefined;
     }
   }
 

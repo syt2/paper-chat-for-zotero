@@ -13,6 +13,18 @@ import { SECTION_ALIASES } from "./constants";
 import { parsePageRange } from "./paperParser";
 import { getErrorMessage } from "../../../utils/common";
 
+function formatSourceReferences(pages: Array<number | undefined>): string {
+  const uniquePages = Array.from(
+    new Set(
+      pages.filter(
+        (page): page is number =>
+          page !== undefined && Number.isSafeInteger(page) && page > 0,
+      ),
+    ),
+  );
+  return `Source references: ${JSON.stringify({ version: 1, pages: uniquePages })}\n`;
+}
+
 const HEURISTIC_SECTION_NOTE =
   "Note: This structure is detected heuristically from extracted PDF text and may be incomplete. Missing headings are not evidence that the paper lacks those sections. For comprehensive analysis, verify with search_paper_content, get_pages, or get_full_text as needed.";
 
@@ -68,13 +80,17 @@ export async function executeSearchPaperContent(
       const ragService = getRAGService();
       if (await ragService.isAvailable()) {
         // 确保已索引
-        if (!await ragService.isIndexed(itemKey)) {
+        if (!(await ragService.isIndexed(itemKey))) {
           ztoolkit.log(`[searchPaperContent] Indexing paper: ${itemKey}`);
           await ragService.indexPaper(itemKey, paperStructure.fullText);
         }
 
         // 执行语义搜索
-        const semanticResults = await ragService.searchPaper(query, itemKey, max_results);
+        const semanticResults = await ragService.searchPaper(
+          query,
+          itemKey,
+          max_results,
+        );
 
         if (semanticResults.length > 0) {
           // 格式化语义搜索结果
@@ -87,7 +103,7 @@ export async function executeSearchPaperContent(
             })
             .join("\n\n---\n\n");
 
-          return `Found ${semanticResults.length} semantically relevant passages for "${query}":\n\n${formatted}`;
+          return `${formatSourceReferences(semanticResults.map((result) => result.page))}Found ${semanticResults.length} semantically relevant passages for "${query}":\n\n${formatted}`;
         }
       }
     } catch (error) {
@@ -297,12 +313,14 @@ export function executeGetPages(
   }
 
   const results: string[] = [];
+  const emittedPages: number[] = [];
   let totalLength = 0;
   const maxTotalLength = 15000;
 
   for (const pageNum of requestedPages) {
     const page = pages.find((p) => p.pageNumber === pageNum);
     if (page) {
+      emittedPages.push(pageNum);
       const content = page.content;
       if (totalLength + content.length > maxTotalLength) {
         results.push(
@@ -322,7 +340,7 @@ export function executeGetPages(
     return `No content found for pages: ${pageRange}`;
   }
 
-  return `Content from pages ${requestedPages.join(", ")} (total ${pageCount} pages):\n${results.join("\n\n---")}`;
+  return `${formatSourceReferences(emittedPages)}Content from pages ${requestedPages.join(", ")} (total ${pageCount} pages):\n${results.join("\n\n---")}`;
 }
 
 /**
@@ -423,7 +441,7 @@ export function executeSearchWithRegex(
     )
     .join("\n\n---\n\n");
 
-  return `Found ${results.length} matches for "${pattern}":\n\n${formatted}`;
+  return `${formatSourceReferences(results.map((result) => result.page))}Found ${results.length} matches for "${pattern}":\n\n${formatted}`;
 }
 
 /**
@@ -441,7 +459,7 @@ export function executeGetOutline(
     return `${HEURISTIC_SECTION_NOTE}\n\nNo structured outline detected. The paper may not have clear section headings.`;
   }
 
-  const outline = sections
+  const outlineEntries = sections
     .filter((s) => s.normalizedName !== "full_text")
     .map((s, i) => {
       // 估算页码
@@ -449,11 +467,14 @@ export function executeGetOutline(
         paperStructure.pages.find(
           (p) => s.startIndex >= p.startIndex && s.startIndex < p.endIndex,
         )?.pageNumber || "?";
-      return `${i + 1}. ${s.name} (Page ~${page}, ${s.content.length} chars)`;
-    })
-    .join("\n");
+      return {
+        page: typeof page === "number" ? page : undefined,
+        text: `${i + 1}. ${s.name} (Page ~${page}, ${s.content.length} chars)`,
+      };
+    });
+  const outline = outlineEntries.map((entry) => entry.text).join("\n");
 
-  return `${HEURISTIC_SECTION_NOTE}\n\nDocument Outline (${pageCount} pages total):\n\n${outline}`;
+  return `${formatSourceReferences(outlineEntries.map((entry) => entry.page))}${HEURISTIC_SECTION_NOTE}\n\nDocument Outline (${pageCount} pages total):\n\n${outline}`;
 }
 
 /**

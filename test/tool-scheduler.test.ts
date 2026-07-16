@@ -162,6 +162,58 @@ describe("tool scheduler execution hooks", function () {
     assert.include(readResult.content, "xxxxxxxxxxxxxxxxxxxx");
   });
 
+  it("captures source references before artifact compaction", async function () {
+    const files = new Map<string, string>();
+    const dirs = new Set<string>();
+    (globalThis as any).PathUtils = {
+      join: (...parts: string[]) => parts.join("/").replace(/\/+/g, "/"),
+    };
+    (globalThis as any).IOUtils = {
+      exists: async (path: string) => files.has(path) || dirs.has(path),
+      makeDirectory: async (path: string) => {
+        dirs.add(path);
+      },
+      writeUTF8: async (path: string, content: string) => {
+        files.set(path, content);
+      },
+      readUTF8: async (path: string) => files.get(path) || "",
+    };
+
+    const { ToolScheduler } =
+      await import("../src/modules/chat/tool-scheduler/ToolScheduler.ts");
+    const rawContent = [
+      "Source item key: ITEM0001",
+      'Source references: {"version":1,"pages":[7]}',
+      "[Result 1] (Score: 98.0% Page 7)",
+      "evidence",
+      "x".repeat(12_500),
+    ].join("\n");
+    const scheduler = new ToolScheduler(async () => rawContent);
+
+    const result = await scheduler.execute({
+      toolCall: {
+        id: "tool-large-source",
+        type: "function",
+        function: {
+          name: "search_paper_content",
+          arguments: JSON.stringify({
+            itemKey: "FAKE0001",
+            query: "method",
+          }),
+        },
+      },
+      sessionId: "session-source",
+      assistantMessageId: "assistant-source",
+    });
+
+    assert.isDefined(result.artifact);
+    assert.notEqual(result.content, rawContent);
+    assert.deepEqual(result.references, [
+      { type: "item", key: "ITEM0001" },
+      { type: "page", itemKey: "ITEM0001", page: 7 },
+    ]);
+  });
+
   it("keeps successful tool results when artifact persistence fails", async function () {
     (globalThis as any).PathUtils = {
       join: (...parts: string[]) => parts.join("/").replace(/\/+/g, "/"),

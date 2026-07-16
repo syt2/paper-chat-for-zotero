@@ -23,11 +23,15 @@ describe("note source navigation", function () {
 
   it("selects the resolved note in the active Zotero pane", async function () {
     let selectedItemID: number | null = null;
+    let resolvedLibraryID: number | null = null;
     let focused = false;
     (globalThis as { Zotero?: unknown }).Zotero = {
       Libraries: { userLibraryID: 1 },
       Items: {
-        getByLibraryAndKey: () => ({ id: 42, isNote: () => true }),
+        getByLibraryAndKey: (libraryID: number) => {
+          resolvedLibraryID = libraryID;
+          return { id: 42, isNote: () => true };
+        },
       },
       getActiveZoteroPane: () => ({
         selectItem: (itemID: number) => {
@@ -41,8 +45,9 @@ describe("note source navigation", function () {
       }),
     };
 
-    await openNoteSource("MISJCTQ9");
+    await openNoteSource("MISJCTQ9", 7);
 
+    assert.equal(resolvedLibraryID, 7);
     assert.equal(selectedItemID, 42);
     assert.isTrue(focused);
   });

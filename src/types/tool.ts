@@ -151,12 +151,54 @@ export interface ToolExecutionResult {
   args?: Record<string, unknown>;
   metadata?: ToolRuntimeMetadata;
   artifact?: ToolResultArtifactRef;
+  /**
+   * Structured source identities derived by the scheduler from a successful
+   * tool execution. These references are captured from the executor's raw
+   * result before any artifact compaction, so assistant-authored markup never
+   * becomes an authority for navigation targets.
+   */
+  references?: ToolSourceReference[];
   permissionDecision?: ToolPermissionDecision;
   policyTrace?: ToolPolicyTrace[];
   status: ToolExecutionStatus;
   content: string;
   error?: string;
 }
+
+export type ToolSourceReference =
+  | {
+      type: "item";
+      key: string;
+      libraryID?: number;
+    }
+  | {
+      type: "note";
+      key: string;
+      libraryID?: number;
+    }
+  | {
+      type: "annotation";
+      key: string;
+      libraryID?: number;
+      itemKey?: string;
+      attachmentKey?: string;
+      page?: number;
+    }
+  | {
+      type: "collection";
+      key: string;
+      libraryID?: number;
+    }
+  | {
+      type: "web";
+      url: string;
+    }
+  | {
+      type: "page";
+      itemKey: string;
+      page: number;
+      libraryID?: number;
+    };
 
 export interface ToolResultArtifactRef {
   id: string;

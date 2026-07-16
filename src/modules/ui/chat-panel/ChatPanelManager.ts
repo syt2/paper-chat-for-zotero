@@ -45,11 +45,13 @@ import {
 } from "./MessageRenderer";
 import {
   type MarkdownRenderOptions,
+  type SourceGroupActionContext,
   renderMarkdownToElement,
   stripIncompleteTrailingToolCall,
 } from "./MarkdownRenderer";
 import { navigateToPdfQuote } from "./PdfQuoteNavigator";
-import { normalizeNoteSourceKey, openNoteSource } from "./NoteSourceNavigator";
+import { normalizeNoteSourceKey } from "./NoteSourceNavigator";
+import { openSourceTarget, type SourceTarget } from "./SourceNavigator";
 import {
   setupEventHandlers,
   updateAttachmentsPreviewDisplay,
@@ -298,7 +300,33 @@ function scheduleStreamingTextRender(
 interface ChatMarkdownActionContext {
   getCurrentItem: () => Zotero.Item | null;
   appendError?: (message: string) => void;
-  enableNoteActions?: boolean;
+  enableSourceActions?: boolean;
+}
+
+function getSourceTarget(group: SourceGroupActionContext): SourceTarget | null {
+  const type = group.type.trim().toLowerCase();
+  if (type === "web") {
+    return group.url?.trim() ? { type: "web", url: group.url } : null;
+  }
+
+  const key = normalizeNoteSourceKey(group.key);
+  if (!key) {
+    return null;
+  }
+
+  switch (type) {
+    case "paper":
+    case "item":
+      return { type: "item", key, page: group.page };
+    case "note":
+      return { type: "note", key };
+    case "annotation":
+      return { type: "annotation", key };
+    case "collection":
+      return { type: "collection", key };
+    default:
+      return null;
+  }
 }
 
 function createChatMarkdownRenderOptions(
@@ -308,26 +336,73 @@ function createChatMarkdownRenderOptions(
     blockquoteAction: {
       label: getString("chat-jump-to-quote"),
       title: getString("chat-jump-to-quote-title"),
-      onClick: async (quoteText) => {
-        await navigateToPdfQuote(quoteText, context.getCurrentItem());
+      onClick: async (quoteText, sourceGroup) => {
+        try {
+          const sourceTarget = sourceGroup
+            ? getSourceTarget(sourceGroup)
+            : null;
+          if (sourceTarget?.type === "annotation") {
+            await openSourceTarget(sourceTarget);
+            return;
+          }
+
+          const sourceItem =
+            sourceTarget?.type === "item"
+              ? getItemByLibraryKey(sourceTarget.key)
+              : null;
+          if (sourceTarget?.type === "item" && !sourceItem) {
+            await openSourceTarget(sourceTarget);
+            return;
+          }
+
+          const navigated = await navigateToPdfQuote(
+            quoteText,
+            sourceItem || context.getCurrentItem(),
+            {
+              allowActiveReaderFallback: sourceTarget?.type !== "item",
+              fallbackPageIndex:
+                sourceTarget?.type === "item" && sourceTarget.page
+                  ? sourceTarget.page - 1
+                  : undefined,
+            },
+          );
+          if (!navigated && sourceTarget?.type === "item") {
+            await openSourceTarget(sourceTarget);
+          }
+        } catch (error) {
+          const normalized =
+            error instanceof Error ? error : new Error(String(error));
+          ztoolkit.log("[ChatPanel] Failed to open quoted source:", normalized);
+          context.appendError?.(
+            `${getString("chat-open-source-failed")}: ${normalized.message}`,
+          );
+        }
       },
     },
     sourceGroupAction:
-      context.enableNoteActions === false
+      context.enableSourceActions === false
         ? undefined
         : {
-            title: getString("chat-open-note"),
-            getTargetKey: (group) => {
-              if (group.type.trim().toLowerCase() !== "note") {
+            getTitle: (group) => {
+              const target = getSourceTarget(group);
+              if (!target) {
                 return null;
               }
-              return normalizeNoteSourceKey(group.key);
+              return target.type === "note"
+                ? getString("chat-open-note")
+                : getString("chat-open-source");
             },
-            onClick: openNoteSource,
+            onClick: async (group) => {
+              const target = getSourceTarget(group);
+              if (!target) {
+                throw new Error("This source does not have a valid target.");
+              }
+              await openSourceTarget(target);
+            },
             onError: (error) => {
-              ztoolkit.log("[ChatPanel] Failed to open note source:", error);
+              ztoolkit.log("[ChatPanel] Failed to open source:", error);
               context.appendError?.(
-                `${getString("chat-open-note-failed")}: ${error.message}`,
+                `${getString("chat-open-source-failed")}: ${error.message}`,
               );
             },
           },
@@ -1685,7 +1760,7 @@ function setupChatManagerCallbacks(
                 moduleCurrentItem,
               ),
             appendError: context.appendError,
-            enableNoteActions: false,
+            enableSourceActions: false,
           }),
         );
       }

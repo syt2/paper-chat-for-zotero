@@ -376,6 +376,139 @@ describe("chat agent safeguards", function () {
     assert.notInclude(result, "Invalid arguments for get_full_text");
   });
 
+  it("identifies the real source item in every successful PDF content result", async function () {
+    const { PdfToolManager } =
+      await import("../src/modules/chat/pdf-tools/PdfToolManager");
+    const manager = new PdfToolManager();
+    manager.setCurrentItemKey("PAPER123");
+
+    const fullText = "Introduction\nNeedle evidence appears here.";
+    const structure = {
+      metadata: {
+        title: "Source protocol paper",
+        authors: [],
+        keywords: [],
+      },
+      sections: [
+        {
+          name: "Introduction",
+          normalizedName: "introduction",
+          content: fullText,
+          startIndex: 0,
+          endIndex: fullText.length,
+        },
+      ],
+      fullText,
+      pages: [
+        {
+          pageNumber: 1,
+          content: fullText,
+          startIndex: 0,
+          endIndex: fullText.length,
+        },
+      ],
+      pageCount: 1,
+    } as any;
+    const calls = [
+      ["get_paper_section", { section: "introduction" }],
+      ["search_paper_content", { query: "Needle" }],
+      ["get_paper_metadata", {}],
+      ["get_pages", { pages: "1" }],
+      ["get_page_count", {}],
+      ["search_with_regex", { pattern: "Needle" }],
+      ["get_outline", {}],
+      ["list_sections", {}],
+      ["get_full_text", {}],
+    ] as const;
+
+    for (const [name, args] of calls) {
+      const result = await manager.executeToolCall(
+        {
+          id: `tool-${name}`,
+          type: "function",
+          function: { name, arguments: JSON.stringify(args) },
+        },
+        structure,
+      );
+      assert.match(
+        result,
+        /^Source item key: PAPER123\n/,
+        `${name} should identify its current-paper fallback source`,
+      );
+    }
+  });
+
+  it("does not attribute current fallback content to an unresolved explicit item", async function () {
+    const { PdfToolManager } =
+      await import("../src/modules/chat/pdf-tools/PdfToolManager");
+    const manager = new PdfToolManager();
+    manager.setCurrentItemKey("CURR1234");
+
+    const result = await manager.executeToolCall(
+      {
+        id: "tool-unresolved-source",
+        type: "function",
+        function: {
+          name: "get_full_text",
+          arguments: JSON.stringify({ itemKey: "FAKE1234" }),
+        },
+      },
+      {
+        metadata: {},
+        sections: [],
+        fullText: "Current paper fallback text",
+        pages: [],
+        pageCount: 1,
+      } as any,
+    );
+
+    assert.include(result, "Current paper fallback text");
+    assert.notInclude(result, "Source item key:");
+    assert.notInclude(result, "FAKE1234");
+  });
+
+  it("returns annotation and source item keys without dropping page or position", async function () {
+    const parentItem = {
+      key: "PAPER123",
+      isAttachment: () => false,
+      getAttachments: () => [2],
+      getField: (field: string) => (field === "title" ? "Annotated paper" : ""),
+    };
+    const annotation = {
+      key: "ANNOT123",
+      annotationType: "highlight",
+      annotationText: "Grounded passage",
+      annotationComment: "Important",
+      annotationColor: "#ffd400",
+      annotationPosition: JSON.stringify({
+        pageIndex: 2,
+        rects: [[10, 20, 30, 40]],
+      }),
+      dateModified: "2026-07-16",
+    };
+    const attachment = {
+      getAnnotations: () => [annotation],
+    };
+    (Zotero.Items as any).getByLibraryAndKey = () => parentItem;
+    (Zotero.Items as any).get = (id: number) => (id === 2 ? attachment : null);
+
+    const { executeGetAnnotations } =
+      await import("../src/modules/chat/pdf-tools/libraryExecutors");
+    const result = await executeGetAnnotations(
+      { itemKey: "PAPER123", includePosition: true },
+      null,
+    );
+
+    assert.match(result, /^Source item key: PAPER123\n/);
+    assert.include(
+      result,
+      'Source references: {"version":1,"pages":[3],"annotations":[{"key":"ANNOT123","page":3}]}',
+    );
+    assert.include(result, "Annotation key: ANNOT123");
+    assert.include(result, "Page 3");
+    assert.include(result, "Position: [10.0, 20.0, 30.0, 40.0]");
+  });
+
   it("keeps PDF tools available without an active paper when itemKey can be provided", async function () {
     const { PdfToolManager } =
       await import("../src/modules/chat/pdf-tools/PdfToolManager");

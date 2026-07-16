@@ -304,13 +304,30 @@ export async function executeGetAnnotations(
   if (annotationType !== "all") filters.push(`type: ${annotationType}`);
   if (selectedOnly) filters.push("selected only");
   const filterStr = filters.length > 0 ? `, ${filters.join(", ")}` : "";
-  const header = `Annotations for "${title}" (${annotations.length} found${filterStr}):\n\n`;
+  const sourceReferences = {
+    version: 1,
+    pages: Array.from(
+      new Set(
+        annotations
+          .map((annotation) => annotation.page)
+          .filter((page) => Number.isSafeInteger(page) && page > 0),
+      ),
+    ),
+    annotations: annotations.map((annotation) => ({
+      key: annotation.key,
+      ...(annotation.page > 0 ? { page: annotation.page } : {}),
+    })),
+  };
+  const header = `Source item key: ${item.key}\nSource references: ${JSON.stringify(sourceReferences)}\nAnnotations for "${title}" (${annotations.length} found${filterStr}):\n\n`;
 
   const formattedAnnotations = annotations.map((ann, index) => {
-    const parts = [`${index + 1}. [${ann.type.toUpperCase()}]`];
-    if (ann.page > 0) parts.push(`Page ${ann.page}`);
-    if (ann.color) parts.push(`Color: ${ann.color}`);
-    parts.push(`\n`);
+    const metadata = [
+      `${index + 1}. [${ann.type.toUpperCase()}]`,
+      `Annotation key: ${ann.key}`,
+    ];
+    if (ann.page > 0) metadata.push(`Page ${ann.page}`);
+    if (ann.color) metadata.push(`Color: ${ann.color}`);
+    const parts = [`${metadata.join(" | ")}\n`];
 
     if (ann.text) {
       parts.push(`   Text: "${ann.text}"\n`);
@@ -490,6 +507,7 @@ export async function executeGetCollections(
     if (childCount > 0) {
       info += ` - ${childCount} sub-collection(s)`;
     }
+    info += `\n${indent}   Collection key: ${key}`;
     return info;
   };
 
@@ -540,7 +558,7 @@ export async function executeGetCollectionItems(
     return `${index + 1}. [${itemKey}] ${title} (${year}) - ${type}`;
   });
 
-  const header = `Items in collection "${collection.name}" (showing ${limitedItems.length} of ${items.length}):\n\n`;
+  const header = `Items in collection "${collection.name}" (showing ${limitedItems.length} of ${items.length}):\nSource collection key: ${collection.key}\n\n`;
   return header + results.join("\n");
 }
 
@@ -765,7 +783,7 @@ export async function executeSearchNotes(
       }
     }
 
-    return `${index + 1}. [${noteKey}]${parentInfo}\n   "${preview}"`;
+    return `${index + 1}. [${noteKey}]${parentInfo}\n   Note key: ${noteKey}\n   "${preview}"`;
   });
 
   const header = `Notes containing "${query}" (showing ${results.length} of ${noteIDs.length}):\n\n`;

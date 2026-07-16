@@ -525,6 +525,10 @@ describe("web search", function () {
     assert.include(result, "Venue: arXiv, 2020");
     assert.include(result, "Year: 2020");
     assert.include(result, "Citations: 1234");
+    assert.include(result, "Web source URLs:");
+    assert.include(result, '- "https://example.org/scaling-laws"');
+    assert.include(result, '- "https://arxiv.org/pdf/2001.08361.pdf"');
+    assert.include(result, "End web source URLs");
     assert.include(
       result,
       "Open-access PDF: https://arxiv.org/pdf/2001.08361.pdf",

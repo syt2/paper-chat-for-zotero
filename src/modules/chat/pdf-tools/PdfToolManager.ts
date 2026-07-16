@@ -254,6 +254,16 @@ export class PdfToolManager {
     return parsePaperStructure(pdfText);
   }
 
+  private formatPdfContentResult(
+    result: string,
+    resolvedSourceItemKey: string | null,
+  ): string {
+    if (!resolvedSourceItemKey || /^\s*Error:/i.test(result)) {
+      return result;
+    }
+    return `Source item key: ${resolvedSourceItemKey}\n${result}`;
+  }
+
   /**
    * itemKey 参数定义（所有工具共用）
    */
@@ -1498,6 +1508,7 @@ export class PdfToolManager {
     // 解析 itemKey：优先使用参数中的 itemKey，否则使用当前 itemKey
     const requestedItemKey = (args as BaseToolArgs).itemKey;
     const targetItemKey = requestedItemKey ?? this.currentItemKey;
+    let resolvedSourceItemKey: string | null = null;
 
     // 获取 paperStructure（按需提取）
     let paperStructure: PaperStructureExtended | null = null;
@@ -1505,11 +1516,22 @@ export class PdfToolManager {
     if (targetItemKey) {
       // 按 itemKey 提取 PDF
       paperStructure = await this.extractAndParsePaper(targetItemKey);
+      if (paperStructure) {
+        resolvedSourceItemKey = targetItemKey;
+      }
     }
 
     // 如果按 itemKey 找不到，使用后备结构
     if (!paperStructure && fallbackStructure) {
       paperStructure = this.ensureExtendedStructure(fallbackStructure);
+      // fallbackStructure represents the current reader paper. Never attribute
+      // it to a different explicit itemKey that failed to resolve.
+      if (
+        this.currentItemKey &&
+        (!requestedItemKey || requestedItemKey === this.currentItemKey)
+      ) {
+        resolvedSourceItemKey = this.currentItemKey;
+      }
     }
 
     if (!paperStructure) {
@@ -1519,47 +1541,54 @@ export class PdfToolManager {
       return `Error: No paper content available. Please specify an itemKey or ensure the current item has a PDF attachment.`;
     }
 
+    const formatResult = (result: string): string =>
+      this.formatPdfContentResult(result, resolvedSourceItemKey);
+
     switch (name) {
       case "get_paper_section":
         if (!this.isGetPaperSectionArgs(args)) {
           return "Error: Invalid arguments for get_paper_section. Required: section (string)";
         }
-        return executeGetPaperSection(args, paperStructure);
+        return formatResult(executeGetPaperSection(args, paperStructure));
       case "search_paper_content":
         if (!this.isSearchPaperContentArgs(args)) {
           return "Error: Invalid arguments for search_paper_content. Required: query (string)";
         }
-        return executeSearchPaperContent(
-          args,
-          paperStructure,
-          targetItemKey ?? undefined,
+        return formatResult(
+          await executeSearchPaperContent(
+            args,
+            paperStructure,
+            resolvedSourceItemKey ?? undefined,
+          ),
         );
       case "get_paper_metadata":
-        return executeGetPaperMetadata(
-          paperStructure,
-          targetItemKey ?? undefined,
+        return formatResult(
+          executeGetPaperMetadata(
+            paperStructure,
+            resolvedSourceItemKey ?? undefined,
+          ),
         );
       case "get_pages":
         if (!this.isGetPagesArgs(args)) {
           return "Error: Invalid arguments for get_pages. Required: pages (string)";
         }
-        return executeGetPages(args, paperStructure);
+        return formatResult(executeGetPages(args, paperStructure));
       case "get_page_count":
-        return executeGetPageCount(paperStructure);
+        return formatResult(executeGetPageCount(paperStructure));
       case "search_with_regex":
         if (!this.isSearchWithRegexArgs(args)) {
           return "Error: Invalid arguments for search_with_regex. Required: pattern (string)";
         }
-        return executeSearchWithRegex(args, paperStructure);
+        return formatResult(executeSearchWithRegex(args, paperStructure));
       case "get_outline":
-        return executeGetOutline(paperStructure);
+        return formatResult(executeGetOutline(paperStructure));
       case "list_sections":
-        return executeListSections(paperStructure);
+        return formatResult(executeListSections(paperStructure));
       case "get_full_text":
         if (!this.isGetFullTextArgs(args)) {
           return "Error: Invalid arguments for get_full_text.";
         }
-        return executeGetFullText(paperStructure);
+        return formatResult(executeGetFullText(paperStructure));
       default:
         return `Error: Unknown tool: ${name}`;
     }

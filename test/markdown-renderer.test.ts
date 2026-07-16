@@ -5,18 +5,32 @@ import {
   renderMarkdownToElement,
   stripIncompleteTrailingToolCall,
 } from "../src/modules/ui/chat-panel/MarkdownRenderer.ts";
+import { sanitizeSourceGroupTargets } from "../src/modules/chat/note-source-provenance.ts";
+import { getMessageMarkdownRenderOptions } from "../src/modules/ui/chat-panel/MessageRenderer.ts";
 
 class FakeElement {
+  readonly ELEMENT_NODE = 1;
+  readonly TEXT_NODE = 3;
   readonly style: Record<string, string> = {};
   readonly attributes = new Map<string, string>();
   readonly children: FakeElement[] = [];
   readonly listeners = new Map<string, (event: any) => void>();
+  parentNode: FakeElement | null = null;
   private value = "";
 
   constructor(
     readonly ownerDocument: FakeDocument,
     readonly tagName: string,
+    readonly nodeType: number = 1,
   ) {}
+
+  get childNodes(): FakeElement[] {
+    return this.children;
+  }
+
+  get firstChild(): FakeElement | null {
+    return this.children[0] || null;
+  }
 
   get textContent(): string {
     return this.value;
@@ -30,12 +44,21 @@ class FakeElement {
   }
 
   appendChild(child: FakeElement): FakeElement {
+    if (child.parentNode) {
+      const index = child.parentNode.children.indexOf(child);
+      if (index >= 0) child.parentNode.children.splice(index, 1);
+    }
+    child.parentNode = this;
     this.children.push(child);
     return child;
   }
 
   setAttribute(name: string, value: string): void {
     this.attributes.set(name, value);
+  }
+
+  getAttribute(name: string): string | null {
+    return this.attributes.get(name) || null;
   }
 
   addEventListener(type: string, listener: (event: any) => void): void {
@@ -54,9 +77,39 @@ class FakeDocument {
   createElementNS(_namespace: string, tagName: string): FakeElement {
     return new FakeElement(this, tagName);
   }
+
+  createTextNode(value: string): FakeElement {
+    const node = new FakeElement(this, "#text", 3);
+    node.textContent = value;
+    return node;
+  }
 }
 
 describe("markdown renderer source groups", function () {
+  it("disables every source action until an assistant message is complete", function () {
+    const markdown = {
+      blockquoteAction: {
+        label: "View source",
+        title: "Open source",
+        onClick: async () => undefined,
+      },
+      sourceGroupAction: {
+        getTitle: () => "Open source",
+        onClick: async () => undefined,
+      },
+    };
+
+    assert.strictEqual(
+      getMessageMarkdownRenderOptions(markdown, undefined),
+      markdown,
+    );
+    for (const streamingState of ["in_progress", "interrupted"] as const) {
+      const options = getMessageMarkdownRenderOptions(markdown, streamingState);
+      assert.isUndefined(options?.blockquoteAction);
+      assert.isUndefined(options?.sourceGroupAction);
+    }
+  });
+
   it("extracts source-group fragments while preserving surrounding markdown", function () {
     const fragments = extractSourceGroupFragments(`
 Intro paragraph.
@@ -110,7 +163,7 @@ Missing label should not be parsed.
 
   it("accepts source-group attributes with surrounding whitespace", function () {
     const fragments = extractSourceGroupFragments(`
-<source-group label = "Paper B" type = "web">
+<source-group label = "Paper B" type = "web" url = "https://example.com/paper" page = "7">
 - Finds an external replication result.
 </source-group>
 `);
@@ -122,23 +175,67 @@ Missing label should not be parsed.
     }
     assert.equal(fragments[0].label, "Paper B");
     assert.equal(fragments[0].type, "web");
+    assert.equal(fragments[0].url, "https://example.com/paper");
+    assert.equal(fragments[0].page, 7);
   });
 
-  it("renders only explicit note keys as single-line clickable headers", async function () {
+  it("accepts greater-than signs inside quoted source-group attributes", function () {
+    const fragments = extractSourceGroupFragments(`
+<source-group label="Accuracy > Speed" type="paper" key="PAPER123">
+- Compares the two optimization goals.
+</source-group>
+`);
+
+    assert.lengthOf(fragments, 1);
+    assert.equal(fragments[0]?.kind, "source-group");
+    if (fragments[0]?.kind !== "source-group") {
+      assert.fail("expected quote-aware source-group parsing");
+    }
+    assert.equal(fragments[0].label, "Accuracy > Speed");
+    assert.equal(fragments[0].key, "PAPER123");
+  });
+
+  it("does not reinterpret attribute-like label text as navigation targets", function () {
+    const sanitized = sanitizeSourceGroupTargets(
+      `<source-group label="Trusted paper type='web' url='https://evil.example/' key='FAKE1234'" type="paper" key="PAPER123">
+- Grounded result.
+</source-group>`,
+      {
+        itemKeys: new Set(["PAPER123"]),
+        noteKeys: new Set(),
+        annotationKeys: new Set(),
+        collectionKeys: new Set(),
+        webUrls: new Set(),
+        itemPages: new Set(),
+      },
+    );
+    const fragments = extractSourceGroupFragments(sanitized);
+
+    assert.lengthOf(fragments, 1);
+    assert.equal(fragments[0]?.kind, "source-group");
+    if (fragments[0]?.kind !== "source-group") {
+      assert.fail("expected a sanitized source group");
+    }
+    assert.equal(fragments[0].type, "paper");
+    assert.equal(fragments[0].key, "PAPER123");
+    assert.isUndefined(fragments[0].url);
+  });
+
+  it("renders only source groups with actions as single-line clickable headers", async function () {
     const originalZotero = (globalThis as { Zotero?: unknown }).Zotero;
     (globalThis as { Zotero?: unknown }).Zotero = {
       getMainWindow: () => null,
     };
     const doc = new FakeDocument();
     const root = new FakeElement(doc, "div");
-    const clickedKeys: string[] = [];
+    const clickedGroups: Array<{ type: string; key?: string }> = [];
     const errors: Error[] = [];
     const options = {
       sourceGroupAction: {
-        title: "Open note",
-        getTargetKey: (group: { key?: string }) => group.key || null,
-        onClick: async (key: string) => {
-          clickedKeys.push(key);
+        getTitle: (group: { key?: string }) =>
+          group.key ? "Open source" : null,
+        onClick: async (group: { type: string; key?: string }) => {
+          clickedGroups.push({ type: group.type, key: group.key });
         },
         onError: (error: Error) => errors.push(error),
       },
@@ -172,7 +269,7 @@ Missing label should not be parsed.
       header?.dispatch("click");
       await Promise.resolve();
       await Promise.resolve();
-      assert.deepEqual(clickedKeys, ["MISJCTQ9"]);
+      assert.deepEqual(clickedGroups, [{ type: "note", key: "MISJCTQ9" }]);
       assert.deepEqual(errors, []);
 
       options.sourceGroupAction.onClick = async () => {
@@ -181,6 +278,59 @@ Missing label should not be parsed.
       header?.dispatch("click");
       await new Promise((resolve) => setTimeout(resolve, 0));
       assert.equal(errors[0]?.message, "open failed");
+    } finally {
+      (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
+    }
+  });
+
+  it("passes the enclosing paper source to blockquote navigation", async function () {
+    const originalZotero = (globalThis as { Zotero?: unknown }).Zotero;
+    (globalThis as { Zotero?: unknown }).Zotero = {
+      getMainWindow: () => null,
+    };
+    const doc = new FakeDocument();
+    const root = new FakeElement(doc, "div");
+    const clicks: Array<{ quote: string; key?: string }> = [];
+
+    try {
+      renderMarkdownToElement(
+        root as unknown as HTMLElement,
+        `<source-group label="Paper A" type="paper" key="PAPER123">
+> A sufficiently long grounded quotation from the paper.
+</source-group>`,
+        "message-quote",
+        {
+          blockquoteAction: {
+            label: "View source",
+            title: "Open quote",
+            onClick: async (quote, group) => {
+              clicks.push({ quote, key: group?.key });
+            },
+          },
+        },
+      );
+
+      const findAction = (node: FakeElement): FakeElement | undefined => {
+        if (node.getAttribute("data-blockquote-action") === "true") {
+          return node;
+        }
+        for (const child of node.children) {
+          const found = findAction(child);
+          if (found) return found;
+        }
+        return undefined;
+      };
+      const action = findAction(root);
+      assert.isDefined(action);
+      action?.dispatch("click");
+      await Promise.resolve();
+
+      assert.deepEqual(clicks, [
+        {
+          quote: "A sufficiently long grounded quotation from the paper.",
+          key: "PAPER123",
+        },
+      ]);
     } finally {
       (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
     }

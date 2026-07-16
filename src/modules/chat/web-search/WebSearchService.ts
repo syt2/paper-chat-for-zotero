@@ -189,7 +189,20 @@ function formatResults(
     return `No web results found for "${query}" using ${response.provider}.`;
   }
 
+  const sourceUrls = Array.from(
+    new Set(
+      response.results.flatMap((result) =>
+        [result.url, result.openAccessPdfUrl].filter((url): url is string =>
+          Boolean(url),
+        ),
+      ),
+    ),
+  );
   const lines = [
+    "Web source URLs:",
+    ...sourceUrls.map((url) => `- ${JSON.stringify(url)}`),
+    "End web source URLs",
+    "",
     `Web search results for "${query}" via ${response.provider} (${response.results.length} found):`,
     "",
     `Requested source: ${request.source}; intent: ${request.intent}.`,

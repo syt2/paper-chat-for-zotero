@@ -133,6 +133,8 @@ export type FluentMessageId =
   | 'paperchat-chat-open-note'
   | 'paperchat-chat-open-note-failed'
   | 'paperchat-chat-open-settings'
+  | 'paperchat-chat-open-source'
+  | 'paperchat-chat-open-source-failed'
   | 'paperchat-chat-panel-title'
   | 'paperchat-chat-reroll-model'
   | 'paperchat-chat-select-model'

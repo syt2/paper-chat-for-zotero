@@ -7,8 +7,11 @@ export function normalizeNoteSourceKey(key: string | undefined): string | null {
     : null;
 }
 
-export async function openNoteSource(noteKey: string): Promise<void> {
-  const libraryID = Zotero.Libraries.userLibraryID;
+export async function openNoteSource(
+  noteKey: string,
+  sourceLibraryID?: number,
+): Promise<void> {
+  const libraryID = sourceLibraryID ?? Zotero.Libraries.userLibraryID;
   const note = Zotero.Items.getByLibraryAndKey(libraryID, noteKey);
   if (!note || !note.isNote?.()) {
     throw new Error(`Note with key "${noteKey}" was not found.`);
