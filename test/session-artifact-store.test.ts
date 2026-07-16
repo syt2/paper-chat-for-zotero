@@ -47,9 +47,12 @@ function installFileSystemStub() {
   };
 }
 
-function createToolCall(name: string = "search_paper_content"): ToolCall {
+function createToolCall(
+  name: string = "search_paper_content",
+  id: string = "tool-1",
+): ToolCall {
   return {
-    id: "tool-1",
+    id,
     type: "function",
     function: {
       name,
@@ -112,6 +115,64 @@ describe("session artifact store", function () {
       assert.fail("expected cross-session read to throw");
     } catch (error) {
       assert.include(String(error), "Artifact not found");
+    }
+  });
+
+  it("copies only artifacts referenced by the forked tool history", async function () {
+    const store = new SessionArtifactStore(10, 20);
+    const included = await store.maybeStoreToolResult({
+      sessionId: "source-session",
+      toolCall: createToolCall("search_paper_content", "reused-tool-id"),
+      content: "included large artifact content",
+    });
+    const excluded = await store.maybeStoreToolResult({
+      sessionId: "source-session",
+      toolCall: createToolCall("web_search", "reused-tool-id"),
+      content: "excluded large artifact content",
+    });
+
+    const copied = await store.copyArtifactsForFork(
+      "source-session",
+      "fork-session",
+      [included!.ref.id],
+    );
+
+    assert.equal(copied, 1);
+    const readIncluded = await store.readArtifact(
+      "fork-session",
+      included!.ref.id,
+    );
+    assert.equal(readIncluded.content, "included large artifact content");
+    assert.equal(readIncluded.ref.sessionId, "fork-session");
+
+    try {
+      await store.readArtifact("fork-session", excluded!.ref.id);
+      assert.fail("expected post-fork artifact to stay out of the new session");
+    } catch (error) {
+      assert.include(String(error), "Artifact not found");
+    }
+  });
+
+  it("fails a fork when a referenced artifact index is corrupt", async function () {
+    const store = new SessionArtifactStore(10, 20);
+    const stored = await store.maybeStoreToolResult({
+      sessionId: "source-session",
+      toolCall: createToolCall(),
+      content: "large artifact content",
+    });
+    const indexPath = [...fs.files.keys()].find((path) =>
+      path.endsWith("source-session/index.json"),
+    );
+    assert.isString(indexPath);
+    fs.files.set(indexPath!, "{broken-json");
+
+    try {
+      await store.copyArtifactsForFork("source-session", "fork-session", [
+        stored!.ref.id,
+      ]);
+      assert.fail("expected corrupt source artifact index to fail the fork");
+    } catch (error) {
+      assert.include(String(error), "artifact index is unreadable");
     }
   });
 

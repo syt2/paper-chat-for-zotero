@@ -40,7 +40,6 @@ export interface ThemeColors {
   // Other
   scrollbarThumb: string;
   scrollbarThumbHover: string;
-  copyBtnBg: string;
 }
 
 // Session info for history dropdown (matches SessionMeta from chat types)

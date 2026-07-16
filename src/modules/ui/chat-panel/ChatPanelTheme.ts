@@ -32,7 +32,6 @@ export const lightTheme: ThemeColors = {
   userBubbleText: "#374151",
   scrollbarThumb: "#c1c1c1",
   scrollbarThumbHover: "#a1a1a1",
-  copyBtnBg: "rgba(0,0,0,0.1)",
 };
 
 // Dark theme colors
@@ -63,7 +62,6 @@ export const darkTheme: ThemeColors = {
   userBubbleText: "#ffffff",
   scrollbarThumb: "#555",
   scrollbarThumbHover: "#666",
-  copyBtnBg: "rgba(255,255,255,0.1)",
 };
 
 // Current theme state
@@ -344,8 +342,8 @@ export function applyThemeToContainer(container: HTMLElement): void {
   // Update message action buttons
   container.querySelectorAll(".message-action-btn").forEach((btn: Element) => {
     const el = btn as HTMLElement;
-    el.style.background = theme.copyBtnBg;
-    el.style.borderColor = theme.borderColor;
+    el.style.background = "transparent";
+    el.style.borderColor = "transparent";
     el.style.color = theme.textPrimary;
   });
 }

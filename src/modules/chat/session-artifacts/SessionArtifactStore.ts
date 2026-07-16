@@ -186,6 +186,77 @@ export class SessionArtifactStore {
     };
   }
 
+  async copyArtifactsForFork(
+    sourceSessionId: string,
+    targetSessionId: string,
+    artifactIds: Iterable<string>,
+  ): Promise<number> {
+    const requestedArtifactIds = new Set(artifactIds);
+    if (
+      sourceSessionId === targetSessionId ||
+      requestedArtifactIds.size === 0
+    ) {
+      return 0;
+    }
+
+    const sourceIndex = await this.readIndexSerialized(sourceSessionId, true);
+    const refs = sourceIndex.artifacts.filter((artifact) =>
+      requestedArtifactIds.has(artifact.id),
+    );
+    const foundArtifactIds = new Set(refs.map((artifact) => artifact.id));
+    const missingArtifactIds = Array.from(requestedArtifactIds).filter(
+      (artifactId) => !foundArtifactIds.has(artifactId),
+    );
+    if (missingArtifactIds.length > 0) {
+      throw new Error(
+        `Fork artifact references are missing: ${missingArtifactIds.join(", ")}`,
+      );
+    }
+
+    await this.ensureSessionDirectory(targetSessionId);
+    const copiedRefs: ToolResultArtifactRef[] = [];
+    try {
+      for (const ref of refs) {
+        const content = await IOUtils.readUTF8(
+          this.getArtifactPath(sourceSessionId, ref.id),
+        );
+        await IOUtils.writeUTF8(
+          this.getArtifactPath(targetSessionId, ref.id),
+          content,
+        );
+        copiedRefs.push({ ...ref, sessionId: targetSessionId });
+      }
+
+      await this.enqueueIndexWrite(targetSessionId, async () => {
+        const targetIndex = await this.readIndex(targetSessionId);
+        const copiedIds = new Set(copiedRefs.map((artifact) => artifact.id));
+        targetIndex.artifacts = [
+          ...targetIndex.artifacts.filter(
+            (artifact) => !copiedIds.has(artifact.id),
+          ),
+          ...copiedRefs,
+        ];
+        await IOUtils.writeUTF8(
+          this.getIndexPath(targetSessionId),
+          JSON.stringify(targetIndex, null, 2),
+        );
+      });
+      return copiedRefs.length;
+    } catch (error) {
+      if (typeof IOUtils.remove === "function") {
+        await Promise.allSettled(
+          copiedRefs.map(async (ref) => {
+            const path = this.getArtifactPath(targetSessionId, ref.id);
+            if (await IOUtils.exists(path)) {
+              await IOUtils.remove(path);
+            }
+          }),
+        );
+      }
+      throw error;
+    }
+  }
+
   formatReadResult(result: ReadArtifactResult): string {
     return [
       `Artifact id: ${result.ref.id}`,
@@ -233,7 +304,10 @@ export class SessionArtifactStore {
     }
   }
 
-  private async readIndex(sessionId: string): Promise<SessionArtifactIndex> {
+  private async readIndex(
+    sessionId: string,
+    strict: boolean = false,
+  ): Promise<SessionArtifactIndex> {
     const indexPath = this.getIndexPath(sessionId);
     if (!(await IOUtils.exists(indexPath))) {
       return {
@@ -251,13 +325,30 @@ export class SessionArtifactStore {
         sessionId,
         artifacts: Array.isArray(parsed.artifacts) ? parsed.artifacts : [],
       };
-    } catch {
+    } catch (error) {
+      if (strict) {
+        throw new Error(
+          `Session artifact index is unreadable for ${sessionId}`,
+          { cause: error },
+        );
+      }
       return {
         version: 1,
         sessionId,
         artifacts: [],
       };
     }
+  }
+
+  private async readIndexSerialized(
+    sessionId: string,
+    strict: boolean,
+  ): Promise<SessionArtifactIndex> {
+    let snapshot: SessionArtifactIndex | undefined;
+    await this.enqueueIndexWrite(sessionId, async () => {
+      snapshot = await this.readIndex(sessionId, strict);
+    });
+    return snapshot!;
   }
 
   private async appendIndexEntry(

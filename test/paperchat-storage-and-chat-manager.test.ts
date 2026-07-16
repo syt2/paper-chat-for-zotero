@@ -251,6 +251,78 @@ describe("paperchat storage and chat manager", function () {
     ]);
   });
 
+  it("creates an inactive session with fork history and routing state", async function () {
+    const recorded: RecordedQuery[] = [];
+    const fakeDb = {
+      async queryAsync(sql: string, params?: unknown[]) {
+        const normalized = normalizeSql(sql);
+        recorded.push({ sql: normalized, params });
+        if (normalized === "SELECT value FROM settings WHERE key = ?") {
+          return [];
+        }
+        if (normalized === "SELECT COUNT(*) as count FROM session_meta") {
+          return [{ count: 1 }];
+        }
+        return [];
+      },
+    };
+
+    const storage = getStorageDatabase() as any;
+    storage.ensureInit = async () => fakeDb;
+
+    const service = new SessionStorageService();
+    const session = await service.createSession({
+      sessionId: "fork-session-1",
+      messages: [
+        {
+          id: "fork-message-1",
+          role: "assistant",
+          content: "Forked answer",
+          timestamp: 100,
+        },
+      ],
+      lastActiveItemKey: "ITEM-1",
+      selectedTier: "paperchat-pro",
+      resolvedModelId: "model-pro-9",
+      activate: false,
+    });
+
+    assert.equal(session.lastActiveItemKey, "ITEM-1");
+    assert.equal(session.id, "fork-session-1");
+    assert.equal(session.selectedTier, "paperchat-pro");
+    assert.equal(session.resolvedModelId, "model-pro-9");
+    assert.deepEqual(
+      session.messages.map((message) => message.id),
+      ["fork-message-1"],
+    );
+
+    const sessionUpsert = recorded.find((entry) =>
+      entry.sql.startsWith("INSERT INTO sessions"),
+    );
+    const companionUpsert = recorded.find((entry) =>
+      entry.sql.startsWith("INSERT INTO paperchat_session_state"),
+    );
+    const messageInsert = recorded.find((entry) =>
+      entry.sql.startsWith("INSERT INTO messages"),
+    );
+    assert.equal(sessionUpsert?.params?.[3], "ITEM-1");
+    assert.deepEqual(companionUpsert?.params?.slice(1, 3), [
+      "paperchat-pro",
+      "model-pro-9",
+    ]);
+    assert.deepEqual(messageInsert?.params?.slice(0, 5), [
+      "fork-message-1",
+      session.id,
+      0,
+      "assistant",
+      "Forked answer",
+    ]);
+    assert.notInclude(
+      recorded.map((entry) => entry.sql),
+      "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+    );
+  });
+
   it("loads a session via SELECT * and merges companion paperchat state", async function () {
     const recorded: RecordedQuery[] = [];
     const fakeDb = {

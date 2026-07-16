@@ -88,6 +88,11 @@ import { saveDebugContextSnapshot } from "./DebugContextExporter";
 import { MemoryManager } from "./memory/MemoryManager";
 import { SessionTitleService } from "./SessionTitleService";
 import {
+  cloneHistoryThroughAssistantMessage,
+  collectForkArtifactIds,
+  resolveForkItemKey,
+} from "./session-fork";
+import {
   AgentRuntime,
   removeApiOnlyModelContextMessagesForTurn,
 } from "./agent-runtime/AgentRuntime";
@@ -251,6 +256,7 @@ export class ChatManager {
   private currentSession: ChatSession | null = null;
   private currentItemKey: string | null = null;
   private initialized: boolean = false;
+  private sessionNavigationQueue: Promise<void> = Promise.resolve();
 
   // Sessions that currently have an in-flight send/stream operation.
   // switchSession() reuses these objects instead of loading from DB,
@@ -791,6 +797,16 @@ export class ChatManager {
     });
   }
 
+  private enqueueSessionNavigation<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.sessionNavigationQueue ?? Promise.resolve();
+    const result = previous.then(operation, operation);
+    this.sessionNavigationQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
   /**
    * 设置当前活动的 Item Key (单文档模式，向后兼容)
    */
@@ -977,6 +993,10 @@ export class ChatManager {
    */
   async createNewSession(): Promise<ChatSession> {
     await this.init();
+    return this.enqueueSessionNavigation(() => this.createNewSessionLocked());
+  }
+
+  private async createNewSessionLocked(): Promise<ChatSession> {
     const previousSession = this.currentSession;
     if (previousSession && this.isDraftSession(previousSession)) {
       await this.sessionStorage.cleanupAbandonedDraftSessions();
@@ -993,11 +1013,95 @@ export class ChatManager {
   }
 
   /**
+   * Start a new session with the complete history through a completed AI
+   * message. The source session remains untouched.
+   */
+  async forkCurrentSessionAtMessage(
+    assistantMessageId: string,
+  ): Promise<ChatSession> {
+    await this.init();
+
+    const sourceSession = this.currentSession;
+    if (!sourceSession) {
+      throw new Error("No active chat session to continue from.");
+    }
+
+    return this.enqueueSessionNavigation(async () => {
+      const previousSession = this.currentSession;
+      const forkedMessages = cloneHistoryThroughAssistantMessage(
+        sourceSession.messages,
+        assistantMessageId,
+        () => this.generateId(),
+      );
+      const lastActiveItemKey = resolveForkItemKey(
+        sourceSession.messages,
+        assistantMessageId,
+        sourceSession.lastActiveItemKey,
+      );
+      const forkArtifactIds = collectForkArtifactIds(forkedMessages);
+      const forkedSessionId = generateTimestampId();
+      let forkedSession: ChatSession | null = null;
+      try {
+        await getSessionArtifactStore().copyArtifactsForFork(
+          sourceSession.id,
+          forkedSessionId,
+          forkArtifactIds,
+        );
+        forkedSession = await this.sessionStorage.createSession({
+          sessionId: forkedSessionId,
+          messages: forkedMessages,
+          lastActiveItemKey,
+          selectedTier: sourceSession.selectedTier,
+          resolvedModelId: sourceSession.resolvedModelId,
+          activate: false,
+        });
+        await this.sessionStorage.setActiveSession(forkedSession.id);
+      } catch (error) {
+        await Promise.allSettled([
+          ...(forkedSession
+            ? [this.sessionStorage.deleteSession(forkedSession.id)]
+            : []),
+          getSessionArtifactStore().deleteSessionArtifacts(forkedSessionId),
+        ]);
+        throw error;
+      }
+
+      this.memoryManager.onBeforeSessionSwitch(
+        previousSession,
+        forkedSession.id,
+      );
+      this.maybeGenerateSessionTitle(previousSession, forkedSession.id);
+      this.currentSession = forkedSession;
+      try {
+        await this.sessionStorage.cleanupAbandonedDraftSessions();
+      } catch (error) {
+        ztoolkit.log(
+          "[ChatManager] Failed to clean abandoned drafts after forking:",
+          getErrorMessage(error),
+        );
+      }
+      this.applySessionItemContext(forkedSession);
+      this.reconcileApprovalState(forkedSession);
+      this.reconcileUserInputRequestState(forkedSession);
+      this.notifySessionListUpdated();
+
+      return forkedSession;
+    });
+  }
+
+  /**
    * 切换到指定 session
    */
   async switchSession(sessionId: string): Promise<ChatSession | null> {
     await this.init();
+    return this.enqueueSessionNavigation(() =>
+      this.switchSessionLocked(sessionId),
+    );
+  }
 
+  private async switchSessionLocked(
+    sessionId: string,
+  ): Promise<ChatSession | null> {
     const previousSession = this.currentSession;
     // Trigger memory extraction for the session we're leaving
     this.memoryManager.onBeforeSessionSwitch(previousSession, sessionId);
@@ -1034,6 +1138,12 @@ export class ChatManager {
    */
   async deleteSession(sessionId: string): Promise<void> {
     await this.init();
+    return this.enqueueSessionNavigation(() =>
+      this.deleteSessionLocked(sessionId),
+    );
+  }
+
+  private async deleteSessionLocked(sessionId: string): Promise<void> {
     const deletingCurrentSession = this.currentSession?.id === sessionId;
 
     // Durable delete first. If the storage delete throws, pending approvals
@@ -2880,6 +2990,12 @@ export class ChatManager {
    * 清空当前会话
    */
   async clearCurrentSession(): Promise<void> {
+    return this.enqueueSessionNavigation(() =>
+      this.clearCurrentSessionLocked(),
+    );
+  }
+
+  private async clearCurrentSessionLocked(): Promise<void> {
     if (!this.currentSession) return;
 
     const clearedSession = this.createClearedSession(this.currentSession);

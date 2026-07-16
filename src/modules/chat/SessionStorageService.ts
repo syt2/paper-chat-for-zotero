@@ -51,6 +51,15 @@ type QueryableDatabase = {
   queryAsync(sql: string, params?: unknown[]): Promise<any[] | undefined>;
 };
 
+export interface CreateSessionOptions {
+  sessionId?: string;
+  messages?: ChatMessage[];
+  lastActiveItemKey?: string | null;
+  selectedTier?: ChatSession["selectedTier"];
+  resolvedModelId?: string;
+  activate?: boolean;
+}
+
 export class SessionLoadError extends Error {
   constructor(message: string, cause?: unknown) {
     super(message);
@@ -656,25 +665,34 @@ export class SessionStorageService {
   /**
    * 创建新 session
    */
-  async createSession(): Promise<ChatSession> {
+  async createSession(
+    options: CreateSessionOptions = {},
+  ): Promise<ChatSession> {
     await this.init();
 
-    const sessionId = this.generateSessionId();
+    const sessionId = options.sessionId ?? this.generateSessionId();
+    if (!/^[A-Za-z0-9_.-]{1,96}$/.test(sessionId)) {
+      throw new Error("Invalid session id.");
+    }
     const now = Date.now();
 
     const session: ChatSession = {
       id: sessionId,
       createdAt: now,
       updatedAt: now,
-      lastActiveItemKey: null,
-      messages: [],
+      lastActiveItemKey: options.lastActiveItemKey ?? null,
+      messages: options.messages ?? [],
+      selectedTier: options.selectedTier,
+      resolvedModelId: options.resolvedModelId,
     };
 
-    // 保存 session (full write — no messages to insert)
+    // 保存 session（full write，也支持一次性写入分叉历史）
     await this.saveSession(session);
 
-    // 设置为活动 session
-    await this.setActiveSession(sessionId);
+    if (options.activate !== false) {
+      // 设置为活动 session
+      await this.setActiveSession(sessionId);
+    }
 
     ztoolkit.log("[SessionStorageService] New session created:", sessionId);
     return session;

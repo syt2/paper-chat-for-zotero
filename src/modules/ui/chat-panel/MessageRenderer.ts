@@ -43,6 +43,7 @@ const CHAT_HISTORY_AUTO_SCROLL_ATTR = "data-auto-scroll";
 const CHAT_SCROLL_BOTTOM_BUTTON_ID = "chat-scroll-bottom-btn";
 const STREAMING_TYPING_INDICATOR_ATTR = "data-streaming-typing-indicator";
 const MESSAGE_ACTION_ICON_SIZE = "15px";
+type MessageActionIconName = "copy" | "fork";
 const userInputCountdownTimers = new WeakMap<
   HTMLElement,
   ReturnType<typeof setInterval>
@@ -176,26 +177,36 @@ function createMessageImagesElement(
   return container;
 }
 
-function getMessageActionIconUrl(iconName: "copy"): string {
+function getMessageActionIconUrl(iconName: MessageActionIconName): string {
   return `chrome://${config.addonRef}/content/icons/${iconName}.svg`;
 }
 
-function setIconButtonImage(
-  button: HTMLElement,
-  iconName: "copy",
+function createMessageActionIcon(
+  doc: Document,
+  iconName: MessageActionIconName,
   alt: string,
-): void {
-  button.textContent = "";
-  const icon = button.ownerDocument.createElementNS(HTML_NS, "img");
+): HTMLElement {
+  const icon = doc.createElementNS(HTML_NS, "img") as HTMLElement;
   icon.setAttribute("src", getMessageActionIconUrl(iconName));
   icon.setAttribute("alt", alt);
-  Object.assign((icon as HTMLElement).style, {
+  Object.assign(icon.style, {
     width: MESSAGE_ACTION_ICON_SIZE,
     height: MESSAGE_ACTION_ICON_SIZE,
     display: "block",
     pointerEvents: "none",
   });
-  button.appendChild(icon);
+  return icon;
+}
+
+function setIconButtonImage(
+  button: HTMLElement,
+  iconName: MessageActionIconName,
+  alt: string,
+): void {
+  button.textContent = "";
+  button.appendChild(
+    createMessageActionIcon(button.ownerDocument, iconName, alt),
+  );
 }
 
 function createMessageActionButton(
@@ -207,28 +218,27 @@ function createMessageActionButton(
     doc,
     "button",
     {
-      width: "26px",
-      height: "26px",
+      width: "28px",
+      height: "28px",
       display: "inline-flex",
       alignItems: "center",
       justifyContent: "center",
-      background: theme.copyBtnBg,
-      border: `1px solid ${theme.borderColor}`,
-      borderRadius: "6px",
+      background: "transparent",
+      border: "none",
+      borderRadius: "4px",
       padding: "0",
       cursor: "pointer",
-      transition: "background 0.2s, opacity 0.2s, transform 0.2s",
+      transition: "opacity 0.2s, transform 0.2s",
       color: theme.textPrimary,
     },
     { title },
   );
   btn.setAttribute("type", "button");
+  btn.setAttribute("aria-label", title);
   btn.addEventListener("mouseenter", () => {
-    btn.style.background = theme.buttonHoverBg;
     btn.style.transform = "translateY(-1px)";
   });
   btn.addEventListener("mouseleave", () => {
-    btn.style.background = theme.copyBtnBg;
     btn.style.transform = "translateY(0)";
   });
   return btn;
@@ -255,6 +265,8 @@ interface ExecutionBannerState {
 
 export interface MessageRenderOptions {
   markdown?: MarkdownRenderOptions;
+  onFork?: (assistantMessageId: string) => void | Promise<void>;
+  onForkError?: (error: Error) => void;
 }
 
 type ExecutionInsetPanelElement = HTMLElement & {
@@ -620,19 +632,23 @@ export function createMessageElement(
     bubble.appendChild(createTopupButton(doc));
   }
 
-  const actions = createMessageActions(doc, theme, msg, rawContent);
-  if (actions) {
-    bubble.style.paddingBottom = "38px";
-    setupMessageActionsHover(bubble, actions);
-    bubble.appendChild(actions);
-  }
-
-  if (showReroll && onReroll && !quotaDetails) {
-    const rerollBtn = createRerollButton(doc, theme, onReroll, onRerollError);
-    bubble.appendChild(rerollBtn);
-  }
-
   wrapper.appendChild(bubble);
+
+  const actions = createMessageActions(
+    doc,
+    theme,
+    msg,
+    rawContent,
+    showReroll && !quotaDetails,
+    onReroll,
+    onRerollError,
+    renderOptions.onFork,
+    renderOptions.onForkError,
+  );
+  if (actions) {
+    wrapper.appendChild(actions);
+  }
+
   return wrapper;
 }
 
@@ -731,24 +747,33 @@ function createRerollButton(
     doc,
     "button",
     {
-      position: "absolute",
-      bottom: "4px",
-      right: "36px",
-      background: theme.copyBtnBg,
+      height: "28px",
+      background: "transparent",
       border: "none",
       borderRadius: "4px",
-      padding: "4px 8px",
+      padding: "0 8px",
       fontSize: "12px",
       lineHeight: "1.2",
       whiteSpace: "nowrap",
       cursor: "pointer",
       opacity: "1",
-      transition: "background 0.2s, box-shadow 0.2s",
+      color: theme.textPrimary,
+      transition: "box-shadow 0.2s, opacity 0.2s, transform 0.2s",
     },
-    { class: "reroll-btn", title: getString("chat-reroll-model") },
+    {
+      class: "message-action-btn reroll-btn",
+      title: getString("chat-reroll-model"),
+    },
   );
   btn.setAttribute("type", "button");
+  btn.setAttribute("aria-label", getString("chat-reroll-model"));
   btn.textContent = `${getString("chat-reroll-model")} 🎲`;
+  btn.addEventListener("mouseenter", () => {
+    btn.style.transform = "translateY(-1px)";
+  });
+  btn.addEventListener("mouseleave", () => {
+    btn.style.transform = "translateY(0)";
+  });
   btn.addEventListener("focus", () => {
     btn.style.boxShadow = `0 0 0 2px ${theme.borderColor}`;
   });
@@ -779,6 +804,50 @@ function createRerollButton(
   return btn;
 }
 
+function createForkButton(
+  doc: Document,
+  theme: ThemeColors,
+  assistantMessageId: string,
+  onFork: (assistantMessageId: string) => void | Promise<void>,
+  onError?: (error: Error) => void,
+): HTMLElement {
+  const label = getString("chat-continue-in-new-chat");
+  const btn = createMessageActionButton(doc, theme, label);
+  btn.setAttribute("class", "message-action-btn fork-message-btn");
+  setIconButtonImage(btn, "fork", "");
+
+  btn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    event.preventDefault();
+    if (btn.getAttribute("data-busy") === "true") {
+      return;
+    }
+
+    btn.setAttribute("data-busy", "true");
+    btn.setAttribute("aria-busy", "true");
+    (btn as HTMLButtonElement).disabled = true;
+    btn.style.cursor = "wait";
+    btn.style.opacity = "0.6";
+
+    Promise.resolve(onFork(assistantMessageId))
+      .catch((error: unknown) => {
+        const forkError =
+          error instanceof Error ? error : new Error(String(error));
+        ztoolkit.log("[MessageRenderer] Fork conversation failed:", forkError);
+        onError?.(forkError);
+      })
+      .finally(() => {
+        btn.removeAttribute("data-busy");
+        btn.removeAttribute("aria-busy");
+        (btn as HTMLButtonElement).disabled = false;
+        btn.style.cursor = "pointer";
+        btn.style.opacity = "1";
+      });
+  });
+
+  return btn;
+}
+
 export function createCopyButton(
   doc: Document,
   theme: ThemeColors,
@@ -806,19 +875,26 @@ function createMessageActions(
   theme: ThemeColors,
   msg: ChatMessage,
   rawContent: string,
+  showReroll: boolean,
+  onReroll?: () => void | Promise<void>,
+  onRerollError?: (error: Error) => void,
+  onFork?: (assistantMessageId: string) => void | Promise<void>,
+  onForkError?: (error: Error) => void,
 ): HTMLElement | null {
   const actions = createElement(
     doc,
     "div",
     {
-      position: "absolute",
-      right: "8px",
-      bottom: "8px",
-      display: "inline-flex",
+      display: "flex",
       alignItems: "center",
+      justifyContent: msg.role === "user" ? "flex-end" : "flex-start",
       gap: "6px",
-      opacity: "0",
-      pointerEvents: "none",
+      width: "fit-content",
+      maxWidth: "85%",
+      marginTop: "4px",
+      marginLeft: msg.role === "user" ? "auto" : "0",
+      marginRight: msg.role === "user" ? "0" : "auto",
+      opacity: "0.72",
       transition: "opacity 0.2s",
     },
     { class: "message-actions" },
@@ -833,24 +909,37 @@ function createMessageActions(
 
   actions.appendChild(createCopyButton(doc, theme, copyContent));
 
-  return actions.childElementCount > 0 ? actions : null;
-}
+  if (
+    msg.role === "assistant" &&
+    !msg.apiOnly &&
+    msg.streamingState === undefined &&
+    onFork
+  ) {
+    actions.appendChild(
+      createForkButton(doc, theme, msg.id, onFork, onForkError),
+    );
+  }
 
-/**
- * Setup hover behavior for message action visibility
- */
-export function setupMessageActionsHover(
-  bubble: HTMLElement,
-  actions: HTMLElement,
-): void {
-  bubble.addEventListener("mouseenter", () => {
+  if (showReroll && onReroll) {
+    actions.appendChild(
+      createRerollButton(doc, theme, onReroll, onRerollError),
+    );
+  }
+
+  actions.addEventListener("mouseenter", () => {
     actions.style.opacity = "1";
-    actions.style.pointerEvents = "auto";
   });
-  bubble.addEventListener("mouseleave", () => {
-    actions.style.opacity = "0";
-    actions.style.pointerEvents = "none";
+  actions.addEventListener("mouseleave", () => {
+    actions.style.opacity = "0.72";
   });
+  actions.addEventListener("focusin", () => {
+    actions.style.opacity = "1";
+  });
+  actions.addEventListener("focusout", () => {
+    actions.style.opacity = "0.72";
+  });
+
+  return actions.childElementCount > 0 ? actions : null;
 }
 
 function createChatEmptyState(doc: Document, theme: ThemeColors): HTMLElement {

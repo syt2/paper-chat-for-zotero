@@ -60,6 +60,7 @@ import {
   updatePanelModeButtonIcon,
   updateModelSelectorDisplay,
   refreshCheckinDisplay,
+  syncSendButtonState,
 } from "./ChatPanelEvents";
 import { loadCachedRatios } from "../../preferences/ModelsFetcher";
 import { Guide } from "../Guide";
@@ -340,6 +341,8 @@ function renderMessageElementsWithPdfQuoteAction(
   retryableErrorMessageId?: string,
   onReroll?: () => void | Promise<void>,
   onRerollError?: (error: Error) => void,
+  onFork?: (assistantMessageId: string) => void | Promise<void>,
+  onForkError?: (error: Error) => void,
 ): void {
   renderMessageElementsBase(
     chatHistory,
@@ -353,6 +356,8 @@ function renderMessageElementsWithPdfQuoteAction(
       markdown: createPdfQuoteMarkdownRenderOptions({
         getCurrentItem: getNavigationItem,
       }),
+      onFork,
+      onForkError,
     },
   );
 }
@@ -1373,11 +1378,17 @@ async function refreshChatForContainer(container: HTMLElement): Promise<void> {
     "#chat-empty-state",
   ) as HTMLElement;
   if (chatHistory && session) {
+    const refreshContext = createContext(container);
     renderMessageElementsWithPdfQuoteAction(
       chatHistory,
       emptyState,
       session.messages,
       () => getQuoteNavigationItem(session, moduleCurrentItem),
+      undefined,
+      undefined,
+      undefined,
+      (assistantMessageId) =>
+        continueInNewChatFromMessage(refreshContext, assistantMessageId),
     );
     updateExecutionInsetsForContainer(
       container,
@@ -2282,6 +2293,38 @@ function renderPendingAttachmentsPreview(container: HTMLElement): void {
   );
 }
 
+async function continueInNewChatFromMessage(
+  context: ChatPanelContext,
+  assistantMessageId: string,
+): Promise<void> {
+  try {
+    const forkedSession =
+      await context.chatManager.forkCurrentSessionAtMessage(assistantMessageId);
+    const item = getItemByLibraryKey(forkedSession.lastActiveItemKey);
+    context.setCurrentItem(item);
+
+    context.clearAttachments();
+    context.updateAttachmentsPreview();
+    context.renderMessages(forkedSession.messages);
+    context.renderExecutionPlan(forkedSession.executionPlan);
+    updateModelSelectorDisplay(context.container);
+    syncSendButtonState(
+      context.container.querySelector(
+        "#chat-send-button",
+      ) as HTMLButtonElement | null,
+      context.chatManager,
+    );
+    await context.updatePdfCheckboxVisibility(item);
+    focusInput(context.container);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    context.appendError(
+      `${getString("chat-continue-in-new-chat-failed")}: ${message}`,
+    );
+    throw error;
+  }
+}
+
 function createContext(container: HTMLElement): ChatPanelContext {
   const manager = getChatManager();
   const authManager = getAuthManager();
@@ -2369,6 +2412,8 @@ function createContext(container: HTMLElement): ChatPanelContext {
             (error) => {
               context.appendError(error.message);
             },
+            (assistantMessageId) =>
+              continueInNewChatFromMessage(context, assistantMessageId),
           );
         }
         if (planPanel) {

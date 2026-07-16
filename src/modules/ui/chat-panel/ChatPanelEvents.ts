@@ -1352,7 +1352,7 @@ function updateSendButtonPresentation(
  * 根据当前 session 的锁状态，同步 sendButton 的 disabled 样式
  * 抽取为独立函数，避免在多处重复 button 样式逻辑
  */
-function syncSendButtonState(
+export function syncSendButtonState(
   sendButton: HTMLButtonElement | null,
   chatManager: ChatPanelContext["chatManager"],
 ): void {

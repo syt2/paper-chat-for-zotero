@@ -100,6 +100,8 @@ export type FluentMessageId =
   | 'paperchat-chat-banner-waiting-approval'
   | 'paperchat-chat-close'
   | 'paperchat-chat-configure-provider'
+  | 'paperchat-chat-continue-in-new-chat'
+  | 'paperchat-chat-continue-in-new-chat-failed'
   | 'paperchat-chat-copy'
   | 'paperchat-chat-debug-context-export'
   | 'paperchat-chat-debug-context-exported'
