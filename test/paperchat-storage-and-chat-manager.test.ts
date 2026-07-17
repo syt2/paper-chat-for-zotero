@@ -467,13 +467,13 @@ describe("paperchat storage and chat manager", function () {
     );
     assert.include(
       recorded.map((entry) => entry.sql),
-      "UPDATE session_meta SET title = ?, title_source = ?, title_generated_at = ?, title_edited_at = ? WHERE id = ?",
+      "UPDATE session_meta SET title = ?, title_source = ?, title_generated_at = ?, title_edited_at = ?, search_title = ?, search_index_version = ? WHERE id = ?",
     );
 
     await service.updateSessionTitle("session-title-1", null, "user", 202);
     assert.deepInclude(
       recorded.map((entry) => entry.params),
-      [null, "user", null, 202, "session-title-1"],
+      [null, "user", null, 202, "", 1, "session-title-1"],
     );
   });
 
@@ -1257,17 +1257,25 @@ describe("paperchat storage and chat manager", function () {
       resolvedModelId: "model-pro-2",
     });
 
-    assert.deepEqual(
-      recorded.map((entry) => entry.sql),
-      [
-        "SELECT value FROM settings WHERE key = ?",
-        "BEGIN TRANSACTION",
-        "UPDATE sessions SET updated_at = ?, last_active_item_key = ?, title = ?, title_source = ?, title_generated_at = ?, title_edited_at = ?, context_summary = ?, context_state = ?, execution_plan = ?, tool_execution_state = ?, tool_approval_state = ? WHERE id = ?",
-        "INSERT INTO paperchat_session_state (session_id, selected_tier, resolved_model_id, last_retryable_user_message_id, last_retryable_error_message_id, last_retryable_failed_model_id) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET selected_tier = excluded.selected_tier, resolved_model_id = excluded.resolved_model_id, last_retryable_user_message_id = excluded.last_retryable_user_message_id, last_retryable_error_message_id = excluded.last_retryable_error_message_id, last_retryable_failed_model_id = excluded.last_retryable_failed_model_id",
-        "UPDATE session_meta SET updated_at = ?, title = ?, title_source = ?, title_generated_at = ?, title_edited_at = ? WHERE id = ?",
-        "COMMIT",
-      ],
+    const sql = recorded.map((entry) => entry.sql);
+    const sessionUpdateIndex = sql.findIndex((statement) =>
+      statement.startsWith("UPDATE sessions SET updated_at = ?"),
     );
+    const transactionStart = sql.lastIndexOf(
+      "BEGIN TRANSACTION",
+      sessionUpdateIndex,
+    );
+    const transactionEnd = sql.indexOf("COMMIT", sessionUpdateIndex);
+
+    assert.deepEqual(sql.slice(transactionStart, transactionEnd + 1), [
+      "BEGIN TRANSACTION",
+      "UPDATE sessions SET updated_at = ?, last_active_item_key = ?, title = ?, title_source = ?, title_generated_at = ?, title_edited_at = ?, context_summary = ?, context_state = ?, execution_plan = ?, tool_execution_state = ?, tool_approval_state = ?, user_input_request_state = ? WHERE id = ?",
+      "INSERT INTO paperchat_session_state (session_id, selected_tier, resolved_model_id, last_retryable_user_message_id, last_retryable_error_message_id, last_retryable_failed_model_id) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET selected_tier = excluded.selected_tier, resolved_model_id = excluded.resolved_model_id, last_retryable_user_message_id = excluded.last_retryable_user_message_id, last_retryable_error_message_id = excluded.last_retryable_error_message_id, last_retryable_failed_model_id = excluded.last_retryable_failed_model_id",
+      "UPDATE session_meta SET search_index_version = ? WHERE id = ?",
+      "UPDATE session_meta SET updated_at = ?, title = ?, title_source = ?, title_generated_at = ?, title_edited_at = ?, search_title = ?, search_index_version = ? WHERE id = ?",
+      "UPDATE chat_search_state SET search_revision = search_revision + 1, updated_at = ?, completed = CASE WHEN target_version > ? THEN 0 ELSE completed END WHERE id = 1",
+      "COMMIT",
+    ]);
   });
 
   it("rolls back session metadata writes when a companion-table write fails", async function () {
@@ -1309,14 +1317,17 @@ describe("paperchat storage and chat manager", function () {
       assert.equal((error as Error).message, "paperchat state write failed");
     }
 
-    assert.include(
-      recorded.map((entry) => entry.sql),
-      "ROLLBACK",
+    const sql = recorded.map((entry) => entry.sql);
+    const failingInsertIndex = sql.findIndex((statement) =>
+      statement.startsWith("INSERT INTO paperchat_session_state"),
     );
-    assert.notInclude(
-      recorded.map((entry) => entry.sql),
-      "COMMIT",
+    const transactionStart = sql.lastIndexOf(
+      "BEGIN TRANSACTION",
+      failingInsertIndex,
     );
+    const failedTransaction = sql.slice(transactionStart);
+    assert.include(failedTransaction, "ROLLBACK");
+    assert.notInclude(failedTransaction, "COMMIT");
   });
 
   it("rolls back prefs, session state, and provider override when hard-failure repair persistence fails", async function () {
@@ -1544,6 +1555,7 @@ describe("paperchat storage and chat manager", function () {
     const persistedSessions: ChatSession[] = [];
     const renderedMessages: ChatMessage[][] = [];
     const appliedContexts: Array<ChatSession | null> = [];
+    const cancelledUserInputSessionIds: string[] = [];
 
     const manager = Object.create(ChatManager.prototype) as ChatManager & {
       currentSession: ChatSession;
@@ -1552,6 +1564,9 @@ describe("paperchat storage and chat manager", function () {
       sessionStorage: {
         deleteAllMessages: (sessionId: string) => Promise<void>;
         updateSessionMeta: (session: ChatSession) => Promise<void>;
+      };
+      agentRuntime: {
+        cancelPendingUserInputRequests: (sessionId: string) => void;
       };
       streamingSessions: Map<string, ChatSession>;
       applySessionItemContext: (session: ChatSession | null) => void;
@@ -1611,6 +1626,11 @@ describe("paperchat storage and chat manager", function () {
         persistedSessions.push(persisted);
       },
     };
+    manager.agentRuntime = {
+      cancelPendingUserInputRequests: (sessionId: string) => {
+        cancelledUserInputSessionIds.push(sessionId);
+      },
+    };
     manager.activeSessionRunIds = new Map();
     manager.activeSessionAbortControllers = new Map();
     manager.streamingSessions = new Map([[session.id, session]]);
@@ -1643,6 +1663,7 @@ describe("paperchat storage and chat manager", function () {
     assert.deepEqual(persistedSessions, [clearedSession]);
     assert.deepEqual(appliedContexts, [clearedSession]);
     assert.deepEqual(renderedMessages, [[]]);
+    assert.deepEqual(cancelledUserInputSessionIds, ["session-clear-1"]);
     assert.isFalse(manager.streamingSessions.has("session-clear-1"));
   });
 

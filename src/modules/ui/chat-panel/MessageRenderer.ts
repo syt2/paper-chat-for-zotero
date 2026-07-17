@@ -43,10 +43,27 @@ const CHAT_HISTORY_AUTO_SCROLL_ATTR = "data-auto-scroll";
 const CHAT_SCROLL_BOTTOM_BUTTON_ID = "chat-scroll-bottom-btn";
 const STREAMING_TYPING_INDICATOR_ATTR = "data-streaming-typing-indicator";
 const MESSAGE_ACTION_ICON_SIZE = "15px";
+const MESSAGE_HIGHLIGHT_DURATION_MS = 2500;
 type MessageActionIconName = "copy" | "fork";
 const userInputCountdownTimers = new WeakMap<
   HTMLElement,
   ReturnType<typeof setInterval>
+>();
+
+interface MessageHighlightLease {
+  element: HTMLElement;
+  timeoutId: ReturnType<typeof setTimeout>;
+  previousStyle: {
+    backgroundColor: string;
+    borderRadius: string;
+    boxShadow: string;
+    transition: string;
+  };
+}
+
+const messageHighlightLeases = new WeakMap<
+  HTMLElement,
+  MessageHighlightLease
 >();
 
 function getChatHistoryBottomOffset(chatHistory: HTMLElement): number {
@@ -83,6 +100,103 @@ export function scrollChatHistoryToBottom(chatHistory: HTMLElement): void {
   chatHistory.scrollTop = chatHistory.scrollHeight;
   chatHistory.setAttribute(CHAT_HISTORY_AUTO_SCROLL_ATTR, "true");
   updateChatHistoryScrollBottomButton(chatHistory);
+}
+
+/**
+ * Find a rendered message by exact ID without interpolating the ID into a CSS
+ * selector. Message IDs are opaque and may contain selector metacharacters.
+ */
+export function findRenderedMessageElement(
+  chatHistory: HTMLElement,
+  messageId: string,
+): HTMLElement | null {
+  for (const child of Array.from(chatHistory.children)) {
+    const element = child as HTMLElement;
+    if (element.getAttribute("data-message-id") === messageId) {
+      return element;
+    }
+  }
+  return null;
+}
+
+function restoreMessageHighlight(lease: MessageHighlightLease): void {
+  const { element, previousStyle } = lease;
+  element.style.backgroundColor = previousStyle.backgroundColor;
+  element.style.borderRadius = previousStyle.borderRadius;
+  element.style.boxShadow = previousStyle.boxShadow;
+  element.style.transition = previousStyle.transition;
+}
+
+export function clearRenderedMessageHighlight(chatHistory: HTMLElement): void {
+  const lease = messageHighlightLeases.get(chatHistory);
+  if (!lease) return;
+
+  clearTimeout(lease.timeoutId);
+  restoreMessageHighlight(lease);
+  messageHighlightLeases.delete(chatHistory);
+}
+
+function centerMessageInChatHistory(
+  chatHistory: HTMLElement,
+  messageElement: HTMLElement,
+): void {
+  const historyRect = chatHistory.getBoundingClientRect();
+  const messageRect = messageElement.getBoundingClientRect();
+  const offset =
+    messageRect.top +
+    messageRect.height / 2 -
+    (historyRect.top + historyRect.height / 2);
+
+  chatHistory.scrollTop = Math.max(0, chatHistory.scrollTop + offset);
+  chatHistory.setAttribute(CHAT_HISTORY_AUTO_SCROLL_ATTR, "false");
+  updateChatHistoryScrollBottomButton(chatHistory);
+}
+
+/**
+ * Center and temporarily highlight an exact rendered message. Repeated calls
+ * replace the previous lease so a timer from an earlier render cannot clear a
+ * newer highlight.
+ */
+export function scrollToAndHighlightMessage(
+  chatHistory: HTMLElement,
+  messageId: string,
+  durationMs: number = MESSAGE_HIGHLIGHT_DURATION_MS,
+): HTMLElement | null {
+  const messageElement = findRenderedMessageElement(chatHistory, messageId);
+  if (!messageElement) return null;
+
+  clearRenderedMessageHighlight(chatHistory);
+  centerMessageInChatHistory(chatHistory, messageElement);
+
+  const previousStyle = {
+    backgroundColor: messageElement.style.backgroundColor,
+    borderRadius: messageElement.style.borderRadius,
+    boxShadow: messageElement.style.boxShadow,
+    transition: messageElement.style.transition,
+  };
+  const highlightTransition =
+    "background-color 160ms ease, box-shadow 160ms ease";
+  messageElement.style.transition = previousStyle.transition
+    ? `${previousStyle.transition}, ${highlightTransition}`
+    : highlightTransition;
+  messageElement.style.backgroundColor = "rgba(59, 130, 246, 0.14)";
+  messageElement.style.borderRadius = "12px";
+  messageElement.style.boxShadow = "inset 0 0 0 2px rgba(59, 130, 246, 0.5)";
+
+  const lease: MessageHighlightLease = {
+    element: messageElement,
+    previousStyle,
+    timeoutId: setTimeout(
+      () => {
+        if (messageHighlightLeases.get(chatHistory) !== lease) return;
+        restoreMessageHighlight(lease);
+        messageHighlightLeases.delete(chatHistory);
+      },
+      Math.max(0, durationMs),
+    ),
+  };
+  messageHighlightLeases.set(chatHistory, lease);
+  return messageElement;
 }
 
 export function updateChatHistoryScrollBottomButton(
@@ -267,6 +381,7 @@ export interface MessageRenderOptions {
   markdown?: MarkdownRenderOptions;
   onFork?: (assistantMessageId: string) => void | Promise<void>;
   onForkError?: (error: Error) => void;
+  onRenderComplete?: () => void;
 }
 
 export function getMessageMarkdownRenderOptions(
@@ -361,7 +476,10 @@ function createSystemNoticeElement(
       justifyContent: "center",
       margin: "16px 0",
     },
-    { class: "chat-message system-notice" },
+    {
+      class: "chat-message system-notice",
+      "data-message-id": msg.id,
+    },
   );
 
   const notice = createElement(
@@ -487,7 +605,10 @@ export function createMessageElement(
       margin: "10px 0",
       textAlign: msg.role === "user" ? "right" : "left",
     },
-    { class: `chat-message ${msg.role}-message` },
+    {
+      class: `chat-message ${msg.role}-message`,
+      "data-message-id": msg.id,
+    },
   );
 
   // 根据角色设置气泡样式
@@ -1009,6 +1130,7 @@ export function renderMessages(
     chatHistory.appendChild(visibleEmptyState);
     visibleEmptyState.style.display = "flex";
     updateChatHistoryScrollBottomButton(chatHistory);
+    renderOptions.onRenderComplete?.();
     return;
   }
 
@@ -1049,6 +1171,7 @@ export function renderMessages(
   } else {
     updateChatHistoryScrollBottomButton(chatHistory);
   }
+  renderOptions.onRenderComplete?.();
 }
 
 export function updateExecutionPlanView(

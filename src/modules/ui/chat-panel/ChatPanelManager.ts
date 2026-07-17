@@ -5,6 +5,7 @@
 import { config } from "../../../../package.json";
 import { getString } from "../../../utils/locale";
 import { ChatManager, type ChatMessage, type ChatSession } from "../../chat";
+import { stopExistingSearchBackfillForShutdown } from "../../chat/search/SearchBackfillShutdown";
 import type {
   ExecutionPlan,
   ImageAttachment,
@@ -441,6 +442,7 @@ interface ChatMessageRenderCallbacks {
   onFork?: (assistantMessageId: string) => void | Promise<void>;
   onForkError?: (error: Error) => void;
   onMarkdownError?: (message: string) => void;
+  onRenderComplete?: () => void;
 }
 
 function renderMessageElementsWithMarkdownActions(
@@ -465,6 +467,7 @@ function renderMessageElementsWithMarkdownActions(
       }),
       onFork: callbacks.onFork,
       onForkError: callbacks.onForkError,
+      onRenderComplete: callbacks.onRenderComplete,
     },
   );
 }
@@ -785,6 +788,7 @@ let panelVisibleSince: number | null = null;
 let panelOpenSource: ChatPanelOpenSource = "unknown";
 let suppressFloatingUnloadTracking = false;
 const readingLoopPanelSubscriptions = new WeakMap<HTMLElement, () => void>();
+const eventHandlerDisposers = new WeakMap<HTMLElement, () => void>();
 let readingLoopExecutorOwner: HTMLElement | null = null;
 let readingLoopToolbarUnsubscribe: (() => void) | null = null;
 let readingLoopLatestSnapshot: ReadingLoopSnapshot | null = null;
@@ -884,6 +888,11 @@ export function getChatManager(): ChatManager {
   }
   initializeEventsModule();
   return chatManager;
+}
+
+/** Stop background search work without creating a ChatManager during shutdown. */
+export async function stopChatSearchBackfillForShutdown(): Promise<void> {
+  await stopExistingSearchBackfillForShutdown(chatManager);
 }
 
 /**
@@ -1152,7 +1161,8 @@ async function initializeChatContentCommon(
   });
 
   // Setup event handlers
-  setupEventHandlers(context);
+  eventHandlerDisposers.get(container)?.();
+  eventHandlerDisposers.set(container, setupEventHandlers(context));
   NextQuestionHintController.attach(context);
 
   // Set up chat manager callbacks
@@ -1261,9 +1271,16 @@ function cleanupReadingLoopIntegration(container: HTMLElement | null): void {
   }
 }
 
-function cleanupPanelIntegrations(container: HTMLElement | null): void {
+function cleanupPanelIntegrations(
+  container: HTMLElement | null,
+  disposeEventHandlers: boolean = true,
+): void {
   if (!container) {
     return;
+  }
+  if (disposeEventHandlers) {
+    eventHandlerDisposers.get(container)?.();
+    eventHandlerDisposers.delete(container);
   }
   NextQuestionHintController.detach(container);
   cleanupReadingLoopIntegration(container);
@@ -1701,7 +1718,8 @@ function showSidebarPanel(): boolean {
  */
 function hideSidebarPanel(): void {
   if (chatContainer) {
-    cleanupPanelIntegrations(chatContainer);
+    // The sidebar DOM and its event listeners are reused when shown again.
+    cleanupPanelIntegrations(chatContainer, false);
     chatContainer.style.display = "none";
   }
 
@@ -2491,7 +2509,10 @@ function createContext(container: HTMLElement): ChatPanelContext {
         await updatePdfCheckboxVisibilityForItem(container, item, manager);
       }
     },
-    renderMessages: (messages: ChatMessage[]) => {
+    renderMessages: (
+      messages: ChatMessage[],
+      onRenderComplete?: () => void,
+    ) => {
       if (container) {
         cancelPendingStreamingTextRender(container);
         const chatHistory = container.querySelector(
@@ -2525,6 +2546,7 @@ function createContext(container: HTMLElement): ChatPanelContext {
               onFork: (assistantMessageId) =>
                 continueInNewChatFromMessage(context, assistantMessageId),
               onMarkdownError: context.appendError,
+              onRenderComplete,
             },
           );
         }

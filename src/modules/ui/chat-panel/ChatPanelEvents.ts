@@ -9,9 +9,11 @@ import { createElement, copyToClipboard } from "./ChatPanelBuilder";
 import { getCurrentTheme } from "./ChatPanelTheme";
 import {
   createHistoryDropdownState,
+  refreshHistoryDropdownSearch,
   populateHistoryDropdown,
-  toggleHistoryDropdown,
+  setupHistoryDropdownSearch,
   setupClickOutsideHandler,
+  toggleHistoryDropdown,
 } from "./HistoryDropdown";
 import { showAuthDialog } from "../AuthDialog";
 import { getString } from "../../../utils/locale";
@@ -38,6 +40,7 @@ import {
   findMentionAtCursor,
 } from "./MentionSelector";
 import {
+  scrollToAndHighlightMessage,
   scrollChatHistoryToBottom,
   shouldAutoScrollChatHistory,
   updateChatHistoryAutoScrollState,
@@ -532,7 +535,7 @@ export async function refreshCheckinDisplay(
 /**
  * Setup all event handlers for the chat panel
  */
-export function setupEventHandlers(context: ChatPanelContext): void {
+export function setupEventHandlers(context: ChatPanelContext): () => void {
   const { container, chatManager, authManager } = context;
 
   const openPluginPreferencesSafely = (): void => {
@@ -597,6 +600,218 @@ export function setupEventHandlers(context: ChatPanelContext): void {
 
   // History dropdown state
   const historyState = createHistoryDropdownState();
+  let historySearchDisposer: (() => void) | null = null;
+  const historyIntegration = { disposed: false };
+  let historyBackfillStarted = false;
+  let historyNavigationToken = 0;
+  let historyNavigationTail: Promise<void> = Promise.resolve();
+  let pendingHistoryMessageTarget: {
+    sessionId: string;
+    messageId: string;
+    navigationToken: number;
+  } | null = null;
+  let historyNotice: HTMLElement | null = null;
+  let historyNoticeTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const clearHistoryNotice = (): void => {
+    if (historyNoticeTimer) {
+      clearTimeout(historyNoticeTimer);
+      historyNoticeTimer = null;
+    }
+    historyNotice?.remove();
+    historyNotice = null;
+  };
+
+  const showHistoryNotice = (message: string): void => {
+    const doc = container.ownerDocument;
+    if (!doc || historyIntegration.disposed) return;
+    clearHistoryNotice();
+    const theme = getCurrentTheme();
+    const notice = createElement(
+      doc,
+      "div",
+      {
+        position: "absolute",
+        top: "58px",
+        left: "16px",
+        right: "16px",
+        zIndex: "10010",
+        padding: "9px 12px",
+        border: `1px solid ${theme.borderColor}`,
+        borderRadius: "8px",
+        background: theme.dropdownBg,
+        color: theme.textPrimary,
+        boxShadow: "0 8px 24px rgba(0, 0, 0, 0.2)",
+        fontSize: "12px",
+        lineHeight: "18px",
+        textAlign: "center",
+        pointerEvents: "none",
+      },
+      {
+        class: "chat-history-search-local-notice",
+        role: "status",
+        "aria-live": "polite",
+      },
+    );
+    notice.textContent = message;
+    container.appendChild(notice);
+    historyNotice = notice;
+    historyNoticeTimer = setTimeout(clearHistoryNotice, 2800);
+  };
+
+  const showHistoryTargetMissingNotice = (): void => {
+    showHistoryNotice(getString("chat-history-search-target-missing"));
+  };
+
+  const invalidateHistoryNavigation = (): void => {
+    historyNavigationToken += 1;
+    pendingHistoryMessageTarget = null;
+    clearHistoryNotice();
+  };
+
+  const reportHistoryNavigationError = (error: unknown): void => {
+    const rawMessage = error instanceof Error ? error.message : String(error);
+    const message = rawMessage.trim() || getString("unknown");
+    ztoolkit.log("[ChatPanel] History navigation/search error:", error);
+    showHistoryNotice(message);
+  };
+
+  const openHistorySession = (
+    sessionId: string,
+    target?: { messageId: string },
+  ): Promise<void> => {
+    const navigationToken = ++historyNavigationToken;
+    clearHistoryNotice();
+    pendingHistoryMessageTarget = target
+      ? { sessionId, messageId: target.messageId, navigationToken }
+      : null;
+    if (historyDropdown) historyDropdown.style.display = "none";
+
+    const operation = historyNavigationTail.then(async () => {
+      if (
+        historyIntegration.disposed ||
+        navigationToken !== historyNavigationToken
+      ) {
+        return;
+      }
+
+      ztoolkit.log("Loading session:", sessionId);
+      const loadedSession = await chatManager.switchSession(sessionId);
+      if (
+        historyIntegration.disposed ||
+        navigationToken !== historyNavigationToken
+      ) {
+        return;
+      }
+      if (!loadedSession) {
+        pendingHistoryMessageTarget = null;
+        if (target) showHistoryTargetMissingNotice();
+        return;
+      }
+
+      syncSendButtonState(sendButton, chatManager);
+      const itemKey = loadedSession.lastActiveItemKey;
+      if (itemKey) {
+        const libraryID = Zotero.Libraries.userLibraryID;
+        const item = Zotero.Items.getByLibraryAndKey(libraryID, itemKey);
+        if (item) {
+          context.setCurrentItem(item as Zotero.Item);
+          await context.updatePdfCheckboxVisibility(item as Zotero.Item);
+        } else {
+          context.setCurrentItem(null);
+          await context.updatePdfCheckboxVisibility(null);
+        }
+      } else {
+        context.setCurrentItem(null);
+        await context.updatePdfCheckboxVisibility(null);
+      }
+
+      if (
+        historyIntegration.disposed ||
+        navigationToken !== historyNavigationToken
+      ) {
+        return;
+      }
+
+      const activeSession = chatManager.getActiveSession() || loadedSession;
+      context.renderMessages(activeSession.messages);
+      context.renderExecutionPlan(activeSession.executionPlan);
+      updateModelSelectorDisplay(container);
+
+      const renderFinalSession = (): void => {
+        if (
+          historyIntegration.disposed ||
+          navigationToken !== historyNavigationToken
+        ) {
+          return;
+        }
+        const latestSession = chatManager.getActiveSession();
+        if (!latestSession || latestSession.id !== sessionId) {
+          pendingHistoryMessageTarget = null;
+          return;
+        }
+
+        context.renderMessages(latestSession.messages, () => {
+          const pendingTarget = pendingHistoryMessageTarget;
+          if (
+            !target ||
+            !pendingTarget ||
+            historyIntegration.disposed ||
+            navigationToken !== historyNavigationToken ||
+            pendingTarget.navigationToken !== navigationToken ||
+            pendingTarget.sessionId !== sessionId ||
+            pendingTarget.messageId !== target.messageId
+          ) {
+            return;
+          }
+
+          const found = chatHistory
+            ? scrollToAndHighlightMessage(chatHistory, target.messageId)
+            : null;
+          pendingHistoryMessageTarget = null;
+          if (!found) showHistoryTargetMissingNotice();
+        });
+        context.renderExecutionPlan(latestSession.executionPlan);
+        updateModelSelectorDisplay(container);
+      };
+
+      const view = container.ownerDocument?.defaultView;
+      if (view && typeof view.requestAnimationFrame === "function") {
+        view.requestAnimationFrame(renderFinalSession);
+      } else {
+        setTimeout(renderFinalSession, 0);
+      }
+    });
+
+    historyNavigationTail = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return operation.catch((error) => {
+      if (navigationToken === historyNavigationToken) {
+        pendingHistoryMessageTarget = null;
+      }
+      throw error;
+    });
+  };
+
+  if (historyDropdown && container.ownerDocument) {
+    historySearchDisposer = setupHistoryDropdownSearch(
+      historyDropdown,
+      container.ownerDocument,
+      historyState,
+      getCurrentTheme(),
+      {
+        searchGroups: (input) => chatManager.searchHistoryGroups(input),
+        searchSessionMatches: (input) =>
+          chatManager.searchHistorySessionMatches(input),
+        onSelectTitleMatch: (sessionId) => openHistorySession(sessionId),
+        onSelectMessageMatch: (sessionId, messageId) =>
+          openHistorySession(sessionId, { messageId }),
+        onSearchError: reportHistoryNavigationError,
+      },
+    );
+  }
 
   // Check-in button
   checkinBtn?.addEventListener("click", async () => {
@@ -769,6 +984,7 @@ export function setupEventHandlers(context: ChatPanelContext): void {
   // New chat button - create a new session
   newChatBtn?.addEventListener("click", async () => {
     ztoolkit.log("New chat button clicked");
+    invalidateHistoryNavigation();
 
     // Create a new session
     const newSession = await chatManager.createNewSession();
@@ -903,15 +1119,22 @@ export function setupEventHandlers(context: ChatPanelContext): void {
     const isNowVisible = toggleHistoryDropdown(historyDropdown);
     if (!isNowVisible) return;
 
-    // Populate history dropdown
+    if (!historyBackfillStarted) {
+      historyBackfillStarted = true;
+      chatManager.startSearchHistoryBackfill();
+    }
+
+    // Populate ordinary history first. For an active query the dropdown keeps
+    // its cached groups/scroll position visible while this refresh runs.
     await refreshHistoryDropdown();
   });
 
   // Helper function to refresh history dropdown
   const refreshHistoryDropdown = async () => {
-    if (!historyDropdown) return;
+    if (!historyDropdown || historyIntegration.disposed) return;
 
     const sessions = await chatManager.getAllSessions();
+    if (historyIntegration.disposed) return;
     const theme = getCurrentTheme();
 
     populateHistoryDropdown(
@@ -921,44 +1144,8 @@ export function setupEventHandlers(context: ChatPanelContext): void {
       historyState,
       theme,
       // onSelect callback
-      async (session: SessionInfo) => {
-        ztoolkit.log("Loading session:", session.id);
-        historyDropdown.style.display = "none";
-
-        const loadedSession = await chatManager.switchSession(session.id);
-        // 切换 session 后同步按钮状态
-        syncSendButtonState(sendButton, chatManager);
-        if (loadedSession) {
-          // Restore the item key from session
-          const itemKey = loadedSession.lastActiveItemKey;
-          if (itemKey) {
-            // Try to get the item by key
-            const libraryID = Zotero.Libraries.userLibraryID;
-            const item = Zotero.Items.getByLibraryAndKey(libraryID, itemKey);
-            if (item) {
-              context.setCurrentItem(item as Zotero.Item);
-              context.updatePdfCheckboxVisibility(item as Zotero.Item);
-            } else {
-              context.setCurrentItem(null);
-            }
-          } else {
-            context.setCurrentItem(null);
-          }
-
-          const activeSession = chatManager.getActiveSession() || loadedSession;
-          context.renderMessages(activeSession.messages);
-          context.renderExecutionPlan(activeSession.executionPlan);
-          updateModelSelectorDisplay(container);
-          container.ownerDocument?.defaultView?.requestAnimationFrame(() => {
-            const latestSession = chatManager.getActiveSession();
-            if (!latestSession || latestSession.id !== session.id) {
-              return;
-            }
-            context.renderMessages(latestSession.messages);
-            context.renderExecutionPlan(latestSession.executionPlan);
-            updateModelSelectorDisplay(container);
-          });
-        }
+      (session: SessionInfo) => {
+        void openHistorySession(session.id).catch(reportHistoryNavigationError);
       },
       // onDelete callback
       async (session: SessionInfo) => {
@@ -1000,6 +1187,13 @@ export function setupEventHandlers(context: ChatPanelContext): void {
         await refreshHistoryDropdown();
       },
     );
+
+    // Empty/short queries remain on the ordinary list. An active query keeps
+    // cached results visible and refreshes against the latest revision. A
+    // hidden dropdown keeps its cache without doing foreground search work.
+    if (historyDropdown.style.display !== "none") {
+      await refreshHistoryDropdownSearch(historyDropdown);
+    }
   };
 
   chatManager.setSessionListUpdateCallback(refreshHistoryDropdown);
@@ -1183,6 +1377,15 @@ export function setupEventHandlers(context: ChatPanelContext): void {
   setupMentionSelector(context);
 
   ztoolkit.log("Event listeners attached to buttons");
+
+  return () => {
+    if (historyIntegration.disposed) return;
+    historyIntegration.disposed = true;
+    invalidateHistoryNavigation();
+    historySearchDisposer?.();
+    historySearchDisposer = null;
+    clearHistoryNotice();
+  };
 }
 
 /**

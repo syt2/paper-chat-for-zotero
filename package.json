@@ -26,6 +26,8 @@
     "lint:fix": "prettier --write . && eslint . --fix",
     "release": "zotero-plugin release",
     "test": "zotero-plugin test",
+    "test:chat-search": "node --import tsx ./node_modules/mocha/bin/mocha test/chat-history-search-service.test.ts test/chat-search-*.test.ts test/history-dropdown-search.test.ts test/message-navigation.test.ts test/migrate-to-sqlite-search.test.ts test/storage-database-foundation.test.ts",
+    "test:online-release-upgrade": "node scripts/test-online-release-upgrade.mjs",
     "test:node": "node --import tsx ./node_modules/mocha/bin/mocha",
     "update-deps": "npm update --save"
   },

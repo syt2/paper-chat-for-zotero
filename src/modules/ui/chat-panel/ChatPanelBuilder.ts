@@ -5,6 +5,7 @@
 import { config } from "../../../../package.json";
 import { getString } from "../../../utils/locale";
 import { getPref } from "../../../utils/prefs";
+import { MAX_SEARCH_QUERY_RAW_UTF16_LENGTH } from "../../chat/search/SearchQuery";
 import type { ThemeColors } from "./types";
 import { HTML_NS } from "./types";
 
@@ -955,7 +956,8 @@ export function createChatContainer(
       right: "10px",
       width: "300px",
       maxHeight: "350px",
-      overflowY: "auto",
+      overflow: "hidden",
+      flexDirection: "column",
       background: theme.dropdownBg,
       border: `1px solid ${theme.borderColor}`,
       borderRadius: "8px",
@@ -964,6 +966,72 @@ export function createChatContainer(
     },
     { id: "chat-history-dropdown" },
   );
+
+  const historySearchHeader = createElement(
+    doc,
+    "div",
+    {
+      flexShrink: "0",
+      padding: "10px",
+      background: theme.dropdownBg,
+      borderBottom: `1px solid ${theme.borderColor}`,
+    },
+    { id: "chat-history-search-header" },
+  );
+  const historySearchInput = createElement(
+    doc,
+    "input",
+    {
+      display: "block",
+      width: "100%",
+      height: "32px",
+      boxSizing: "border-box",
+      padding: "6px 10px",
+      color: theme.textPrimary,
+      background: theme.inputBg,
+      border: `1px solid ${theme.inputBorderColor}`,
+      borderRadius: "7px",
+      outline: "none",
+      fontFamily: "inherit",
+      fontSize: "12px",
+    },
+    {
+      id: "chat-history-search-input",
+      type: "search",
+      placeholder: getString("chat-history-search-placeholder"),
+      "aria-label": getString("chat-history-search-placeholder"),
+      autocomplete: "off",
+      spellcheck: "false",
+      maxlength: String(MAX_SEARCH_QUERY_RAW_UTF16_LENGTH),
+      "data-focus-border-color": theme.inputFocusBorderColor,
+      "data-idle-border-color": theme.inputBorderColor,
+    },
+  ) as HTMLInputElement;
+  historySearchInput.addEventListener("focus", () => {
+    historySearchInput.style.borderColor =
+      historySearchInput.getAttribute("data-focus-border-color") ||
+      theme.inputFocusBorderColor;
+  });
+  historySearchInput.addEventListener("blur", () => {
+    historySearchInput.style.borderColor =
+      historySearchInput.getAttribute("data-idle-border-color") ||
+      theme.inputBorderColor;
+  });
+  historySearchHeader.appendChild(historySearchInput);
+
+  const historyDropdownBody = createElement(
+    doc,
+    "div",
+    {
+      flex: "1 1 auto",
+      minHeight: "0",
+      overflowY: "auto",
+      overscrollBehavior: "contain",
+    },
+    { id: "chat-history-dropdown-body" },
+  );
+  historyDropdown.appendChild(historySearchHeader);
+  historyDropdown.appendChild(historyDropdownBody);
 
   // Mention selector popup (for @ mentions) - positioned relative to input area
   const mentionPopup = createElement(

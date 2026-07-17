@@ -1,0 +1,282 @@
+import { assert } from "chai";
+import type { ChatMessage } from "../src/modules/chat/index.ts";
+import { darkTheme } from "../src/modules/ui/chat-panel/ChatPanelTheme.ts";
+import {
+  createMessageElement,
+  findRenderedMessageElement,
+  renderMessages,
+  scrollToAndHighlightMessage,
+} from "../src/modules/ui/chat-panel/MessageRenderer.ts";
+
+interface RectInit {
+  top: number;
+  height: number;
+}
+
+class FakeElement {
+  readonly style: Record<string, string> = {
+    backgroundColor: "",
+    borderRadius: "",
+    boxShadow: "",
+    transition: "",
+  };
+  readonly attributes = new Map<string, string>();
+  readonly children: FakeElement[] = [];
+  readonly listeners = new Map<string, Array<(event: any) => void>>();
+  parentElement: FakeElement | null = null;
+  scrollTop = 0;
+  scrollHeight = 0;
+  clientHeight = 0;
+  disabled = false;
+  private textValue = "";
+  private rect: RectInit = { top: 0, height: 0 };
+
+  constructor(
+    readonly ownerDocument: FakeDocument,
+    readonly tagName: string,
+  ) {}
+
+  get childElementCount(): number {
+    return this.children.length;
+  }
+
+  get textContent(): string {
+    return this.textValue;
+  }
+
+  set textContent(value: string) {
+    this.textValue = value;
+    if (value === "") {
+      this.children.length = 0;
+    }
+  }
+
+  setRect(rect: RectInit): void {
+    this.rect = rect;
+  }
+
+  getBoundingClientRect(): DOMRect {
+    return {
+      top: this.rect.top,
+      bottom: this.rect.top + this.rect.height,
+      height: this.rect.height,
+      left: 0,
+      right: 0,
+      width: 0,
+      x: 0,
+      y: this.rect.top,
+      toJSON: () => ({}),
+    };
+  }
+
+  appendChild(child: FakeElement): FakeElement {
+    child.parentElement = this;
+    this.children.push(child);
+    return child;
+  }
+
+  setAttribute(name: string, value: string): void {
+    this.attributes.set(name, value);
+  }
+
+  getAttribute(name: string): string | null {
+    return this.attributes.get(name) ?? null;
+  }
+
+  hasAttribute(name: string): boolean {
+    return this.attributes.has(name);
+  }
+
+  removeAttribute(name: string): void {
+    this.attributes.delete(name);
+  }
+
+  addEventListener(type: string, listener: (event: any) => void): void {
+    const listeners = this.listeners.get(type) || [];
+    listeners.push(listener);
+    this.listeners.set(type, listeners);
+  }
+
+  querySelector(_selector: string): FakeElement | null {
+    return null;
+  }
+
+  querySelectorAll(_selector: string): FakeElement[] {
+    return [];
+  }
+}
+
+class FakeDocument {
+  readonly head: FakeElement;
+
+  constructor() {
+    this.head = new FakeElement(this, "head");
+  }
+
+  createElementNS(_namespace: string, tagName: string): FakeElement {
+    return new FakeElement(this, tagName);
+  }
+
+  querySelector(_selector: string): FakeElement | null {
+    return null;
+  }
+}
+
+function asElement(element: FakeElement): HTMLElement {
+  return element as unknown as HTMLElement;
+}
+
+function message(
+  id: string,
+  overrides: Partial<ChatMessage> = {},
+): ChatMessage {
+  return {
+    id,
+    role: "user",
+    content: "hello",
+    timestamp: 1,
+    ...overrides,
+  };
+}
+
+describe("chat message exact navigation", function () {
+  let originalAddon: unknown;
+
+  beforeEach(function () {
+    originalAddon = (globalThis as { addon?: unknown }).addon;
+    (globalThis as { addon?: unknown }).addon = {
+      data: {
+        locale: {
+          current: {
+            formatMessagesSync: ([request]: Array<{ id: string }>) => [
+              { value: request.id, attributes: null },
+            ],
+          },
+        },
+      },
+    };
+  });
+
+  afterEach(function () {
+    (globalThis as { addon?: unknown }).addon = originalAddon;
+  });
+
+  it("adds stable IDs to ordinary and system message wrappers", function () {
+    const doc = new FakeDocument();
+    const ordinary = createMessageElement(
+      doc as unknown as Document,
+      message('ordinary"] > *'),
+      darkTheme,
+    );
+    const notice = createMessageElement(
+      doc as unknown as Document,
+      message("notice:id", {
+        role: "system",
+        isSystemNotice: true,
+      }),
+      darkTheme,
+    );
+
+    assert.equal(ordinary.getAttribute("data-message-id"), 'ordinary"] > *');
+    assert.equal(notice.getAttribute("data-message-id"), "notice:id");
+  });
+
+  it("fires the render-complete callback after message wrappers exist", function () {
+    const doc = new FakeDocument();
+    const history = new FakeElement(doc, "div");
+    history.scrollHeight = 100;
+    history.clientHeight = 100;
+    let renderedId: string | null = null;
+
+    renderMessages(
+      asElement(history),
+      null,
+      [message("rendered", { role: "system", isSystemNotice: true })],
+      darkTheme,
+      undefined,
+      undefined,
+      undefined,
+      {
+        onRenderComplete: () => {
+          renderedId = history.children[0]?.getAttribute("data-message-id");
+        },
+      },
+    );
+
+    assert.equal(renderedId, "rendered");
+  });
+
+  it("matches opaque message IDs without CSS selector escaping", function () {
+    const doc = new FakeDocument();
+    const history = new FakeElement(doc, "div");
+    const first = new FakeElement(doc, "div");
+    const target = new FakeElement(doc, "div");
+    const opaqueId = 'message"]:not(*) \\ / 漢字';
+    first.setAttribute("data-message-id", "first");
+    target.setAttribute("data-message-id", opaqueId);
+    history.appendChild(first);
+    history.appendChild(target);
+
+    assert.strictEqual(
+      findRenderedMessageElement(asElement(history), opaqueId),
+      asElement(target),
+    );
+    assert.isNull(findRenderedMessageElement(asElement(history), "missing"));
+  });
+
+  it("centers, highlights, and restores the whole message", async function () {
+    const doc = new FakeDocument();
+    const history = new FakeElement(doc, "div");
+    const target = new FakeElement(doc, "div");
+    history.scrollTop = 20;
+    history.scrollHeight = 600;
+    history.clientHeight = 200;
+    history.setRect({ top: 100, height: 200 });
+    target.setRect({ top: 350, height: 40 });
+    target.setAttribute("data-message-id", "target");
+    target.style.backgroundColor = "transparent";
+    history.appendChild(target);
+
+    const found = scrollToAndHighlightMessage(asElement(history), "target", 5);
+
+    assert.strictEqual(found, asElement(target));
+    assert.equal(history.scrollTop, 190);
+    assert.equal(history.getAttribute("data-auto-scroll"), "false");
+    assert.equal(target.style.backgroundColor, "rgba(59, 130, 246, 0.14)");
+    assert.include(target.style.boxShadow, "rgba(59, 130, 246, 0.5)");
+
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    assert.equal(target.style.backgroundColor, "transparent");
+    assert.equal(target.style.boxShadow, "");
+  });
+
+  it("does not let an earlier render lease clear a newer highlight", async function () {
+    const doc = new FakeDocument();
+    const history = new FakeElement(doc, "div");
+    history.clientHeight = 200;
+    history.scrollHeight = 600;
+    history.setRect({ top: 0, height: 200 });
+
+    const firstRender = new FakeElement(doc, "div");
+    firstRender.setAttribute("data-message-id", "same-id");
+    firstRender.setRect({ top: 100, height: 40 });
+    history.appendChild(firstRender);
+    scrollToAndHighlightMessage(asElement(history), "same-id", 5);
+
+    history.children.length = 0;
+    const secondRender = new FakeElement(doc, "div");
+    secondRender.setAttribute("data-message-id", "same-id");
+    secondRender.setRect({ top: 100, height: 40 });
+    history.appendChild(secondRender);
+    scrollToAndHighlightMessage(asElement(history), "same-id", 30);
+
+    await new Promise((resolve) => setTimeout(resolve, 12));
+    assert.equal(
+      secondRender.style.backgroundColor,
+      "rgba(59, 130, 246, 0.14)",
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(secondRender.style.backgroundColor, "");
+  });
+});

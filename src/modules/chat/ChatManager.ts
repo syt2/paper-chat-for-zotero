@@ -107,6 +107,12 @@ import {
 } from "./tool-budget/ToolBudgetPolicy";
 import { isAbortError, SessionRunInvalidatedError } from "./errors";
 import { ANALYTICS_EVENTS, getAnalyticsService } from "../analytics";
+import type {
+  ChatHistoryMessagePage,
+  ChatHistorySearchPage,
+  SearchHistoryGroupsRequest,
+  SearchHistorySessionMatchesRequest,
+} from "./search/SearchTypes";
 // V1 migration now handled by migrateToSQLite.ts at startup
 
 /**
@@ -1222,6 +1228,28 @@ export class ChatManager {
   async getAllSessions(): Promise<SessionMeta[]> {
     await this.init();
     return this.sessionStorage.listSessions();
+  }
+
+  startSearchHistoryBackfill(): void {
+    this.sessionStorage.startSearchBackfill();
+  }
+
+  async stopSearchHistoryBackfill(): Promise<void> {
+    await this.sessionStorage.stopSearchBackfill();
+  }
+
+  async searchHistoryGroups(
+    input: SearchHistoryGroupsRequest,
+  ): Promise<ChatHistorySearchPage> {
+    await this.init();
+    return this.sessionStorage.searchHistoryGroups(input);
+  }
+
+  async searchHistorySessionMatches(
+    input: SearchHistorySessionMatchesRequest,
+  ): Promise<ChatHistoryMessagePage> {
+    await this.init();
+    return this.sessionStorage.searchHistorySessionMatches(input);
   }
 
   async updateSessionTitle(
@@ -3272,6 +3300,7 @@ export class ChatManager {
    * 销毁
    */
   async destroy(): Promise<void> {
+    await this.stopSearchHistoryBackfill();
     await this.memoryManager.flushOnDestroy(this.currentSession);
     if (this.currentSession) {
       await this.sessionStorage.updateSessionMeta(this.currentSession);

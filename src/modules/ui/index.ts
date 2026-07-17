@@ -12,5 +12,6 @@ export {
   hidePanel,
   unregisterAll as unregisterChatPanel,
   getChatManager,
+  stopChatSearchBackfillForShutdown,
   addSelectedTextAttachment,
 } from "./chat-panel";

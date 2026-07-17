@@ -3,6 +3,7 @@
  */
 
 import type { ThemeColors } from "./types";
+import { updateHistoryDropdownSearchTheme } from "./HistoryDropdown";
 
 // Light theme colors
 export const lightTheme: ThemeColors = {
@@ -50,7 +51,7 @@ export const darkTheme: ThemeColors = {
   hoverBg: "#383838",
   borderColor: "#444",
   inputBorderColor: "#555",
-  inputFocusBorderColor: "#6b7280",
+  inputFocusBorderColor: "#9ca3af",
   textPrimary: "#e0e0e0",
   textSecondary: "#ccc",
   textMuted: "#999",
@@ -264,7 +265,45 @@ export function applyThemeToContainer(container: HTMLElement): void {
   if (historyDropdown) {
     historyDropdown.style.background = theme.dropdownBg;
     historyDropdown.style.borderColor = theme.borderColor;
+    updateHistoryDropdownSearchTheme(historyDropdown, theme);
   }
+
+  const historySearchHeader = container.querySelector(
+    "#chat-history-search-header",
+  ) as HTMLElement;
+  if (historySearchHeader) {
+    historySearchHeader.style.background = theme.dropdownBg;
+    historySearchHeader.style.borderBottomColor = theme.borderColor;
+  }
+
+  const historySearchInput = container.querySelector(
+    "#chat-history-search-input",
+  ) as HTMLElement;
+  if (historySearchInput) {
+    historySearchInput.style.background = theme.inputBg;
+    historySearchInput.setAttribute(
+      "data-focus-border-color",
+      theme.inputFocusBorderColor,
+    );
+    historySearchInput.setAttribute(
+      "data-idle-border-color",
+      theme.inputBorderColor,
+    );
+    historySearchInput.style.borderColor =
+      historySearchInput.ownerDocument.activeElement === historySearchInput
+        ? theme.inputFocusBorderColor
+        : theme.inputBorderColor;
+    historySearchInput.style.color = theme.textPrimary;
+  }
+
+  container.querySelectorAll(".history-search-group").forEach((group) => {
+    (group as HTMLElement).style.borderBottomColor = theme.borderColor;
+  });
+  container.querySelectorAll(".history-search-highlight").forEach((mark) => {
+    const element = mark as HTMLElement;
+    element.style.background = theme.buttonHoverBg;
+    element.style.color = theme.textPrimary;
+  });
 
   // Mention popup
   const mentionPopup = container.querySelector(

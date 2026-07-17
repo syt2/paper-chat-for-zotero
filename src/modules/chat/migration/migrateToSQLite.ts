@@ -15,10 +15,31 @@ import type {
   SessionMeta,
 } from "../../../types/chat";
 import type { AISummaryStoredState } from "../../../types/ai-summary";
-import { getStorageDatabase } from "../db/StorageDatabase";
-import { getDataPath, getErrorMessage, generateShortId } from "../../../utils/common";
+import {
+  getStorageDatabase,
+  type StorageTransactionClient,
+} from "../db/StorageDatabase";
+import {
+  CURRENT_SEARCH_VERSION,
+  projectMessageSearchNormalizedText,
+  projectSearchNormalizedText,
+} from "../search/SearchProjection";
+import {
+  getDataPath,
+  getErrorMessage,
+  generateShortId,
+} from "../../../utils/common";
 
 const MIGRATION_KEY = "migration_v3_completed";
+const MIGRATION_FILE_KEY_PREFIX = "migration_v3_file";
+const SESSION_MIGRATION_BATCH_SIZE = 25;
+const MESSAGE_ID_LOOKUP_CHUNK_SIZE = 500;
+
+interface SessionMigrationResult {
+  count: number;
+  activeSessionId: string | null;
+  preparationFailures: string[];
+}
 
 /**
  * Check if V3 migration has been completed
@@ -26,10 +47,10 @@ const MIGRATION_KEY = "migration_v3_completed";
 async function isMigrationCompleted(): Promise<boolean> {
   try {
     const db = await getStorageDatabase().ensureInit();
-    const rows = (await db.queryAsync(
-      "SELECT value FROM settings WHERE key = ?",
-      [MIGRATION_KEY],
-    )) || [];
+    const rows =
+      (await db.queryAsync("SELECT value FROM settings WHERE key = ?", [
+        MIGRATION_KEY,
+      ])) || [];
     return rows.length > 0;
   } catch {
     return false;
@@ -57,7 +78,7 @@ function buildSessionMeta(session: ChatSession): SessionMeta {
   if (session.messages && session.messages.length > 0) {
     for (let i = session.messages.length - 1; i >= 0; i--) {
       const msg = session.messages[i];
-      if (msg.content && msg.role !== "tool") {
+      if (msg.content && msg.role !== "tool" && !msg.apiOnly) {
         lastMessagePreview =
           msg.content.substring(0, 50) + (msg.content.length > 50 ? "..." : "");
         lastMessageTime = msg.timestamp || session.updatedAt || Date.now();
@@ -70,85 +91,401 @@ function buildSessionMeta(session: ChatSession): SessionMeta {
     id: session.id,
     createdAt: session.createdAt || Date.now(),
     updatedAt: session.updatedAt || Date.now(),
-    messageCount: session.messages?.length || 0,
+    messageCount: session.messages?.filter((msg) => !msg.apiOnly).length || 0,
     lastMessagePreview,
     lastMessageTime,
+    title: session.title,
+    titleSource: session.titleSource,
+    titleGeneratedAt: session.titleGeneratedAt,
+    titleEditedAt: session.titleEditedAt,
   };
 }
 
-/**
- * Insert a session and its metadata into SQLite (within an existing transaction)
- */
-async function insertSession(
-  db: { queryAsync(sql: string, params?: unknown[]): Promise<any[] | undefined> },
-  session: ChatSession,
-): Promise<void> {
-  const meta = buildSessionMeta(session);
+interface PreparedImportedSession {
+  source: "v1" | "v2";
+  filePath: string;
+  markerKey: string;
+  id: string;
+  updatedAt: number;
+  sessionParams: unknown[];
+  companionParams: unknown[];
+  messageParams: unknown[][];
+  metaParams: unknown[];
+}
 
-  // Insert session row (no messages column in v2 schema)
-  await db.queryAsync(
-    `INSERT OR REPLACE INTO sessions
-     (id, created_at, updated_at, last_active_item_key, context_summary, context_state)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [
+function prepareImportedSession(
+  source: "v1" | "v2",
+  filePath: string,
+  markerKey: string,
+  session: ChatSession,
+): PreparedImportedSession {
+  const meta = buildSessionMeta(session);
+  const searchTitle = projectSearchNormalizedText([
+    {
+      kind: "text",
+      text: session.title || "",
+      separator: "none",
+    },
+  ]);
+  const messageParams = (session.messages || []).map((msg, seq) => [
+    msg.id,
+    session.id,
+    seq,
+    msg.role,
+    msg.content || "",
+    msg.reasoning || null,
+    msg.images ? JSON.stringify(msg.images) : null,
+    msg.files ? JSON.stringify(msg.files) : null,
+    msg.timestamp || Date.now(),
+    msg.pdfContext ? 1 : null,
+    msg.selectedText || null,
+    msg.tool_calls ? JSON.stringify(msg.tool_calls) : null,
+    msg.tool_call_id || null,
+    msg.streamingState || null,
+    msg.apiOnly ? 1 : null,
+    msg.isSystemNotice ? 1 : null,
+    projectMessageSearchNormalizedText(msg),
+    CURRENT_SEARCH_VERSION,
+  ]);
+
+  return {
+    source,
+    filePath,
+    markerKey,
+    id: session.id,
+    updatedAt: session.updatedAt || 0,
+    sessionParams: [
       session.id,
       session.createdAt,
       session.updatedAt,
       session.lastActiveItemKey || null,
+      session.title || null,
+      session.titleSource || null,
+      session.titleGeneratedAt ?? null,
+      session.titleEditedAt ?? null,
       session.contextSummary ? JSON.stringify(session.contextSummary) : null,
       session.contextState ? JSON.stringify(session.contextState) : null,
+      session.executionPlan ? JSON.stringify(session.executionPlan) : null,
+      session.toolExecutionState
+        ? JSON.stringify(session.toolExecutionState)
+        : null,
+      session.toolApprovalState
+        ? JSON.stringify(session.toolApprovalState)
+        : null,
+      session.userInputRequestState
+        ? JSON.stringify(session.userInputRequestState)
+        : null,
+      session.memoryExtractedAt ?? null,
+      session.memoryExtractedMsgCount ?? null,
     ],
-  );
-
-  // Insert messages into the messages table (one row per message)
-  const messages = session.messages || [];
-  for (let seq = 0; seq < messages.length; seq++) {
-    const msg = messages[seq];
-    await db.queryAsync(
-      `INSERT INTO messages (id, session_id, seq, role, content, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, is_system_notice)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        msg.id,
-        session.id,
-        seq,
-        msg.role,
-        msg.content || "",
-        msg.images ? JSON.stringify(msg.images) : null,
-        msg.files ? JSON.stringify(msg.files) : null,
-        msg.timestamp || Date.now(),
-        msg.pdfContext ? 1 : null,
-        msg.selectedText || null,
-        msg.tool_calls ? JSON.stringify(msg.tool_calls) : null,
-        msg.tool_call_id || null,
-        msg.isSystemNotice ? 1 : null,
-      ],
-    );
-  }
-
-  // Insert session_meta
-  await db.queryAsync(
-    `INSERT OR REPLACE INTO session_meta
-     (id, created_at, updated_at, message_count, last_message_preview, last_message_time)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [
+    companionParams: [
+      session.id,
+      session.selectedTier || null,
+      session.resolvedModelId || null,
+      session.lastRetryableUserMessageId || null,
+      session.lastRetryableErrorMessageId || null,
+      session.lastRetryableFailedModelId || null,
+    ],
+    messageParams,
+    metaParams: [
       meta.id,
       meta.createdAt,
       meta.updatedAt,
       meta.messageCount,
       meta.lastMessagePreview,
       meta.lastMessageTime,
+      meta.title || null,
+      meta.titleSource || null,
+      meta.titleGeneratedAt ?? null,
+      meta.titleEditedAt ?? null,
+      searchTitle,
+      CURRENT_SEARCH_VERSION,
+    ],
+  };
+}
+
+interface SessionInsertOutcome {
+  prepared: PreparedImportedSession;
+  status: "inserted" | "covered";
+}
+
+async function findForeignMessageOwners(
+  db: StorageTransactionClient,
+  prepared: PreparedImportedSession,
+): Promise<Map<string, string>> {
+  const messageIds = [
+    ...new Set(
+      prepared.messageParams
+        .map((params) => params[0])
+        .filter((id): id is string => typeof id === "string" && id.length > 0),
+    ),
+  ];
+  const owners = new Map<string, string>();
+
+  for (
+    let offset = 0;
+    offset < messageIds.length;
+    offset += MESSAGE_ID_LOOKUP_CHUNK_SIZE
+  ) {
+    const chunk = messageIds.slice(
+      offset,
+      offset + MESSAGE_ID_LOOKUP_CHUNK_SIZE,
+    );
+    const placeholders = chunk.map(() => "?").join(", ");
+    const rows =
+      (await db.queryAsync(
+        `SELECT id, session_id FROM messages WHERE id IN (${placeholders})`,
+        chunk,
+      )) || [];
+
+    for (const row of rows) {
+      const messageId = String(row.id);
+      const sessionId = String(row.session_id);
+      if (sessionId !== prepared.id) {
+        owners.set(messageId, sessionId);
+      }
+    }
+  }
+
+  return owners;
+}
+
+async function markImportedSessionCovered(
+  db: StorageTransactionClient,
+  prepared: PreparedImportedSession,
+): Promise<void> {
+  await db.queryAsync(
+    "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+    [
+      prepared.markerKey,
+      JSON.stringify({
+        importedAt: Date.now(),
+        coveredByExistingMessages: true,
+      }),
     ],
   );
 }
 
 /**
+ * A JSON import can run before SessionStorageService initializes its singleton
+ * search state. Create that state if needed, then publish the imported semantic
+ * batch by incrementing its durable revision. Existing target versions are
+ * deliberately left untouched so an older plugin cannot downgrade newer data.
+ */
+async function publishImportedSearchBatch(
+  db: StorageTransactionClient,
+  updatedAt: number,
+  revisionEpoch: string,
+): Promise<void> {
+  await db.queryAsync(
+    `INSERT OR IGNORE INTO chat_search_state
+     (id, target_version, completed, revision_epoch, search_revision, updated_at)
+     VALUES (1, ?, 0, ?, 0, ?)`,
+    [CURRENT_SEARCH_VERSION, revisionEpoch, updatedAt],
+  );
+
+  // Recompute completion against the preserved target version. Imported rows
+  // are projected at this build's version, so they correctly reopen backfill
+  // when a newer build already owns the database state.
+  await db.queryAsync(
+    `UPDATE chat_search_state
+     SET completed = CASE WHEN
+           EXISTS (
+             SELECT 1 FROM messages
+             WHERE search_index_version < chat_search_state.target_version
+             LIMIT 1
+           ) OR EXISTS (
+             SELECT 1 FROM session_meta
+             WHERE search_index_version < chat_search_state.target_version
+             LIMIT 1
+           )
+         THEN 0 ELSE 1 END,
+         search_revision = search_revision + 1,
+         updated_at = ?
+     WHERE id = 1`,
+    [updatedAt],
+  );
+}
+
+/**
+ * Insert a session and its metadata into SQLite (within an existing transaction)
+ */
+async function insertSession(
+  db: StorageTransactionClient,
+  prepared: PreparedImportedSession,
+): Promise<void> {
+  // Insert session row (no messages column in v2 schema)
+  await db.queryAsync(
+    `INSERT INTO sessions
+     (id, created_at, updated_at, last_active_item_key, title, title_source, title_generated_at, title_edited_at, context_summary, context_state, execution_plan, tool_execution_state, tool_approval_state, user_input_request_state, memory_extracted_at, memory_extracted_msg_count)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       created_at = excluded.created_at,
+       updated_at = excluded.updated_at,
+       last_active_item_key = excluded.last_active_item_key,
+       title = excluded.title,
+       title_source = excluded.title_source,
+       title_generated_at = excluded.title_generated_at,
+       title_edited_at = excluded.title_edited_at,
+       context_summary = excluded.context_summary,
+       context_state = excluded.context_state,
+       execution_plan = excluded.execution_plan,
+       tool_execution_state = excluded.tool_execution_state,
+       tool_approval_state = excluded.tool_approval_state,
+       user_input_request_state = excluded.user_input_request_state,
+       memory_extracted_at = excluded.memory_extracted_at,
+       memory_extracted_msg_count = excluded.memory_extracted_msg_count`,
+    prepared.sessionParams,
+  );
+
+  // Preserve a companion row that may already contain newer routing state.
+  await db.queryAsync(
+    `INSERT INTO paperchat_session_state
+     (session_id, selected_tier, resolved_model_id, last_retryable_user_message_id, last_retryable_error_message_id, last_retryable_failed_model_id)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(session_id) DO NOTHING`,
+    prepared.companionParams,
+  );
+
+  // Replace any pre-marker partial data for this source session inside the
+  // same transaction. Once the marker commits, future retries skip the file.
+  await db.queryAsync("DELETE FROM messages WHERE session_id = ?", [
+    prepared.id,
+  ]);
+
+  // Insert messages into the messages table (one row per message)
+  for (const params of prepared.messageParams) {
+    await db.queryAsync(
+      `INSERT INTO messages
+       (id, session_id, seq, role, content, reasoning, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, streaming_state, api_only, is_system_notice, search_text, search_index_version)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      params,
+    );
+  }
+
+  // Insert session_meta
+  await db.queryAsync(
+    `INSERT OR REPLACE INTO session_meta
+     (id, created_at, updated_at, message_count, last_message_preview, last_message_time, title, title_source, title_generated_at, title_edited_at, search_title, search_index_version)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    prepared.metaParams,
+  );
+
+  // This marker commits atomically with the imported session. If a later
+  // batch fails, retries skip this source snapshot instead of overwriting
+  // user changes made to the already-visible SQLite session.
+  await db.queryAsync(
+    "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+    [prepared.markerKey, JSON.stringify({ importedAt: Date.now() })],
+  );
+}
+
+async function insertSessionBatch(
+  preparedSessions: PreparedImportedSession[],
+): Promise<SessionInsertOutcome[]> {
+  if (preparedSessions.length === 0) return [];
+
+  const batchUpdatedAt = Date.now();
+  const revisionEpoch = `${batchUpdatedAt.toString(36)}-${generateShortId()}`;
+
+  return getStorageDatabase().executeTransaction(async (db) => {
+    const outcomes: SessionInsertOutcome[] = [];
+    let insertedAnySession = false;
+
+    for (const prepared of preparedSessions) {
+      if (prepared.source === "v1") {
+        const foreignOwners = await findForeignMessageOwners(db, prepared);
+        if (foreignOwners.size > 0) {
+          // Historical V1 -> V2 conversion preserved message ids but left the
+          // V1 source file behind. Any foreign owner proves this V1 snapshot
+          // was already converted. Importing its remaining stale messages
+          // would create a duplicate session or resurrect messages deleted
+          // from the newer V2 copy.
+          await markImportedSessionCovered(db, prepared);
+          outcomes.push({ prepared, status: "covered" });
+          continue;
+        }
+      }
+
+      try {
+        await insertSession(db, prepared);
+        insertedAnySession = true;
+        outcomes.push({ prepared, status: "inserted" });
+      } catch (error) {
+        throw new Error(
+          `Failed to migrate ${prepared.filePath}: ${getErrorMessage(error)}`,
+        );
+      }
+    }
+
+    if (insertedAnySession) {
+      await publishImportedSearchBatch(db, batchUpdatedAt, revisionEpoch);
+    }
+
+    return outcomes;
+  });
+}
+
+async function setActiveSessionId(activeSessionId: string | null) {
+  if (!activeSessionId) return;
+
+  await getStorageDatabase().executeTransaction(async (db) => {
+    await db.queryAsync(
+      "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+      ["active_session_id", activeSessionId],
+    );
+  });
+}
+
+function getLegacySessionId(
+  filePath: string,
+  legacy: LegacyChatSession,
+): string {
+  const sourceId =
+    typeof legacy.id === "string" && legacy.id.trim()
+      ? legacy.id.trim()
+      : filePath
+          .split(/[\\/]/)
+          .pop()
+          ?.replace(/\.json$/i, "") || "unknown";
+  return `legacy-v1-${sourceId}`;
+}
+
+function getMigrationFileMarkerKey(
+  source: "v1" | "v2",
+  filePath: string,
+): string {
+  const fileName = filePath.split(/[\\/]/).pop() || filePath;
+  return `${MIGRATION_FILE_KEY_PREFIX}:${source}:${fileName}`;
+}
+
+async function loadImportedMigrationFileKeys(
+  source: "v1" | "v2",
+): Promise<Set<string>> {
+  const db = await getStorageDatabase().ensureInit();
+  const prefix = `${MIGRATION_FILE_KEY_PREFIX}:${source}:`;
+  const rows =
+    (await db.queryAsync("SELECT key FROM settings WHERE key LIKE ?", [
+      `${prefix}%`,
+    ])) || [];
+  return new Set(rows.map((row) => String(row.key)));
+}
+
+/**
  * Migrate V2 sessions (sessions/*.json) to SQLite
  */
-async function migrateV2Sessions(): Promise<{ count: number; activeSessionId: string | null }> {
+async function migrateV2Sessions(): Promise<
+  SessionMigrationResult & { hasExplicitActiveSessionId: boolean }
+> {
   const sessionsPath = getDataPath("sessions");
 
   if (!(await IOUtils.exists(sessionsPath))) {
-    return { count: 0, activeSessionId: null };
+    return {
+      count: 0,
+      activeSessionId: null,
+      preparationFailures: [],
+      hasExplicitActiveSessionId: false,
+    };
   }
 
   const children = await IOUtils.getChildren(sessionsPath);
@@ -157,7 +494,12 @@ async function migrateV2Sessions(): Promise<{ count: number; activeSessionId: st
   );
 
   if (sessionFiles.length === 0) {
-    return { count: 0, activeSessionId: null };
+    return {
+      count: 0,
+      activeSessionId: null,
+      preparationFailures: [],
+      hasExplicitActiveSessionId: false,
+    };
   }
 
   ztoolkit.log(`[Migration V3] Found ${sessionFiles.length} V2 session files`);
@@ -174,55 +516,80 @@ async function migrateV2Sessions(): Promise<{ count: number; activeSessionId: st
     // Index file corrupted, we'll pick the most recent session
   }
 
-  const db = await getStorageDatabase().ensureInit();
   let migratedCount = 0;
   let latestSession: { id: string; updatedAt: number } | null = null;
+  const preparationFailures: string[] = [];
+  const importedFileKeys = await loadImportedMigrationFileKeys("v2");
+  migratedCount = sessionFiles.filter((filePath) =>
+    importedFileKeys.has(getMigrationFileMarkerKey("v2", filePath)),
+  ).length;
+  for (
+    let offset = 0;
+    offset < sessionFiles.length;
+    offset += SESSION_MIGRATION_BATCH_SIZE
+  ) {
+    const preparedBatch: PreparedImportedSession[] = [];
+    const fileBatch = sessionFiles.slice(
+      offset,
+      offset + SESSION_MIGRATION_BATCH_SIZE,
+    );
 
-  // Migrate in a transaction
-  await db.queryAsync("BEGIN TRANSACTION");
-  try {
-    for (const filePath of sessionFiles) {
+    for (const filePath of fileBatch) {
+      const markerKey = getMigrationFileMarkerKey("v2", filePath);
+      if (importedFileKeys.has(markerKey)) continue;
       try {
         const session = (await IOUtils.readJSON(filePath)) as ChatSession;
-        if (!session.id) continue;
-
-        await insertSession(db, session);
-        migratedCount++;
-
-        if (!latestSession || (session.updatedAt || 0) > latestSession.updatedAt) {
-          latestSession = { id: session.id, updatedAt: session.updatedAt || 0 };
+        if (!session.id) {
+          throw new Error("Session id is missing");
         }
+        preparedBatch.push(
+          prepareImportedSession("v2", filePath, markerKey, session),
+        );
       } catch (error) {
-        ztoolkit.log(`[Migration V3] Error migrating file ${filePath}:`, getErrorMessage(error));
+        const failure = `Failed to prepare migration file ${filePath}: ${getErrorMessage(error)}`;
+        preparationFailures.push(failure);
+        ztoolkit.log(`[Migration V3] ${failure}`);
       }
     }
 
-    // Set active session
-    const finalActiveId = activeSessionId || latestSession?.id || null;
-    if (finalActiveId) {
-      await db.queryAsync(
-        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-        ["active_session_id", finalActiveId],
-      );
+    const outcomes = await insertSessionBatch(preparedBatch);
+    for (const { prepared, status } of outcomes) {
+      migratedCount += 1;
+      importedFileKeys.add(prepared.markerKey);
+      if (
+        status === "inserted" &&
+        (!latestSession || prepared.updatedAt > latestSession.updatedAt)
+      ) {
+        latestSession = {
+          id: prepared.id,
+          updatedAt: prepared.updatedAt,
+        };
+      }
     }
-
-    await db.queryAsync("COMMIT");
-    ztoolkit.log(`[Migration V3] V2 sessions migrated: ${migratedCount}`);
-    return { count: migratedCount, activeSessionId: finalActiveId };
-  } catch (error) {
-    try { await db.queryAsync("ROLLBACK"); } catch { /* ignore */ }
-    throw error;
   }
+
+  const finalActiveId = activeSessionId || latestSession?.id || null;
+  await setActiveSessionId(finalActiveId);
+
+  ztoolkit.log(`[Migration V3] V2 sessions migrated: ${migratedCount}`);
+  return {
+    count: migratedCount,
+    activeSessionId: finalActiveId,
+    preparationFailures,
+    hasExplicitActiveSessionId: activeSessionId !== null,
+  };
 }
 
 /**
  * Migrate V1 sessions (conversations/*.json) to SQLite
  */
-async function migrateV1Sessions(): Promise<{ count: number; activeSessionId: string | null }> {
+async function migrateV1Sessions(
+  preserveExistingActiveSessionId = false,
+): Promise<SessionMigrationResult> {
   const legacyPath = getDataPath("conversations");
 
   if (!(await IOUtils.exists(legacyPath))) {
-    return { count: 0, activeSessionId: null };
+    return { count: 0, activeSessionId: null, preparationFailures: [] };
   }
 
   const children = await IOUtils.getChildren(legacyPath);
@@ -231,18 +598,34 @@ async function migrateV1Sessions(): Promise<{ count: number; activeSessionId: st
   );
 
   if (sessionFiles.length === 0) {
-    return { count: 0, activeSessionId: null };
+    return { count: 0, activeSessionId: null, preparationFailures: [] };
   }
 
-  ztoolkit.log(`[Migration V3] Found ${sessionFiles.length} V1 legacy session files`);
+  ztoolkit.log(
+    `[Migration V3] Found ${sessionFiles.length} V1 legacy session files`,
+  );
 
-  const db = await getStorageDatabase().ensureInit();
   let migratedCount = 0;
   let latestSession: { id: string; updatedAt: number } | null = null;
+  const preparationFailures: string[] = [];
+  const importedFileKeys = await loadImportedMigrationFileKeys("v1");
+  migratedCount = sessionFiles.filter((filePath) =>
+    importedFileKeys.has(getMigrationFileMarkerKey("v1", filePath)),
+  ).length;
+  for (
+    let offset = 0;
+    offset < sessionFiles.length;
+    offset += SESSION_MIGRATION_BATCH_SIZE
+  ) {
+    const preparedBatch: PreparedImportedSession[] = [];
+    const fileBatch = sessionFiles.slice(
+      offset,
+      offset + SESSION_MIGRATION_BATCH_SIZE,
+    );
 
-  await db.queryAsync("BEGIN TRANSACTION");
-  try {
-    for (const filePath of sessionFiles) {
+    for (const filePath of fileBatch) {
+      const markerKey = getMigrationFileMarkerKey("v1", filePath);
+      if (importedFileKeys.has(markerKey)) continue;
       try {
         const legacy = (await IOUtils.readJSON(filePath)) as LegacyChatSession;
 
@@ -263,44 +646,54 @@ async function migrateV1Sessions(): Promise<{ count: number; activeSessionId: st
         }
 
         const newSession: ChatSession = {
-          id: `${Date.now()}-${generateShortId()}`,
+          id: getLegacySessionId(filePath, legacy),
           createdAt: legacy.createdAt || Date.now(),
           updatedAt: legacy.updatedAt || Date.now(),
           lastActiveItemKey: itemKey,
           messages: legacy.messages,
           contextSummary: legacy.contextSummary,
           contextState: legacy.contextState,
+          executionPlan: legacy.executionPlan,
+          toolExecutionState: legacy.toolExecutionState,
+          toolApprovalState: legacy.toolApprovalState,
         };
-
-        await insertSession(db, newSession);
-        migratedCount++;
-
-        if (!latestSession || (newSession.updatedAt || 0) > latestSession.updatedAt) {
-          latestSession = { id: newSession.id, updatedAt: newSession.updatedAt || 0 };
-        }
-
-        // Small delay to ensure unique IDs
-        await new Promise((resolve) => setTimeout(resolve, 1));
+        preparedBatch.push(
+          prepareImportedSession("v1", filePath, markerKey, newSession),
+        );
       } catch (error) {
-        ztoolkit.log(`[Migration V3] Error migrating V1 file ${filePath}:`, getErrorMessage(error));
+        const failure = `Failed to prepare legacy migration file ${filePath}: ${getErrorMessage(error)}`;
+        preparationFailures.push(failure);
+        ztoolkit.log(`[Migration V3] ${failure}`);
       }
     }
 
-    // Set active session
-    if (latestSession) {
-      await db.queryAsync(
-        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-        ["active_session_id", latestSession.id],
-      );
+    const outcomes = await insertSessionBatch(preparedBatch);
+    for (const { prepared, status } of outcomes) {
+      migratedCount += 1;
+      importedFileKeys.add(prepared.markerKey);
+      if (
+        status === "inserted" &&
+        (!latestSession || prepared.updatedAt > latestSession.updatedAt)
+      ) {
+        latestSession = {
+          id: prepared.id,
+          updatedAt: prepared.updatedAt,
+        };
+      }
     }
-
-    await db.queryAsync("COMMIT");
-    ztoolkit.log(`[Migration V3] V1 sessions migrated: ${migratedCount}`);
-    return { count: migratedCount, activeSessionId: latestSession?.id || null };
-  } catch (error) {
-    try { await db.queryAsync("ROLLBACK"); } catch { /* ignore */ }
-    throw error;
   }
+
+  const finalActiveId = latestSession?.id || null;
+  if (!preserveExistingActiveSessionId) {
+    await setActiveSessionId(finalActiveId);
+  }
+
+  ztoolkit.log(`[Migration V3] V1 sessions migrated: ${migratedCount}`);
+  return {
+    count: migratedCount,
+    activeSessionId: finalActiveId,
+    preparationFailures,
+  };
 }
 
 /**
@@ -334,8 +727,11 @@ async function migrateAISummaryProgress(): Promise<boolean> {
     ztoolkit.log("[Migration V3] AI Summary progress migrated");
     return true;
   } catch (error) {
-    ztoolkit.log("[Migration V3] AI Summary progress migration error:", getErrorMessage(error));
-    return false;
+    ztoolkit.log(
+      "[Migration V3] AI Summary progress migration error:",
+      getErrorMessage(error),
+    );
+    throw error;
   }
 }
 
@@ -351,7 +747,10 @@ async function cleanupOldFiles(): Promise<void> {
       ztoolkit.log("[Migration V3] Deleted old sessions/ directory");
     }
   } catch (error) {
-    ztoolkit.log("[Migration V3] Failed to delete sessions/:", getErrorMessage(error));
+    ztoolkit.log(
+      "[Migration V3] Failed to delete sessions/:",
+      getErrorMessage(error),
+    );
   }
 
   // Delete conversations/ directory
@@ -362,7 +761,10 @@ async function cleanupOldFiles(): Promise<void> {
       ztoolkit.log("[Migration V3] Deleted old conversations/ directory");
     }
   } catch (error) {
-    ztoolkit.log("[Migration V3] Failed to delete conversations/:", getErrorMessage(error));
+    ztoolkit.log(
+      "[Migration V3] Failed to delete conversations/:",
+      getErrorMessage(error),
+    );
   }
 
   // Delete ai-summary/progress.json
@@ -373,7 +775,10 @@ async function cleanupOldFiles(): Promise<void> {
       ztoolkit.log("[Migration V3] Deleted old ai-summary/progress.json");
     }
   } catch (error) {
-    ztoolkit.log("[Migration V3] Failed to delete progress.json:", getErrorMessage(error));
+    ztoolkit.log(
+      "[Migration V3] Failed to delete progress.json:",
+      getErrorMessage(error),
+    );
   }
 }
 
@@ -395,30 +800,42 @@ export async function checkAndMigrateToV3(): Promise<void> {
     const hasV2 = await IOUtils.exists(sessionsPath);
 
     let migrated = false;
+    let preserveV2IndexedActiveSession = false;
+    const preparationFailures: string[] = [];
 
     if (hasV2) {
       const result = await migrateV2Sessions();
+      preserveV2IndexedActiveSession = result.hasExplicitActiveSessionId;
+      preparationFailures.push(...result.preparationFailures);
       if (result.count > 0) {
         ztoolkit.log(`[Migration V3] V2 migration: ${result.count} sessions`);
         migrated = true;
       }
     }
 
-    // If no V2 data, try V1
-    if (!migrated) {
-      const conversationsPath = getDataPath("conversations");
-      const hasV1 = await IOUtils.exists(conversationsPath);
-      if (hasV1) {
-        const result = await migrateV1Sessions();
-        if (result.count > 0) {
-          ztoolkit.log(`[Migration V3] V1 migration: ${result.count} sessions`);
-          migrated = true;
-        }
+    // V1 and V2 sources can coexist after an older partial conversion. Import
+    // both independently so cleanup never deletes an unprocessed source tree.
+    const conversationsPath = getDataPath("conversations");
+    const hasV1 = await IOUtils.exists(conversationsPath);
+    if (hasV1) {
+      const result = await migrateV1Sessions(preserveV2IndexedActiveSession);
+      preparationFailures.push(...result.preparationFailures);
+      if (result.count > 0) {
+        ztoolkit.log(`[Migration V3] V1 migration: ${result.count} sessions`);
+        migrated = true;
       }
     }
 
     // Migrate AI Summary progress (independent of session migration)
     await migrateAISummaryProgress();
+
+    // Successful files have already committed with their durable markers.
+    // Keep the source trees and retry only the unmarked failures next startup.
+    if (preparationFailures.length > 0) {
+      throw new Error(
+        `${preparationFailures.length} session migration file(s) could not be prepared: ${preparationFailures.join("; ")}`,
+      );
+    }
 
     // Mark migration as completed
     await markMigrationCompleted();

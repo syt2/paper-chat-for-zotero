@@ -6,6 +6,7 @@ import {
 import { createZToolkit } from "./utils/ztoolkit";
 import {
   registerToolbarButton,
+  stopChatSearchBackfillForShutdown,
   unregisterChatPanel,
   togglePanel,
 } from "./modules/ui";
@@ -199,7 +200,14 @@ async function onShutdown(): Promise<void> {
 
 async function onAppShutdown(): Promise<void> {
   // Full UI/service teardown during APP_SHUTDOWN can add work to Zotero's own
-  // shutdown path. Close only DB connections that otherwise block shutdown.
+  // shutdown path. Stop DB-backed background work, then close only connections
+  // that would otherwise block shutdown.
+  try {
+    await stopChatSearchBackfillForShutdown();
+  } catch (error) {
+    ztoolkit.log("[Shutdown] Failed to stop chat search backfill:", error);
+  }
+
   try {
     await destroyVectorStore();
   } catch (error) {

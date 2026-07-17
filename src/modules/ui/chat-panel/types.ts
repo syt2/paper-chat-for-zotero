@@ -77,7 +77,10 @@ export interface ChatPanelContext {
   updateAttachmentsPreview: () => void;
   updateUserBar: () => void;
   updatePdfCheckboxVisibility: (item: Zotero.Item | null) => Promise<void>;
-  renderMessages: (messages: ChatMessage[]) => void;
+  renderMessages: (
+    messages: ChatMessage[],
+    onRenderComplete?: () => void,
+  ) => void;
   renderExecutionPlan: (plan?: ExecutionPlan) => void;
   appendError: (errorMessage: string) => void;
   rerollPaperChatTierForCurrentSession: () => Promise<{

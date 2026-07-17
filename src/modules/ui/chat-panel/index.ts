@@ -12,6 +12,7 @@ export {
   unregisterToolbarButton,
   unregisterAll,
   getChatManager,
+  stopChatSearchBackfillForShutdown,
   addSelectedTextAttachment,
 } from "./ChatPanelManager";
 

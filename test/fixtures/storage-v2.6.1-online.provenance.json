@@ -1,0 +1,20 @@
+{
+  "releaseVersion": "2.6.1",
+  "releaseTag": "V2.6.1",
+  "releaseCommit": "586f0b18d69d4c41dfbff9a40b694f4bac048ded",
+  "xpiSourceURI": "https://github.com/syt2/paper-chat-for-zotero/releases/download/V2.6.1/ai-paper-chat.xpi",
+  "xpiSha256": "344cd422d02a9e522820a0495e9f4ab67c139922fa25b488079f75333738a579",
+  "xpiBundleSha256": "5cc9d30f66c6bcc65e000e9863a7cc9645e8e9500bd150f4664ff05a3cfc73b7",
+  "zoteroVersion": "9.0.6",
+  "schemaVersion": 8,
+  "fixtureSha256": "2ca0cb72505adb4afdd2c9cba5d15cbf5b3775153c4bdbb57134c05b53aae49b",
+  "fixtureGzipSha256": "3aeba4e52427e8052fc408c14209fe7e3a9a43078ddecb4b8e46766eb7172367",
+  "containsSyntheticDataOnly": true,
+  "expectedRows": {
+    "sessions": 2,
+    "messages": 3,
+    "session_meta": 2,
+    "paperchat_session_state": 1
+  },
+  "generation": "The byte-verified official V2.6.1 XPI initialized a clean isolated Zotero data directory. The harness then inserted two deterministic synthetic sessions and three synthetic messages, including a non-empty reasoning value, through Zotero.DBConnection before checkpointing the v8 database."
+}

@@ -11,7 +11,7 @@ import { getErrorMessage } from "../../../utils/common";
 
 const DB_DIR = "paper-chat";
 const DB_FILE = "storage";
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 
 /** Build absolute DB path so Zotero.DBConnection doesn't parse subdirectory names */
 function getDBPath(): string {
@@ -37,14 +37,34 @@ interface ZoteroDBConnection {
   closeDatabase(permanent: boolean): Promise<void>;
 }
 
+/**
+ * The only database surface exposed to storage consumers. Every ordinary
+ * statement is scheduled as one job on the single owned Zotero connection.
+ */
+export interface StorageDatabaseClient {
+  queryAsync(sql: string, params?: unknown[]): Promise<any[] | undefined>;
+}
+
+export type StorageTransactionClient = StorageDatabaseClient;
+
 export class StorageDatabase {
   private db: ZoteroDBConnection | null = null;
   private initPromise: Promise<void> | null = null;
+  private operationTail: Promise<void> = Promise.resolve();
+  private acceptingWork = true;
+  private acceptedWorkCount = 0;
+  private acceptedWorkDrained: Promise<void> = Promise.resolve();
+  private resolveAcceptedWorkDrained: (() => void) | null = null;
+  private closePromise: Promise<void> | null = null;
 
   /**
    * Initialize the SQLite database
    */
   async init(): Promise<void> {
+    if (!this.acceptingWork) {
+      throw new Error("StorageDatabase is shutting down");
+    }
+
     if (this.db) {
       return;
     }
@@ -62,6 +82,7 @@ export class StorageDatabase {
   }
 
   private async initDatabase(): Promise<void> {
+    let pendingDb: ZoteroDBConnection | null = null;
     try {
       // Ensure subdirectory exists
       const dataDir = Zotero.DataDirectory.dir;
@@ -74,22 +95,22 @@ export class StorageDatabase {
       // Create database connection (assign to local var first;
       // only set this.db after all initialization succeeds to prevent
       // concurrent callers from seeing a partially-initialized DB)
-      const db: ZoteroDBConnection = new Zotero.DBConnection(getDBPath());
+      pendingDb = new Zotero.DBConnection(getDBPath());
 
       // Enable WAL mode for better concurrent read performance
-      await db.queryAsync("PRAGMA journal_mode=WAL");
+      await pendingDb.queryAsync("PRAGMA journal_mode=WAL");
       // Enable foreign keys (best-effort: may not persist across reconnections,
       // so callers should not rely solely on CASCADE - always delete explicitly)
-      await db.queryAsync("PRAGMA foreign_keys=ON");
+      await pendingDb.queryAsync("PRAGMA foreign_keys=ON");
 
       // Create all tables
-      await this.createTables(db);
+      await this.createTables(pendingDb);
 
       // Initialize schema version
-      await this.initSchemaVersion(db);
+      await this.initSchemaVersion(pendingDb);
 
       // Mark as fully initialized only after everything succeeds
-      this.db = db;
+      this.db = pendingDb;
 
       ztoolkit.log(
         "[StorageDatabase] SQLite database initialized successfully",
@@ -99,6 +120,16 @@ export class StorageDatabase {
         "[StorageDatabase] Failed to initialize database:",
         getErrorMessage(error),
       );
+      if (pendingDb) {
+        try {
+          await pendingDb.closeDatabase(false);
+        } catch (closeError) {
+          ztoolkit.log(
+            "[StorageDatabase] Failed to close rejected database connection:",
+            getErrorMessage(closeError),
+          );
+        }
+      }
       this.db = null;
       this.initPromise = null;
       throw error;
@@ -172,6 +203,8 @@ export class StorageDatabase {
         title_source TEXT,
         title_generated_at INTEGER,
         title_edited_at INTEGER,
+        search_title TEXT NOT NULL DEFAULT '',
+        search_index_version INTEGER NOT NULL DEFAULT 0,
         FOREIGN KEY (id) REFERENCES sessions(id) ON DELETE CASCADE
       )
     `);
@@ -180,6 +213,21 @@ export class StorageDatabase {
       CREATE INDEX IF NOT EXISTS idx_session_meta_updated_at
       ON session_meta (updated_at DESC)
     `);
+
+    const sessionMetaColumns = new Set(
+      ((await db.queryAsync("PRAGMA table_info(session_meta)")) || []).map(
+        (column: any) => String(column.name),
+      ),
+    );
+    const hasSessionMetaSearchColumns =
+      sessionMetaColumns.has("search_title") &&
+      sessionMetaColumns.has("search_index_version");
+    if (hasSessionMetaSearchColumns) {
+      await db.queryAsync(`
+        CREATE INDEX IF NOT EXISTS idx_session_meta_search_work
+        ON session_meta (search_index_version, id COLLATE BINARY)
+      `);
+    }
 
     // Chat messages (one row per message)
     await db.queryAsync(`
@@ -200,6 +248,8 @@ export class StorageDatabase {
         streaming_state TEXT,
         api_only INTEGER,
         is_system_notice INTEGER,
+        search_text TEXT NOT NULL DEFAULT '',
+        search_index_version INTEGER NOT NULL DEFAULT 0,
         FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
       )
     `);
@@ -208,6 +258,60 @@ export class StorageDatabase {
       CREATE INDEX IF NOT EXISTS idx_messages_session_seq
       ON messages (session_id, seq ASC)
     `);
+
+    const messageColumns = new Set(
+      ((await db.queryAsync("PRAGMA table_info(messages)")) || []).map(
+        (column: any) => String(column.name),
+      ),
+    );
+    // A persisted schema version can outlive a partially applied or legacy
+    // table shape. Reconcile this historical v3 invariant from the real table
+    // on every startup instead of trusting only the version row.
+    if (!messageColumns.has("reasoning")) {
+      await db.queryAsync("ALTER TABLE messages ADD COLUMN reasoning TEXT");
+      messageColumns.add("reasoning");
+    }
+    const hasMessageSearchColumns =
+      messageColumns.has("search_text") &&
+      messageColumns.has("search_index_version");
+    if (hasMessageSearchColumns) {
+      await db.queryAsync(`
+        CREATE INDEX IF NOT EXISTS idx_messages_search_work
+        ON messages (search_index_version, id COLLATE BINARY)
+      `);
+      await db.queryAsync(`
+        CREATE INDEX IF NOT EXISTS idx_messages_session_search_work
+        ON messages (session_id, search_index_version, id COLLATE BINARY)
+      `);
+    }
+
+    await db.queryAsync(`
+      CREATE TABLE IF NOT EXISTS chat_search_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        target_version INTEGER NOT NULL,
+        completed INTEGER NOT NULL DEFAULT 0,
+        revision_epoch TEXT NOT NULL,
+        search_revision INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+    // A v8 database reaches createTables() before upgradeToV9() starts its
+    // transaction. Never install triggers that reference columns the real
+    // tables do not have yet: if the migration then failed, those triggers
+    // would survive and break writes from the previous online build.
+    if (hasSessionMetaSearchColumns && hasMessageSearchColumns) {
+      await this.ensureSearchInvalidationTriggers(db);
+    } else {
+      // Clean up triggers left by an interrupted pre-v9 development build.
+      // They are unusable against the legacy shape and would make old-version
+      // UPDATE statements fail before a retry can repair the schema.
+      await db.queryAsync(
+        "DROP TRIGGER IF EXISTS trg_messages_search_projection_stale",
+      );
+      await db.queryAsync(
+        "DROP TRIGGER IF EXISTS trg_session_meta_search_projection_stale",
+      );
+    }
 
     await db.queryAsync(`
       CREATE TABLE IF NOT EXISTS tasks (
@@ -301,6 +405,25 @@ export class StorageDatabase {
     `);
   }
 
+  private async hasV9SearchColumns(db: ZoteroDBConnection): Promise<boolean> {
+    const messageColumns = new Set(
+      ((await db.queryAsync("PRAGMA table_info(messages)")) || []).map(
+        (column: any) => String(column.name),
+      ),
+    );
+    const sessionMetaColumns = new Set(
+      ((await db.queryAsync("PRAGMA table_info(session_meta)")) || []).map(
+        (column: any) => String(column.name),
+      ),
+    );
+    return (
+      messageColumns.has("search_text") &&
+      messageColumns.has("search_index_version") &&
+      sessionMetaColumns.has("search_title") &&
+      sessionMetaColumns.has("search_index_version")
+    );
+  }
+
   private async initSchemaVersion(db: ZoteroDBConnection): Promise<void> {
     const rows =
       (await db.queryAsync(
@@ -308,13 +431,30 @@ export class StorageDatabase {
       )) || [];
 
     if (rows.length === 0) {
-      // Fresh install — tables already created with current schema
+      // A missing version row is only a fresh install if createTables() built
+      // the complete current shape. Never label a legacy/corrupt table set as
+      // current and silently skip its migrations.
+      if (!(await this.hasV9SearchColumns(db))) {
+        throw new Error(
+          "StorageDatabase schema version is missing for a legacy table shape",
+        );
+      }
       await db.queryAsync(
         "INSERT INTO schema_version (id, version, updated_at) VALUES (1, ?, ?)",
         [SCHEMA_VERSION, Date.now()],
       );
     } else {
-      let currentVersion = rows[0].version;
+      let currentVersion = Number(rows[0].version);
+      if (!Number.isSafeInteger(currentVersion) || currentVersion < 1) {
+        throw new Error(
+          `StorageDatabase has an invalid schema version: ${String(rows[0].version)}`,
+        );
+      }
+      if (currentVersion > SCHEMA_VERSION) {
+        throw new Error(
+          `StorageDatabase schema version ${currentVersion} is newer than supported version ${SCHEMA_VERSION}`,
+        );
+      }
       if (currentVersion < 2) {
         await this.devUpgradeToV2(db);
         currentVersion = 2;
@@ -342,6 +482,16 @@ export class StorageDatabase {
       if (currentVersion < 8) {
         await this.upgradeToV8(db);
         currentVersion = 8;
+      }
+      if (currentVersion < 9) {
+        await this.upgradeToV9(db);
+        currentVersion = 9;
+      }
+      if (
+        currentVersion === SCHEMA_VERSION &&
+        !(await this.hasV9SearchColumns(db))
+      ) {
+        await this.upgradeToV9(db);
       }
     }
   }
@@ -701,8 +851,7 @@ export class StorageDatabase {
 
       const sessionRows =
         (await db.queryAsync(
-          `SELECT
-           id,
+          `SELECT id,
            selected_tier,
            resolved_model_id,
            last_retryable_user_message_id,
@@ -876,36 +1025,340 @@ export class StorageDatabase {
   }
 
   /**
+   * Upgrade schema v8 -> v9: add the inline chat-history search work columns
+   * and repair companion PaperChat state rows missed by the old v5 backfill.
+   */
+  private async upgradeToV9(db: ZoteroDBConnection): Promise<void> {
+    ztoolkit.log("[StorageDatabase] Upgrading schema v8 -> v9...");
+
+    await db.queryAsync("BEGIN TRANSACTION");
+    try {
+      const messageCols = new Set(
+        ((await db.queryAsync("PRAGMA table_info(messages)")) || []).map(
+          (column: any) => String(column.name),
+        ),
+      );
+      if (!messageCols.has("search_text")) {
+        await db.queryAsync(
+          "ALTER TABLE messages ADD COLUMN search_text TEXT NOT NULL DEFAULT ''",
+        );
+      }
+      if (!messageCols.has("search_index_version")) {
+        await db.queryAsync(
+          "ALTER TABLE messages ADD COLUMN search_index_version INTEGER NOT NULL DEFAULT 0",
+        );
+      }
+      await db.queryAsync(
+        "CREATE INDEX IF NOT EXISTS idx_messages_search_work ON messages(search_index_version, id COLLATE BINARY)",
+      );
+      await db.queryAsync(
+        "CREATE INDEX IF NOT EXISTS idx_messages_session_search_work ON messages(session_id, search_index_version, id COLLATE BINARY)",
+      );
+
+      const sessionMetaCols = new Set(
+        ((await db.queryAsync("PRAGMA table_info(session_meta)")) || []).map(
+          (column: any) => String(column.name),
+        ),
+      );
+      if (!sessionMetaCols.has("search_title")) {
+        await db.queryAsync(
+          "ALTER TABLE session_meta ADD COLUMN search_title TEXT NOT NULL DEFAULT ''",
+        );
+      }
+      if (!sessionMetaCols.has("search_index_version")) {
+        await db.queryAsync(
+          "ALTER TABLE session_meta ADD COLUMN search_index_version INTEGER NOT NULL DEFAULT 0",
+        );
+      }
+      await db.queryAsync(
+        "CREATE INDEX IF NOT EXISTS idx_session_meta_search_work ON session_meta(search_index_version, id COLLATE BINARY)",
+      );
+
+      await db.queryAsync(`
+        CREATE TABLE IF NOT EXISTS chat_search_state (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          target_version INTEGER NOT NULL,
+          completed INTEGER NOT NULL DEFAULT 0,
+          revision_epoch TEXT NOT NULL,
+          search_revision INTEGER NOT NULL DEFAULT 0,
+          updated_at INTEGER NOT NULL
+        )
+      `);
+      await this.ensureSearchInvalidationTriggers(db);
+
+      // Repair only missing rows. Existing companion rows can be newer than
+      // the legacy columns retained on sessions and must never be overwritten.
+      await db.queryAsync(`
+        INSERT INTO paperchat_session_state (
+          session_id,
+          selected_tier,
+          resolved_model_id,
+          last_retryable_user_message_id,
+          last_retryable_error_message_id,
+          last_retryable_failed_model_id
+        )
+        SELECT s.id,
+          s.selected_tier,
+          s.resolved_model_id,
+          s.last_retryable_user_message_id,
+          s.last_retryable_error_message_id,
+          s.last_retryable_failed_model_id
+        FROM sessions s
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM paperchat_session_state pcs
+          WHERE pcs.session_id = s.id
+        )
+      `);
+
+      await db.queryAsync(
+        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
+        [9, Date.now()],
+      );
+
+      await db.queryAsync("COMMIT");
+      ztoolkit.log("[StorageDatabase] Schema upgraded to v9");
+    } catch (error) {
+      try {
+        await db.queryAsync("ROLLBACK");
+      } catch {
+        /* ignore */
+      }
+      ztoolkit.log(
+        "[StorageDatabase] Failed to upgrade to v9:",
+        getErrorMessage(error),
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Keep projections safe if an older plugin build edits a v9 database without
+   * knowing about the search columns. Current semantic writes first reserve a
+   * negative projection-version sentinel in the same transaction, so even an
+   * unchanged normalized projection is distinguishable from a legacy write.
+   */
+  private async ensureSearchInvalidationTriggers(
+    db: ZoteroDBConnection,
+  ): Promise<void> {
+    await db.queryAsync(`
+      CREATE TRIGGER IF NOT EXISTS trg_messages_search_projection_stale
+      AFTER UPDATE OF role, content, selected_text, tool_calls, tool_call_id,
+        streaming_state, api_only, is_system_notice ON messages
+      WHEN NEW.search_index_version = OLD.search_index_version
+        AND NEW.search_text = OLD.search_text
+        AND (
+          NEW.role IS NOT OLD.role
+          OR NEW.content IS NOT OLD.content
+          OR NEW.selected_text IS NOT OLD.selected_text
+          OR NEW.tool_calls IS NOT OLD.tool_calls
+          OR NEW.tool_call_id IS NOT OLD.tool_call_id
+          OR NEW.streaming_state IS NOT OLD.streaming_state
+          OR NEW.api_only IS NOT OLD.api_only
+          OR NEW.is_system_notice IS NOT OLD.is_system_notice
+        )
+      BEGIN
+        UPDATE messages
+        SET search_text = '', search_index_version = 0
+        WHERE id = NEW.id;
+        UPDATE chat_search_state
+        SET completed = 0,
+            search_revision = search_revision + 1,
+            updated_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000
+        WHERE id = 1;
+      END
+    `);
+    await db.queryAsync(`
+      CREATE TRIGGER IF NOT EXISTS trg_session_meta_search_projection_stale
+      AFTER UPDATE OF title ON session_meta
+      WHEN NEW.title IS NOT OLD.title
+        AND NEW.search_index_version = OLD.search_index_version
+        AND NEW.search_title = OLD.search_title
+      BEGIN
+        UPDATE session_meta
+        SET search_title = '', search_index_version = 0
+        WHERE id = NEW.id;
+        UPDATE chat_search_state
+        SET completed = 0,
+            search_revision = search_revision + 1,
+            updated_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000
+        WHERE id = 1;
+      END
+    `);
+  }
+
+  private enqueueOperation<T>(
+    operation: (db: ZoteroDBConnection) => Promise<T>,
+  ): Promise<T> {
+    const result = this.operationTail.then(async () => {
+      const db = this.db;
+      if (!db) {
+        throw new Error("StorageDatabase not initialized");
+      }
+      return operation(db);
+    });
+    this.operationTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  /** Reserve work at the public-call boundary, before initialization awaits. */
+  private acceptWork(): () => void {
+    if (!this.acceptingWork) {
+      throw new Error("StorageDatabase is shutting down");
+    }
+
+    if (this.acceptedWorkCount === 0) {
+      this.acceptedWorkDrained = new Promise<void>((resolve) => {
+        this.resolveAcceptedWorkDrained = resolve;
+      });
+    }
+    this.acceptedWorkCount += 1;
+
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.acceptedWorkCount -= 1;
+      if (this.acceptedWorkCount === 0) {
+        this.resolveAcceptedWorkDrained?.();
+        this.resolveAcceptedWorkDrained = null;
+      }
+    };
+  }
+
+  /**
+   * Queue one ordinary statement on the single owned connection.
+   */
+  async queryAsync(
+    sql: string,
+    params?: unknown[],
+  ): Promise<any[] | undefined> {
+    const releaseWork = this.acceptWork();
+    try {
+      if (!this.db) {
+        await this.init();
+      }
+      return await this.enqueueOperation((db) => db.queryAsync(sql, params));
+    } finally {
+      releaseWork();
+    }
+  }
+
+  /**
+   * Queue one exclusive transaction job. The callback must use the provided
+   * scoped client; its statements execute directly while the scheduler remains
+   * occupied from BEGIN through COMMIT or ROLLBACK.
+   */
+  async executeTransaction<T>(
+    operation: (db: StorageTransactionClient) => Promise<T>,
+  ): Promise<T> {
+    const releaseWork = this.acceptWork();
+    try {
+      // When initialized, reserve the scheduler position synchronously so an
+      // ordinary statement invoked immediately afterwards cannot overtake the
+      // transaction while this async method is awaiting another promise.
+      if (this.db) {
+        return await this.enqueueExclusiveTransaction(operation);
+      }
+
+      const initializedClient = await this.ensureInit();
+
+      // A few storage tests and embedders inject a connection by overriding
+      // ensureInit(). Preserve that seam while production always returns this
+      // scheduler facade and takes the exclusive queued path below.
+      if (initializedClient !== this) {
+        await initializedClient.queryAsync("BEGIN TRANSACTION");
+        try {
+          const value = await operation(initializedClient);
+          await initializedClient.queryAsync("COMMIT");
+          return value;
+        } catch (error) {
+          try {
+            await initializedClient.queryAsync("ROLLBACK");
+          } catch {
+            /* preserve the original transaction error */
+          }
+          throw error;
+        }
+      }
+
+      return await this.enqueueExclusiveTransaction(operation);
+    } finally {
+      releaseWork();
+    }
+  }
+
+  private enqueueExclusiveTransaction<T>(
+    operation: (db: StorageTransactionClient) => Promise<T>,
+  ): Promise<T> {
+    return this.enqueueOperation(async (db) => {
+      await db.queryAsync("BEGIN TRANSACTION");
+      const transactionClient: StorageTransactionClient = {
+        queryAsync: (sql, params) => db.queryAsync(sql, params),
+      };
+      try {
+        const value = await operation(transactionClient);
+        await db.queryAsync("COMMIT");
+        return value;
+      } catch (error) {
+        try {
+          await db.queryAsync("ROLLBACK");
+        } catch {
+          /* preserve the original transaction error */
+        }
+        throw error;
+      }
+    });
+  }
+
+  /**
    * Ensure database is initialized and return the connection
    */
-  async ensureInit(): Promise<ZoteroDBConnection> {
+  async ensureInit(): Promise<StorageDatabaseClient> {
     await this.init();
-    if (!this.db) {
-      throw new Error("StorageDatabase not initialized");
-    }
-    return this.db;
+    return this;
   }
 
   /**
    * Close the database connection
    */
   async close(): Promise<void> {
-    if (this.initPromise) {
-      try {
-        await this.initPromise;
-      } catch {
-        // A failed init has already reset state; close remains best-effort.
+    if (this.closePromise) {
+      return this.closePromise;
+    }
+
+    this.acceptingWork = false;
+    this.closePromise = (async () => {
+      if (this.initPromise) {
+        try {
+          await this.initPromise;
+        } catch {
+          // A failed init has already reset state; close remains best-effort.
+        }
       }
-    }
 
-    const db = this.db;
-    this.db = null;
-    this.initPromise = null;
+      // Public calls reserve admission before awaiting initialization. Those
+      // calls remain accepted even after shutdown closes the admission gate.
+      await this.acceptedWorkDrained;
 
-    if (db) {
-      await db.closeDatabase(false);
-      ztoolkit.log("[StorageDatabase] Database connection closed");
-    }
+      // Finish the active job and every job accepted before shutdown before
+      // closing the underlying connection.
+      await this.operationTail;
+
+      const db = this.db;
+      this.db = null;
+      this.initPromise = null;
+
+      if (db) {
+        await db.closeDatabase(false);
+        ztoolkit.log("[StorageDatabase] Database connection closed");
+      }
+    })();
+
+    return this.closePromise;
   }
 }
 
