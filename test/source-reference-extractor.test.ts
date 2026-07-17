@@ -23,6 +23,55 @@ function identities(references: ToolSourceReference[]): string[] {
 }
 
 describe("tool source reference extraction", function () {
+  let originalItemLookupDescriptor: PropertyDescriptor | undefined;
+  let originalCollectionLookupDescriptor: PropertyDescriptor | undefined;
+
+  before(function () {
+    const runtimeZotero = (globalThis as any).Zotero;
+    if (!runtimeZotero) return;
+
+    originalItemLookupDescriptor = Object.getOwnPropertyDescriptor(
+      runtimeZotero.Items,
+      "getByLibraryAndKey",
+    );
+    originalCollectionLookupDescriptor = Object.getOwnPropertyDescriptor(
+      runtimeZotero.Collections,
+      "getByLibraryAndKey",
+    );
+    Object.defineProperty(runtimeZotero.Items, "getByLibraryAndKey", {
+      configurable: true,
+      value: undefined,
+    });
+    Object.defineProperty(runtimeZotero.Collections, "getByLibraryAndKey", {
+      configurable: true,
+      value: undefined,
+    });
+  });
+
+  after(function () {
+    const runtimeZotero = (globalThis as any).Zotero;
+    if (!runtimeZotero) return;
+
+    if (originalItemLookupDescriptor) {
+      Object.defineProperty(
+        runtimeZotero.Items,
+        "getByLibraryAndKey",
+        originalItemLookupDescriptor,
+      );
+    } else {
+      delete runtimeZotero.Items.getByLibraryAndKey;
+    }
+    if (originalCollectionLookupDescriptor) {
+      Object.defineProperty(
+        runtimeZotero.Collections,
+        "getByLibraryAndKey",
+        originalCollectionLookupDescriptor,
+      );
+    } else {
+      delete runtimeZotero.Collections.getByLibraryAndKey;
+    }
+  });
+
   it("uses the executor's source item identity instead of model arguments", function () {
     const references = deriveToolSourceReferences(
       createToolCall("get_pages", {
