@@ -18,6 +18,7 @@ class FakeElement {
     backgroundColor: "",
     borderRadius: "",
     boxShadow: "",
+    position: "",
     transition: "",
   };
   readonly attributes = new Map<string, string>();
@@ -73,6 +74,13 @@ class FakeElement {
     child.parentElement = this;
     this.children.push(child);
     return child;
+  }
+
+  remove(): void {
+    if (!this.parentElement) return;
+    const index = this.parentElement.children.indexOf(this);
+    if (index >= 0) this.parentElement.children.splice(index, 1);
+    this.parentElement = null;
   }
 
   setAttribute(name: string, value: string): void {
@@ -224,17 +232,20 @@ describe("chat message exact navigation", function () {
     assert.isNull(findRenderedMessageElement(asElement(history), "missing"));
   });
 
-  it("centers, highlights, and restores the whole message", async function () {
+  it("centers the message and briefly flashes only its bubble", async function () {
     const doc = new FakeDocument();
     const history = new FakeElement(doc, "div");
     const target = new FakeElement(doc, "div");
+    const bubble = new FakeElement(doc, "div");
     history.scrollTop = 20;
     history.scrollHeight = 600;
     history.clientHeight = 200;
     history.setRect({ top: 100, height: 200 });
     target.setRect({ top: 350, height: 40 });
     target.setAttribute("data-message-id", "target");
-    target.style.backgroundColor = "transparent";
+    bubble.setAttribute("class", "chat-bubble");
+    bubble.style.backgroundColor = "navy";
+    target.appendChild(bubble);
     history.appendChild(target);
 
     const found = scrollToAndHighlightMessage(asElement(history), "target", 5);
@@ -242,12 +253,56 @@ describe("chat message exact navigation", function () {
     assert.strictEqual(found, asElement(target));
     assert.equal(history.scrollTop, 190);
     assert.equal(history.getAttribute("data-auto-scroll"), "false");
-    assert.equal(target.style.backgroundColor, "rgba(59, 130, 246, 0.14)");
-    assert.include(target.style.boxShadow, "rgba(59, 130, 246, 0.5)");
+    assert.equal(target.style.backgroundColor, "");
+    assert.equal(bubble.style.backgroundColor, "navy");
+    assert.lengthOf(bubble.children, 1);
+    assert.equal(
+      bubble.children[0].getAttribute("class"),
+      "paperchat-message-highlight-overlay",
+    );
+    assert.equal(
+      bubble.children[0].style.backgroundColor,
+      "rgba(59, 130, 246, 0.18)",
+    );
+    assert.equal(bubble.children[0].style.opacity, "0.72");
+    assert.equal(bubble.children[0].style.animation, undefined);
+    assert.equal(bubble.children[0].style.boxShadow, "");
 
     await new Promise((resolve) => setTimeout(resolve, 15));
-    assert.equal(target.style.backgroundColor, "transparent");
-    assert.equal(target.style.boxShadow, "");
+    assert.lengthOf(bubble.children, 0);
+    assert.equal(bubble.style.backgroundColor, "navy");
+    assert.equal(bubble.style.position, "");
+  });
+
+  it("pulses the bubble background twice before removing the overlay", async function () {
+    const doc = new FakeDocument();
+    const history = new FakeElement(doc, "div");
+    const target = new FakeElement(doc, "div");
+    const bubble = new FakeElement(doc, "div");
+    history.clientHeight = 200;
+    history.scrollHeight = 600;
+    history.setRect({ top: 0, height: 200 });
+    target.setRect({ top: 100, height: 40 });
+    target.setAttribute("data-message-id", "double-pulse");
+    bubble.setAttribute("class", "chat-bubble");
+    target.appendChild(bubble);
+    history.appendChild(target);
+
+    scrollToAndHighlightMessage(asElement(history), "double-pulse", 300);
+    const overlay = bubble.children[0];
+    assert.equal(overlay.style.opacity, "0.72");
+
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.equal(overlay.style.opacity, "0");
+
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.equal(overlay.style.opacity, "0.58");
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.equal(overlay.style.opacity, "0");
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.lengthOf(bubble.children, 0);
   });
 
   it("does not let an earlier render lease clear a newer highlight", async function () {
@@ -258,25 +313,28 @@ describe("chat message exact navigation", function () {
     history.setRect({ top: 0, height: 200 });
 
     const firstRender = new FakeElement(doc, "div");
+    const firstBubble = new FakeElement(doc, "div");
     firstRender.setAttribute("data-message-id", "same-id");
     firstRender.setRect({ top: 100, height: 40 });
+    firstBubble.setAttribute("class", "chat-bubble");
+    firstRender.appendChild(firstBubble);
     history.appendChild(firstRender);
     scrollToAndHighlightMessage(asElement(history), "same-id", 5);
 
     history.children.length = 0;
     const secondRender = new FakeElement(doc, "div");
+    const secondBubble = new FakeElement(doc, "div");
     secondRender.setAttribute("data-message-id", "same-id");
     secondRender.setRect({ top: 100, height: 40 });
+    secondBubble.setAttribute("class", "chat-bubble");
+    secondRender.appendChild(secondBubble);
     history.appendChild(secondRender);
     scrollToAndHighlightMessage(asElement(history), "same-id", 30);
 
     await new Promise((resolve) => setTimeout(resolve, 12));
-    assert.equal(
-      secondRender.style.backgroundColor,
-      "rgba(59, 130, 246, 0.14)",
-    );
+    assert.lengthOf(secondBubble.children, 1);
 
     await new Promise((resolve) => setTimeout(resolve, 30));
-    assert.equal(secondRender.style.backgroundColor, "");
+    assert.lengthOf(secondBubble.children, 0);
   });
 });

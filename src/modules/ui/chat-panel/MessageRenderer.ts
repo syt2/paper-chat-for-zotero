@@ -43,7 +43,8 @@ const CHAT_HISTORY_AUTO_SCROLL_ATTR = "data-auto-scroll";
 const CHAT_SCROLL_BOTTOM_BUTTON_ID = "chat-scroll-bottom-btn";
 const STREAMING_TYPING_INDICATOR_ATTR = "data-streaming-typing-indicator";
 const MESSAGE_ACTION_ICON_SIZE = "15px";
-const MESSAGE_HIGHLIGHT_DURATION_MS = 2500;
+const MESSAGE_HIGHLIGHT_DURATION_MS = 1050;
+const MESSAGE_HIGHLIGHT_OVERLAY_CLASS = "paperchat-message-highlight-overlay";
 type MessageActionIconName = "copy" | "fork";
 const userInputCountdownTimers = new WeakMap<
   HTMLElement,
@@ -51,14 +52,11 @@ const userInputCountdownTimers = new WeakMap<
 >();
 
 interface MessageHighlightLease {
-  element: HTMLElement;
+  overlay: HTMLElement;
+  surface: HTMLElement;
+  previousPosition: string;
+  pulseTimeoutIds: Array<ReturnType<typeof setTimeout>>;
   timeoutId: ReturnType<typeof setTimeout>;
-  previousStyle: {
-    backgroundColor: string;
-    borderRadius: string;
-    boxShadow: string;
-    transition: string;
-  };
 }
 
 const messageHighlightLeases = new WeakMap<
@@ -120,11 +118,26 @@ export function findRenderedMessageElement(
 }
 
 function restoreMessageHighlight(lease: MessageHighlightLease): void {
-  const { element, previousStyle } = lease;
-  element.style.backgroundColor = previousStyle.backgroundColor;
-  element.style.borderRadius = previousStyle.borderRadius;
-  element.style.boxShadow = previousStyle.boxShadow;
-  element.style.transition = previousStyle.transition;
+  lease.pulseTimeoutIds.forEach(clearTimeout);
+  lease.overlay.remove();
+  lease.surface.style.position = lease.previousPosition;
+}
+
+function hasClass(element: HTMLElement, className: string): boolean {
+  return (element.getAttribute("class") || "").split(/\s+/).includes(className);
+}
+
+function findMessageHighlightSurface(messageElement: HTMLElement): HTMLElement {
+  for (const child of Array.from(messageElement.children)) {
+    const element = child as HTMLElement;
+    if (
+      hasClass(element, "chat-bubble") ||
+      hasClass(element, "system-notice-content")
+    ) {
+      return element;
+    }
+  }
+  return messageElement;
 }
 
 export function clearRenderedMessageHighlight(chatHistory: HTMLElement): void {
@@ -153,9 +166,9 @@ function centerMessageInChatHistory(
 }
 
 /**
- * Center and temporarily highlight an exact rendered message. Repeated calls
- * replace the previous lease so a timer from an earlier render cannot clear a
- * newer highlight.
+ * Center and briefly flash the rendered message bubble. Repeated calls replace
+ * the previous lease so a timer from an earlier render cannot clear a newer
+ * highlight.
  */
 export function scrollToAndHighlightMessage(
   chatHistory: HTMLElement,
@@ -168,34 +181,60 @@ export function scrollToAndHighlightMessage(
   clearRenderedMessageHighlight(chatHistory);
   centerMessageInChatHistory(chatHistory, messageElement);
 
-  const previousStyle = {
-    backgroundColor: messageElement.style.backgroundColor,
-    borderRadius: messageElement.style.borderRadius,
-    boxShadow: messageElement.style.boxShadow,
-    transition: messageElement.style.transition,
-  };
-  const highlightTransition =
-    "background-color 160ms ease, box-shadow 160ms ease";
-  messageElement.style.transition = previousStyle.transition
-    ? `${previousStyle.transition}, ${highlightTransition}`
-    : highlightTransition;
-  messageElement.style.backgroundColor = "rgba(59, 130, 246, 0.14)";
-  messageElement.style.borderRadius = "12px";
-  messageElement.style.boxShadow = "inset 0 0 0 2px rgba(59, 130, 246, 0.5)";
+  const surface = findMessageHighlightSurface(messageElement);
+  const safeDurationMs = Math.max(1, durationMs);
+  const pulseTransitionMs = Math.max(1, safeDurationMs * 0.16);
+  const overlay = createElement(
+    messageElement.ownerDocument,
+    "div",
+    {
+      position: "absolute",
+      top: "0",
+      right: "0",
+      bottom: "0",
+      left: "0",
+      borderRadius: "inherit",
+      backgroundColor: "rgba(59, 130, 246, 0.18)",
+      opacity: "0.72",
+      pointerEvents: "none",
+      transition: `opacity ${pulseTransitionMs}ms ease-in-out`,
+    },
+    {
+      class: MESSAGE_HIGHLIGHT_OVERLAY_CLASS,
+      "aria-hidden": "true",
+    },
+  );
+
+  // Ordinary bubbles already use relative positioning. System notices and
+  // fallback message surfaces need an anchor for the absolute overlay.
+  const previousPosition = surface.style.position;
+  if (!surface.style.position) {
+    surface.style.position = "relative";
+  }
+  surface.appendChild(overlay);
 
   const lease: MessageHighlightLease = {
-    element: messageElement,
-    previousStyle,
-    timeoutId: setTimeout(
-      () => {
-        if (messageHighlightLeases.get(chatHistory) !== lease) return;
-        restoreMessageHighlight(lease);
-        messageHighlightLeases.delete(chatHistory);
-      },
-      Math.max(0, durationMs),
-    ),
+    overlay,
+    surface,
+    previousPosition,
+    pulseTimeoutIds: [],
+    timeoutId: setTimeout(() => {
+      if (messageHighlightLeases.get(chatHistory) !== lease) return;
+      restoreMessageHighlight(lease);
+      messageHighlightLeases.delete(chatHistory);
+    }, safeDurationMs),
   };
   messageHighlightLeases.set(chatHistory, lease);
+
+  const setPulseOpacity = (opacity: string): void => {
+    if (messageHighlightLeases.get(chatHistory) !== lease) return;
+    overlay.style.opacity = opacity;
+  };
+  lease.pulseTimeoutIds.push(
+    setTimeout(() => setPulseOpacity("0"), safeDurationMs * 0.14),
+    setTimeout(() => setPulseOpacity("0.58"), safeDurationMs * 0.43),
+    setTimeout(() => setPulseOpacity("0"), safeDurationMs * 0.61),
+  );
   return messageElement;
 }
 
