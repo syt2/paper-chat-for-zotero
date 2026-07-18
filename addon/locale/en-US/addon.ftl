@@ -93,6 +93,7 @@ paperchat-chat-message-count = { $count } messages
 paperchat-chat-show-more = Show more ({ $count } remaining)
 paperchat-chat-no-history = No chat history
 paperchat-chat-history-search-placeholder = Search chat history
+paperchat-chat-history-search-clear = Clear search
 paperchat-chat-history-search-no-results = No matching conversations
 paperchat-chat-history-search-title-match = Matching title
 paperchat-chat-history-search-user = You

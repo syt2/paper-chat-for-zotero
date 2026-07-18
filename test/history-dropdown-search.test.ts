@@ -195,18 +195,22 @@ function asElement(element: FakeElement): HTMLElement {
 function createShell(doc: FakeDocument): {
   dropdown: FakeElement;
   input: FakeElement;
+  clearButton: FakeElement;
   body: FakeElement;
 } {
   const dropdown = new FakeElement(doc, "div");
   const header = new FakeElement(doc, "div");
   const input = new FakeElement(doc, "input");
+  const clearButton = new FakeElement(doc, "button");
   const body = new FakeElement(doc, "div");
   input.setAttribute("id", "chat-history-search-input");
+  clearButton.setAttribute("id", "chat-history-search-clear");
   body.setAttribute("id", "chat-history-dropdown-body");
   header.appendChild(input);
+  header.appendChild(clearButton);
   dropdown.appendChild(header);
   dropdown.appendChild(body);
-  return { dropdown, input, body };
+  return { dropdown, input, clearButton, body };
 }
 
 function match(id: string, snippet = "matched text") {
@@ -354,6 +358,65 @@ describe("history dropdown grouped search UI", function () {
       String(MAX_SEARCH_QUERY_RAW_UTF16_LENGTH),
     );
     assert.equal(darkTheme.inputFocusBorderColor, "#9ca3af");
+  });
+
+  it("rejects a search shell without its clear button", function () {
+    const doc = new FakeDocument();
+    const { dropdown, clearButton } = createShell(doc);
+    clearButton.remove();
+
+    assert.throws(
+      () =>
+        setupHistoryDropdownSearch(
+          asElement(dropdown),
+          asDocument(doc),
+          createHistoryDropdownState(),
+          darkTheme,
+          callbacks(async () => page("q", "session")),
+        ),
+      "History dropdown search clear button is missing",
+    );
+  });
+
+  it("shows a clear button, cancels pending search, and restores history when clicked", function () {
+    const doc = new FakeDocument();
+    const { dropdown, input, clearButton, body } = createShell(doc);
+    const state = createHistoryDropdownState();
+    let searchCalls = 0;
+    setupHistoryDropdownSearch(
+      asElement(dropdown),
+      asDocument(doc),
+      state,
+      darkTheme,
+      callbacks(async () => {
+        searchCalls += 1;
+        return page("topic", "session");
+      }),
+    );
+    populateHistoryDropdown(
+      asElement(dropdown),
+      asDocument(doc),
+      [session(1)],
+      state,
+      darkTheme,
+      () => {},
+    );
+
+    assert.equal(clearButton.style.display, "none");
+    input.value = "topic";
+    input.dispatch("input");
+    assert.equal(clearButton.style.display, "flex");
+
+    clearButton.dispatch("click");
+
+    assert.equal(input.value, "");
+    assert.equal(clearButton.style.display, "none");
+    assert.equal(state.query, "");
+    assert.equal(state.normalizedQuery, "");
+    assert.isFalse(state.searchPending);
+    assert.isNull(state.debounceHandle);
+    assert.isAbove(body.children.length, 0);
+    assert.equal(searchCalls, 0);
   });
 
   it("clears ordinary history while the first search is pending", function () {

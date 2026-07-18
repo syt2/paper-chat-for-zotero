@@ -27,6 +27,7 @@ export const HISTORY_SEARCH_EXPANSION_LIMIT = 10;
 
 const HISTORY_BODY_ID = "chat-history-dropdown-body";
 const HISTORY_SEARCH_INPUT_ID = "chat-history-search-input";
+const HISTORY_SEARCH_CLEAR_BUTTON_ID = "chat-history-search-clear";
 
 /**
  * Format timestamp to display string
@@ -110,6 +111,14 @@ function getHistorySearchInput(dropdown: HTMLElement): HTMLInputElement | null {
   return dropdown.querySelector(
     `#${HISTORY_SEARCH_INPUT_ID}`,
   ) as HTMLInputElement | null;
+}
+
+function getHistorySearchClearButton(
+  dropdown: HTMLElement,
+): HTMLButtonElement | null {
+  return dropdown.querySelector(
+    `#${HISTORY_SEARCH_CLEAR_BUTTON_ID}`,
+  ) as HTMLButtonElement | null;
 }
 
 function normalizedCodePointLength(value: string): number {
@@ -1168,6 +1177,10 @@ export function setupHistoryDropdownSearch(
   if (!input) {
     throw new Error("History dropdown search input is missing");
   }
+  const clearButton = getHistorySearchClearButton(dropdown);
+  if (!clearButton) {
+    throw new Error("History dropdown search clear button is missing");
+  }
   input.setAttribute("maxlength", String(MAX_SEARCH_QUERY_RAW_UTF16_LENGTH));
   const body = getHistoryBody(dropdown);
   const controller: HistoryDropdownSearchController & {
@@ -1188,7 +1201,12 @@ export function setupHistoryDropdownSearch(
   input.value = state.query;
   body.scrollTop = state.scrollTop;
 
+  const updateClearButtonVisibility = () => {
+    clearButton.style.display = input.value ? "flex" : "none";
+  };
+
   const onInput = () => {
+    updateClearButtonVisibility();
     const previousNormalizedQuery = state.normalizedQuery;
     state.query = input.value;
     state.normalizedQuery = normalizeSearchValue(state.query);
@@ -1253,11 +1271,19 @@ export function setupHistoryDropdownSearch(
   const onScroll = () => {
     state.scrollTop = body.scrollTop;
   };
+  const onClear = () => {
+    state.isComposing = false;
+    input.value = "";
+    onInput();
+    input.focus();
+  };
 
   input.addEventListener("input", onInput);
   input.addEventListener("compositionstart", onCompositionStart);
   input.addEventListener("compositionend", onCompositionEnd);
   body.addEventListener("scroll", onScroll);
+  clearButton.addEventListener("click", onClear);
+  updateClearButtonVisibility();
 
   const dispose = () => {
     if (controller.disposed) return;
@@ -1272,6 +1298,7 @@ export function setupHistoryDropdownSearch(
     input.removeEventListener("compositionstart", onCompositionStart);
     input.removeEventListener("compositionend", onCompositionEnd);
     body.removeEventListener("scroll", onScroll);
+    clearButton.removeEventListener("click", onClear);
     if (searchControllers.get(dropdown) === controller) {
       searchControllers.delete(dropdown);
     }

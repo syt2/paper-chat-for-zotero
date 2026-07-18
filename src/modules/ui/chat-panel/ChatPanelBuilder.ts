@@ -978,6 +978,9 @@ export function createChatContainer(
     },
     { id: "chat-history-search-header" },
   );
+  const historySearchField = createElement(doc, "div", {
+    position: "relative",
+  });
   const historySearchInput = createElement(
     doc,
     "input",
@@ -986,7 +989,7 @@ export function createChatContainer(
       width: "100%",
       height: "32px",
       boxSizing: "border-box",
-      padding: "6px 10px",
+      padding: "6px 32px 6px 10px",
       color: theme.textPrimary,
       background: theme.inputBg,
       border: `1px solid ${theme.inputBorderColor}`,
@@ -997,7 +1000,8 @@ export function createChatContainer(
     },
     {
       id: "chat-history-search-input",
-      type: "search",
+      type: "text",
+      role: "searchbox",
       placeholder: getString("chat-history-search-placeholder"),
       "aria-label": getString("chat-history-search-placeholder"),
       autocomplete: "off",
@@ -1017,7 +1021,47 @@ export function createChatContainer(
       historySearchInput.getAttribute("data-idle-border-color") ||
       theme.inputBorderColor;
   });
-  historySearchHeader.appendChild(historySearchInput);
+  const historySearchClearButton = createElement(
+    doc,
+    "button",
+    {
+      position: "absolute",
+      top: "50%",
+      right: "5px",
+      transform: "translateY(-50%)",
+      width: "24px",
+      height: "24px",
+      display: "none",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: "0",
+      color: theme.textMuted,
+      background: "transparent",
+      border: "none",
+      borderRadius: "4px",
+      cursor: "pointer",
+      fontFamily: "inherit",
+      fontSize: "16px",
+      lineHeight: "1",
+      opacity: "0.72",
+    },
+    {
+      id: "chat-history-search-clear",
+      type: "button",
+      title: getString("chat-history-search-clear"),
+      "aria-label": getString("chat-history-search-clear"),
+    },
+  ) as HTMLButtonElement;
+  historySearchClearButton.textContent = "×";
+  historySearchClearButton.addEventListener("mouseenter", () => {
+    historySearchClearButton.style.opacity = "1";
+  });
+  historySearchClearButton.addEventListener("mouseleave", () => {
+    historySearchClearButton.style.opacity = "0.72";
+  });
+  historySearchField.appendChild(historySearchInput);
+  historySearchField.appendChild(historySearchClearButton);
+  historySearchHeader.appendChild(historySearchField);
 
   const historyDropdownBody = createElement(
     doc,

@@ -118,6 +118,7 @@ export type FluentMessageId =
   | 'paperchat-chat-high-tier-warning-title'
   | 'paperchat-chat-history'
   | 'paperchat-chat-history-search-assistant'
+  | 'paperchat-chat-history-search-clear'
   | 'paperchat-chat-history-search-more-matches'
   | 'paperchat-chat-history-search-more-sessions'
   | 'paperchat-chat-history-search-no-results'

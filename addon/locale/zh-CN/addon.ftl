@@ -93,6 +93,7 @@ paperchat-chat-message-count = { $count } 条消息
 paperchat-chat-show-more = 显示更多 (剩余 { $count } 条)
 paperchat-chat-no-history = 暂无聊天记录
 paperchat-chat-history-search-placeholder = 搜索聊天记录
+paperchat-chat-history-search-clear = 清空搜索
 paperchat-chat-history-search-no-results = 未找到相关对话
 paperchat-chat-history-search-title-match = 标题匹配
 paperchat-chat-history-search-user = 你

@@ -296,6 +296,13 @@ export function applyThemeToContainer(container: HTMLElement): void {
     historySearchInput.style.color = theme.textPrimary;
   }
 
+  const historySearchClearButton = container.querySelector(
+    "#chat-history-search-clear",
+  ) as HTMLElement;
+  if (historySearchClearButton) {
+    historySearchClearButton.style.color = theme.textMuted;
+  }
+
   container.querySelectorAll(".history-search-group").forEach((group) => {
     (group as HTMLElement).style.borderBottomColor = theme.borderColor;
   });
