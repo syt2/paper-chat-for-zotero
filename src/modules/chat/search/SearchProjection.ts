@@ -1,4 +1,5 @@
 import MarkdownIt from "markdown-it";
+import { graphemeSegments } from "unicode-segmenter/grapheme";
 import type { ChatMessage } from "../../../types/chat";
 import type { SearchHighlightRange } from "./SearchTypes";
 
@@ -99,9 +100,34 @@ const noProviderAssistantMessages = new Set([
   "paperchat-chat-error-no-provider",
 ]);
 
-const graphemeSegmenter = new Intl.Segmenter("und", {
-  granularity: "grapheme",
-});
+function resolveRuntimeSegmenter(): typeof Intl.Segmenter | undefined {
+  return typeof Intl.Segmenter === "function" ? Intl.Segmenter : undefined;
+}
+
+export function createNativeGraphemeSegmenter(
+  resolveSegmenter: () =>
+    | typeof Intl.Segmenter
+    | undefined = resolveRuntimeSegmenter,
+): Intl.Segmenter | null {
+  const Segmenter = resolveSegmenter();
+  return Segmenter ? new Segmenter("und", { granularity: "grapheme" }) : null;
+}
+
+const nativeGraphemeSegmenter = createNativeGraphemeSegmenter();
+
+export function* iterateGraphemeSegments(
+  value: string,
+  segmenter: Intl.Segmenter | null = nativeGraphemeSegmenter,
+): IterableIterator<{ segment: string; index: number }> {
+  if (segmenter) {
+    yield* segmenter.segment(value);
+    return;
+  }
+
+  for (const { segment, index } of graphemeSegments(value)) {
+    yield { segment, index };
+  }
+}
 
 function installMathPlugin(md: MarkdownIt): void {
   md.inline.ruler.after("escape", "math_inline", (state, silent) => {
@@ -213,7 +239,7 @@ function canonicalizeNewlines(value: string): string {
 }
 
 function segmentGraphemes(value: string): Grapheme[] {
-  return Array.from(graphemeSegmenter.segment(value), (part) => ({
+  return Array.from(iterateGraphemeSegments(value), (part) => ({
     text: part.segment,
     start: part.index,
     end: part.index + part.segment.length,
@@ -414,9 +440,9 @@ function appendNormalizedText(
 
 function appendSearchText(state: NormalizedTextState, value: string): void {
   // Combining marks and conjoining Hangul Jamo can normalize across scalar
-  // boundaries, so only those uncommon inputs need the Segmenter path.
+  // boundaries, so only those uncommon inputs need grapheme-aware splitting.
   if (graphemeSensitiveNormalization.test(value)) {
-    for (const grapheme of graphemeSegmenter.segment(value)) {
+    for (const grapheme of iterateGraphemeSegments(value)) {
       appendNormalizedText(state, normalizeGrapheme(grapheme.segment));
     }
     return;
