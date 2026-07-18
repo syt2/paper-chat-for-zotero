@@ -19,3 +19,4 @@ build
 logs
 doc/config
 docs/analytics-events.md
+.gstack/
