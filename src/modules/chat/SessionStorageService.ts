@@ -166,13 +166,15 @@ interface SearchBackfillTitleRow {
 
 interface PreparedMessageSearchProjection {
   id: string;
-  signature: string;
+  /** null when the projection pipeline threw — the row must be quarantined. */
+  signature: string | null;
   searchText: string;
 }
 
 interface PreparedTitleSearchProjection {
   id: string;
-  signature: string;
+  /** null when the projection pipeline threw — the row must be quarantined. */
+  signature: string | null;
   searchTitle: string;
 }
 
@@ -263,7 +265,10 @@ class SourceSessionMatchAccumulator {
   add(row: SearchSourceMessageRow): void {
     if (row.role !== "user" && row.role !== "assistant") return;
     const message = mapMessageRowToChatMessage(row);
-    const normalizedText = projectSourceMessageSearchText(message, this.query);
+    const normalizedText = projectSourceMessageSearchTextSafe(
+      message,
+      this.query,
+    );
     if (normalizedText === null) return;
     const category = classifyMessageMatch(normalizedText, this.query);
     if (category === null) return;
@@ -340,21 +345,43 @@ function toMessageProjectionSource(
 function prepareMessageSearchProjection(
   row: MessageStorageRow,
 ): PreparedMessageSearchProjection {
-  return {
-    id: row.id,
-    signature: createMessageProjectionSignature(toMessageProjectionSource(row)),
-    searchText: projectMessageSearchText(mapMessageRowToChatMessage(row)),
-  };
+  try {
+    return {
+      id: row.id,
+      signature: createMessageProjectionSignature(
+        toMessageProjectionSource(row),
+      ),
+      searchText: projectMessageSearchText(mapMessageRowToChatMessage(row)),
+    };
+  } catch (error) {
+    // One un-projectable row must never wedge the whole backfill. Quarantine
+    // it with an empty projection so it exits the work set as non-matching.
+    ztoolkit.log(
+      "[SessionStorageService] Message search projection failed, quarantining:",
+      row.id,
+      error,
+    );
+    return { id: row.id, signature: null, searchText: "" };
+  }
 }
 
 function prepareTitleSearchProjection(
   row: SearchBackfillTitleRow,
 ): PreparedTitleSearchProjection {
-  return {
-    id: row.id,
-    signature: createTitleProjectionSignature(row.id, row.title),
-    searchTitle: projectTitleSearchText(row.title || ""),
-  };
+  try {
+    return {
+      id: row.id,
+      signature: createTitleProjectionSignature(row.id, row.title),
+      searchTitle: projectTitleSearchText(row.title || ""),
+    };
+  } catch (error) {
+    ztoolkit.log(
+      "[SessionStorageService] Title search projection failed, quarantining:",
+      row.id,
+      error,
+    );
+    return { id: row.id, signature: null, searchTitle: "" };
+  }
 }
 
 function parseSearchState(row: unknown): ChatSearchState | null {
@@ -467,6 +494,37 @@ function projectMessageSearchText(message: ChatMessage): string {
   return projectMessageSearchNormalizedText(message);
 }
 
+interface SafeSearchProjection {
+  searchText: string;
+  searchIndexVersion: number;
+  failed: boolean;
+}
+
+/**
+ * The projection pipeline parses arbitrary historical/LLM content and must
+ * never take chat persistence down with it. On failure, persist an empty
+ * projection at version 0: the row simply stays unindexed and the hardened
+ * backfill later quarantines it at the target version.
+ */
+function projectMessageSearchTextSafe(
+  message: ChatMessage,
+): SafeSearchProjection {
+  try {
+    return {
+      searchText: projectMessageSearchText(message),
+      searchIndexVersion: CURRENT_SEARCH_VERSION,
+      failed: false,
+    };
+  } catch (error) {
+    ztoolkit.log(
+      "[SessionStorageService] Message search projection failed, persisting without index:",
+      message.id,
+      error,
+    );
+    return { searchText: "", searchIndexVersion: 0, failed: true };
+  }
+}
+
 function projectSourceMessageSearchText(
   message: ChatMessage,
   query: ParsedSearchQuery,
@@ -477,10 +535,47 @@ function projectSourceMessageSearchText(
   return projectMessageSearchText(message);
 }
 
+/**
+ * Foreground fallback scans run the full projection pipeline over rows the
+ * backfill has not reached yet. A row that cannot be projected is treated as
+ * non-matching instead of failing the entire search.
+ */
+function projectSourceMessageSearchTextSafe(
+  message: ChatMessage,
+  query: ParsedSearchQuery,
+): string | null {
+  try {
+    return projectSourceMessageSearchText(message, query);
+  } catch (error) {
+    ztoolkit.log(
+      "[SessionStorageService] Source message search projection failed, skipping row:",
+      message.id,
+      error,
+    );
+    return null;
+  }
+}
+
 function projectTitleSearchText(title: string): string {
   return projectSearchNormalizedText([
     { kind: "text", text: title, separator: "none" },
   ]);
+}
+
+function projectTitleSearchTextSafe(title: string): SafeSearchProjection {
+  try {
+    return {
+      searchText: projectTitleSearchText(title),
+      searchIndexVersion: CURRENT_SEARCH_VERSION,
+      failed: false,
+    };
+  } catch (error) {
+    ztoolkit.log(
+      "[SessionStorageService] Title search projection failed, persisting without index:",
+      error,
+    );
+    return { searchText: "", searchIndexVersion: 0, failed: true };
+  }
 }
 
 export interface CreateSessionOptions {
@@ -939,7 +1034,10 @@ export class SessionStorageService {
         const sessionMetadata = metadata.get(String(row.session_id));
         if (!sessionMetadata) continue;
         const message = mapMessageRowToChatMessage(row);
-        const normalizedText = projectSourceMessageSearchText(message, query);
+        const normalizedText = projectSourceMessageSearchTextSafe(
+          message,
+          query,
+        );
         if (normalizedText === null) continue;
         const candidate: LowerVersionMessageSearchCandidate = {
           ...toSearchSessionMetadata(sessionMetadata),
@@ -971,7 +1069,7 @@ export class SessionStorageService {
     if (sourceOnly) {
       return Array.from(metadata.values(), (row) => ({
         ...toSearchSessionMetadata(row),
-        normalizedTitle: projectTitleSearchText(row.title || ""),
+        normalizedTitle: projectTitleSearchTextSafe(row.title || "").searchText,
         sessionMessageCount: row.message_count,
       }));
     }
@@ -994,7 +1092,8 @@ export class SessionStorageService {
         if (!sessionMetadata) continue;
         candidates.push({
           ...toSearchSessionMetadata(sessionMetadata),
-          normalizedTitle: projectTitleSearchText(row.title || ""),
+          normalizedTitle: projectTitleSearchTextSafe(row.title || "")
+            .searchText,
           sessionMessageCount: Number(row.message_count),
         });
       }
@@ -1581,7 +1680,16 @@ export class SessionStorageService {
             const current = currentById.get(projection.id);
             if (
               !current ||
-              Number(current.search_index_version) >= targetVersion ||
+              Number(current.search_index_version) >= targetVersion
+            ) {
+              continue;
+            }
+            // A null signature means the projection threw: quarantine the row
+            // with an empty projection so it exits the work set. The signature
+            // check only applies to successful projections; a concurrently
+            // changed row is left for the next slice to re-read.
+            if (
+              projection.signature !== null &&
               createMessageProjectionSignature(
                 toMessageProjectionSource(current),
               ) !== projection.signature
@@ -1622,7 +1730,14 @@ export class SessionStorageService {
             const current = currentById.get(projection.id);
             if (
               !current ||
-              Number(current.search_index_version) >= targetVersion ||
+              Number(current.search_index_version) >= targetVersion
+            ) {
+              continue;
+            }
+            // A null signature means the projection threw: quarantine the row
+            // with an empty projection so it exits the work set.
+            if (
+              projection.signature !== null &&
               createTitleProjectionSignature(current.id, current.title) !==
                 projection.signature
             ) {
@@ -1808,7 +1923,7 @@ export class SessionStorageService {
       await getStorageDatabase().ensureInit();
       const now = Date.now();
       const messageTimestamp = message.timestamp || now;
-      const searchText = projectMessageSearchText(message);
+      const searchProjection = projectMessageSearchTextSafe(message);
       const messageCountDelta = message.apiOnly ? 0 : 1;
       const preview =
         !message.apiOnly && message.role !== "tool" && message.content
@@ -1846,8 +1961,8 @@ export class SessionStorageService {
             message.streamingState || null,
             message.apiOnly ? 1 : null,
             message.isSystemNotice ? 1 : null,
-            searchText,
-            CURRENT_SEARCH_VERSION,
+            searchProjection.searchText,
+            searchProjection.searchIndexVersion,
           ],
         );
 
@@ -1996,8 +2111,9 @@ export class SessionStorageService {
           timestamp: now,
           streamingState: options?.streamingState ?? undefined,
         };
-        const previousSearchText = projectMessageSearchText(previousMessage);
-        const searchText = projectMessageSearchText(nextMessage);
+        const previousProjection =
+          projectMessageSearchTextSafe(previousMessage);
+        const nextProjection = projectMessageSearchTextSafe(nextMessage);
 
         await db.queryAsync(
           `UPDATE messages
@@ -2015,8 +2131,8 @@ export class SessionStorageService {
             reasoning || null,
             now,
             options?.streamingState ?? null,
-            searchText,
-            CURRENT_SEARCH_VERSION,
+            nextProjection.searchText,
+            nextProjection.searchIndexVersion,
             messageId,
             sessionId,
           ],
@@ -2041,10 +2157,14 @@ export class SessionStorageService {
           );
         }
 
+        // A failed projection is indistinguishable from a semantic change,
+        // so bump the revision conservatively in that case.
         if (
           !options?.streamingState ||
-          previousSearchText.length > 0 ||
-          searchText.length > 0
+          previousProjection.failed ||
+          nextProjection.failed ||
+          previousProjection.searchText.length > 0 ||
+          nextProjection.searchText.length > 0
         ) {
           await incrementSearchRevision(db, now);
         }
@@ -2067,7 +2187,7 @@ export class SessionStorageService {
     try {
       await getStorageDatabase().ensureInit();
       const nextUpdatedAt = Date.now();
-      const searchTitle = projectTitleSearchText(session.title || "");
+      const titleProjection = projectTitleSearchTextSafe(session.title || "");
       await this.runTransaction(async (db) => {
         await db.queryAsync(
           `UPDATE sessions SET
@@ -2153,8 +2273,8 @@ export class SessionStorageService {
             session.titleSource || null,
             session.titleGeneratedAt ?? null,
             session.titleEditedAt ?? null,
-            searchTitle,
-            CURRENT_SEARCH_VERSION,
+            titleProjection.searchText,
+            titleProjection.searchIndexVersion,
             session.id,
           ],
         );
@@ -2324,10 +2444,10 @@ export class SessionStorageService {
       };
 
       const meta = this.buildSessionMeta(sessionForMeta);
-      const searchTitle = projectTitleSearchText(session.title || "");
+      const titleProjection = projectTitleSearchTextSafe(session.title || "");
       const messagesForStorage = (session.messages || []).map((message) => ({
         message,
-        searchText: projectMessageSearchText(message),
+        searchProjection: projectMessageSearchTextSafe(message),
         timestamp: message.timestamp || nextUpdatedAt,
       }));
 
@@ -2412,7 +2532,7 @@ export class SessionStorageService {
           for (let seq = 0; seq < messagesForStorage.length; seq++) {
             const {
               message: msg,
-              searchText,
+              searchProjection,
               timestamp,
             } = messagesForStorage[seq];
             await db.queryAsync(
@@ -2436,8 +2556,8 @@ export class SessionStorageService {
                 msg.streamingState || null,
                 msg.apiOnly ? 1 : null,
                 msg.isSystemNotice ? 1 : null,
-                searchText,
-                CURRENT_SEARCH_VERSION,
+                searchProjection.searchText,
+                searchProjection.searchIndexVersion,
               ],
             );
           }
@@ -2459,8 +2579,8 @@ export class SessionStorageService {
             meta.titleSource || null,
             meta.titleGeneratedAt ?? null,
             meta.titleEditedAt ?? null,
-            searchTitle,
-            CURRENT_SEARCH_VERSION,
+            titleProjection.searchText,
+            titleProjection.searchIndexVersion,
           ],
         );
         await incrementSearchRevision(db, nextUpdatedAt);
@@ -2697,7 +2817,7 @@ export class SessionStorageService {
       const titleGeneratedAt =
         normalizedTitle && source === "generated" ? timestamp : null;
       const titleEditedAt = source === "user" ? timestamp : null;
-      const searchTitle = projectTitleSearchText(normalizedTitle || "");
+      const titleProjection = projectTitleSearchTextSafe(normalizedTitle || "");
 
       await this.runTransaction(async (db) => {
         await db.queryAsync(
@@ -2735,8 +2855,8 @@ export class SessionStorageService {
             titleSource,
             titleGeneratedAt,
             titleEditedAt,
-            searchTitle,
-            CURRENT_SEARCH_VERSION,
+            titleProjection.searchText,
+            titleProjection.searchIndexVersion,
             sessionId,
           ],
         );

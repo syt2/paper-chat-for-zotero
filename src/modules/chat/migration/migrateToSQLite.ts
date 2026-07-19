@@ -113,6 +113,31 @@ interface PreparedImportedSession {
   metaParams: unknown[];
 }
 
+/**
+ * Legacy files can contain content the projection pipeline has never seen.
+ * A projection failure must not make the file permanently un-importable:
+ * fall back to an unindexed empty projection and let the backfill quarantine
+ * the row later.
+ */
+function projectImportedSearchTextSafe(
+  project: () => string,
+  context: string,
+): { searchText: string; searchIndexVersion: number } {
+  try {
+    return {
+      searchText: project(),
+      searchIndexVersion: CURRENT_SEARCH_VERSION,
+    };
+  } catch (error) {
+    ztoolkit.log(
+      "[Migration V3] Search projection failed, importing without index:",
+      context,
+      getErrorMessage(error),
+    );
+    return { searchText: "", searchIndexVersion: 0 };
+  }
+}
+
 function prepareImportedSession(
   source: "v1" | "v2",
   filePath: string,
@@ -120,33 +145,43 @@ function prepareImportedSession(
   session: ChatSession,
 ): PreparedImportedSession {
   const meta = buildSessionMeta(session);
-  const searchTitle = projectSearchNormalizedText([
-    {
-      kind: "text",
-      text: session.title || "",
-      separator: "none",
-    },
-  ]);
-  const messageParams = (session.messages || []).map((msg, seq) => [
-    msg.id,
-    session.id,
-    seq,
-    msg.role,
-    msg.content || "",
-    msg.reasoning || null,
-    msg.images ? JSON.stringify(msg.images) : null,
-    msg.files ? JSON.stringify(msg.files) : null,
-    msg.timestamp || Date.now(),
-    msg.pdfContext ? 1 : null,
-    msg.selectedText || null,
-    msg.tool_calls ? JSON.stringify(msg.tool_calls) : null,
-    msg.tool_call_id || null,
-    msg.streamingState || null,
-    msg.apiOnly ? 1 : null,
-    msg.isSystemNotice ? 1 : null,
-    projectMessageSearchNormalizedText(msg),
-    CURRENT_SEARCH_VERSION,
-  ]);
+  const titleProjection = projectImportedSearchTextSafe(
+    () =>
+      projectSearchNormalizedText([
+        {
+          kind: "text",
+          text: session.title || "",
+          separator: "none",
+        },
+      ]),
+    `session ${session.id} title`,
+  );
+  const messageParams = (session.messages || []).map((msg, seq) => {
+    const searchProjection = projectImportedSearchTextSafe(
+      () => projectMessageSearchNormalizedText(msg),
+      `message ${msg.id}`,
+    );
+    return [
+      msg.id,
+      session.id,
+      seq,
+      msg.role,
+      msg.content || "",
+      msg.reasoning || null,
+      msg.images ? JSON.stringify(msg.images) : null,
+      msg.files ? JSON.stringify(msg.files) : null,
+      msg.timestamp || Date.now(),
+      msg.pdfContext ? 1 : null,
+      msg.selectedText || null,
+      msg.tool_calls ? JSON.stringify(msg.tool_calls) : null,
+      msg.tool_call_id || null,
+      msg.streamingState || null,
+      msg.apiOnly ? 1 : null,
+      msg.isSystemNotice ? 1 : null,
+      searchProjection.searchText,
+      searchProjection.searchIndexVersion,
+    ];
+  });
 
   return {
     source,
@@ -198,8 +233,8 @@ function prepareImportedSession(
       meta.titleSource || null,
       meta.titleGeneratedAt ?? null,
       meta.titleEditedAt ?? null,
-      searchTitle,
-      CURRENT_SEARCH_VERSION,
+      titleProjection.searchText,
+      titleProjection.searchIndexVersion,
     ],
   };
 }

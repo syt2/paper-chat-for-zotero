@@ -65,10 +65,24 @@ class BackfillFakeDatabase {
   readonly messages = new Map<string, BackfillMessageRow>();
   readonly titles = new Map<string, BackfillTitleRow>();
   readonly queries: RecordedQuery[] = [];
+  /** Rows whose content reads throw, like a strict Zotero row Proxy would. */
+  readonly poisonedMessageIds = new Set<string>();
   mutateOnNextTransaction: (() => void) | null = null;
   private transactionDepth = 0;
 
   constructor(readonly state: SearchStateRow) {}
+
+  private copyMessageRow(row: BackfillMessageRow): BackfillMessageRow {
+    const copy: BackfillMessageRow = { ...row };
+    if (this.poisonedMessageIds.has(row.id)) {
+      Object.defineProperty(copy, "content", {
+        get(): string {
+          throw new Error("poisoned content read");
+        },
+      });
+    }
+    return copy;
+  }
 
   async queryAsync(
     sql: string,
@@ -116,7 +130,7 @@ class BackfillFakeDatabase {
         .filter((row) => row.search_index_version < targetVersion)
         .sort(sortByWorkOrder)
         .slice(0, limit)
-        .map((row) => ({ ...row }));
+        .map((row) => this.copyMessageRow(row));
     }
     if (
       statement.startsWith(
@@ -139,7 +153,7 @@ class BackfillFakeDatabase {
       return params
         .map((id) => this.messages.get(String(id)))
         .filter((row): row is BackfillMessageRow => !!row)
-        .map((row) => ({ ...row }));
+        .map((row) => this.copyMessageRow(row));
     }
     if (
       statement.startsWith(
@@ -462,6 +476,64 @@ describe("chat history search backfill helpers", function () {
       CURRENT_SEARCH_VERSION,
     );
     assert.equal(fake.state.completed, 1);
+  });
+
+  it("quarantines a row whose projection throws instead of wedging the backfill", async function () {
+    const fake = new BackfillFakeDatabase({
+      target_version: CURRENT_SEARCH_VERSION,
+      completed: 0,
+      revision_epoch: "poison-epoch",
+      search_revision: 5,
+      updated_at: 1,
+    });
+    fake.messages.set("message-poisoned", {
+      id: "message-poisoned",
+      session_id: "session-1",
+      seq: 0,
+      role: "assistant",
+      content: "Unreadable legacy content",
+      timestamp: 1,
+      tool_calls: null,
+      tool_call_id: null,
+      streaming_state: null,
+      api_only: null,
+      is_system_notice: null,
+      search_text: "",
+      search_index_version: 0,
+    });
+    fake.messages.set("message-healthy", {
+      id: "message-healthy",
+      session_id: "session-1",
+      seq: 1,
+      role: "assistant",
+      content: "Healthy answer",
+      timestamp: 2,
+      tool_calls: null,
+      tool_call_id: null,
+      streaming_state: null,
+      api_only: null,
+      is_system_notice: null,
+      search_text: "",
+      search_index_version: 0,
+    });
+    fake.poisonedMessageIds.add("message-poisoned");
+    await installFakeDatabase(fake);
+    const service = new SessionStorageService();
+    await service.init();
+
+    // The slice completes instead of throwing and re-reading the same
+    // poisoned row on every retry forever.
+    assert.isFalse(await (service as any).runSearchBackfillSlice());
+
+    const poisoned = fake.messages.get("message-poisoned");
+    assert.equal(poisoned?.search_text, "");
+    assert.equal(poisoned?.search_index_version, CURRENT_SEARCH_VERSION);
+    assert.equal(
+      fake.messages.get("message-healthy")?.search_text,
+      "healthy answer",
+    );
+    assert.equal(fake.state.completed, 1);
+    assert.equal(fake.state.search_revision, 5);
   });
 
   it("leaves a stale source pending and projects it on the next slice", async function () {

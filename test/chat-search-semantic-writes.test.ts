@@ -373,6 +373,47 @@ describe("chat search semantic writes", function () {
     );
   });
 
+  it("persists a message even when its search projection throws", async function () {
+    const fake = new SemanticWriteFakeDatabase({
+      target_version: CURRENT_SEARCH_VERSION,
+      completed: 1,
+      revision_epoch: "poison-epoch",
+      search_revision: 3,
+      updated_at: 1,
+    });
+    await installFakeDatabase(fake);
+    const service = new SessionStorageService();
+
+    // Simulate a projection-pipeline failure: the first content read happens
+    // inside the search projection and throws; the later persistence reads
+    // succeed, mirroring a parser that chokes on otherwise storable content.
+    let projectionRead = true;
+    const message = {
+      id: "poisoned-write",
+      role: "user",
+      timestamp: 2,
+    } as any;
+    Object.defineProperty(message, "content", {
+      get(): string {
+        if (projectionRead) {
+          projectionRead = false;
+          throw new Error("projection pipeline failure");
+        }
+        return "[Question]: still persisted";
+      },
+    });
+
+    await service.insertMessage("session-1", message);
+
+    const stored = fake.messages.get("poisoned-write");
+    assert.exists(stored);
+    assert.equal(stored?.content, "[Question]: still persisted");
+    assert.equal(stored?.search_text, "");
+    assert.equal(stored?.search_index_version, 0);
+    // The failed projection still counts as a semantic write.
+    assert.equal(fake.state?.search_revision, 4);
+  });
+
   it("repairs a completed state when older writes left lower-version rows", async function () {
     const fake = new SemanticWriteFakeDatabase({
       target_version: CURRENT_SEARCH_VERSION,
