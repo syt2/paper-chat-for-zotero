@@ -63,6 +63,11 @@ import {
   collectTrustedSourceTargets,
   sanitizeSourceGroupTargets,
 } from "../note-source-provenance";
+import {
+  appendEvidenceCitationCatalog,
+  collectToolEvidenceRecords,
+  sanitizeEvidenceReferences,
+} from "../evidence";
 
 interface AgentRuntimeCallbacks {
   isSessionActive: (session: ChatSession) => boolean;
@@ -920,7 +925,10 @@ export class AgentRuntime {
         const toolResultMessage: ChatMessage = {
           id: this.callbacks.generateId(),
           role: "tool",
-          content: modelToolResult,
+          content: appendEvidenceCitationCatalog(
+            modelToolResult,
+            executionResult.evidence,
+          ),
           tool_call_id: toolCall.id,
           timestamp: Date.now(),
         };
@@ -1023,15 +1031,13 @@ export class AgentRuntime {
     }
 
     this.ensureSessionTracked(sendingSession, sessionRunId);
-    const trustedSourceTargets = collectTrustedSourceTargets(
-      sendingSession.toolExecutionState?.results || [],
-    );
-    const sanitizedDisplay = sanitizeSourceGroupTargets(
+    const groundedDisplay = this.sanitizeGroundedDisplay(
+      sendingSession,
       accumulatedDisplay,
-      trustedSourceTargets,
     );
 
-    assistantMessage.content = sanitizedDisplay;
+    assistantMessage.content = groundedDisplay.content;
+    assistantMessage.evidence = groundedDisplay.evidence;
     assistantMessage.streamingState = "in_progress";
     await this.flushAssistantMessageCheckpoint(
       sendingSession,
@@ -1042,7 +1048,7 @@ export class AgentRuntime {
     this.ensureSessionTracked(sendingSession, sessionRunId);
     if (this.callbacks.isSessionActive(sendingSession)) {
       this.callbacks.onStreamingUpdate?.(
-        accumulatedDisplay,
+        groundedDisplay.content,
         assistantMessage.id,
       );
     }
@@ -1498,15 +1504,14 @@ export class AgentRuntime {
       iteration,
     } = params;
 
-    const trustedSourceTargets = collectTrustedSourceTargets(
-      sendingSession.toolExecutionState?.results || [],
-    );
-    const sanitizedDisplay = sanitizeSourceGroupTargets(
+    const groundedDisplay = this.sanitizeGroundedDisplay(
+      sendingSession,
       accumulatedDisplay,
-      trustedSourceTargets,
     );
+    const sanitizedDisplay = groundedDisplay.content;
 
     assistantMessage.content = sanitizedDisplay;
+    assistantMessage.evidence = groundedDisplay.evidence;
     assistantMessage.timestamp = Date.now();
     sendingSession.updatedAt = Date.now();
 
@@ -1576,13 +1581,12 @@ export class AgentRuntime {
     accumulatedDisplay: string,
     iteration: number,
   ): Promise<void> {
-    const trustedSourceTargets = collectTrustedSourceTargets(
-      sendingSession.toolExecutionState?.results || [],
-    );
-    assistantMessage.content = sanitizeSourceGroupTargets(
+    const groundedDisplay = this.sanitizeGroundedDisplay(
+      sendingSession,
       accumulatedDisplay,
-      trustedSourceTargets,
     );
+    assistantMessage.content = groundedDisplay.content;
+    assistantMessage.evidence = groundedDisplay.evidence;
     assistantMessage.timestamp = Date.now();
     sendingSession.updatedAt = Date.now();
     this.executionPlanManager.failPlan(
@@ -1646,6 +1650,12 @@ export class AgentRuntime {
       sendingSession,
       assistantMessage.id,
     );
+    const groundedDisplay = this.sanitizeGroundedDisplay(
+      sendingSession,
+      assistantMessage.content,
+    );
+    assistantMessage.content = groundedDisplay.content;
+    assistantMessage.evidence = groundedDisplay.evidence;
     await this.flushAssistantMessageCheckpoint(
       sendingSession,
       sessionRunId,
@@ -1685,6 +1695,28 @@ export class AgentRuntime {
       turnStartedAt: now,
       updatedAt: now,
       results: [],
+    };
+  }
+
+  private sanitizeGroundedDisplay(
+    session: ChatSession,
+    content: string,
+  ): { content: string; evidence: ChatMessage["evidence"] } {
+    const results = session.toolExecutionState?.results || [];
+    const sourceSanitized = sanitizeSourceGroupTargets(
+      content,
+      collectTrustedSourceTargets(results),
+    );
+    const evidenceSanitized = sanitizeEvidenceReferences(
+      sourceSanitized,
+      collectToolEvidenceRecords(results),
+    );
+    return {
+      content: evidenceSanitized.content,
+      evidence:
+        evidenceSanitized.referencedRecords.length > 0
+          ? evidenceSanitized.referencedRecords
+          : undefined,
     };
   }
 
@@ -1773,12 +1805,19 @@ export class AgentRuntime {
     const next = previous
       .catch(() => undefined)
       .then(async () => {
+        const groundedDisplay = this.sanitizeGroundedDisplay(
+          session,
+          message.content,
+        );
         await this.sessionStorage.updateMessageContent(
           session.id,
           message.id,
-          message.content,
+          groundedDisplay.content,
           message.reasoning,
-          { streamingState },
+          {
+            streamingState,
+            evidence: groundedDisplay.evidence || [],
+          },
         );
       });
     this.messageCheckpointQueues.set(message.id, next);

@@ -96,6 +96,7 @@ import {
   collectTrustedSourceTargets,
   sanitizeSourceGroupTargets,
 } from "./note-source-provenance";
+import { sanitizeEvidenceReferences } from "./evidence";
 import {
   AgentRuntime,
   removeApiOnlyModelContextMessagesForTurn,
@@ -2121,6 +2122,7 @@ export class ChatManager {
           // 重置 assistant 消息内容（降级时需要清空之前的部分内容）
           assistantMessage.content = "";
           assistantMessage.reasoning = "";
+          assistantMessage.evidence = undefined;
           assistantMessage.streamingState = "in_progress";
 
           let checkpointTimer: ReturnType<typeof setTimeout> | null = null;
@@ -2138,12 +2140,16 @@ export class ChatManager {
                 if (!this.isSessionTracked(sendingSession, sessionRunId)) {
                   return;
                 }
+                const sanitizedCheckpoint = sanitizeEvidenceReferences(
+                  assistantMessage.content,
+                  [],
+                );
                 await this.sessionStorage.updateMessageContent(
                   sendingSession.id,
                   assistantMessage.id,
-                  assistantMessage.content,
+                  sanitizedCheckpoint.content,
                   assistantMessage.reasoning,
-                  { streamingState },
+                  { streamingState, evidence: [] },
                 );
               });
             return checkpointQueue;
@@ -2217,10 +2223,14 @@ export class ChatManager {
                     resolve();
                     return;
                   }
-                  assistantMessage.content = sanitizeSourceGroupTargets(
-                    fullContent,
-                    collectTrustedSourceTargets([]),
-                  );
+                  assistantMessage.content = sanitizeEvidenceReferences(
+                    sanitizeSourceGroupTargets(
+                      fullContent,
+                      collectTrustedSourceTargets([]),
+                    ),
+                    [],
+                  ).content;
+                  assistantMessage.evidence = undefined;
                   assistantMessage.streamingState = undefined;
                   assistantMessage.timestamp = Date.now();
                   sendingSession.updatedAt = Date.now();
@@ -2995,6 +3005,14 @@ export class ChatManager {
       } else {
         message.content = getString("chat-turn-cancelled");
       }
+      const sanitizedEvidence = sanitizeEvidenceReferences(
+        message.content,
+        message.evidence || [],
+      );
+      message.content = sanitizedEvidence.content;
+      message.evidence = sanitizedEvidence.referencedRecords.length
+        ? sanitizedEvidence.referencedRecords
+        : undefined;
       message.streamingState = "interrupted";
       message.timestamp = now;
       await this.sessionStorage.updateMessageContent(
@@ -3002,7 +3020,10 @@ export class ChatManager {
         message.id,
         message.content,
         message.reasoning,
-        { streamingState: "interrupted" },
+        {
+          streamingState: "interrupted",
+          evidence: message.evidence || [],
+        },
       );
     }
 

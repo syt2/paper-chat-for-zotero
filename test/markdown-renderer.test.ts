@@ -1,3 +1,4 @@
+/* eslint-disable mocha/max-top-level-suites -- renderer behaviors use focused suites. */
 import { assert } from "chai";
 import {
   extractSourceGroupFragments,
@@ -7,6 +8,7 @@ import {
 } from "../src/modules/ui/chat-panel/MarkdownRenderer.ts";
 import { sanitizeSourceGroupTargets } from "../src/modules/chat/note-source-provenance.ts";
 import { getMessageMarkdownRenderOptions } from "../src/modules/ui/chat-panel/MessageRenderer.ts";
+import { createPdfPassageEvidenceRecord } from "../src/modules/chat/evidence/index.ts";
 
 class FakeElement {
   readonly ELEMENT_NODE = 1;
@@ -74,6 +76,9 @@ class FakeElement {
 }
 
 class FakeDocument {
+  readonly body = new FakeElement(this, "body");
+  readonly documentElement = this.body;
+
   createElementNS(_namespace: string, tagName: string): FakeElement {
     return new FakeElement(this, tagName);
   }
@@ -97,6 +102,11 @@ describe("markdown renderer source groups", function () {
         getTitle: () => "Open source",
         onClick: async () => undefined,
       },
+      evidenceAction: {
+        citationTitle: "View evidence",
+        viewSourceLabel: "View source",
+        onClick: async () => undefined,
+      },
     };
 
     assert.strictEqual(
@@ -107,6 +117,7 @@ describe("markdown renderer source groups", function () {
       const options = getMessageMarkdownRenderOptions(markdown, streamingState);
       assert.isUndefined(options?.blockquoteAction);
       assert.isUndefined(options?.sourceGroupAction);
+      assert.isUndefined(options?.evidenceAction);
     }
   });
 
@@ -334,6 +345,137 @@ Missing label should not be parsed.
     } finally {
       (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
     }
+  });
+
+  describe("evidence references", function () {
+    let record: NonNullable<ReturnType<typeof createPdfPassageEvidenceRecord>>;
+    let secondRecord: NonNullable<
+      ReturnType<typeof createPdfPassageEvidenceRecord>
+    >;
+
+    beforeEach(function () {
+      record = createPdfPassageEvidenceRecord({
+        itemKey: "ITEM0001",
+        page: 7,
+        section: "Results",
+        quote: "The verified result is supported by this exact passage.",
+        toolCallId: "tool-search",
+        resultIndex: 1,
+      })!;
+      secondRecord = createPdfPassageEvidenceRecord({
+        itemKey: "ITEM0001",
+        page: 8,
+        section: "Discussion",
+        quote: "A second passage should replace the first open preview.",
+        toolCallId: "tool-search",
+        resultIndex: 2,
+      })!;
+    });
+
+    function findByAttribute(
+      node: FakeElement,
+      name: string,
+      value: string,
+    ): FakeElement | undefined {
+      if (node.getAttribute(name) === value) return node;
+      for (const child of node.children) {
+        const found = findByAttribute(child, name, value);
+        if (found) return found;
+      }
+      return undefined;
+    }
+
+    it("resolves citations from message-local records and opens their preview", async function () {
+      const originalZotero = (globalThis as { Zotero?: unknown }).Zotero;
+      (globalThis as { Zotero?: unknown }).Zotero = {
+        getMainWindow: () => null,
+      };
+      const doc = new FakeDocument();
+      const root = new FakeElement(doc, "div");
+      const opened: string[] = [];
+
+      try {
+        renderMarkdownToElement(
+          root as unknown as HTMLElement,
+          `Verified claim.<evidence-ref ids="${record.id}"/> Another claim.<evidence-ref ids="${secondRecord.id}"/>`,
+          "message-evidence",
+          {
+            evidenceRecords: [record, secondRecord],
+            evidenceAction: {
+              citationTitle: "View evidence",
+              viewSourceLabel: "View source",
+              onClick: async (selected) => opened.push(selected.id),
+            },
+          },
+        );
+
+        const citation = findByAttribute(root, "data-evidence-ref", record.id);
+        const secondCitation = findByAttribute(
+          root,
+          "data-evidence-ref",
+          secondRecord.id,
+        );
+        assert.isDefined(citation);
+        assert.equal(citation?.textContent, "[1]");
+        citation?.dispatch("click");
+        const firstCard = findByAttribute(
+          doc.body,
+          "data-evidence-card",
+          record.id,
+        );
+        assert.equal(firstCard?.style.display, "block");
+        assert.equal(firstCard?.style.position, "fixed");
+        assert.strictEqual(firstCard?.parentNode, doc.body);
+
+        secondCitation?.dispatch("click");
+        const secondCard = findByAttribute(
+          doc.body,
+          "data-evidence-card",
+          secondRecord.id,
+        );
+        const sourceAction = findByAttribute(
+          doc.body,
+          "data-evidence-source-action",
+          secondRecord.id,
+        );
+        assert.equal(firstCard?.style.display, "none");
+        assert.equal(citation?.getAttribute("aria-expanded"), "false");
+        assert.equal(secondCard?.style.display, "block");
+        assert.strictEqual(secondCard?.parentNode, doc.body);
+        sourceAction?.dispatch("click");
+        await Promise.resolve();
+        await Promise.resolve();
+        assert.deepEqual(opened, [secondRecord.id]);
+      } finally {
+        (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
+      }
+    });
+
+    it("never renders an unknown evidence ID as a citation action", function () {
+      const doc = new FakeDocument();
+      const root = new FakeElement(doc, "div");
+      renderMarkdownToElement(
+        root as unknown as HTMLElement,
+        'Claim.<evidence-ref ids="ev-ffffffffffffffff"/>',
+        "message-forged-evidence",
+        { evidenceRecords: [record] },
+      );
+      assert.isUndefined(
+        findByAttribute(root, "data-evidence-ref", "ev-ffffffffffffffff"),
+      );
+    });
+
+    it("copies citation numbers and an evidence appendix without raw tags", function () {
+      const copied = formatMarkdownForMessageCopy(
+        `Verified claim.<evidence-ref ids="${record.id}"/>`,
+        { evidenceRecords: [record] },
+      );
+      assert.include(copied, "Verified claim.[1]");
+      assert.include(copied, "### Evidence");
+      assert.include(copied, record.quote);
+      assert.notInclude(copied, "<evidence-ref");
+      assert.notInclude(copied, record.id);
+    });
   });
 });
 

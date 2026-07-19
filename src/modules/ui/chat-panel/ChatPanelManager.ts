@@ -380,6 +380,39 @@ function createChatMarkdownRenderOptions(
         }
       },
     },
+    evidenceAction: {
+      citationTitle: getString("chat-evidence-citation-title"),
+      viewSourceLabel: getString("chat-evidence-view-source"),
+      onClick: async (record) => {
+        const target: SourceTarget = {
+          type: "item",
+          key: record.itemKey,
+          libraryID: record.libraryID,
+          page: record.page,
+        };
+        const sourceItem = getItemByLibraryKey(
+          record.itemKey,
+          record.libraryID,
+        );
+        if (!sourceItem) {
+          await openSourceTarget(target);
+          return;
+        }
+        const navigated = await navigateToPdfQuote(record.quote, sourceItem, {
+          allowActiveReaderFallback: false,
+          fallbackPageIndex: record.page ? record.page - 1 : undefined,
+        });
+        if (!navigated) {
+          await openSourceTarget(target);
+        }
+      },
+      onError: (error) => {
+        ztoolkit.log("[ChatPanel] Failed to open evidence source:", error);
+        context.appendError?.(
+          `${getString("chat-open-source-failed")}: ${error.message}`,
+        );
+      },
+    },
     sourceGroupAction:
       context.enableSourceActions === false
         ? undefined
@@ -412,11 +445,11 @@ function createChatMarkdownRenderOptions(
 
 function getItemByLibraryKey(
   itemKey: string | null | undefined,
+  libraryID: number = Zotero.Libraries.userLibraryID,
 ): Zotero.Item | null {
   if (!itemKey) {
     return null;
   }
-  const libraryID = Zotero.Libraries.userLibraryID;
   return (
     (Zotero.Items.getByLibraryAndKey(libraryID, itemKey) as
       | Zotero.Item

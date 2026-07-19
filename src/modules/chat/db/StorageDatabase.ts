@@ -11,7 +11,7 @@ import { getErrorMessage } from "../../../utils/common";
 
 const DB_DIR = "paper-chat";
 const DB_FILE = "storage";
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 
 /** Build absolute DB path so Zotero.DBConnection doesn't parse subdirectory names */
 function getDBPath(): string {
@@ -245,6 +245,7 @@ export class StorageDatabase {
         selected_text TEXT,
         tool_calls TEXT,
         tool_call_id TEXT,
+        evidence TEXT,
         streaming_state TEXT,
         api_only INTEGER,
         is_system_notice INTEGER,
@@ -424,6 +425,20 @@ export class StorageDatabase {
     );
   }
 
+  private async hasCurrentSchemaColumns(
+    db: ZoteroDBConnection,
+  ): Promise<boolean> {
+    if (!(await this.hasV9SearchColumns(db))) {
+      return false;
+    }
+    const messageColumns = new Set(
+      ((await db.queryAsync("PRAGMA table_info(messages)")) || []).map(
+        (column: any) => String(column.name),
+      ),
+    );
+    return messageColumns.has("evidence");
+  }
+
   private async initSchemaVersion(db: ZoteroDBConnection): Promise<void> {
     const rows =
       (await db.queryAsync(
@@ -434,7 +449,7 @@ export class StorageDatabase {
       // A missing version row is only a fresh install if createTables() built
       // the complete current shape. Never label a legacy/corrupt table set as
       // current and silently skip its migrations.
-      if (!(await this.hasV9SearchColumns(db))) {
+      if (!(await this.hasCurrentSchemaColumns(db))) {
         throw new Error(
           "StorageDatabase schema version is missing for a legacy table shape",
         );
@@ -487,11 +502,18 @@ export class StorageDatabase {
         await this.upgradeToV9(db);
         currentVersion = 9;
       }
+      if (currentVersion < 10) {
+        await this.upgradeToV10(db);
+        currentVersion = 10;
+      }
       if (
         currentVersion === SCHEMA_VERSION &&
-        !(await this.hasV9SearchColumns(db))
+        !(await this.hasCurrentSchemaColumns(db))
       ) {
-        await this.upgradeToV9(db);
+        if (!(await this.hasV9SearchColumns(db))) {
+          await this.upgradeToV9(db);
+        }
+        await this.upgradeToV10(db);
       }
     }
   }
@@ -541,6 +563,7 @@ export class StorageDatabase {
           selected_text TEXT,
           tool_calls TEXT,
           tool_call_id TEXT,
+          evidence TEXT,
           is_system_notice INTEGER,
           FOREIGN KEY (session_id) REFERENCES sessions_new(id) ON DELETE CASCADE
         )
@@ -575,8 +598,8 @@ export class StorageDatabase {
           if (!msg.id || !msg.role) continue;
 
           await db.queryAsync(
-            `INSERT INTO messages (id, session_id, seq, role, content, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, is_system_notice)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO messages (id, session_id, seq, role, content, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, is_system_notice)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               msg.id,
               row.id,
@@ -590,6 +613,7 @@ export class StorageDatabase {
               msg.selectedText || null,
               msg.tool_calls ? JSON.stringify(msg.tool_calls) : null,
               msg.tool_call_id || null,
+              msg.evidence ? JSON.stringify(msg.evidence) : null,
               msg.isSystemNotice ? 1 : null,
             ],
           );
@@ -1126,6 +1150,40 @@ export class StorageDatabase {
       }
       ztoolkit.log(
         "[StorageDatabase] Failed to upgrade to v9:",
+        getErrorMessage(error),
+      );
+      throw error;
+    }
+  }
+
+  /** Upgrade schema v9 -> v10: persist trusted evidence with each message. */
+  private async upgradeToV10(db: ZoteroDBConnection): Promise<void> {
+    ztoolkit.log("[StorageDatabase] Upgrading schema v9 -> v10...");
+
+    await db.queryAsync("BEGIN TRANSACTION");
+    try {
+      const messageColumns = new Set(
+        ((await db.queryAsync("PRAGMA table_info(messages)")) || []).map(
+          (column: any) => String(column.name),
+        ),
+      );
+      if (!messageColumns.has("evidence")) {
+        await db.queryAsync("ALTER TABLE messages ADD COLUMN evidence TEXT");
+      }
+      await db.queryAsync(
+        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
+        [10, Date.now()],
+      );
+      await db.queryAsync("COMMIT");
+      ztoolkit.log("[StorageDatabase] Schema upgraded to v10");
+    } catch (error) {
+      try {
+        await db.queryAsync("ROLLBACK");
+      } catch {
+        /* ignore */
+      }
+      ztoolkit.log(
+        "[StorageDatabase] Failed to upgrade to v10:",
         getErrorMessage(error),
       );
       throw error;

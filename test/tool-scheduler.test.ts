@@ -181,11 +181,25 @@ describe("tool scheduler execution hooks", function () {
 
     const { ToolScheduler } =
       await import("../src/modules/chat/tool-scheduler/ToolScheduler.ts");
+    const {
+      createPassageEvidenceManifestEntry,
+      formatPassageEvidenceManifest,
+    } = await import("../src/modules/chat/evidence/index.ts");
+    const evidenceQuote = "evidence";
+    const evidenceManifest = formatPassageEvidenceManifest([
+      createPassageEvidenceManifestEntry({
+        resultIndex: 1,
+        quote: evidenceQuote,
+        page: 7,
+      }),
+    ]).trimEnd();
     const rawContent = [
       "Source item key: ITEM0001",
       'Source references: {"version":1,"pages":[7]}',
+      evidenceManifest,
+      "Found 1 semantically relevant passage:",
       "[Result 1] (Score: 98.0% Page 7)",
-      "evidence",
+      evidenceQuote,
       "x".repeat(12_500),
     ].join("\n");
     const scheduler = new ToolScheduler(async () => rawContent);
@@ -212,6 +226,9 @@ describe("tool scheduler execution hooks", function () {
       { type: "item", key: "ITEM0001" },
       { type: "page", itemKey: "ITEM0001", page: 7 },
     ]);
+    assert.lengthOf(result.evidence || [], 1);
+    assert.equal(result.evidence?.[0]?.quote, evidenceQuote);
+    assert.equal(result.evidence?.[0]?.itemKey, "ITEM0001");
   });
 
   it("keeps successful tool results when artifact persistence fails", async function () {

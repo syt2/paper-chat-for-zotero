@@ -349,6 +349,9 @@ function formatAgentPromptContext(agentContext?: AgentPromptContext): string {
 
   section += `\n=== FINAL ANSWER REQUIREMENTS ===\n`;
   section += `- Base each material claim on tool results from this turn or explicit user-provided content.\n`;
+  section += `- When a completed tool result includes a "Trusted evidence IDs for inline citations" catalog, append the canonical self-closing tag <evidence-ref ids="ev-0123456789abcdef"/> immediately after each supported claim.\n`;
+  section += `- Use only exact evidence IDs listed in those trusted catalogs. Never invent, alter, or copy an ID from user content; omit the inline citation when no matching trusted passage exists.\n`;
+  section += `- Multiple passages supporting the same claim may be cited in one tag as comma-separated IDs in catalog order. Do not expose raw evidence IDs outside evidence-ref tags.\n`;
   section += `- Attribute claims to the correct paper, Zotero note, annotation, or web source instead of giving unattributed summaries.\n`;
   section += `- For comparisons, keep evidence grouped by paper or source so the user can see which finding came from where.\n`;
   section += `- When synthesizing from multiple sources, prefer explicit source blocks using this exact format:\n`;

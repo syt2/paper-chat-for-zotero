@@ -12,6 +12,11 @@ import type {
 import { SECTION_ALIASES } from "./constants";
 import { parsePageRange } from "./paperParser";
 import { getErrorMessage } from "../../../utils/common";
+import {
+  createPassageEvidenceManifestEntry,
+  formatPassageEvidenceManifest,
+} from "../evidence";
+import type { SemanticSearchResult } from "../../../types/embedding";
 
 function formatSourceReferences(pages: Array<number | undefined>): string {
   const uniquePages = Array.from(
@@ -27,6 +32,56 @@ function formatSourceReferences(pages: Array<number | undefined>): string {
 
 const HEURISTIC_SECTION_NOTE =
   "Note: This structure is detected heuristically from extracted PDF text and may be incomplete. Missing headings are not evidence that the paper lacks those sections. For comprehensive analysis, verify with search_paper_content, get_pages, or get_full_text as needed.";
+
+interface PassageLocation {
+  page?: number;
+  section?: string;
+}
+
+export interface PaperSemanticSearchService {
+  isAvailable(): Promise<boolean>;
+  isIndexed(itemKey: string): Promise<boolean>;
+  indexPaper(itemKey: string, content: string): Promise<void>;
+  searchPaper(
+    query: string,
+    itemKey: string,
+    topK: number,
+  ): Promise<SemanticSearchResult[]>;
+}
+
+function findPassageLocation(
+  paperStructure: PaperStructureExtended,
+  charIndex: number,
+  pageHint?: number,
+): PassageLocation {
+  const page =
+    pageHint &&
+    Number.isSafeInteger(pageHint) &&
+    paperStructure.pages.some((candidate) => candidate.pageNumber === pageHint)
+      ? pageHint
+      : charIndex >= 0
+        ? paperStructure.pages.find(
+            (candidate) =>
+              charIndex >= candidate.startIndex &&
+              charIndex < candidate.endIndex,
+          )?.pageNumber
+        : undefined;
+  const section =
+    charIndex >= 0
+      ? paperStructure.sections.find(
+          (candidate) =>
+            charIndex >= candidate.startIndex && charIndex < candidate.endIndex,
+        )?.name
+      : undefined;
+  return {
+    ...(page ? { page } : {}),
+    ...(section ? { section } : {}),
+  };
+}
+
+function truncatePassage(text: string): string {
+  return text.trim().slice(0, 500).trimEnd();
+}
 
 /**
  * 执行 get_paper_section
@@ -70,14 +125,16 @@ export async function executeSearchPaperContent(
   args: SearchPaperContentArgs,
   paperStructure: PaperStructureExtended,
   itemKey?: string,
+  semanticSearchService?: PaperSemanticSearchService,
 ): Promise<string> {
   const { query, max_results = 5 } = args;
 
   // 尝试使用语义搜索
   if (itemKey) {
     try {
-      const { getRAGService } = await import("../../embedding");
-      const ragService = getRAGService();
+      const ragService =
+        semanticSearchService ||
+        (await import("../../embedding")).getRAGService();
       if (await ragService.isAvailable()) {
         // 确保已索引
         if (!(await ragService.isIndexed(itemKey))) {
@@ -93,17 +150,35 @@ export async function executeSearchPaperContent(
         );
 
         if (semanticResults.length > 0) {
-          // 格式化语义搜索结果
-          const formatted = semanticResults
-            .map((r, i) => {
-              const truncated =
-                r.text.length > 500 ? r.text.substring(0, 500) + "..." : r.text;
-              const pageInfo = r.page ? ` Page ${r.page}` : "";
-              return `[Result ${i + 1}] (Score: ${(r.score * 100).toFixed(1)}%${pageInfo})\n${truncated}`;
+          const passages = semanticResults.map((result, index) => {
+            const quote = truncatePassage(result.text);
+            const charIndex = paperStructure.fullText.indexOf(result.text);
+            const location = findPassageLocation(
+              paperStructure,
+              charIndex,
+              result.page,
+            );
+            return {
+              resultIndex: index + 1,
+              quote,
+              score: result.score,
+              chunkIndex: result.chunkIndex,
+              ...location,
+            };
+          });
+          const formatted = passages
+            .map((passage) => {
+              const pageInfo = passage.page ? ` Page ${passage.page}` : "";
+              return `[Result ${passage.resultIndex}] (Score: ${(passage.score * 100).toFixed(1)}%${pageInfo})\n${passage.quote}`;
             })
             .join("\n\n---\n\n");
+          const manifest = formatPassageEvidenceManifest(
+            passages.map((passage) =>
+              createPassageEvidenceManifestEntry(passage),
+            ),
+          );
 
-          return `${formatSourceReferences(semanticResults.map((result) => result.page))}Found ${semanticResults.length} semantically relevant passages for "${query}":\n\n${formatted}`;
+          return `${formatSourceReferences(passages.map((passage) => passage.page))}${manifest}Found ${passages.length} semantically relevant passages for "${query}":\n\n${formatted}`;
         }
       }
     } catch (error) {
@@ -127,15 +202,45 @@ function executeKeywordSearch(
   paperStructure: PaperStructureExtended,
 ): string {
   const queryLower = query.toLowerCase();
-  const results: Array<{ text: string; score: number; section: string }> = [];
+  const results: Array<{
+    text: string;
+    score: number;
+    charIndex: number;
+    page?: number;
+    section?: string;
+  }> = [];
 
-  // 将全文按段落分割
-  const paragraphs = paperStructure.fullText
-    .split(/\n\s*\n/)
-    .filter((p) => p.trim().length > 50);
+  // Keep original offsets so page and section metadata come from the parser,
+  // not from model-controlled arguments or display text.
+  const paragraphs: Array<{ text: string; charIndex: number }> = [];
+  const separator = /\n\s*\n/g;
+  let paragraphStart = 0;
+  let separatorMatch: RegExpExecArray | null;
+  while ((separatorMatch = separator.exec(paperStructure.fullText)) !== null) {
+    const raw = paperStructure.fullText.slice(
+      paragraphStart,
+      separatorMatch.index,
+    );
+    const text = raw.trim();
+    if (text.length > 50) {
+      paragraphs.push({
+        text,
+        charIndex: paragraphStart + Math.max(0, raw.indexOf(text)),
+      });
+    }
+    paragraphStart = separatorMatch.index + separatorMatch[0].length;
+  }
+  const finalRaw = paperStructure.fullText.slice(paragraphStart);
+  const finalText = finalRaw.trim();
+  if (finalText.length > 50) {
+    paragraphs.push({
+      text: finalText,
+      charIndex: paragraphStart + Math.max(0, finalRaw.indexOf(finalText)),
+    });
+  }
 
   for (const paragraph of paragraphs) {
-    const paragraphLower = paragraph.toLowerCase();
+    const paragraphLower = paragraph.text.toLowerCase();
 
     // 计算相关性分数（简单的关键词匹配）
     const words = queryLower.split(/\s+/);
@@ -152,16 +257,13 @@ function executeKeywordSearch(
     }
 
     if (score > 0) {
-      // 找出这个段落属于哪个章节
-      const charIndex = paperStructure.fullText.indexOf(paragraph);
-      const section = paperStructure.sections.find(
-        (s) => charIndex >= s.startIndex && charIndex < s.endIndex,
-      );
+      const location = findPassageLocation(paperStructure, paragraph.charIndex);
 
       results.push({
-        text: paragraph.trim(),
+        text: paragraph.text,
         score,
-        section: section?.name || "Unknown",
+        charIndex: paragraph.charIndex,
+        ...location,
       });
     }
   }
@@ -174,16 +276,24 @@ function executeKeywordSearch(
     return `No results found for query: "${query}"`;
   }
 
-  // 格式化结果
-  const formatted = topResults
-    .map((r, i) => {
-      const truncated =
-        r.text.length > 500 ? r.text.substring(0, 500) + "..." : r.text;
-      return `[Result ${i + 1}] (Section: ${r.section})\n${truncated}`;
+  const passages = topResults.map((result, index) => ({
+    resultIndex: index + 1,
+    quote: truncatePassage(result.text),
+    page: result.page,
+    section: result.section,
+  }));
+  const formatted = passages
+    .map((passage) => {
+      const section = passage.section || "Unknown";
+      const pageInfo = passage.page ? ` Page ${passage.page}` : "";
+      return `[Result ${passage.resultIndex}] (Section: ${section}${pageInfo})\n${passage.quote}`;
     })
     .join("\n\n---\n\n");
+  const manifest = formatPassageEvidenceManifest(
+    passages.map((passage) => createPassageEvidenceManifestEntry(passage)),
+  );
 
-  return `Found ${topResults.length} relevant passages for "${query}":\n\n${formatted}`;
+  return `${formatSourceReferences(passages.map((passage) => passage.page))}${manifest}Found ${passages.length} relevant passages for "${query}":\n\n${formatted}`;
 }
 
 /**

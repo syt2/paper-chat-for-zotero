@@ -2,6 +2,8 @@
  * Tool Types - Function Calling 相关类型定义
  */
 
+import type { EvidenceRecord } from "./evidence";
+
 // 工具定义（OpenAI 格式）
 export interface ToolDefinition {
   type: "function";
@@ -158,6 +160,12 @@ export interface ToolExecutionResult {
    * becomes an authority for navigation targets.
    */
   references?: ToolSourceReference[];
+  /**
+   * Passage-level evidence derived from executor-owned manifests and trusted
+   * source references before artifact compaction. Model-authored citation tags
+   * never create or mutate these records.
+   */
+  evidence?: EvidenceRecord[];
   permissionDecision?: ToolPermissionDecision;
   policyTrace?: ToolPolicyTrace[];
   status: ToolExecutionStatus;

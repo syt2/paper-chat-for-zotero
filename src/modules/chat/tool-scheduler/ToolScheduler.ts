@@ -28,6 +28,7 @@ import {
 } from "../session-artifacts";
 import { deriveToolSourceReferences } from "./SourceReferenceExtractor";
 import { getToolRuntimeMetadata } from "./ToolMetadataRegistry";
+import { deriveToolEvidenceRecords } from "../evidence";
 
 export interface ToolSchedulerRequest {
   toolCall: ToolCall;
@@ -587,6 +588,13 @@ export class ToolScheduler {
             prepared.args,
             content,
           );
+      const evidence = normalizedError
+        ? undefined
+        : this.deriveEvidenceRecords(
+            prepared.request.toolCall,
+            content,
+            references || [],
+          );
       const stored =
         normalizedError ||
         prepared.request.toolCall.function.name === "read_artifact"
@@ -601,6 +609,7 @@ export class ToolScheduler {
         policyTrace: prepared.policyTrace,
         artifact: stored?.ref,
         references: references?.length ? references : undefined,
+        evidence: evidence?.length ? evidence : undefined,
         status: normalizedError ? "failed" : "completed",
         content: normalizedError
           ? normalizedError.content
@@ -643,6 +652,26 @@ export class ToolScheduler {
         );
       } catch {
         // Provenance extraction is best-effort and must not fail the tool.
+      }
+      return undefined;
+    }
+  }
+
+  private deriveEvidenceRecords(
+    toolCall: ToolCall,
+    rawContent: string,
+    references: NonNullable<ToolExecutionResult["references"]>,
+  ): ToolExecutionResult["evidence"] {
+    try {
+      return deriveToolEvidenceRecords(toolCall, rawContent, references);
+    } catch (error) {
+      try {
+        ztoolkit.log(
+          "[ToolScheduler] Failed to derive evidence records:",
+          getErrorMessage(error),
+        );
+      } catch {
+        // Evidence extraction is best-effort and must not fail the tool.
       }
       return undefined;
     }

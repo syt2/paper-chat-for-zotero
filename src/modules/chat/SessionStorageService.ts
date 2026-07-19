@@ -17,7 +17,9 @@ import type {
   ChatSession,
   SessionMeta,
 } from "../../types/chat";
+import type { EvidenceRecord } from "../../types/evidence";
 import { filterValidMessages, generateShortId } from "../../utils/common";
+import { normalizeEvidenceRecords } from "./evidence";
 import { getStorageDatabase } from "./db/StorageDatabase";
 import {
   aggregateSearchSessions,
@@ -95,6 +97,7 @@ const SEARCH_SOURCE_SCAN_PAGE_SIZE = 100;
 const SEARCH_SQL_SESSION_CHUNK_SIZE = 250;
 const SEARCH_BACKFILL_RETRY_BASE_DELAY_MS = 250;
 const SEARCH_BACKFILL_RETRY_MAX_DELAY_MS = 30_000;
+const MAX_STORED_EVIDENCE_JSON_CHARACTERS = 600_000;
 
 type SessionRow = {
   id: string;
@@ -144,6 +147,7 @@ export interface MessageStorageRow {
   selected_text?: string | null;
   tool_calls?: string | null;
   tool_call_id?: string | null;
+  evidence?: string | null;
   streaming_state?: ChatMessageStreamingState | null;
   api_only?: number | null;
   is_system_notice?: number | null;
@@ -317,6 +321,25 @@ function parseStoredJsonArray<T extends unknown[]>(
   }
 }
 
+function parseStoredEvidenceRecords(
+  value: string | null | undefined,
+): EvidenceRecord[] | undefined {
+  if (!value || value.length > MAX_STORED_EVIDENCE_JSON_CHARACTERS) {
+    return undefined;
+  }
+  try {
+    const records = normalizeEvidenceRecords(JSON.parse(value));
+    return records.length > 0 ? records : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function serializeEvidenceRecords(value: unknown): string | null {
+  const records = normalizeEvidenceRecords(value);
+  return records.length > 0 ? JSON.stringify(records) : null;
+}
+
 function getSearchBackfillRetryDelayMs(consecutiveFailures: number): number {
   if (consecutiveFailures <= 0) return 0;
   const exponent = Math.min(consecutiveFailures - 1, 30);
@@ -481,6 +504,10 @@ export function mapMessageRowToChatMessage(
   if (toolCalls) message.tool_calls = toolCalls;
   const toolCallId = readOptionalMessageColumn(row, "tool_call_id");
   if (toolCallId) message.tool_call_id = toolCallId;
+  const evidence = parseStoredEvidenceRecords(
+    readOptionalMessageColumn(row, "evidence"),
+  );
+  if (evidence) message.evidence = evidence;
   const streamingState = readOptionalMessageColumn(row, "streaming_state");
   if (streamingState) message.streamingState = streamingState;
   if (readOptionalMessageColumn(row, "api_only")) message.apiOnly = true;
@@ -1942,8 +1969,8 @@ export class SessionStorageService {
 
         await db.queryAsync(
           `INSERT INTO messages
-           (id, session_id, seq, role, content, reasoning, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, streaming_state, api_only, is_system_notice, search_text, search_index_version)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, session_id, seq, role, content, reasoning, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, streaming_state, api_only, is_system_notice, search_text, search_index_version)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             message.id,
             sessionId,
@@ -1958,6 +1985,7 @@ export class SessionStorageService {
             message.selectedText || null,
             message.tool_calls ? JSON.stringify(message.tool_calls) : null,
             message.tool_call_id || null,
+            serializeEvidenceRecords(message.evidence),
             message.streamingState || null,
             message.apiOnly ? 1 : null,
             message.isSystemNotice ? 1 : null,
@@ -2085,6 +2113,7 @@ export class SessionStorageService {
     reasoning?: string,
     options?: {
       streamingState?: ChatMessageStreamingState | null;
+      evidence?: EvidenceRecord[];
     },
   ): Promise<void> {
     await this.init();
@@ -2104,12 +2133,19 @@ export class SessionStorageService {
         const previousMessage = mapMessageRowToChatMessage(
           rows[0] as MessageStorageRow,
         );
+        const nextEvidence = Object.prototype.hasOwnProperty.call(
+          options || {},
+          "evidence",
+        )
+          ? normalizeEvidenceRecords(options?.evidence)
+          : previousMessage.evidence;
         const nextMessage: ChatMessage = {
           ...previousMessage,
           content,
           reasoning,
           timestamp: now,
           streamingState: options?.streamingState ?? undefined,
+          evidence: nextEvidence,
         };
         const previousProjection =
           projectMessageSearchTextSafe(previousMessage);
@@ -2123,7 +2159,7 @@ export class SessionStorageService {
         );
         await db.queryAsync(
           `UPDATE messages SET
-            content = ?, reasoning = ?, timestamp = ?, streaming_state = ?,
+            content = ?, reasoning = ?, timestamp = ?, streaming_state = ?, evidence = ?,
             search_text = ?, search_index_version = ?
           WHERE id = ? AND session_id = ?`,
           [
@@ -2131,6 +2167,7 @@ export class SessionStorageService {
             reasoning || null,
             now,
             options?.streamingState ?? null,
+            serializeEvidenceRecords(nextEvidence),
             nextProjection.searchText,
             nextProjection.searchIndexVersion,
             messageId,
@@ -2537,8 +2574,8 @@ export class SessionStorageService {
             } = messagesForStorage[seq];
             await db.queryAsync(
               `INSERT INTO messages
-               (id, session_id, seq, role, content, reasoning, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, streaming_state, api_only, is_system_notice, search_text, search_index_version)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               (id, session_id, seq, role, content, reasoning, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, streaming_state, api_only, is_system_notice, search_text, search_index_version)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               [
                 msg.id,
                 session.id,
@@ -2553,6 +2590,7 @@ export class SessionStorageService {
                 msg.selectedText || null,
                 msg.tool_calls ? JSON.stringify(msg.tool_calls) : null,
                 msg.tool_call_id || null,
+                serializeEvidenceRecords(msg.evidence),
                 msg.streamingState || null,
                 msg.apiOnly ? 1 : null,
                 msg.isSystemNotice ? 1 : null,

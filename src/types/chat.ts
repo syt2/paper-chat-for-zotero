@@ -30,6 +30,7 @@ import type {
   ToolPermissionRiskLevel,
   ToolPermissionScope,
 } from "./tool";
+import type { EvidenceRecord } from "./evidence";
 
 export type ChatMessageStreamingState = "in_progress" | "interrupted";
 
@@ -51,6 +52,8 @@ export interface ChatMessage {
   apiOnly?: boolean; // Hidden from chat UI; retained only for model context.
   // 系统通知标记 (用于显示 item 切换提示等)
   isSystemNotice?: boolean;
+  /** Trusted passage records referenced by this assistant message. */
+  evidence?: EvidenceRecord[];
 }
 
 // 上下文摘要

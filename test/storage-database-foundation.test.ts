@@ -217,6 +217,7 @@ describe("StorageDatabase foundation", function () {
         if (normalized === "PRAGMA table_info(messages)") {
           return [
             { name: "reasoning" },
+            { name: "evidence" },
             { name: "search_text" },
             { name: "search_index_version" },
           ];
@@ -345,6 +346,7 @@ describe("StorageDatabase foundation", function () {
         if (normalized === "PRAGMA table_info(messages)") {
           return [
             { name: "id" },
+            { name: "evidence" },
             { name: "search_text" },
             { name: "search_index_version" },
           ];
@@ -357,7 +359,7 @@ describe("StorageDatabase foundation", function () {
           ];
         }
         if (normalized === "SELECT version FROM schema_version WHERE id = 1") {
-          return [{ version: 9 }];
+          return [{ version: 10 }];
         }
         return [];
       },
@@ -377,6 +379,47 @@ describe("StorageDatabase foundation", function () {
       recorded,
       "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
     );
+  });
+
+  it("adds message evidence when upgrading schema v9 to v10", async function () {
+    const recorded: Array<{ sql: string; params?: unknown[] }> = [];
+    const fakeDb = {
+      async queryAsync(sql: string, params?: unknown[]) {
+        const normalized = normalizeSql(sql);
+        recorded.push({ sql: normalized, params });
+        if (normalized === "SELECT version FROM schema_version WHERE id = 1") {
+          return [{ version: 9 }];
+        }
+        if (normalized === "PRAGMA table_info(messages)") {
+          return [
+            { name: "reasoning" },
+            { name: "search_text" },
+            { name: "search_index_version" },
+          ];
+        }
+        if (normalized === "PRAGMA table_info(session_meta)") {
+          return [{ name: "search_title" }, { name: "search_index_version" }];
+        }
+        return [];
+      },
+    };
+
+    await (new StorageDatabase() as any).initSchemaVersion(fakeDb);
+
+    assert.include(
+      recorded.map((entry) => entry.sql),
+      "ALTER TABLE messages ADD COLUMN evidence TEXT",
+    );
+    assert.isTrue(
+      recorded.some(
+        (entry) =>
+          entry.sql ===
+            "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1" &&
+          entry.params?.[0] === 10 &&
+          typeof entry.params?.[1] === "number",
+      ),
+    );
+    assert.strictEqual(recorded.at(-1)?.sql, "COMMIT");
   });
 
   it("does not install v9 triggers against a V2.6.1 table shape", async function () {
@@ -425,7 +468,7 @@ describe("StorageDatabase foundation", function () {
         const normalized = normalizeSql(sql);
         recorded.push(normalized);
         if (normalized === "SELECT version FROM schema_version WHERE id = 1") {
-          return [{ version: 9 }];
+          return [{ version: 10 }];
         }
         if (normalized === "PRAGMA table_info(messages)") {
           return [{ name: "id" }, { name: "reasoning" }];

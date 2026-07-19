@@ -161,12 +161,13 @@ class SemanticWriteFakeDatabase {
         selected_text: (params[10] as string | null) || null,
         tool_calls: (params[11] as string | null) || null,
         tool_call_id: (params[12] as string | null) || null,
+        evidence: (params[13] as string | null) || null,
         streaming_state:
-          (params[13] as StoredMessage["streaming_state"]) || null,
-        api_only: (params[14] as number | null) || null,
-        is_system_notice: (params[15] as number | null) || null,
-        search_text: String(params[16] || ""),
-        search_index_version: Number(params[17]),
+          (params[14] as StoredMessage["streaming_state"]) || null,
+        api_only: (params[15] as number | null) || null,
+        is_system_notice: (params[16] as number | null) || null,
+        search_text: String(params[17] || ""),
+        search_index_version: Number(params[18]),
       };
       this.messages.set(message.id, message);
       return [];
@@ -180,15 +181,16 @@ class SemanticWriteFakeDatabase {
         : [];
     }
     if (statement.startsWith("UPDATE messages SET content = ?")) {
-      const message = this.messages.get(String(params[6]));
-      if (message && message.session_id === params[7]) {
+      const message = this.messages.get(String(params[7]));
+      if (message && message.session_id === params[8]) {
         message.content = String(params[0] || "");
         message.reasoning = (params[1] as string | null) || null;
         message.timestamp = Number(params[2]);
         message.streaming_state =
           (params[3] as StoredMessage["streaming_state"]) || null;
-        message.search_text = String(params[4] || "");
-        message.search_index_version = Number(params[5]);
+        message.evidence = (params[4] as string | null) || null;
+        message.search_text = String(params[5] || "");
+        message.search_index_version = Number(params[6]);
       }
       return [];
     }

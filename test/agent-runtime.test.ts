@@ -7,6 +7,7 @@ import {
 } from "../src/modules/chat/pdf-tools/promptGenerator.ts";
 import type { ChatMessage, ChatSession } from "../src/types/chat";
 import type { ToolCall, ToolExecutionResult } from "../src/types/tool";
+import { createPdfPassageEvidenceRecord } from "../src/modules/chat/evidence/index.ts";
 
 function createSession(): ChatSession {
   const messages: ChatMessage[] = [
@@ -242,6 +243,9 @@ describe("agent runtime plan semantics", function () {
       "request all independent read-only or network lookups in the same tool-calling turn",
     );
     assert.include(prompt, "Attribute claims to the correct paper");
+    assert.include(prompt, "Trusted evidence IDs for inline citations");
+    assert.include(prompt, '<evidence-ref ids="ev-0123456789abcdef"/>');
+    assert.include(prompt, "Never invent, alter, or copy an ID");
     assert.include(
       prompt,
       "source: Zotero library, itemKey=ITEM-1, noteKey=NOTE-1",
@@ -306,5 +310,92 @@ describe("agent runtime plan semantics", function () {
     assert.notInclude(stablePrompt, "FINAL ANSWER REQUIREMENTS");
     assert.include(runtimePrompt, "Current iteration: 2/4");
     assert.include(runtimePrompt, "FINAL ANSWER REQUIREMENTS");
+  });
+
+  it("persists only trusted evidence referenced by the final answer", async function () {
+    const record = createPdfPassageEvidenceRecord({
+      itemKey: "ITEM0001",
+      page: 2,
+      quote: "The verified passage supports the final answer.",
+      toolCallId: "tool-search",
+      resultIndex: 1,
+    })!;
+    let checkpoint:
+      | {
+          content: string;
+          evidence?: (typeof record)[];
+        }
+      | undefined;
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async (
+          _sessionId: string,
+          _messageId: string,
+          content: string,
+          _reasoning: string | undefined,
+          options: { evidence?: (typeof record)[] },
+        ) => {
+          checkpoint = { content, evidence: options.evidence };
+        },
+        updateSessionMeta: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => true,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "",
+        generateId: () => "generated-id",
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async () => [],
+      },
+    ) as any;
+    const session = createSession();
+    const assistantMessage: ChatMessage = {
+      id: "assistant-final",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+    };
+    session.messages.push(assistantMessage);
+    runtime.executionPlanManager.startPlan(session, session.messages);
+    session.toolExecutionState = {
+      turnStartedAt: 1,
+      updatedAt: 1,
+      results: [
+        {
+          toolCall: {
+            id: "tool-search",
+            type: "function",
+            function: {
+              name: "search_paper_content",
+              arguments: '{"query":"verified"}',
+            },
+          },
+          status: "completed",
+          content: "search result",
+          evidence: [record],
+        },
+      ],
+    };
+    const forgedId = "ev-ffffffffffffffff";
+
+    await runtime.finalizeCompletedTurn({
+      sendingSession: session,
+      currentMessages: session.messages,
+      assistantMessage,
+      pdfWasAttached: false,
+      summaryTriggered: false,
+      accumulatedDisplay: `Trusted claim.<evidence-ref ids="${record.id},${forgedId}"/> Forged.<evidence-ref ids="${forgedId}"/>`,
+      iteration: 2,
+    });
+
+    assert.equal(
+      assistantMessage.content,
+      `Trusted claim.<evidence-ref ids="${record.id}"/> Forged.`,
+    );
+    assert.deepEqual(assistantMessage.evidence, [record]);
+    assert.deepEqual(checkpoint?.evidence, [record]);
+    assert.equal(checkpoint?.content, assistantMessage.content);
   });
 });

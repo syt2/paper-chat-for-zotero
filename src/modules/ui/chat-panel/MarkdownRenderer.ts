@@ -9,6 +9,8 @@ import { chatColors } from "../../../utils/colors";
 import { getString } from "../../../utils/locale";
 import { HTML_NS } from "./types";
 import { isDarkMode } from "./ChatPanelTheme";
+import type { EvidenceRecord } from "../../../types/evidence";
+import { normalizeEvidenceRecords } from "../../chat/evidence";
 import {
   getToolCallGroupExpandKey,
   isToolCallGroupExpanded,
@@ -23,6 +25,26 @@ const md = new MarkdownIt({
   typographer: true,
   linkify: true,
 });
+
+function evidenceRefPlugin(mdInstance: MarkdownIt) {
+  mdInstance.inline.ruler.before(
+    "html_inline",
+    "evidence_ref",
+    (state, silent) => {
+      const remaining = state.src.slice(state.pos, state.posMax);
+      const match = remaining.match(
+        /^<evidence-ref ids="(ev-[a-f0-9]{16}(?:,ev-[a-f0-9]{16})*)"\/>/,
+      );
+      if (!match) return false;
+      if (!silent) {
+        const token = state.push("evidence_ref", "", 0);
+        token.meta = { ids: match[1].split(",") };
+      }
+      state.pos += match[0].length;
+      return true;
+    },
+  );
+}
 
 /**
  * Markdown-it plugin for math expressions ($...$ and $$...$$)
@@ -156,6 +178,7 @@ function mathPlugin(mdInstance: MarkdownIt) {
   );
 }
 
+md.use(evidenceRefPlugin);
 md.use(mathPlugin);
 
 /**
@@ -250,6 +273,120 @@ const sourceGroupStyles = {
   },
 };
 
+interface ActiveEvidencePopover {
+  card: HTMLElement;
+  citation: HTMLElement;
+}
+
+const activeEvidencePopoverByDocument = new WeakMap<
+  Document,
+  ActiveEvidencePopover
+>();
+const evidencePopoverListenersInstalled = new WeakSet<Document>();
+
+function closeActiveEvidencePopover(doc: Document): void {
+  const active = activeEvidencePopoverByDocument.get(doc);
+  if (!active) return;
+  active.citation.setAttribute("aria-expanded", "false");
+  active.card.style.display = "none";
+  if (active.card.parentNode?.removeChild) {
+    active.card.parentNode.removeChild(active.card);
+  }
+  activeEvidencePopoverByDocument.delete(doc);
+}
+
+function isNodeInside(
+  container: HTMLElement,
+  target: EventTarget | null,
+): boolean {
+  return (
+    !!target &&
+    typeof (target as Node).nodeType === "number" &&
+    container.contains(target as Node)
+  );
+}
+
+function ensureEvidencePopoverDismissListeners(doc: Document): void {
+  if (evidencePopoverListenersInstalled.has(doc)) return;
+  evidencePopoverListenersInstalled.add(doc);
+  if (typeof doc.addEventListener !== "function") return;
+  doc.addEventListener(
+    "pointerdown",
+    (event) => {
+      const active = activeEvidencePopoverByDocument.get(doc);
+      if (
+        !active ||
+        isNodeInside(active.card, event.target) ||
+        isNodeInside(active.citation, event.target)
+      ) {
+        return;
+      }
+      closeActiveEvidencePopover(doc);
+    },
+    true,
+  );
+  doc.addEventListener(
+    "scroll",
+    (event) => {
+      const active = activeEvidencePopoverByDocument.get(doc);
+      if (active && isNodeInside(active.card, event.target)) return;
+      closeActiveEvidencePopover(doc);
+    },
+    true,
+  );
+  doc.defaultView?.addEventListener("resize", () =>
+    closeActiveEvidencePopover(doc),
+  );
+}
+
+function positionEvidencePopover(
+  doc: Document,
+  citation: HTMLElement,
+  card: HTMLElement,
+): void {
+  const view = doc.defaultView;
+  if (!view) return;
+
+  const margin = 12;
+  const gap = 6;
+  const viewportWidth = Math.max(
+    1,
+    view.innerWidth || doc.documentElement.clientWidth,
+  );
+  const viewportHeight = Math.max(
+    1,
+    view.innerHeight || doc.documentElement.clientHeight,
+  );
+  const width = Math.min(360, Math.max(1, viewportWidth - margin * 2));
+  card.style.width = `${width}px`;
+  card.style.maxWidth = `${width}px`;
+  card.style.maxHeight = `${Math.max(1, viewportHeight - margin * 2)}px`;
+  card.style.visibility = "hidden";
+  card.style.display = "block";
+
+  const anchorRect = citation.getBoundingClientRect();
+  const cardRect = card.getBoundingClientRect();
+  const left = Math.min(
+    Math.max(margin, anchorRect.left),
+    Math.max(margin, viewportWidth - margin - cardRect.width),
+  );
+  const belowTop = anchorRect.bottom + gap;
+  const aboveTop = anchorRect.top - cardRect.height - gap;
+  const top =
+    belowTop + cardRect.height <= viewportHeight - margin
+      ? belowTop
+      : aboveTop >= margin
+        ? aboveTop
+        : Math.max(
+            margin,
+            Math.min(belowTop, viewportHeight - margin - cardRect.height),
+          );
+
+  card.style.left = `${Math.round(left)}px`;
+  card.style.top = `${Math.round(top)}px`;
+  card.style.visibility = "visible";
+}
+
 export interface MarkdownRenderOptions {
   blockquoteAction?: {
     label: string;
@@ -262,6 +399,13 @@ export interface MarkdownRenderOptions {
   sourceGroupAction?: {
     getTitle: (group: SourceGroupActionContext) => string | null;
     onClick: (group: SourceGroupActionContext) => void | Promise<void>;
+    onError?: (error: Error) => void;
+  };
+  evidenceRecords?: EvidenceRecord[];
+  evidenceAction?: {
+    citationTitle: string;
+    viewSourceLabel: string;
+    onClick: (record: EvidenceRecord) => void | Promise<void>;
     onError?: (error: Error) => void;
   };
   sourceGroupContext?: SourceGroupActionContext;
@@ -980,6 +1124,57 @@ function renderSourceGroupBlocks(
 
 interface MarkdownMessageCopyOptions {
   reasoning?: string | null;
+  evidenceRecords?: EvidenceRecord[];
+}
+
+function formatEvidenceReferencesForMarkdownCopy(
+  content: string,
+  evidenceRecords: EvidenceRecord[] | undefined,
+): {
+  content: string;
+  referencedRecords: Array<{ record: EvidenceRecord; citationNumber: number }>;
+} {
+  const records = normalizeEvidenceRecords(evidenceRecords);
+  const byId = new Map(
+    records.map((record, index) => [record.id, { record, index }]),
+  );
+  const referencedIds = new Set<string>();
+  const formatted = content.replace(
+    /<evidence-ref ids="(ev-[a-f0-9]{16}(?:,ev-[a-f0-9]{16})*)"\/>/g,
+    (_match, rawIds: string) => {
+      const indexes: number[] = [];
+      for (const id of rawIds.split(",")) {
+        const entry = byId.get(id);
+        if (!entry) continue;
+        referencedIds.add(id);
+        indexes.push(entry.index + 1);
+      }
+      return indexes.length > 0 ? `[${indexes.join(", ")}]` : "";
+    },
+  );
+  return {
+    content: formatted.replace(/<\/?evidence-ref\b[^>]*>/gi, ""),
+    referencedRecords: records.flatMap((record, index) =>
+      referencedIds.has(record.id)
+        ? [{ record, citationNumber: index + 1 }]
+        : [],
+    ),
+  };
+}
+
+function formatEvidenceAppendix(
+  records: Array<{ record: EvidenceRecord; citationNumber: number }>,
+): string {
+  if (records.length === 0) return "";
+  const entries = records.map(({ record, citationNumber }) => {
+    const location = formatEvidenceLocation(record);
+    const quote = record.quote.replace(/\n/g, "\n   > ");
+    return [
+      `${citationNumber}. ${location ? `**${location}**` : "Supporting passage"}`,
+      `   > ${quote}`,
+    ].join("\n\n");
+  });
+  return ["### Evidence", ...entries].join("\n\n");
 }
 
 function formatToolCallFragmentsForMarkdownCopy(content: string): string {
@@ -1009,7 +1204,11 @@ export function formatMarkdownForMessageCopy(
   options: MarkdownMessageCopyOptions = {},
 ): string {
   const stableContent = stripIncompleteTrailingToolCall(content);
-  const copiedContent = extractSourceGroupFragments(stableContent)
+  const evidenceCopy = formatEvidenceReferencesForMarkdownCopy(
+    stableContent,
+    options.evidenceRecords,
+  );
+  const copiedContent = extractSourceGroupFragments(evidenceCopy.content)
     .map((fragment) => {
       if (fragment.kind === "markdown") {
         return formatToolCallFragmentsForMarkdownCopy(fragment.content);
@@ -1020,12 +1219,19 @@ export function formatMarkdownForMessageCopy(
     .join("\n\n")
     .trim();
 
+  const evidenceAppendix = formatEvidenceAppendix(
+    evidenceCopy.referencedRecords,
+  );
+  const answerWithEvidence = [copiedContent, evidenceAppendix]
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
   const reasoning = options.reasoning?.trim();
   if (!reasoning) {
-    return copiedContent;
+    return answerWithEvidence;
   }
 
-  return [`## Thinking`, reasoning, copiedContent]
+  return [`## Thinking`, reasoning, answerWithEvidence]
     .filter(Boolean)
     .join("\n\n")
     .trim();
@@ -1183,9 +1389,10 @@ export function renderMarkdownToElement(
   messageId?: string,
   options: MarkdownRenderOptions = {},
 ): void {
-  element.textContent = "";
   const doc = element.ownerDocument;
   if (!doc) return;
+  closeActiveEvidencePopover(doc);
+  element.textContent = "";
 
   // First, check for and render tool call cards
   const remainingContent = renderToolCallCards(
@@ -1264,6 +1471,195 @@ function getBlockquoteActionText(node: Node): string {
     }
   }
   return text;
+}
+
+function formatEvidenceLocation(record: EvidenceRecord): string {
+  return [
+    record.page
+      ? getEvidenceLocaleString(
+          "chat-evidence-page",
+          { page: record.page },
+          `Page ${record.page}`,
+        )
+      : "",
+    record.section
+      ? getEvidenceLocaleString(
+          "chat-evidence-section",
+          { section: record.section },
+          `Section: ${record.section}`,
+        )
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function getEvidenceLocaleString(
+  key: "chat-evidence-page" | "chat-evidence-section",
+  args: Record<string, unknown>,
+  fallback: string,
+): string {
+  try {
+    return getString(key, { args });
+  } catch {
+    return fallback;
+  }
+}
+
+function appendEvidenceReference(
+  doc: Document,
+  parent: HTMLElement,
+  ids: string[],
+  options: MarkdownRenderOptions,
+): void {
+  const records = normalizeEvidenceRecords(options.evidenceRecords);
+  const recordIndex = new Map(
+    records.map((record, index) => [record.id, { record, index }]),
+  );
+  const resolved = ids
+    .map((id) => recordIndex.get(id))
+    .filter(
+      (
+        entry,
+      ): entry is {
+        record: EvidenceRecord;
+        index: number;
+      } => !!entry,
+    );
+  if (resolved.length === 0) return;
+
+  const dark = isDarkMode();
+  for (const { record, index } of resolved) {
+    const wrapper = doc.createElementNS(HTML_NS, "span") as HTMLElement;
+    wrapper.style.display = "inline-block";
+    wrapper.style.position = "relative";
+    wrapper.style.margin = "0 1px";
+    wrapper.style.lineHeight = "1";
+    wrapper.style.verticalAlign = "super";
+
+    const citation = doc.createElementNS(
+      HTML_NS,
+      options.evidenceAction ? "button" : "span",
+    ) as HTMLElement;
+    citation.setAttribute("data-evidence-ref", record.id);
+    citation.setAttribute(
+      "title",
+      options.evidenceAction?.citationTitle ||
+        truncateInlineText(record.quote.replace(/\s+/g, " "), 180),
+    );
+    citation.style.display = "inline";
+    citation.style.padding = "0 2px";
+    citation.style.border = "none";
+    citation.style.borderRadius = "4px";
+    citation.style.background = "transparent";
+    citation.style.color = dark ? "#79c0ff" : "#2563eb";
+    citation.style.fontSize = "0.72em";
+    citation.style.fontWeight = "650";
+    citation.style.lineHeight = "1";
+    citation.style.verticalAlign = "baseline";
+    citation.textContent = `[${index + 1}]`;
+    wrapper.appendChild(citation);
+
+    const action = options.evidenceAction;
+    if (action) {
+      citation.setAttribute("type", "button");
+      citation.setAttribute("aria-expanded", "false");
+      citation.style.cursor = "pointer";
+
+      const card = doc.createElementNS(HTML_NS, "span") as HTMLElement;
+      card.setAttribute("data-evidence-card", record.id);
+      card.setAttribute("role", "note");
+      card.style.display = "none";
+      card.style.position = "fixed";
+      card.style.zIndex = "2147483000";
+      card.style.width = "360px";
+      card.style.maxWidth = "calc(100vw - 24px)";
+      card.style.overflowY = "auto";
+      card.style.boxSizing = "border-box";
+      card.style.padding = "10px";
+      card.style.border = `1px solid ${dark ? "#4b5563" : "#d0d7de"}`;
+      card.style.borderRadius = "8px";
+      card.style.background = dark ? "#161b22" : "#ffffff";
+      card.style.color = dark ? "#c9d1d9" : "#334155";
+      card.style.boxShadow = dark
+        ? "0 8px 24px rgba(0, 0, 0, 0.45)"
+        : "0 8px 24px rgba(15, 23, 42, 0.16)";
+      card.style.fontSize = "12px";
+      card.style.fontWeight = "400";
+      card.style.lineHeight = "1.5";
+      card.style.textAlign = "left";
+      card.style.whiteSpace = "normal";
+
+      const location = formatEvidenceLocation(record);
+      if (location) {
+        const locationElement = doc.createElementNS(
+          HTML_NS,
+          "span",
+        ) as HTMLElement;
+        locationElement.style.display = "block";
+        locationElement.style.marginBottom = "5px";
+        locationElement.style.color = dark ? "#8b949e" : "#64748b";
+        locationElement.style.fontSize = "11px";
+        locationElement.style.fontWeight = "600";
+        locationElement.textContent = location;
+        card.appendChild(locationElement);
+      }
+
+      const quote = doc.createElementNS(HTML_NS, "span") as HTMLElement;
+      quote.style.display = "block";
+      quote.style.whiteSpace = "pre-wrap";
+      quote.textContent = record.quote;
+      card.appendChild(quote);
+
+      const viewSource = doc.createElementNS(HTML_NS, "button") as HTMLElement;
+      viewSource.setAttribute("type", "button");
+      viewSource.setAttribute("data-evidence-source-action", record.id);
+      viewSource.style.display = "inline-flex";
+      viewSource.style.marginTop = "8px";
+      viewSource.style.padding = "3px 8px";
+      viewSource.style.border = `1px solid ${dark ? "#4b5563" : "#cbd5e1"}`;
+      viewSource.style.borderRadius = "6px";
+      viewSource.style.background = dark ? "#21262d" : "#f8fafc";
+      viewSource.style.color = dark ? "#79c0ff" : "#2563eb";
+      viewSource.style.cursor = "pointer";
+      viewSource.style.fontSize = "11px";
+      viewSource.textContent = action.viewSourceLabel;
+      viewSource.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        closeActiveEvidencePopover(doc);
+        void Promise.resolve()
+          .then(() => action.onClick(record))
+          .catch((error: unknown) => {
+            action.onError?.(
+              error instanceof Error ? error : new Error(String(error)),
+            );
+          });
+      });
+      card.appendChild(viewSource);
+
+      citation.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const active = activeEvidencePopoverByDocument.get(doc);
+        if (active?.card === card) {
+          closeActiveEvidencePopover(doc);
+          return;
+        }
+
+        closeActiveEvidencePopover(doc);
+        const host = doc.body || doc.documentElement || wrapper;
+        host.appendChild(card);
+        card.style.display = "block";
+        citation.setAttribute("aria-expanded", "true");
+        activeEvidencePopoverByDocument.set(doc, { card, citation });
+        ensureEvidencePopoverDismissListeners(doc);
+        positionEvidencePopover(doc, citation, card);
+      });
+    }
+
+    parent.appendChild(wrapper);
+  }
 }
 
 /**
@@ -1483,7 +1879,7 @@ export function buildDOMFromTokens(
 
       case "inline":
         if (token.children) {
-          renderInlineTokens(doc, parent, token.children);
+          renderInlineTokens(doc, parent, token.children, options);
         }
         break;
 
@@ -1517,6 +1913,7 @@ export function renderInlineTokens(
   doc: Document,
   parent: HTMLElement,
   tokens: ReturnType<typeof md.parse>,
+  options: MarkdownRenderOptions = {},
 ): void {
   const stack: HTMLElement[] = [parent];
 
@@ -1594,6 +1991,16 @@ export function renderInlineTokens(
         // Block-level display math is handled by math_block tokens.
         renderMathToElement(doc, mathSpan, token.content, false);
         current.appendChild(mathSpan);
+        break;
+      }
+
+      case "evidence_ref": {
+        const ids = Array.isArray((token.meta as { ids?: unknown })?.ids)
+          ? ((token.meta as { ids: unknown[] }).ids.filter(
+              (id): id is string => typeof id === "string",
+            ) as string[])
+          : [];
+        appendEvidenceReference(doc, current, ids, options);
         break;
       }
 

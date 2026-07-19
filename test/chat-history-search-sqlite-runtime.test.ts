@@ -470,7 +470,7 @@ describe("chat history search SQLite runtime", function () {
     }
   });
 
-  it("repairs a missing reasoning column despite a current schema version", async function () {
+  it("repairs reasoning and upgrades message evidence to schema v10", async function () {
     const runtime = globalThis as any;
     if (
       !runtime.Zotero?.DBConnection ||
@@ -525,10 +525,15 @@ describe("chat history search SQLite runtime", function () {
         (await db.queryAsync(
           "SELECT name FROM pragma_table_info('messages') ORDER BY name",
         )) || [];
-      assert.include(
+      assert.includeMembers(
         columnRows.map((row) => String(row.name)),
-        "reasoning",
+        ["reasoning", "evidence"],
       );
+      const versionRows =
+        (await db.queryAsync(
+          "SELECT version FROM schema_version WHERE id = 1",
+        )) || [];
+      assert.equal(Number(versionRows[0]?.version), 10);
 
       await db.queryAsync(
         `INSERT INTO messages

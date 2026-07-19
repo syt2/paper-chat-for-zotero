@@ -426,14 +426,22 @@ export interface MessageRenderOptions {
 export function getMessageMarkdownRenderOptions(
   markdown: MarkdownRenderOptions | undefined,
   streamingState: ChatMessage["streamingState"],
+  evidenceRecords?: ChatMessage["evidence"],
 ): MarkdownRenderOptions | undefined {
-  if (streamingState === undefined || !markdown) {
-    return markdown;
+  if (!markdown) {
+    return evidenceRecords?.length ? { evidenceRecords } : undefined;
+  }
+  if (streamingState === undefined) {
+    return evidenceRecords?.length
+      ? { ...markdown, evidenceRecords }
+      : markdown;
   }
   return {
     ...markdown,
+    evidenceRecords,
     blockquoteAction: undefined,
     sourceGroupAction: undefined,
+    evidenceAction: undefined,
   };
 }
 
@@ -736,6 +744,7 @@ export function createMessageElement(
     const markdownOptions = getMessageMarkdownRenderOptions(
       renderOptions.markdown,
       msg.streamingState,
+      msg.evidence,
     );
     if (msg.streamingState === "in_progress") {
       renderMarkdownToElement(content, msg.content, msg.id, markdownOptions);
@@ -1072,6 +1081,7 @@ function createMessageActions(
     msg.role === "assistant"
       ? formatMarkdownForMessageCopy(msg.content, {
           reasoning: msg.reasoning,
+          evidenceRecords: msg.evidence,
         })
       : rawContent;
 

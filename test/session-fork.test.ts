@@ -7,6 +7,7 @@ import {
   resolveForkItemKey,
 } from "../src/modules/chat/session-fork.ts";
 import type { ChatMessage, ChatSession } from "../src/types/chat";
+import { createPdfPassageEvidenceRecord } from "../src/modules/chat/evidence/index.ts";
 
 function createDeferred<T = void>(): {
   promise: Promise<T>;
@@ -71,6 +72,15 @@ describe("chat session fork", function () {
         role: "assistant",
         content: "The methods differ in two ways.",
         reasoning: "Compared the retrieved evidence.",
+        evidence: [
+          createPdfPassageEvidenceRecord({
+            itemKey: "ITEM0001",
+            page: 2,
+            quote: "The methods differ in two ways.",
+            toolCallId: "tool-call-1",
+            resultIndex: 1,
+          })!,
+        ],
         timestamp: 4,
       },
       {
@@ -100,6 +110,8 @@ describe("chat session fork", function () {
     assert.equal(forked[2]?.tool_call_id, "tool-call-1");
     assert.notStrictEqual(forked[0]?.images, messages[0]?.images);
     assert.notStrictEqual(forked[1]?.tool_calls, messages[1]?.tool_calls);
+    assert.notStrictEqual(forked[3]?.evidence, messages[3]?.evidence);
+    assert.notStrictEqual(forked[3]?.evidence?.[0], messages[3]?.evidence?.[0]);
     assert.equal(messages[0]?.id, "user-1");
     assert.equal(messages[4]?.id, "user-2");
   });
