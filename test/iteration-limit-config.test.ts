@@ -2,6 +2,14 @@ import { assert } from "chai";
 import type { ToolExecutionResult } from "../src/types/tool";
 
 describe("IterationLimitConfig", function () {
+  it("defaults maximum planning iterations to 30", async function () {
+    const { DEFAULT_AGENT_MAX_PLANNING_ITERATIONS } = await import(
+      "../src/modules/chat/agent-runtime/IterationLimitConfig.ts"
+    );
+
+    assert.equal(DEFAULT_AGENT_MAX_PLANNING_ITERATIONS, 30);
+  });
+
   it("clamps finite values into the [min, max] range", async function () {
     const {
       normalizeAgentMaxPlanningIterations,
@@ -100,9 +108,14 @@ describe("ToolBudgetLimits", function () {
     const { getToolBudgetLimits } = await import(
       "../src/modules/chat/tool-budget/ToolBudgetPolicy.ts"
     );
+    const { DEFAULT_AGENT_MAX_PLANNING_ITERATIONS } = await import(
+      "../src/modules/chat/agent-runtime/IterationLimitConfig.ts"
+    );
 
     const fromNaN = getToolBudgetLimits(Number.NaN);
-    const fromDefault = getToolBudgetLimits(15);
+    const fromDefault = getToolBudgetLimits(
+      DEFAULT_AGENT_MAX_PLANNING_ITERATIONS,
+    );
     assert.deepEqual(fromNaN, fromDefault);
   });
 
