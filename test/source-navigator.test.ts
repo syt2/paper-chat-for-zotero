@@ -1,6 +1,9 @@
 import { assert } from "chai";
 import { openSourceTarget } from "../src/modules/ui/chat-panel/SourceNavigator.ts";
-import { navigateToPdfQuote } from "../src/modules/ui/chat-panel/PdfQuoteNavigator.ts";
+import {
+  clearPdfQuoteHighlight,
+  navigateToPdfQuote,
+} from "../src/modules/ui/chat-panel/PdfQuoteNavigator.ts";
 
 interface ZoteroMock {
   Libraries: { userLibraryID: number };
@@ -18,7 +21,7 @@ interface ZoteroMock {
       itemID: number,
       location?: unknown,
       options?: unknown,
-    ) => Promise<void>;
+    ) => Promise<void | unknown>;
   };
   getActiveZoteroPane: () => unknown;
   getMainWindow: () => unknown;
@@ -38,6 +41,143 @@ function createPdfAttachment(id: number): object {
   };
 }
 
+function createOverlayReaderDocument(text: string): {
+  document: Document;
+  page: {
+    children: Array<{ getAttribute: (name: string) => string | null }>;
+  };
+} {
+  class FakeElement {
+    ownerDocument: FakeDocument;
+    parentElement: FakeElement | null = null;
+    children: FakeElement[] = [];
+    textNodes: FakeText[] = [];
+    textContent = "";
+    style: Record<string, string> = {};
+    attributes = new Map<string, string>();
+    offsetWidth = 600;
+    offsetHeight = 800;
+
+    constructor(ownerDocument: FakeDocument) {
+      this.ownerDocument = ownerDocument;
+    }
+
+    setAttribute(name: string, value: string): void {
+      this.attributes.set(name, value);
+    }
+
+    getAttribute(name: string): string | null {
+      return this.attributes.get(name) ?? null;
+    }
+
+    appendChild(child: FakeElement): FakeElement {
+      child.parentElement = this;
+      this.children.push(child);
+      return child;
+    }
+
+    remove(): void {
+      if (!this.parentElement) return;
+      const index = this.parentElement.children.indexOf(this);
+      if (index >= 0) this.parentElement.children.splice(index, 1);
+      this.parentElement = null;
+    }
+
+    closest(selector: string): FakeElement | null {
+      if (
+        selector === "[data-page-number]" &&
+        this.getAttribute("data-page-number")
+      ) {
+        return this;
+      }
+      return this.parentElement?.closest(selector) || null;
+    }
+
+    getBoundingClientRect(): object {
+      return {
+        left: 0,
+        top: 0,
+        right: 600,
+        bottom: 800,
+        width: 600,
+        height: 800,
+      };
+    }
+
+    scrollIntoView(): void {}
+  }
+
+  class FakeText {
+    constructor(
+      readonly data: string,
+      readonly ownerDocument: FakeDocument,
+      readonly parentElement: FakeElement,
+    ) {}
+  }
+
+  class FakeRange {
+    setStart(): void {}
+    setEnd(): void {}
+    getClientRects(): object[] {
+      return [
+        {
+          left: 40,
+          top: 100,
+          right: 340,
+          bottom: 118,
+          width: 300,
+          height: 18,
+        },
+      ];
+    }
+  }
+
+  class FakeDocument {
+    layer!: FakeElement;
+    defaultView = {
+      NodeFilter: { SHOW_TEXT: 4 },
+      getComputedStyle: () => ({ position: "relative" }),
+    };
+
+    querySelector(): FakeElement | null {
+      return this.layer;
+    }
+
+    createTreeWalker(root: FakeElement): { nextNode: () => FakeText | null } {
+      let index = 0;
+      return {
+        nextNode: () => root.textNodes[index++] || null,
+      };
+    }
+
+    createRange(): FakeRange {
+      return new FakeRange();
+    }
+
+    createElement(): FakeElement {
+      return new FakeElement(this);
+    }
+
+    getSelection(): never {
+      throw new Error("The overlay highlighter must not access Selection");
+    }
+  }
+
+  const document = new FakeDocument();
+  const page = new FakeElement(document);
+  page.setAttribute("data-page-number", "1");
+  const layer = new FakeElement(document);
+  layer.textContent = text;
+  page.appendChild(layer);
+  const textNode = new FakeText(text, document, layer);
+  layer.textNodes.push(textNode);
+  document.layer = layer;
+  return {
+    document: document as unknown as Document,
+    page,
+  };
+}
+
 describe("typed source navigation", function () {
   let originalZotero: unknown;
   let originalZtoolkit: unknown;
@@ -51,6 +191,7 @@ describe("typed source navigation", function () {
   });
 
   afterEach(function () {
+    clearPdfQuoteHighlight();
     (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
     (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
   });
@@ -402,5 +543,111 @@ describe("typed source navigation", function () {
 
     assert.isTrue(result);
     assert.deepEqual(openedLocation, { pageIndex: 5 });
+  });
+
+  it("flashes a self-owned overlay twice without touching Selection", async function () {
+    this.timeout(3000);
+    const quote =
+      "A sufficiently long grounded quotation that appears on the PDF page.";
+    const overlayDocument = createOverlayReaderDocument(quote);
+    const pdf = {
+      ...createPdfAttachment(20),
+      attachmentText: quote,
+    };
+    const reader = {
+      itemID: 20,
+      type: "pdf",
+      focus: () => undefined,
+      navigate: async () => undefined,
+      _internalReader: {
+        _lastView: {
+          _iframeWindow: { document: overlayDocument.document },
+        },
+      },
+    };
+    setZoteroMock({
+      Libraries: { userLibraryID: 1 },
+      Items: {
+        getByLibraryAndKey: () => false,
+        get: () => pdf,
+        getAsync: async () => false,
+      },
+      Reader: {
+        getByTabID: () => reader,
+        open: async () => {
+          assert.fail("the existing reader should be reused");
+        },
+      },
+      getActiveZoteroPane: () => null,
+      getMainWindow: () => ({ Zotero_Tabs: { selectedID: "reader-tab" } }),
+    });
+
+    assert.isTrue(await navigateToPdfQuote(quote, pdf as Zotero.Item));
+    const findOverlay = () =>
+      overlayDocument.page.children.find((child) =>
+        child.getAttribute("data-paperchat-pdf-quote-overlay"),
+      ) as unknown as { style: Record<string, string> } | undefined;
+    assert.equal(findOverlay()?.style.opacity, "1");
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    assert.equal(findOverlay()?.style.opacity, "0");
+    await new Promise((resolve) => setTimeout(resolve, 180));
+    assert.equal(findOverlay()?.style.opacity, "1");
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    assert.isUndefined(findOverlay());
+  });
+
+  it("serializes Reader navigation so the latest rapid click wins", async function () {
+    const quoteA = "A sufficiently long quotation on the first PDF page.";
+    const quoteB = "A sufficiently long quotation on the second PDF page.";
+    const pdf = {
+      ...createPdfAttachment(20),
+      attachmentText: `${quoteA}\f${quoteB}`,
+    };
+    const navigatedPages: number[] = [];
+    let releaseFirstNavigation: (() => void) | undefined;
+    const reader = {
+      itemID: 20,
+      type: "epub",
+      focus: () => undefined,
+      navigate: async (location: { pageIndex: number }) => {
+        navigatedPages.push(location.pageIndex);
+        if (navigatedPages.length === 1) {
+          await new Promise<void>((resolve) => {
+            releaseFirstNavigation = resolve;
+          });
+        }
+      },
+    };
+    setZoteroMock({
+      Libraries: { userLibraryID: 1 },
+      Items: {
+        getByLibraryAndKey: () => false,
+        get: () => pdf,
+        getAsync: async () => false,
+      },
+      Reader: {
+        getByTabID: () => reader,
+        open: async () => {
+          assert.fail("the existing reader should be reused");
+        },
+      },
+      getActiveZoteroPane: () => null,
+      getMainWindow: () => ({ Zotero_Tabs: { selectedID: "reader-tab" } }),
+    });
+
+    const first = navigateToPdfQuote(quoteA, pdf as Zotero.Item);
+    for (
+      let attempt = 0;
+      attempt < 10 && navigatedPages.length === 0;
+      attempt++
+    ) {
+      await Promise.resolve();
+    }
+    assert.deepEqual(navigatedPages, [0]);
+    const second = navigateToPdfQuote(quoteB, pdf as Zotero.Item);
+    releaseFirstNavigation?.();
+    await Promise.all([first, second]);
+
+    assert.deepEqual(navigatedPages, [0, 1]);
   });
 });
