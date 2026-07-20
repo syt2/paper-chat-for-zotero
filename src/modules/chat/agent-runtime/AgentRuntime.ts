@@ -68,7 +68,7 @@ import {
   collectToolEvidenceRecords,
   sanitizeEvidenceReferences,
 } from "../evidence";
-import { MAX_ITERATIONS_MESSAGE } from "./messages";
+import { getMaxIterationsMessage } from "./messages";
 
 interface AgentRuntimeCallbacks {
   isSessionActive: (session: ChatSession) => boolean;
@@ -348,7 +348,7 @@ export class AgentRuntime {
             assistantMessage,
             accumulatedDisplay +
               (result.content || "") +
-              MAX_ITERATIONS_MESSAGE,
+              getMaxIterationsMessage(),
             iteration,
           );
           return;
@@ -375,7 +375,7 @@ export class AgentRuntime {
         sessionRunId,
         currentMessages,
         assistantMessage,
-        accumulatedDisplay + MAX_ITERATIONS_MESSAGE,
+        accumulatedDisplay + getMaxIterationsMessage(),
         iteration,
       );
     } catch (error) {
@@ -507,7 +507,7 @@ export class AgentRuntime {
             assistantMessage,
             accumulatedDisplay +
               (result.content || "") +
-              MAX_ITERATIONS_MESSAGE,
+              getMaxIterationsMessage(),
             iteration,
           );
           return;
@@ -534,7 +534,7 @@ export class AgentRuntime {
         sessionRunId,
         currentMessages,
         assistantMessage,
-        accumulatedDisplay + MAX_ITERATIONS_MESSAGE,
+        accumulatedDisplay + getMaxIterationsMessage(),
         iteration,
       );
     } catch (error) {

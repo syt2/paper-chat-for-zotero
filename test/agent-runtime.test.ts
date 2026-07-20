@@ -8,7 +8,7 @@ import {
 import type { ChatMessage, ChatSession } from "../src/types/chat";
 import type { ToolCall, ToolExecutionResult } from "../src/types/tool";
 import { createPdfPassageEvidenceRecord } from "../src/modules/chat/evidence/index.ts";
-import { MAX_ITERATIONS_MESSAGE } from "../src/modules/chat/agent-runtime/messages.ts";
+import { AGENT_MAX_PLANNING_ITERATIONS_SETTINGS_HREF } from "../src/utils/internalLinks.ts";
 
 function createSession(): ChatSession {
   const messages: ChatMessage[] = [
@@ -32,8 +32,26 @@ function createSession(): ChatSession {
 describe("agent runtime plan semantics", function () {
   it("fails the final round when a provider suppresses a prefixed tool call", async function () {
     const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    const originalAddon = (globalThis as { addon?: unknown }).addon;
     (globalThis as { ztoolkit?: unknown }).ztoolkit = {
       log: () => undefined,
+    };
+    (globalThis as { addon?: unknown }).addon = {
+      data: {
+        locale: {
+          current: {
+            formatMessagesSync: (requests: Array<{ id: string }>) => {
+              assert.equal(
+                requests[0]?.id,
+                "paperchat-chat-max-planning-iterations-reached",
+              );
+              return [
+                { value: "抱歉，我未能在允许的最大规划轮次内完成此请求。" },
+              ];
+            },
+          },
+        },
+      },
     };
     const session = createSession();
     const assistantMessage: ChatMessage = {
@@ -112,11 +130,12 @@ describe("agent runtime plan semantics", function () {
       assert.equal(session.executionPlan?.status, "failed");
       assert.equal(
         assistantMessage.content,
-        `Let me inspect that.${MAX_ITERATIONS_MESSAGE}`,
+        `Let me inspect that.\n\n[抱歉，我未能在允许的最大规划轮次内完成此请求。](${AGENT_MAX_PLANNING_ITERATIONS_SETTINGS_HREF})`,
       );
       assert.equal(persistedContent.at(-1), assistantMessage.content);
     } finally {
       (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+      (globalThis as { addon?: unknown }).addon = originalAddon;
     }
   });
 
