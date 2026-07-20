@@ -16,6 +16,8 @@ import {
   isToolCallGroupExpanded,
   setToolCallGroupExpanded,
 } from "./ToolCallGroupExpandState";
+import { AGENT_MAX_PLANNING_ITERATIONS_SETTINGS_HREF } from "../../../utils/internalLinks";
+import { openAgentMaxPlanningIterationsSettings } from "../../preferences/navigation";
 
 // Initialize markdown-it with XHTML output
 const md = new MarkdownIt({
@@ -388,6 +390,8 @@ function positionEvidencePopover(
 }
 
 export interface MarkdownRenderOptions {
+  /** Enable the trusted app-authored max-iterations settings action. */
+  enableAgentMaxPlanningIterationsSettingsLink?: boolean;
   blockquoteAction?: {
     label: string;
     title: string;
@@ -1972,7 +1976,25 @@ export function renderInlineTokens(
       case "link_open": {
         const a = doc.createElementNS(HTML_NS, "a") as HTMLAnchorElement;
         const href = token.attrGet("href");
-        if (href) a.href = href;
+        if (href === AGENT_MAX_PLANNING_ITERATIONS_SETTINGS_HREF) {
+          a.href = "#";
+          if (options.enableAgentMaxPlanningIterationsSettingsLink) {
+            a.setAttribute(
+              "data-paperchat-settings-target",
+              "agent-max-planning-iterations",
+            );
+            a.addEventListener("click", (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              openAgentMaxPlanningIterationsSettings();
+            });
+          } else {
+            // Internal app actions are inert in untrusted model markdown.
+            a.addEventListener("click", (event) => event.preventDefault());
+          }
+        } else if (href) {
+          a.href = href;
+        }
         const darkLink = isDarkMode();
         a.style.color = darkLink ? "#58a6ff" : chatColors.markdownLink;
         a.style.textDecoration = "underline";

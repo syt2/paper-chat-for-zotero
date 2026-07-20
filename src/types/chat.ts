@@ -439,6 +439,8 @@ export interface StreamToolCallingResult {
   content: string;
   reasoning?: string;
   toolCalls?: ToolCall[];
+  /** Provider returned tool protocol even though this round disabled tools. */
+  suppressedToolCall?: boolean;
   stopReason: "tool_calls" | "end_turn" | "max_tokens" | "stop";
 }
 

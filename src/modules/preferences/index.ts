@@ -22,6 +22,15 @@ export async function registerPrefsScripts(_window: Window): Promise<void> {
   addon.data.prefs = {
     window: _window,
   };
+  _window.addEventListener(
+    "unload",
+    () => {
+      if (addon.data.prefs?.window === _window) {
+        delete addon.data.prefs;
+      }
+    },
+    { once: true },
+  );
 
   try {
     await initializePrefsUI();

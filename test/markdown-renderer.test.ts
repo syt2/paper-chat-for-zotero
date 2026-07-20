@@ -9,6 +9,7 @@ import {
 import { sanitizeSourceGroupTargets } from "../src/modules/chat/note-source-provenance.ts";
 import { getMessageMarkdownRenderOptions } from "../src/modules/ui/chat-panel/MessageRenderer.ts";
 import { createPdfPassageEvidenceRecord } from "../src/modules/chat/evidence/index.ts";
+import { MAX_ITERATIONS_MESSAGE } from "../src/modules/chat/agent-runtime/messages.ts";
 
 class FakeElement {
   readonly ELEMENT_NODE = 1;
@@ -476,6 +477,196 @@ Missing label should not be parsed.
       assert.notInclude(copied, "<evidence-ref");
       assert.notInclude(copied, record.id);
     });
+  });
+});
+
+describe("markdown renderer internal settings links", function () {
+  it("opens and focuses the maximum planning iterations preference", function () {
+    const originalAddon = (globalThis as { addon?: unknown }).addon;
+    const originalZotero = (globalThis as { Zotero?: unknown }).Zotero;
+    const doc = new FakeDocument();
+    const root = new FakeElement(doc, "div");
+    let openedPane = "";
+    let focused = false;
+    let selected = false;
+    let scrolled = false;
+    const input = {
+      focus: () => {
+        focused = true;
+      },
+      select: () => {
+        selected = true;
+      },
+      scrollIntoView: () => {
+        scrolled = true;
+      },
+    };
+
+    (globalThis as { addon?: unknown }).addon = {
+      data: {
+        prefs: {
+          window: {
+            document: {
+              getElementById: (id: string) =>
+                id === "pref-agent-max-planning-iterations" ? input : null,
+            },
+            setTimeout: (callback: () => void) => callback(),
+          },
+        },
+      },
+    };
+    (globalThis as { Zotero?: unknown }).Zotero = {
+      getMainWindow: () => null,
+      Utilities: {
+        Internal: {
+          openPreferences: (pane: string) => {
+            openedPane = pane;
+          },
+        },
+      },
+    };
+
+    try {
+      renderMarkdownToElement(
+        root as unknown as HTMLElement,
+        MAX_ITERATIONS_MESSAGE,
+        undefined,
+        { enableAgentMaxPlanningIterationsSettingsLink: true },
+      );
+
+      const findSettingsLink = (node: FakeElement): FakeElement | undefined => {
+        if (
+          node.getAttribute("data-paperchat-settings-target") ===
+          "agent-max-planning-iterations"
+        ) {
+          return node;
+        }
+        for (const child of node.children) {
+          const found = findSettingsLink(child);
+          if (found) return found;
+        }
+        return undefined;
+      };
+      const settingsLink = findSettingsLink(root);
+      assert.exists(settingsLink);
+      assert.isNull(settingsLink?.getAttribute("role") || null);
+
+      settingsLink?.dispatch("click");
+
+      assert.equal(openedPane, "paperchat-prefpane");
+      assert.isTrue(scrolled);
+      assert.isTrue(focused);
+      assert.isTrue(selected);
+    } finally {
+      (globalThis as { addon?: unknown }).addon = originalAddon;
+      (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
+    }
+  });
+
+  it("keeps model-authored internal settings links inert", function () {
+    const originalZotero = (globalThis as { Zotero?: unknown }).Zotero;
+    const doc = new FakeDocument();
+    const root = new FakeElement(doc, "div");
+    let openCount = 0;
+    (globalThis as { Zotero?: unknown }).Zotero = {
+      getMainWindow: () => null,
+      Utilities: {
+        Internal: {
+          openPreferences: () => {
+            openCount++;
+          },
+        },
+      },
+    };
+
+    try {
+      renderMarkdownToElement(
+        root as unknown as HTMLElement,
+        "[Open citation](paperchat://preferences/agent-max-planning-iterations)",
+      );
+      const link = root.children[0]?.children[0];
+      link?.dispatch("click");
+
+      assert.equal(openCount, 0);
+      assert.isNull(
+        link?.getAttribute("data-paperchat-settings-target") || null,
+      );
+    } finally {
+      (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
+    }
+  });
+
+  it("ignores a closed preferences window and focuses the reopened pane", function () {
+    const originalAddon = (globalThis as { addon?: unknown }).addon;
+    const originalZotero = (globalThis as { Zotero?: unknown }).Zotero;
+    const originalSetTimeout = globalThis.setTimeout;
+    const doc = new FakeDocument();
+    const root = new FakeElement(doc, "div");
+    const queuedCallbacks: Array<() => void> = [];
+    let staleFocusCount = 0;
+    let liveFocusCount = 0;
+    const staleWindow = {
+      closed: true,
+      document: {
+        getElementById: () => ({
+          focus: () => staleFocusCount++,
+          select: () => undefined,
+          scrollIntoView: () => undefined,
+        }),
+      },
+    };
+    const liveInput = {
+      isConnected: true,
+      focus: () => liveFocusCount++,
+      select: () => undefined,
+      scrollIntoView: () => undefined,
+    };
+    const liveWindow = {
+      closed: false,
+      document: {
+        getElementById: (id: string) =>
+          id === "pref-agent-max-planning-iterations" ? liveInput : null,
+      },
+    };
+
+    (globalThis as { addon?: unknown }).addon = {
+      data: { prefs: { window: staleWindow } },
+    };
+    (globalThis as { Zotero?: unknown }).Zotero = {
+      getMainWindow: () => null,
+      Utilities: { Internal: { openPreferences: () => undefined } },
+    };
+    globalThis.setTimeout = ((callback: () => void) => {
+      queuedCallbacks.push(callback);
+      return 1;
+    }) as typeof setTimeout;
+
+    try {
+      renderMarkdownToElement(
+        root as unknown as HTMLElement,
+        MAX_ITERATIONS_MESSAGE,
+        undefined,
+        { enableAgentMaxPlanningIterationsSettingsLink: true },
+      );
+      const findSettingsLink = (node: FakeElement): FakeElement | undefined => {
+        if (node.getAttribute("data-paperchat-settings-target")) return node;
+        for (const child of node.children) {
+          const found = findSettingsLink(child);
+          if (found) return found;
+        }
+        return undefined;
+      };
+      findSettingsLink(root)?.dispatch("click");
+      (globalThis as any).addon.data.prefs.window = liveWindow;
+      queuedCallbacks.shift()?.();
+
+      assert.equal(staleFocusCount, 0);
+      assert.equal(liveFocusCount, 1);
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+      (globalThis as { addon?: unknown }).addon = originalAddon;
+      (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
+    }
   });
 });
 

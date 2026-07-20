@@ -68,6 +68,7 @@ import {
   collectToolEvidenceRecords,
   sanitizeEvidenceReferences,
 } from "../evidence";
+import { MAX_ITERATIONS_MESSAGE } from "./messages";
 
 interface AgentRuntimeCallbacks {
   isSessionActive: (session: ChatSession) => boolean;
@@ -152,8 +153,6 @@ interface ToolIterationParams {
 
 // Hard stop for a single assistant turn. Keeps malformed tool loops bounded
 // while still allowing a few replan / retry pivots inside one response.
-const MAX_ITERATIONS_MESSAGE =
-  "\n\nI apologize, but I was unable to complete the request within the allowed number of iterations.";
 const MAX_ITERATIONS_ERROR = "Maximum tool-calling iterations reached.";
 const AGENT_TRACE_LOG_PREF =
   "extensions.zotero.paperchat.devEnableAgentTraceLogs";
@@ -335,17 +334,21 @@ export class AgentRuntime {
 
         if (
           iterationControl.forceFinalAnswer &&
-          !(result.content || "").trim()
+          (result.suppressedToolCall ||
+            !!result.toolCalls?.length ||
+            !(result.content || "").trim())
         ) {
           ztoolkit.log(
-            `[${logPrefix}] Final synthesis round returned no text; falling back to max-iterations message`,
+            `[${logPrefix}] Final synthesis round did not produce a terminal answer; falling back to max-iterations message`,
           );
           await this.finalizeMaxIterationsTurn(
             sendingSession,
             sessionRunId,
             currentMessages,
             assistantMessage,
-            accumulatedDisplay + MAX_ITERATIONS_MESSAGE,
+            accumulatedDisplay +
+              (result.content || "") +
+              MAX_ITERATIONS_MESSAGE,
             iteration,
           );
           return;
@@ -490,17 +493,21 @@ export class AgentRuntime {
 
         if (
           iterationControl.forceFinalAnswer &&
-          !(result.content || "").trim()
+          (result.suppressedToolCall ||
+            !!result.toolCalls?.length ||
+            !(result.content || "").trim())
         ) {
           ztoolkit.log(
-            `[${logPrefix}] Final synthesis round returned no text; falling back to max-iterations message`,
+            `[${logPrefix}] Final synthesis round did not produce a terminal answer; falling back to max-iterations message`,
           );
           await this.finalizeMaxIterationsTurn(
             sendingSession,
             sessionRunId,
             currentMessages,
             assistantMessage,
-            accumulatedDisplay + MAX_ITERATIONS_MESSAGE,
+            accumulatedDisplay +
+              (result.content || "") +
+              MAX_ITERATIONS_MESSAGE,
             iteration,
           );
           return;
@@ -589,6 +596,7 @@ export class AgentRuntime {
     content: string;
     reasoning?: string;
     toolCalls?: ToolCall[];
+    suppressedToolCall?: boolean;
     stopReason: string;
   }> {
     const pendingToolCalls = new Map<
@@ -725,6 +733,7 @@ export class AgentRuntime {
             content: result.content,
             reasoning: result.reasoning || roundReasoning || undefined,
             toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+            suppressedToolCall: result.suppressedToolCall,
             stopReason,
           });
         },

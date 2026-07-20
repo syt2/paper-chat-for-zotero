@@ -23,6 +23,7 @@ import {
   type MarkdownRenderOptions,
   renderMarkdownToElement,
 } from "./MarkdownRenderer";
+import { MAX_ITERATIONS_MESSAGE } from "../../chat/agent-runtime/messages";
 
 export function getStreamingContentSelector(messageId: string): string {
   return `[data-streaming-content-for="${messageId}"]`;
@@ -746,11 +747,31 @@ export function createMessageElement(
       msg.streamingState,
       msg.evidence,
     );
+    const hasCanonicalMaxIterationsNotice =
+      msg.role === "assistant" &&
+      msg.streamingState === undefined &&
+      msg.content.trimEnd().endsWith(MAX_ITERATIONS_MESSAGE.trim());
+    const trustedMarkdownOptions = hasCanonicalMaxIterationsNotice
+      ? {
+          ...markdownOptions,
+          enableAgentMaxPlanningIterationsSettingsLink: true,
+        }
+      : markdownOptions;
     if (msg.streamingState === "in_progress") {
-      renderMarkdownToElement(content, msg.content, msg.id, markdownOptions);
+      renderMarkdownToElement(
+        content,
+        msg.content,
+        msg.id,
+        trustedMarkdownOptions,
+      );
       ensureStreamingTypingIndicator(content, theme);
     } else {
-      renderMarkdownToElement(content, msg.content, msg.id, markdownOptions);
+      renderMarkdownToElement(
+        content,
+        msg.content,
+        msg.id,
+        trustedMarkdownOptions,
+      );
     }
   }
 

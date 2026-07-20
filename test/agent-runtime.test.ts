@@ -8,6 +8,7 @@ import {
 import type { ChatMessage, ChatSession } from "../src/types/chat";
 import type { ToolCall, ToolExecutionResult } from "../src/types/tool";
 import { createPdfPassageEvidenceRecord } from "../src/modules/chat/evidence/index.ts";
+import { MAX_ITERATIONS_MESSAGE } from "../src/modules/chat/agent-runtime/messages.ts";
 
 function createSession(): ChatSession {
   const messages: ChatMessage[] = [
@@ -29,6 +30,96 @@ function createSession(): ChatSession {
 }
 
 describe("agent runtime plan semantics", function () {
+  it("fails the final round when a provider suppresses a prefixed tool call", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    const session = createSession();
+    const assistantMessage: ChatMessage = {
+      id: "assistant-max-iterations",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+    };
+    session.messages.push(assistantMessage);
+    const persistedContent: string[] = [];
+    const runtime = new AgentRuntime(
+      {
+        updateSessionMeta: async () => undefined,
+        updateMessageContent: async (
+          _sessionId: string,
+          _messageId: string,
+          content: string,
+        ) => {
+          persistedContent.push(content);
+        },
+      } as any,
+      {
+        isSessionActive: () => true,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "",
+        generateId: () => "generated-id",
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async () => [],
+      },
+    ) as any;
+    runtime.getMaxIterations = () => 1;
+    let receivedToolChoice = "";
+    const provider = {
+      config: {
+        id: "deepseek",
+        type: "openai-compatible",
+        defaultModel: "deepseek-test",
+      },
+      chatCompletionWithTools: async (
+        _messages: ChatMessage[],
+        _tools: unknown[],
+        _signal: AbortSignal | undefined,
+        options: { toolChoice?: string },
+      ) => {
+        receivedToolChoice = options.toolChoice || "";
+        return {
+          content: "Let me inspect that.",
+          suppressedToolCall: true,
+        };
+      },
+    };
+
+    try {
+      await runtime.executeNonStreamingToolLoop({
+        provider,
+        currentMessages: session.messages,
+        assistantMessage,
+        pdfWasAttached: false,
+        summaryTriggered: false,
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "search_paper_content",
+              description: "Search paper text",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
+        sendingSession: session,
+      });
+
+      assert.equal(receivedToolChoice, "none");
+      assert.equal(session.executionPlan?.status, "failed");
+      assert.equal(
+        assistantMessage.content,
+        `Let me inspect that.${MAX_ITERATIONS_MESSAGE}`,
+      );
+      assert.equal(persistedContent.at(-1), assistantMessage.content);
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
+  });
+
   it("dedupes identical request_user_input calls in one model response", function () {
     const runtime = new AgentRuntime(
       {

@@ -65,8 +65,12 @@ const DSML_TOOL_CALLS_START_REGEX = new RegExp(
   String.raw`<\s*${DSML_TAG_PREFIX}\s*tool_calls\s*>`,
   "i",
 );
-const DSML_TOOL_CALLS_BLOCK_REGEX = new RegExp(
-  String.raw`<\s*${DSML_TAG_PREFIX}\s*tool_calls\s*>([\s\S]*?)<\s*\/\s*${DSML_TAG_PREFIX}\s*tool_calls\s*>`,
+const DSML_TOOL_CALLS_START_SCAN_REGEX = new RegExp(
+  String.raw`<\s*${DSML_TAG_PREFIX}\s*tool_calls\s*>`,
+  "gi",
+);
+const DSML_TOOL_CALLS_END_SCAN_REGEX = new RegExp(
+  String.raw`<\s*\/\s*${DSML_TAG_PREFIX}\s*tool_calls\s*>`,
   "gi",
 );
 const DSML_INVOKE_REGEX = new RegExp(
@@ -79,7 +83,6 @@ const DSML_PARAMETER_REGEX = new RegExp(
 );
 const XML_ATTRIBUTE_REGEX =
   /([A-Za-z_:][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>=`]+))/g;
-const DSML_DETECTION_TAIL_LENGTH = 64;
 
 function decodeXmlEntities(value: string): string {
   return value
@@ -107,28 +110,134 @@ function parseXmlAttributes(rawAttributes: string): Record<string, string> {
   return attributes;
 }
 
+interface DsmlToolCallBlock {
+  start: number;
+  end: number;
+  body: string;
+  complete: boolean;
+}
+
+function isPotentialDsmlToolCallsStart(candidate: string): boolean {
+  const compact = candidate
+    .replace(/\s/g, "")
+    .replace(/｜/g, "|")
+    .toLowerCase();
+  if (!compact.startsWith("<")) {
+    return false;
+  }
+
+  let rest = compact.slice(1);
+  if (!rest.startsWith("|")) {
+    return false;
+  }
+  rest = rest.replace(/^\|+/, "");
+  if (!rest) {
+    return true;
+  }
+  if ("dsml".startsWith(rest)) {
+    return true;
+  }
+  if (!rest.startsWith("dsml")) {
+    return false;
+  }
+
+  rest = rest.slice("dsml".length);
+  if (!rest) {
+    return true;
+  }
+  if (!rest.startsWith("|")) {
+    return false;
+  }
+  rest = rest.replace(/^\|+/, "");
+  return !rest || "tool_calls>".startsWith(rest);
+}
+
+/**
+ * Scan DSML envelopes without asking one backtracking regex to search from
+ * every opening marker. An opening marker without a close consumes through
+ * EOF: it is still provider protocol text and must never become chat content.
+ */
+function scanDsmlToolCallBlocks(content: string): DsmlToolCallBlock[] {
+  const blocks: DsmlToolCallBlock[] = [];
+  let cursor = 0;
+
+  while (cursor < content.length) {
+    DSML_TOOL_CALLS_START_SCAN_REGEX.lastIndex = cursor;
+    const startMatch = DSML_TOOL_CALLS_START_SCAN_REGEX.exec(content);
+    if (!startMatch) {
+      const trailingTagStart = content.lastIndexOf("<");
+      if (
+        trailingTagStart >= cursor &&
+        isPotentialDsmlToolCallsStart(content.slice(trailingTagStart))
+      ) {
+        blocks.push({
+          start: trailingTagStart,
+          end: content.length,
+          body: "",
+          complete: false,
+        });
+      }
+      break;
+    }
+
+    const bodyStart = startMatch.index + startMatch[0].length;
+    DSML_TOOL_CALLS_END_SCAN_REGEX.lastIndex = bodyStart;
+    const endMatch = DSML_TOOL_CALLS_END_SCAN_REGEX.exec(content);
+    if (!endMatch) {
+      blocks.push({
+        start: startMatch.index,
+        end: content.length,
+        body: content.slice(bodyStart),
+        complete: false,
+      });
+      break;
+    }
+
+    const end = endMatch.index + endMatch[0].length;
+    blocks.push({
+      start: startMatch.index,
+      end,
+      body: content.slice(bodyStart, endMatch.index),
+      complete: true,
+    });
+    cursor = end;
+  }
+
+  return blocks;
+}
+
 export function stripDsmlToolCallBlocks(content: string): string {
-  DSML_TOOL_CALLS_BLOCK_REGEX.lastIndex = 0;
-  return content.replace(DSML_TOOL_CALLS_BLOCK_REGEX, "").trim();
+  const blocks = scanDsmlToolCallBlocks(content);
+  if (blocks.length === 0) {
+    return content.trim();
+  }
+
+  const cleanParts: string[] = [];
+  let cursor = 0;
+  for (const block of blocks) {
+    cleanParts.push(content.slice(cursor, block.start));
+    cursor = block.end;
+  }
+  cleanParts.push(content.slice(cursor));
+  return cleanParts.join("").trim();
 }
 
 export function hasDsmlToolCallBlock(content: string): boolean {
-  DSML_TOOL_CALLS_BLOCK_REGEX.lastIndex = 0;
-  return DSML_TOOL_CALLS_BLOCK_REGEX.test(content);
+  return scanDsmlToolCallBlocks(content).length > 0;
 }
 
 export function parseDsmlToolCallsFromContent(content: string): ToolCall[] {
   const toolCalls: ToolCall[] = [];
-  let blockMatch: RegExpExecArray | null;
   let index = 0;
 
-  DSML_TOOL_CALLS_BLOCK_REGEX.lastIndex = 0;
-  while ((blockMatch = DSML_TOOL_CALLS_BLOCK_REGEX.exec(content)) !== null) {
-    const block = blockMatch[1];
+  for (const block of scanDsmlToolCallBlocks(content)) {
+    if (!block.complete) {
+      continue;
+    }
     let invokeMatch: RegExpExecArray | null;
     DSML_INVOKE_REGEX.lastIndex = 0;
 
-    while ((invokeMatch = DSML_INVOKE_REGEX.exec(block)) !== null) {
+    while ((invokeMatch = DSML_INVOKE_REGEX.exec(block.body)) !== null) {
       const invokeAttributes = parseXmlAttributes(invokeMatch[1]);
       const functionName = invokeAttributes.name;
       if (!functionName) {
@@ -181,13 +290,21 @@ function filterToolCallsByAllowedTools(
 export function resolveDsmlFallbackContent(
   content: string,
   tools: ToolDefinition[] | undefined,
-  allowDsmlFallback: boolean,
-): { cleanContent: string; hasDsmlBlock: boolean; toolCalls: ToolCall[] } {
-  if (!allowDsmlFallback) {
+  allowDsmlToolCalls: boolean,
+): {
+  cleanContent: string;
+  hasDsmlBlock: boolean;
+  toolCalls: ToolCall[];
+  suppressedToolCall: boolean;
+} {
+  // DSML is provider protocol only while a tool contract is active. Preserve
+  // literal DSML examples in ordinary, tool-free answers.
+  if (!tools || tools.length === 0) {
     return {
       cleanContent: content,
       hasDsmlBlock: false,
       toolCalls: [],
+      suppressedToolCall: false,
     };
   }
 
@@ -195,10 +312,13 @@ export function resolveDsmlFallbackContent(
   return {
     cleanContent: hasDsmlBlock ? stripDsmlToolCallBlocks(content) : content,
     hasDsmlBlock,
-    toolCalls: filterToolCallsByAllowedTools(
-      parseDsmlToolCallsFromContent(content),
-      tools,
-    ),
+    toolCalls: allowDsmlToolCalls
+      ? filterToolCallsByAllowedTools(
+          parseDsmlToolCallsFromContent(content),
+          tools,
+        )
+      : [],
+    suppressedToolCall: hasDsmlBlock && !allowDsmlToolCalls,
   };
 }
 
@@ -422,7 +542,12 @@ export class OpenAICompatibleProvider extends BaseProvider {
     tools?: ToolDefinition[],
     signal?: AbortSignal,
     options?: ToolCallingOptions,
-  ): Promise<{ content: string; reasoning?: string; toolCalls?: ToolCall[] }> {
+  ): Promise<{
+    content: string;
+    reasoning?: string;
+    toolCalls?: ToolCall[];
+    suppressedToolCall?: boolean;
+  }> {
     if (!this.isReady()) {
       throw new Error("Provider is not configured");
     }
@@ -515,7 +640,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
 
     const rawContent = message?.content || "";
     const structuredToolCalls = message?.tool_calls;
-    const allowDsmlFallback =
+    const allowDsmlToolCalls =
       !!tools && tools.length > 0 && options?.toolChoice !== "none";
 
     // Fallback: some OpenAI-compatible backends leak native tool-call markup
@@ -537,7 +662,8 @@ export class OpenAICompatibleProvider extends BaseProvider {
         return {
           content: cleanContent,
           reasoning: message?.reasoning_content || undefined,
-          toolCalls: xmlToolCalls,
+          toolCalls: allowDsmlToolCalls ? xmlToolCalls : undefined,
+          suppressedToolCall: !allowDsmlToolCalls,
         };
       }
     }
@@ -545,7 +671,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
     const dsmlFallback = resolveDsmlFallbackContent(
       rawContent,
       tools,
-      allowDsmlFallback,
+      allowDsmlToolCalls,
     );
     if (dsmlFallback.toolCalls.length > 0) {
       ztoolkit.log(
@@ -566,7 +692,10 @@ export class OpenAICompatibleProvider extends BaseProvider {
     return {
       content: dsmlFallback.cleanContent,
       reasoning: message?.reasoning_content || undefined,
-      toolCalls: structuredToolCalls,
+      toolCalls: allowDsmlToolCalls ? structuredToolCalls : undefined,
+      suppressedToolCall:
+        dsmlFallback.suppressedToolCall ||
+        (!allowDsmlToolCalls && !!structuredToolCalls?.length),
     };
   }
 
@@ -693,8 +822,9 @@ export class OpenAICompatibleProvider extends BaseProvider {
         { id: string; name: string; arguments: string }
       >();
       let stopReason = "end_turn";
-      const allowDsmlFallback =
-        tools.length > 0 && options?.toolChoice !== "none";
+      const shouldHandleDsmlProtocol = tools.length > 0;
+      const allowDsmlToolCalls =
+        shouldHandleDsmlProtocol && options?.toolChoice !== "none";
       let pendingTextDelta = "";
       let suppressDsmlTextDeltas = false;
 
@@ -709,7 +839,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
       const handleTextDelta = (text: string): void => {
         fullContent += text;
 
-        if (!allowDsmlFallback) {
+        if (!shouldHandleDsmlProtocol) {
           onTextDelta(text);
           return;
         }
@@ -718,27 +848,45 @@ export class OpenAICompatibleProvider extends BaseProvider {
           return;
         }
 
-        const combined = pendingTextDelta + text;
-        const dsmlStartMatch = DSML_TOOL_CALLS_START_REGEX.exec(combined);
-        if (dsmlStartMatch?.index !== undefined) {
-          const safePrefix = combined.slice(0, dsmlStartMatch.index);
-          pendingTextDelta = "";
-          suppressDsmlTextDeltas = true;
-          if (safePrefix) {
-            onTextDelta(safePrefix);
-          }
-          return;
-        }
+        let combined = pendingTextDelta + text;
+        pendingTextDelta = "";
 
-        const emitLength = Math.max(
-          0,
-          combined.length - DSML_DETECTION_TAIL_LENGTH,
-        );
-        if (emitLength > 0) {
-          onTextDelta(combined.slice(0, emitLength));
-          pendingTextDelta = combined.slice(emitLength);
-        } else {
-          pendingTextDelta = combined;
+        while (combined) {
+          const tagStart = combined.indexOf("<");
+          if (tagStart < 0) {
+            onTextDelta(combined);
+            return;
+          }
+          if (tagStart > 0) {
+            onTextDelta(combined.slice(0, tagStart));
+            combined = combined.slice(tagStart);
+          }
+
+          const tagEnd = combined.indexOf(">");
+          if (tagEnd < 0) {
+            if (
+              combined.replace(/\s/g, "") === "<" ||
+              isPotentialDsmlToolCallsStart(combined)
+            ) {
+              pendingTextDelta = combined;
+            } else {
+              onTextDelta(combined);
+            }
+            return;
+          }
+
+          const candidateTag = combined.slice(0, tagEnd + 1);
+          const dsmlStartMatch = DSML_TOOL_CALLS_START_REGEX.exec(candidateTag);
+          if (
+            dsmlStartMatch?.index === 0 &&
+            dsmlStartMatch[0].length === candidateTag.length
+          ) {
+            suppressDsmlTextDeltas = true;
+            return;
+          }
+
+          onTextDelta(candidateTag);
+          combined = combined.slice(tagEnd + 1);
         }
       };
 
@@ -805,7 +953,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
       const dsmlFallback = resolveDsmlFallbackContent(
         fullContent,
         tools,
-        allowDsmlFallback,
+        allowDsmlToolCalls,
       );
 
       if (!dsmlFallback.hasDsmlBlock) {
@@ -821,6 +969,9 @@ export class OpenAICompatibleProvider extends BaseProvider {
             : dsmlFallback.toolCalls.length > 0
               ? dsmlFallback.toolCalls
               : undefined,
+        suppressedToolCall:
+          dsmlFallback.suppressedToolCall ||
+          (!allowDsmlToolCalls && toolCalls.length > 0),
         stopReason:
           dsmlFallback.toolCalls.length > 0
             ? "tool_calls"
