@@ -85,14 +85,21 @@ export async function repairPaperChatSessionAfterHardFailureWithRollback(
 type RerollPaperChatFailureAndReplayOptions<TItem> = {
   session: ChatSession;
   rerollTier: () => Promise<PaperChatRerouteResult | null>;
-  deleteMessage: (sessionId: string, messageId: string) => Promise<void>;
   buildSystemNotice: (reroute: PaperChatRerouteResult) => string;
-  insertSystemNotice: (session: ChatSession, content: string) => Promise<void>;
+  insertSystemNotice: (
+    session: ChatSession,
+    content: string,
+  ) => Promise<string>;
+  rollbackReroute: (
+    reroute: PaperChatRerouteResult,
+    noticeMessageId?: string,
+  ) => Promise<void>;
   resend: (payload: {
     content: string;
     images?: ImageAttachment[];
     item: TItem;
-  }) => Promise<void>;
+    sourceUserMessageId: string;
+  }) => Promise<boolean>;
   getItem: (session: ChatSession) => TItem;
 };
 
@@ -102,16 +109,16 @@ export async function rerollPaperChatFailureAndReplay<TItem>(
   const {
     session,
     rerollTier,
-    deleteMessage,
     buildSystemNotice,
     insertSystemNotice,
+    rollbackReroute,
     resend,
     getItem,
   } = options;
 
   if (
-    !session.lastRetryableUserMessageId
-    || !session.lastRetryableErrorMessageId
+    !session.lastRetryableUserMessageId ||
+    !session.lastRetryableErrorMessageId
   ) {
     return null;
   }
@@ -127,7 +134,8 @@ export async function rerollPaperChatFailureAndReplay<TItem>(
   }
 
   const userMessage = session.messages[userMessageIndex];
-  if (userMessage.role !== "user") {
+  const errorMessage = session.messages[errorMessageIndex];
+  if (userMessage.role !== "user" || errorMessage.role !== "error") {
     return null;
   }
 
@@ -136,20 +144,33 @@ export async function rerollPaperChatFailureAndReplay<TItem>(
     return null;
   }
 
-  const removalOrder = [userMessageIndex, errorMessageIndex].sort((a, b) => b - a);
-  for (const index of removalOrder) {
-    const [removed] = session.messages.splice(index, 1);
-    if (removed) {
-      await deleteMessage(session.id, removed.id);
+  let noticeMessageId: string | undefined;
+  try {
+    noticeMessageId = await insertSystemNotice(
+      session,
+      buildSystemNotice(reroute),
+    );
+    const accepted = await resend({
+      content: userMessage.content,
+      images: userMessage.images,
+      item: getItem(session),
+      sourceUserMessageId: userMessage.id,
+    });
+    if (accepted) {
+      return reroute;
     }
+  } catch (error) {
+    try {
+      await rollbackReroute(reroute, noticeMessageId);
+    } catch (rollbackError) {
+      throw new AggregateError(
+        [error, rollbackError],
+        "PaperChat replay failed and its reroute could not be rolled back.",
+      );
+    }
+    throw error;
   }
 
-  await insertSystemNotice(session, buildSystemNotice(reroute));
-  await resend({
-    content: userMessage.content,
-    images: userMessage.images,
-    item: getItem(session),
-  });
-
-  return reroute;
+  await rollbackReroute(reroute, noticeMessageId);
+  return null;
 }

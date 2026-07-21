@@ -15,6 +15,7 @@ import type { ModelInfo, ProviderConfig } from "../../types/provider";
 import { getPref } from "../../utils/prefs";
 import { getProviderManager } from "../providers";
 import { getModelRoutingMeta } from "../preferences/ModelsFetcher";
+import { createInterruptedAssistantContextMessage } from "./interrupted-message";
 
 // 过滤后的消息结果
 export interface FilteredMessagesResult {
@@ -70,6 +71,119 @@ function estimateMessagesTokens(messages: ChatMessage[]): number {
     (sum, message) => sum + estimateMessageTokens(message),
     0,
   );
+}
+
+function projectConversationMessage(message: ChatMessage): ChatMessage | null {
+  if (message.role === "error") {
+    return null;
+  }
+  if (message.apiOnly && message.role !== "system") {
+    return message;
+  }
+  if (
+    message.role === "assistant" &&
+    message.streamingState === "interrupted"
+  ) {
+    return createInterruptedAssistantContextMessage(message);
+  }
+  if (
+    message.role === "user" ||
+    message.role === "assistant" ||
+    message.role === "tool" ||
+    message.isSystemNotice
+  ) {
+    return message;
+  }
+  return null;
+}
+
+function projectSummaryConversationMessage(
+  message: ChatMessage,
+): ChatMessage | null {
+  if (message.apiOnly) {
+    return null;
+  }
+  if (
+    message.role === "assistant" &&
+    message.streamingState === "interrupted"
+  ) {
+    return createInterruptedAssistantContextMessage(message);
+  }
+  return message.role === "user" || message.role === "assistant"
+    ? message
+    : null;
+}
+
+/**
+ * Exact rerolls can leave an interrupted assistant reply immediately before
+ * its replacement, with only UI system notices between them. Keep both stored
+ * messages intact, but merge their model-facing text so providers never see
+ * consecutive assistant roles.
+ */
+function normalizeAssistantReplacementSequence(
+  messages: ChatMessage[],
+  interruptedAssistantIds: ReadonlySet<string>,
+): ChatMessage[] {
+  const normalized: ChatMessage[] = [];
+  let pendingInterrupted: ChatMessage | null = null;
+  let interveningNotices: ChatMessage[] = [];
+
+  const flushPending = () => {
+    if (!pendingInterrupted) return;
+    normalized.push(pendingInterrupted, ...interveningNotices);
+    pendingInterrupted = null;
+    interveningNotices = [];
+  };
+
+  for (const message of messages) {
+    if (!pendingInterrupted) {
+      if (
+        message.role === "assistant" &&
+        interruptedAssistantIds.has(message.id)
+      ) {
+        pendingInterrupted = message;
+      } else {
+        normalized.push(message);
+      }
+      continue;
+    }
+
+    if (message.role === "system" && message.isSystemNotice) {
+      interveningNotices.push(message);
+      continue;
+    }
+
+    if (message.apiOnly) {
+      normalized.push(...interveningNotices, message);
+      interveningNotices = [];
+      continue;
+    }
+
+    if (message.role !== "assistant") {
+      flushPending();
+      normalized.push(message);
+      continue;
+    }
+
+    const mergedAssistant = {
+      ...message,
+      content: [pendingInterrupted.content, message.content]
+        .filter((content) => content.trim())
+        .join("\n\n"),
+    };
+    normalized.push(...interveningNotices);
+    interveningNotices = [];
+
+    if (interruptedAssistantIds.has(message.id)) {
+      pendingInterrupted = mergedAssistant;
+    } else {
+      normalized.push(mergedAssistant);
+      pendingInterrupted = null;
+    }
+  }
+
+  flushPending();
+  return normalized;
 }
 
 function getProviderModelId(
@@ -169,6 +283,15 @@ class ContextManager {
     const messages = session.messages;
     const result: ChatMessage[] = [];
     let summaryTriggered = false;
+    const interruptedAssistantIds = new Set(
+      messages
+        .filter(
+          (message) =>
+            message.role === "assistant" &&
+            message.streamingState === "interrupted",
+        )
+        .map((message) => message.id),
+    );
 
     // 1. 提取所有 system 消息 (不包括 system-notice)
     const systemMessages = messages.filter(
@@ -176,14 +299,9 @@ class ContextManager {
     );
 
     // 2. 提取对话消息 (user/assistant/tool) 和 system-notice，过滤掉 error 消息
-    const conversationMessages = messages.filter(
-      (m) =>
-        m.role === "user" ||
-        (m.role === "assistant" && m.streamingState !== "interrupted") ||
-        m.role === "tool" ||
-        (m.apiOnly && m.role !== "system") ||
-        m.isSystemNotice,
-    );
+    const conversationMessages = messages
+      .map((message) => projectConversationMessage(message))
+      .filter((message): message is ChatMessage => message !== null);
 
     // 3. 组装最终消息列表
     result.push(...systemMessages);
@@ -223,7 +341,12 @@ class ContextManager {
       }
     }
 
-    result.push(...messagesAfterSummary);
+    result.push(
+      ...normalizeAssistantReplacementSequence(
+        messagesAfterSummary,
+        interruptedAssistantIds,
+      ),
+    );
 
     // 5. 检查是否需要触发摘要生成
     if (enableSummary) {
@@ -302,12 +425,9 @@ class ContextManager {
       }
 
       // 构建要摘要的消息 (只包含 user/assistant，排除 system/error)
-      const conversationMessages = session.messages.filter(
-        (m) =>
-          !m.apiOnly &&
-          (m.role === "user" ||
-            (m.role === "assistant" && m.streamingState !== "interrupted")),
-      );
+      const conversationMessages = session.messages
+        .map((message) => projectSummaryConversationMessage(message))
+        .filter((message): message is ChatMessage => message !== null);
 
       // 压缩时保留最近的消息；平时 filterMessages 不再滑动裁剪。
       const maxRecentPairs = getPref("contextMaxRecentPairs") ?? 10;

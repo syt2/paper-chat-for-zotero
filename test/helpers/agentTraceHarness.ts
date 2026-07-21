@@ -77,6 +77,11 @@ export interface AgentTraceRunResult {
         reasoning?: string;
         streamingState?: ChatMessage["streamingState"] | null;
       }
+    | {
+        type: "saveSession";
+        executionPlanStatus?: ExecutionPlan["status"];
+        toolResults: number;
+      }
   >;
 }
 
@@ -142,9 +147,8 @@ export async function runAgentTraceScenario(
   const storageOps: AgentTraceRunResult["storageOps"] = [];
 
   const provider = new ScriptedToolProvider(options.rounds, providerRounds);
-  const { AgentRuntime } = await import(
-    "../../src/modules/chat/agent-runtime/AgentRuntime.ts"
-  );
+  const { AgentRuntime } =
+    await import("../../src/modules/chat/agent-runtime/AgentRuntime.ts");
   const toolScheduler = {
     createExecutionBatches(
       requests: Array<{
@@ -171,9 +175,10 @@ export async function runAgentTraceScenario(
     ): Promise<ToolExecutionResult[]> {
       const results: ToolExecutionResult[] = [];
       for (const request of requests) {
-        const args = JSON.parse(
-          request.toolCall.function.arguments,
-        ) as Record<string, unknown>;
+        const args = JSON.parse(request.toolCall.function.arguments) as Record<
+          string,
+          unknown
+        >;
         const decision = normalizeDecision(
           options.decideTool?.(request.toolCall, args),
           request.toolCall.function.name,
@@ -232,7 +237,8 @@ export async function runAgentTraceScenario(
             error: failed ? content : undefined,
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message =
+            error instanceof Error ? error.message : String(error);
           results.push({
             toolCall: request.toolCall,
             args,
@@ -251,6 +257,13 @@ export async function runAgentTraceScenario(
       updateSessionMeta: async (trackedSession: ChatSession) => {
         storageOps.push({
           type: "updateSessionMeta",
+          executionPlanStatus: trackedSession.executionPlan?.status,
+          toolResults: trackedSession.toolExecutionState?.results.length || 0,
+        });
+      },
+      saveSession: async (trackedSession: ChatSession) => {
+        storageOps.push({
+          type: "saveSession",
           executionPlanStatus: trackedSession.executionPlan?.status,
           toolResults: trackedSession.toolExecutionState?.results.length || 0,
         });
@@ -528,7 +541,9 @@ class ScriptedToolProvider implements ToolCallingProvider {
     _pdfAttachment?: unknown,
     _signal?: AbortSignal,
   ): Promise<void> {
-    throw new Error("streamChatCompletion is not implemented in the test harness");
+    throw new Error(
+      "streamChatCompletion is not implemented in the test harness",
+    );
   }
 
   async chatCompletion(
@@ -640,8 +655,7 @@ function normalizeDecision(
 ): ToolPermissionDecision {
   const verdict =
     value === "deny" || value?.verdict === "deny" ? "deny" : "allow";
-  const reason =
-    typeof value === "object" && value ? value.reason : undefined;
+  const reason = typeof value === "object" && value ? value.reason : undefined;
   const descriptor: ToolPermissionDescriptor = {
     name: toolName as ToolPermissionDescriptor["name"],
     riskLevel: getRiskLevel(toolName),

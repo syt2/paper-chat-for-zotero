@@ -563,8 +563,11 @@ describe("chat agent safeguards", function () {
           params,
           inTransaction: transactionDepth > 0,
         });
-        if (sql.includes("SELECT COUNT(*) as count")) {
-          return [{ count: 1 }];
+        if (
+          sql.includes("SELECT id, content") &&
+          sql.includes("streaming_state = 'in_progress'")
+        ) {
+          return [{ id: "assistant-1", content: "partial" }];
         }
         return [];
       },
@@ -583,7 +586,7 @@ describe("chat agent safeguards", function () {
 
     const findQuery = (needle: string) =>
       queries.find((entry) => entry.sql.includes(needle));
-    const interruptQ = findQuery("SET streaming_state = 'interrupted'");
+    const interruptQ = findQuery("streaming_state = 'interrupted'");
     const planQ = findQuery("SET execution_plan = NULL");
     const sessionMetaQ = findQuery("UPDATE session_meta");
 

@@ -84,6 +84,7 @@ import {
   repairPaperChatSessionAfterHardFailureWithRollback,
   rerollPaperChatFailureAndReplay,
 } from "./paperchat-retry-orchestration";
+import { stripPendingAndIncompleteToolCallContent } from "./interrupted-message";
 import { saveDebugContextSnapshot } from "./DebugContextExporter";
 import { MemoryManager } from "./memory/MemoryManager";
 import { SessionTitleService } from "./SessionTitleService";
@@ -100,6 +101,7 @@ import { sanitizeEvidenceReferences } from "./evidence";
 import {
   AgentRuntime,
   removeApiOnlyModelContextMessagesForTurn,
+  retainCompletedApiOnlyModelContextMessagesForTurn,
 } from "./agent-runtime/AgentRuntime";
 import { normalizeAgentMaxPlanningIterations } from "./agent-runtime/IterationLimitConfig";
 import {
@@ -115,6 +117,28 @@ import type {
   SearchHistorySessionMatchesRequest,
 } from "./search/SearchTypes";
 // V1 migration now handled by migrateToSQLite.ts at startup
+
+type FailedAssistantSnapshot = Pick<
+  ChatMessage,
+  "content" | "reasoning" | "evidence"
+>;
+
+type InternalSendMessageOptions = SendMessageOptions & {
+  item?: Zotero.Item | null;
+  fromPaperChatReroll?: boolean;
+  reuseUserMessageId?: string;
+  targetSession?: ChatSession;
+  requireTargetSessionActive?: boolean;
+};
+
+function selectMoreSubstantialSnapshot(
+  current: FailedAssistantSnapshot | null,
+  previous: FailedAssistantSnapshot | null,
+): FailedAssistantSnapshot | null {
+  if (!current) return previous;
+  if (!previous) return current;
+  return current.content.length >= previous.content.length ? current : previous;
+}
 
 /**
  * Type guard: check if provider supports tool calling
@@ -280,6 +304,7 @@ export class ChatManager {
     string,
     ManagedAbortController
   >();
+  private paperChatRerollSessions = new Set<string>();
 
   private memoryManager: MemoryManager;
   private sessionTitleService: SessionTitleService;
@@ -655,7 +680,7 @@ export class ChatManager {
     session: ChatSession,
     content: string,
     options?: { notify?: boolean },
-  ): Promise<void> {
+  ): Promise<ChatMessage> {
     const notice: ChatMessage = {
       id: this.generateId(),
       role: "system",
@@ -665,10 +690,28 @@ export class ChatManager {
     };
 
     session.messages.push(notice);
-    await this.sessionStorage.insertMessage(session.id, notice);
-    if (options?.notify !== false && this.isSessionActive(session)) {
-      this.onMessageUpdate?.(session.messages);
+    try {
+      await this.sessionStorage.insertMessage(session.id, notice);
+    } catch (error) {
+      const noticeIndex = session.messages.findIndex(
+        (message) => message.id === notice.id,
+      );
+      if (noticeIndex >= 0) {
+        session.messages.splice(noticeIndex, 1);
+      }
+      throw error;
     }
+    if (options?.notify !== false && this.isSessionActive(session)) {
+      try {
+        this.onMessageUpdate?.(session.messages);
+      } catch (error) {
+        ztoolkit.log(
+          "[ChatManager] Failed to render persisted system notice:",
+          getErrorMessage(error),
+        );
+      }
+    }
+    return notice;
   }
 
   private getSessionItem(session: ChatSession): Zotero.Item | null {
@@ -1517,31 +1560,106 @@ export class ChatManager {
     await this.init();
 
     const session = this.currentSession;
-    if (!session) {
+    if (
+      !session ||
+      this.activeSessionRunIds.has(session.id) ||
+      this.paperChatRerollSessions.has(session.id)
+    ) {
       return null;
     }
 
-    return rerollPaperChatFailureAndReplay<Zotero.Item | null>({
-      session,
-      rerollTier: () => this.rerollCurrentPaperChatTier(),
-      deleteMessage: (sessionId, messageId) =>
-        this.sessionStorage.deleteMessage(sessionId, messageId),
-      buildSystemNotice: (reroute) =>
-        this.buildPaperChatReroutedNotice(
-          reroute.tier,
-          reroute.previousModel,
-          reroute.nextModel,
-        ),
-      insertSystemNotice: (targetSession, content) =>
-        this.insertSystemNotice(targetSession, content),
-      resend: async ({ content, images, item }) => {
-        await this.sendMessage(content, {
-          item,
-          images,
-        });
-      },
-      getItem: (targetSession) => this.getSessionItem(targetSession),
-    });
+    this.paperChatRerollSessions.add(session.id);
+    const previousState = {
+      resolvedModelId: session.resolvedModelId,
+      lastRetryableUserMessageId: session.lastRetryableUserMessageId,
+      lastRetryableErrorMessageId: session.lastRetryableErrorMessageId,
+      lastRetryableFailedModelId: session.lastRetryableFailedModelId,
+      updatedAt: session.updatedAt,
+    };
+    try {
+      return await rerollPaperChatFailureAndReplay<Zotero.Item | null>({
+        session,
+        rerollTier: () => this.rerollCurrentPaperChatTier(),
+        buildSystemNotice: (reroute) =>
+          this.buildPaperChatReroutedNotice(
+            reroute.tier,
+            reroute.previousModel,
+            reroute.nextModel,
+          ),
+        insertSystemNotice: async (targetSession, content) =>
+          (await this.insertSystemNotice(targetSession, content)).id,
+        rollbackReroute: async (_reroute, noticeMessageId) => {
+          const restoreState = (targetSession: ChatSession) => {
+            targetSession.resolvedModelId = previousState.resolvedModelId;
+            targetSession.lastRetryableUserMessageId =
+              previousState.lastRetryableUserMessageId;
+            targetSession.lastRetryableErrorMessageId =
+              previousState.lastRetryableErrorMessageId;
+            targetSession.lastRetryableFailedModelId =
+              previousState.lastRetryableFailedModelId;
+            targetSession.updatedAt = previousState.updatedAt;
+          };
+          restoreState(session);
+          if (
+            this.currentSession?.id === session.id &&
+            this.currentSession !== session
+          ) {
+            restoreState(this.currentSession);
+          }
+
+          if (noticeMessageId) {
+            const noticeIndex = session.messages.findIndex(
+              (message) => message.id === noticeMessageId,
+            );
+            if (noticeIndex >= 0) {
+              session.messages.splice(noticeIndex, 1);
+            }
+          }
+
+          getProviderManager()
+            .getProvider("paperchat")
+            ?.updateConfig({
+              resolvedModelOverride:
+                this.currentSession?.resolvedModelId ||
+                previousState.resolvedModelId,
+            });
+          if (this.currentSession?.id === session.id) {
+            this.onMessageUpdate?.(this.currentSession.messages);
+          }
+          let rollbackError: unknown = null;
+          try {
+            await this.sessionStorage.updateSessionMeta(session);
+          } catch (error) {
+            rollbackError = error;
+          }
+          if (noticeMessageId) {
+            try {
+              await this.sessionStorage.deleteMessage(
+                session.id,
+                noticeMessageId,
+              );
+            } catch (error) {
+              rollbackError ||= error;
+            }
+          }
+          if (rollbackError) {
+            throw rollbackError;
+          }
+        },
+        resend: ({ content, images, item, sourceUserMessageId }) =>
+          this.sendMessage(content, {
+            item,
+            images,
+            fromPaperChatReroll: true,
+            reuseUserMessageId: sourceUserMessageId,
+            targetSession: session,
+            requireTargetSessionActive: true,
+          }),
+        getItem: (targetSession) => this.getSessionItem(targetSession),
+      });
+    } finally {
+      this.paperChatRerollSessions.delete(session.id);
+    }
   }
 
   async insertCurrentSessionSystemNotice(content: string): Promise<void> {
@@ -1615,6 +1733,84 @@ export class ChatManager {
     session.executionPlan = undefined;
     session.toolExecutionState = undefined;
     session.toolApprovalState = undefined;
+  }
+
+  private createFailedAssistantSnapshot(
+    assistantMessage: ChatMessage,
+  ): FailedAssistantSnapshot | null {
+    const content = stripPendingAndIncompleteToolCallContent(
+      assistantMessage.content,
+    );
+    const reasoning = assistantMessage.reasoning?.trim() || undefined;
+    const evidence = assistantMessage.evidence?.length
+      ? assistantMessage.evidence
+      : undefined;
+    return content || reasoning || evidence
+      ? { content, reasoning, evidence }
+      : null;
+  }
+
+  private resetAssistantForRetry(assistantMessage: ChatMessage): void {
+    assistantMessage.content = "";
+    delete assistantMessage.reasoning;
+    delete assistantMessage.evidence;
+    delete assistantMessage.tool_calls;
+    assistantMessage.streamingState = "in_progress";
+  }
+
+  private async finalizeFailedAssistantMessage(
+    session: ChatSession,
+    assistantMessage: ChatMessage,
+    fallbackSnapshot: FailedAssistantSnapshot | null,
+  ): Promise<boolean> {
+    const toolContextChanged =
+      retainCompletedApiOnlyModelContextMessagesForTurn(
+        session,
+        assistantMessage.id,
+      );
+    this.clearFailedTurnRuntimeState(session);
+
+    const snapshot = selectMoreSubstantialSnapshot(
+      this.createFailedAssistantSnapshot(assistantMessage),
+      fallbackSnapshot,
+    );
+    if (!snapshot) {
+      const assistantIndex = session.messages.findIndex(
+        (message) => message.id === assistantMessage.id,
+      );
+      if (assistantIndex >= 0) {
+        session.messages.splice(assistantIndex, 1);
+        await this.sessionStorage.deleteMessage(
+          session.id,
+          assistantMessage.id,
+        );
+      }
+      if (toolContextChanged) {
+        await this.sessionStorage.saveSession(session);
+      }
+      return false;
+    }
+
+    assistantMessage.content = snapshot.content;
+    assistantMessage.reasoning = snapshot.reasoning;
+    assistantMessage.evidence = snapshot.evidence;
+    assistantMessage.streamingState = "interrupted";
+    assistantMessage.timestamp = Date.now();
+    delete assistantMessage.tool_calls;
+    await this.sessionStorage.updateMessageContent(
+      session.id,
+      assistantMessage.id,
+      snapshot.content,
+      snapshot.reasoning,
+      {
+        streamingState: "interrupted",
+        evidence: snapshot.evidence || [],
+      },
+    );
+    if (toolContextChanged) {
+      await this.sessionStorage.saveSession(session);
+    }
+    return true;
   }
 
   private async applyFailureStateSafely(
@@ -1696,7 +1892,7 @@ export class ChatManager {
    */
   async sendMessage(
     content: string,
-    options: SendMessageOptions & { item?: Zotero.Item | null } = {},
+    options: InternalSendMessageOptions = {},
   ): Promise<boolean> {
     await this.init();
 
@@ -1746,11 +1942,35 @@ export class ChatManager {
     // Capture a stable reference to the session we're sending in.
     // This ensures DB writes and in-memory mutations target the correct
     // session even if the user switches sessions mid-stream.
-    const sendingSession = this.currentSession;
+    if (
+      options.requireTargetSessionActive &&
+      this.currentSession !== options.targetSession
+    ) {
+      return false;
+    }
+    const sendingSession = options.targetSession || this.currentSession;
+    if (
+      this.activeSessionRunIds.has(sendingSession.id) ||
+      ((this.paperChatRerollSessions?.has(sendingSession.id) ?? false) &&
+        !options.fromPaperChatReroll)
+    ) {
+      this.onError?.(new Error(getString("chat-turn-in-progress")));
+      return false;
+    }
     if (sendingSession.userInputRequestState?.pendingRequests.length) {
       this.onError?.(
         new Error("Please answer the pending PaperChat question first."),
       );
+      return false;
+    }
+    const reusedUserMessage = options.reuseUserMessageId
+      ? sendingSession.messages.find(
+          (message) =>
+            message.id === options.reuseUserMessageId &&
+            message.role === "user",
+        )
+      : undefined;
+    if (options.reuseUserMessageId && !reusedUserMessage) {
       return false;
     }
     const { runId: sessionRunId, abortSignal } =
@@ -1827,6 +2047,10 @@ export class ChatManager {
 
       if (!provider || !provider.isReady()) {
         ztoolkit.log("[ChatManager] Provider not ready, showing error in chat");
+        if (options.fromPaperChatReroll) {
+          trackChatCompleted(false);
+          return false;
+        }
         const errorMessage: ChatMessage = {
           id: this.generateId(),
           role: "assistant",
@@ -1934,8 +2158,10 @@ export class ChatManager {
       }
 
       // 创建用户消息
-      const wasDraftSession = this.isDraftSession(sendingSession);
-      const userMessage: ChatMessage = {
+      const wasDraftSession = !reusedUserMessage
+        ? this.isDraftSession(sendingSession)
+        : false;
+      const userMessage: ChatMessage = reusedUserMessage || {
         id: this.generateId(),
         role: "user",
         content: finalContent,
@@ -1946,8 +2172,25 @@ export class ChatManager {
         selectedText: options.selectedText,
       };
 
-      sendingSession.messages.push(userMessage);
-      await this.sessionStorage.insertMessage(sendingSession.id, userMessage);
+      if (!reusedUserMessage) {
+        sendingSession.messages.push(userMessage);
+        await this.sessionStorage.insertMessage(sendingSession.id, userMessage);
+      }
+      clearPaperChatRetryableState(sendingSession);
+      const reusedUserIndex = reusedUserMessage
+        ? sendingSession.messages.findIndex(
+            (message) => message.id === reusedUserMessage.id,
+          )
+        : -1;
+      const requestContextSession = reusedUserMessage
+        ? {
+            ...sendingSession,
+            messages: sendingSession.messages.slice(0, reusedUserIndex + 1),
+            contextState: sendingSession.contextState
+              ? { ...sendingSession.contextState }
+              : undefined,
+          }
+        : sendingSession;
       sendingSession.updatedAt = Date.now();
       if (wasDraftSession) {
         this.notifySessionListUpdated();
@@ -1972,8 +2215,13 @@ export class ChatManager {
       let contextCompacted = false;
       try {
         contextCompacted = await contextManager.compactBeforeSendIfNeeded(
-          sendingSession,
+          requestContextSession,
           async () => {
+            if (requestContextSession !== sendingSession) {
+              sendingSession.contextSummary =
+                requestContextSession.contextSummary;
+              sendingSession.contextState = requestContextSession.contextState;
+            }
             await this.sessionStorage.updateSessionMeta(sendingSession);
           },
         );
@@ -2022,7 +2270,7 @@ export class ChatManager {
       }
 
       const { messages: filteredMessages, summaryTriggered } =
-        contextManager.filterMessages(sendingSession);
+        contextManager.filterMessages(requestContextSession);
 
       // 从过滤后的消息中排除最后一条 (assistant 占位)
       const messagesForApi = filteredMessages.filter(
@@ -2068,6 +2316,14 @@ export class ChatManager {
       let failedPaperChatModelId: string | null = null;
       let fallbackFromProviderName: string | null = null;
       let fallbackToProviderName: string | null = null;
+      let latestFailedAssistantSnapshot: FailedAssistantSnapshot | null = null;
+
+      const captureFailedAssistantSnapshot = () => {
+        latestFailedAssistantSnapshot = selectMoreSubstantialSnapshot(
+          this.createFailedAssistantSnapshot(assistantMessage),
+          latestFailedAssistantSnapshot,
+        );
+      };
 
       const handleFallbackNotice = async () => {
         if (!fallbackFromProviderName || !fallbackToProviderName) {
@@ -2119,11 +2375,9 @@ export class ChatManager {
 
           ensureSendingSessionTracked();
 
-          // 重置 assistant 消息内容（降级时需要清空之前的部分内容）
-          assistantMessage.content = "";
-          assistantMessage.reasoning = "";
-          assistantMessage.evidence = undefined;
-          assistantMessage.streamingState = "in_progress";
+          // 重试时清空当前显示，但保留最后一份非空输出供终态失败恢复。
+          captureFailedAssistantSnapshot();
+          this.resetAssistantForRetry(assistantMessage);
 
           let checkpointTimer: ReturnType<typeof setTimeout> | null = null;
           let checkpointQueue: Promise<void> = Promise.resolve();
@@ -2317,6 +2571,8 @@ export class ChatManager {
           try {
             return await streamCurrentProvider();
           } catch (error) {
+            await checkpointQueue.catch(() => undefined);
+            captureFailedAssistantSnapshot();
             if (
               currentProvider.config.id !== "paperchat" ||
               !(error instanceof Error) ||
@@ -2335,8 +2591,7 @@ export class ChatManager {
             }
 
             failedPaperChatModelId = reroute.nextModel;
-            assistantMessage.content = "";
-            assistantMessage.reasoning = "";
+            this.resetAssistantForRetry(assistantMessage);
             await this.insertSystemNotice(
               sendingSession,
               this.buildPaperChatReroutedNotice(
@@ -2351,8 +2606,13 @@ export class ChatManager {
               reroute.nextModel,
               "streaming",
             );
-
-            return await streamCurrentProvider();
+            try {
+              return await streamCurrentProvider();
+            } catch (reroutedError) {
+              await checkpointQueue.catch(() => undefined);
+              captureFailedAssistantSnapshot();
+              throw reroutedError;
+            }
           }
         });
 
@@ -2371,18 +2631,11 @@ export class ChatManager {
         // 所有 provider 都失败了
         ztoolkit.log("[ChatManager] All providers failed:", error);
 
-        // 移除 assistant 占位消息（使用 id 精确定位，避免误删 fallback notice）
-        const assistantIndex = sendingSession.messages.findIndex(
-          (m) => m.id === assistantMessage.id,
+        await this.finalizeFailedAssistantMessage(
+          sendingSession,
+          assistantMessage,
+          latestFailedAssistantSnapshot,
         );
-        if (assistantIndex !== -1) {
-          sendingSession.messages.splice(assistantIndex, 1);
-          await this.sessionStorage.deleteMessage(
-            sendingSession.id,
-            assistantMessage.id,
-          );
-        }
-        this.clearFailedTurnRuntimeState(sendingSession);
 
         const errorMessage: ChatMessage = {
           id: this.generateId(),
@@ -2547,6 +2800,14 @@ export class ChatManager {
 
     let fallbackFromProviderName: string | null = null;
     let fallbackToProviderName: string | null = null;
+    let latestFailedAssistantSnapshot: FailedAssistantSnapshot | null = null;
+
+    const captureFailedAssistantSnapshot = () => {
+      latestFailedAssistantSnapshot = selectMoreSubstantialSnapshot(
+        this.createFailedAssistantSnapshot(assistantMessage),
+        latestFailedAssistantSnapshot,
+      );
+    };
 
     const handleFallbackNotice = async () => {
       if (!fallbackFromProviderName || !fallbackToProviderName) {
@@ -2605,6 +2866,10 @@ export class ChatManager {
 
         const toolProvider = currentProvider as AIProvider &
           ToolCallingProvider;
+        removeApiOnlyModelContextMessagesForTurn(
+          sendingSession,
+          assistantMessage.id,
+        );
         const isDeepSeekPromptCacheTarget = isDeepSeekToolPromptCacheTarget(
           currentProvider,
           failedPaperChatModelId || sendingSession.resolvedModelId,
@@ -2619,9 +2884,9 @@ export class ChatManager {
           ? undefined
           : buildRuntimeSystemPrompt;
 
-        // 重置 assistant 消息内容（降级时需要清空之前的部分内容）
-        assistantMessage.content = "";
-        assistantMessage.reasoning = "";
+        // 重试时清空当前显示，但保留最后一份非空输出供终态失败恢复。
+        captureFailedAssistantSnapshot();
+        this.resetAssistantForRetry(assistantMessage);
 
         const executeToolCallingAttempt = async () => {
           if (providerSupportsStreamingToolCalling(currentProvider)) {
@@ -2670,6 +2935,7 @@ export class ChatManager {
         try {
           await executeToolCallingAttempt();
         } catch (error) {
+          captureFailedAssistantSnapshot();
           if (
             currentProvider.config.id !== "paperchat" ||
             !(error instanceof Error) ||
@@ -2688,8 +2954,11 @@ export class ChatManager {
           }
 
           failedPaperChatModelId = reroute.nextModel;
-          assistantMessage.content = "";
-          assistantMessage.reasoning = "";
+          removeApiOnlyModelContextMessagesForTurn(
+            sendingSession,
+            assistantMessage.id,
+          );
+          this.resetAssistantForRetry(assistantMessage);
           await this.insertSystemNotice(
             sendingSession,
             this.buildPaperChatReroutedNotice(
@@ -2704,8 +2973,12 @@ export class ChatManager {
             reroute.nextModel,
             "tool_calling",
           );
-
-          await executeToolCallingAttempt();
+          try {
+            await executeToolCallingAttempt();
+          } catch (reroutedError) {
+            captureFailedAssistantSnapshot();
+            throw reroutedError;
+          }
         }
       });
 
@@ -2723,22 +2996,11 @@ export class ChatManager {
       // 所有 provider 都失败了
       ztoolkit.log("[Tool Calling] All providers failed:", error);
 
-      // 移除 assistant 占位消息（使用 id 精确定位，避免误删 fallback notice）
-      const assistantIndex = sendingSession.messages.findIndex(
-        (m) => m.id === assistantMessage.id,
+      await this.finalizeFailedAssistantMessage(
+        sendingSession,
+        assistantMessage,
+        latestFailedAssistantSnapshot,
       );
-      if (assistantIndex !== -1) {
-        sendingSession.messages.splice(assistantIndex, 1);
-        removeApiOnlyModelContextMessagesForTurn(
-          sendingSession,
-          assistantMessage.id,
-        );
-        await this.sessionStorage.deleteMessage(
-          sendingSession.id,
-          assistantMessage.id,
-        );
-      }
-      this.clearFailedTurnRuntimeState(sendingSession);
 
       const errorMessage: ChatMessage = {
         id: this.generateId(),
@@ -2845,10 +3107,7 @@ export class ChatManager {
   }
 
   private stripPendingToolCallCards(content: string): string {
-    return content
-      .replace(/\n?<tool-call status="calling">[\s\S]*?<\/tool-call>\n?/g, "\n")
-      .replace(/\n{3,}/g, "\n\n")
-      .trim();
+    return stripPendingAndIncompleteToolCallContent(content);
   }
 
   private hasPendingToolCallCards(content: string): boolean {
@@ -2997,8 +3256,13 @@ export class ChatManager {
     }
 
     const now = Date.now();
+    let toolContextChanged = false;
     for (const message of interruptedMessages) {
-      removeApiOnlyModelContextMessagesForTurn(session, message.id);
+      toolContextChanged =
+        retainCompletedApiOnlyModelContextMessagesForTurn(
+          session,
+          message.id,
+        ) || toolContextChanged;
       const cleanedContent = this.stripPendingToolCallCards(message.content);
       if (cleanedContent) {
         message.content = cleanedContent;
@@ -3032,7 +3296,11 @@ export class ChatManager {
     session.toolApprovalState = undefined;
     session.userInputRequestState = undefined;
     session.updatedAt = now;
-    await this.sessionStorage.updateSessionMeta(session);
+    if (toolContextChanged) {
+      await this.sessionStorage.saveSession(session);
+    } else {
+      await this.sessionStorage.updateSessionMeta(session);
+    }
 
     if (this.isSessionActive(session)) {
       this.onExecutionPlanUpdate?.(session.executionPlan);

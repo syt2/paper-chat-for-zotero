@@ -145,6 +145,7 @@ paperchat-chat-evidence-view-source = 查看原文
 paperchat-chat-evidence-page = 第 { $page } 页
 paperchat-chat-evidence-section = 章节：{ $section }
 paperchat-chat-interrupted = 已中断
+paperchat-chat-turn-in-progress = 当前回复仍在生成中。
 paperchat-chat-turn-cancelled = 已取消本次请求。
 paperchat-chat-max-planning-iterations-reached = 抱歉，我未能在允许的最大规划轮次内完成此请求。
 paperchat-chat-thinking = 思考中

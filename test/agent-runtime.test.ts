@@ -1,5 +1,8 @@
 import { assert } from "chai";
-import { AgentRuntime } from "../src/modules/chat/agent-runtime/AgentRuntime.ts";
+import {
+  AgentRuntime,
+  retainCompletedApiOnlyModelContextMessagesForTurn,
+} from "../src/modules/chat/agent-runtime/AgentRuntime.ts";
 import { ExecutionPlanManager } from "../src/modules/chat/agent-runtime/ExecutionPlanManager.ts";
 import {
   generateAgentRuntimeContextPrompt,
@@ -30,6 +33,332 @@ function createSession(): ChatSession {
 }
 
 describe("agent runtime plan semantics", function () {
+  it("keeps completed pairs while removing pending calls and orphan results", function () {
+    const visibleContent = [
+      '<tool-call status="completed">',
+      "<tool-name>search_paper_content</tool-name>",
+      "<tool-result>visible preview</tool-result>",
+      "</tool-call>",
+    ].join("\n");
+    const session: ChatSession = {
+      id: "session-interrupted-tools",
+      createdAt: 1,
+      updatedAt: 7,
+      lastActiveItemKey: null,
+      messages: [
+        { id: "user-1", role: "user", content: "question", timestamp: 1 },
+        {
+          id: "assistant-1-api-context-request",
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            {
+              id: "call-completed",
+              type: "function",
+              function: {
+                name: "search_paper_content",
+                arguments: '{"query":"IDR"}',
+              },
+            },
+            {
+              id: "call-pending",
+              type: "function",
+              function: {
+                name: "search_paper_content",
+                arguments: '{"query":"disorder"}',
+              },
+            },
+          ],
+          apiOnly: true,
+          timestamp: 2,
+        },
+        {
+          id: "assistant-1-api-context-result",
+          role: "tool",
+          content: "trusted completed result",
+          tool_call_id: "call-completed",
+          apiOnly: true,
+          timestamp: 3,
+        },
+        {
+          id: "assistant-1-api-context-orphan",
+          role: "tool",
+          content: "orphan result",
+          tool_call_id: "call-orphan",
+          apiOnly: true,
+          timestamp: 4,
+        },
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: visibleContent,
+          streamingState: "interrupted",
+          timestamp: 5,
+        },
+        { id: "error-1", role: "error", content: "cancelled", timestamp: 6 },
+        {
+          id: "user-2",
+          role: "user",
+          content: "请基于刚才结果直接回答",
+          timestamp: 7,
+        },
+      ],
+    };
+
+    assert.isTrue(
+      retainCompletedApiOnlyModelContextMessagesForTurn(session, "assistant-1"),
+    );
+    assert.deepEqual(
+      session.messages.map((message) => message.id),
+      [
+        "user-1",
+        "assistant-1-api-context-request",
+        "assistant-1-api-context-result",
+        "assistant-1",
+        "error-1",
+        "user-2",
+      ],
+    );
+    assert.deepEqual(
+      session.messages[1].tool_calls?.map((call) => call.id),
+      ["call-completed"],
+    );
+    assert.equal(session.messages[2].content, "trusted completed result");
+    assert.equal(session.messages[3].content, visibleContent);
+    assert.equal(session.messages[3].streamingState, "interrupted");
+  });
+
+  it("removes an entirely incomplete transcript and reports that storage changed", function () {
+    const session = createSession();
+    session.messages.push(
+      {
+        id: "assistant-incomplete-api-context-request",
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "call-pending",
+            type: "function",
+            function: { name: "search_paper_content", arguments: "{}" },
+          },
+        ],
+        apiOnly: true,
+        timestamp: 2,
+      },
+      {
+        id: "assistant-incomplete",
+        role: "assistant",
+        content: "",
+        streamingState: "interrupted",
+        timestamp: 3,
+      },
+    );
+
+    assert.isTrue(
+      retainCompletedApiOnlyModelContextMessagesForTurn(
+        session,
+        "assistant-incomplete",
+      ),
+    );
+    assert.deepEqual(
+      session.messages.map((message) => message.id),
+      ["user-1", "assistant-incomplete"],
+    );
+  });
+
+  it("persists structured history for non-OpenAI tool providers", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    const session = createSession();
+    const assistantMessage: ChatMessage = {
+      id: "assistant-anthropic-tools",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+    };
+    session.messages.push(assistantMessage);
+    const toolCall: ToolCall = {
+      id: "call-1",
+      type: "function",
+      function: { name: "list_all_items", arguments: "{}" },
+    };
+    const savedSessions: ChatSession[] = [];
+    let providerCalls = 0;
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        saveSession: async (saved: ChatSession) => {
+          savedSessions.push(saved);
+        },
+      } as any,
+      {
+        isSessionActive: () => false,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "<tool-call />",
+        generateId: (() => {
+          let id = 0;
+          return () => `generated-${++id}`;
+        })(),
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async (requests: any[]) => [
+          {
+            toolCall: requests[0].toolCall,
+            status: "completed",
+            content: "recent paper result",
+          },
+        ],
+      },
+    ) as any;
+    runtime.getMaxIterations = () => 2;
+    const provider = {
+      config: {
+        id: "anthropic",
+        type: "anthropic",
+        defaultModel: "claude-test",
+      },
+      chatCompletionWithTools: async () => {
+        providerCalls++;
+        return providerCalls === 1
+          ? { content: "", toolCalls: [toolCall] }
+          : { content: "done" };
+      },
+    };
+
+    try {
+      await runtime.executeNonStreamingToolLoop({
+        provider,
+        currentMessages: session.messages,
+        assistantMessage,
+        pdfWasAttached: false,
+        summaryTriggered: false,
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "list_all_items",
+              description: "List Zotero items",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
+        sendingSession: session,
+      });
+
+      assert.lengthOf(savedSessions, 1);
+      assert.deepEqual(
+        session.messages
+          .filter((message) => message.apiOnly)
+          .map((message) => message.role),
+        ["assistant", "tool"],
+      );
+      assert.equal(
+        session.messages.find((message) => message.role === "tool")?.content,
+        "recent paper result",
+      );
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
+  });
+
+  it("persists completed tool context when a turn reaches the iteration limit", async function () {
+    const session = createSession();
+    const assistantMessage: ChatMessage = {
+      id: "assistant-max-tools",
+      role: "assistant",
+      content: "",
+      timestamp: 4,
+    };
+    session.messages.push(
+      {
+        id: "assistant-max-tools-api-context-request",
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "call-completed",
+            type: "function",
+            function: { name: "search_paper_content", arguments: "{}" },
+          },
+          {
+            id: "call-pending",
+            type: "function",
+            function: { name: "search_paper_content", arguments: "{}" },
+          },
+        ],
+        apiOnly: true,
+        timestamp: 2,
+      },
+      {
+        id: "assistant-max-tools-api-context-result",
+        role: "tool",
+        content: "completed result",
+        tool_call_id: "call-completed",
+        apiOnly: true,
+        timestamp: 3,
+      },
+      assistantMessage,
+    );
+    session.toolExecutionState = {
+      turnStartedAt: 1,
+      updatedAt: 1,
+      results: [],
+    };
+    const savedSessions: ChatSession[] = [];
+    let metadataUpdates = 0;
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => {
+          metadataUpdates++;
+        },
+        saveSession: async (saved: ChatSession) => {
+          savedSessions.push(saved);
+        },
+      } as any,
+      {
+        isSessionActive: () => false,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "",
+        generateId: () => "generated-id",
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async () => [],
+      },
+    ) as any;
+
+    await runtime.finalizeMaxIterationsTurn(
+      session,
+      1,
+      session.messages,
+      assistantMessage,
+      "Maximum iterations reached.",
+      30,
+    );
+
+    assert.equal(metadataUpdates, 0);
+    assert.deepEqual(savedSessions, [session]);
+    assert.deepEqual(
+      session.messages.map((message) => message.id),
+      [
+        "user-1",
+        "assistant-max-tools-api-context-request",
+        "assistant-max-tools-api-context-result",
+        "assistant-max-tools",
+      ],
+    );
+    assert.deepEqual(
+      session.messages[1].tool_calls?.map((call) => call.id),
+      ["call-completed"],
+    );
+    assert.equal(assistantMessage.content, "Maximum iterations reached.");
+  });
+
   it("fails the final round when a provider suppresses a prefixed tool call", async function () {
     const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
     const originalAddon = (globalThis as { addon?: unknown }).addon;

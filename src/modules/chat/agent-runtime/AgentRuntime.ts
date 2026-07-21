@@ -1607,10 +1607,11 @@ export class AgentRuntime {
       delete assistantMessage.reasoning;
     }
     assistantMessage.streamingState = undefined;
-    removeApiOnlyModelContextMessagesForTurn(
-      sendingSession,
-      assistantMessage.id,
-    );
+    const toolContextChanged =
+      retainCompletedApiOnlyModelContextMessagesForTurn(
+        sendingSession,
+        assistantMessage.id,
+      );
     await this.flushAssistantMessageCheckpoint(
       sendingSession,
       sessionRunId,
@@ -1619,7 +1620,11 @@ export class AgentRuntime {
     );
     this.ensureSessionTracked(sendingSession, sessionRunId);
     this.touchToolExecutionState(sendingSession);
-    await this.sessionStorage.updateSessionMeta(sendingSession);
+    if (toolContextChanged) {
+      await this.sessionStorage.saveSession(sendingSession);
+    } else {
+      await this.sessionStorage.updateSessionMeta(sendingSession);
+    }
     this.emitPlanUpdate(sendingSession, sessionRunId);
     this.emitRuntimeEvent<"turn_failed">(
       sendingSession,
@@ -1655,7 +1660,7 @@ export class AgentRuntime {
     // this turn is done, so the on-disk snapshot should match. markInterrupted
     // on next load would fix it, but only if another session is loaded — if
     // the user re-opens this exact session we want an accurate state.
-    removeApiOnlyModelContextMessagesForTurn(
+    retainCompletedApiOnlyModelContextMessagesForTurn(
       sendingSession,
       assistantMessage.id,
     );
@@ -1673,6 +1678,8 @@ export class AgentRuntime {
     );
     this.ensureSessionTracked(sendingSession, sessionRunId);
     this.touchToolExecutionState(sendingSession);
+    // Do not save the hidden transcript here. ChatManager may retry another
+    // provider, and owns the final persistence once all fallbacks are exhausted.
     await this.sessionStorage.updateSessionMeta(sendingSession);
     this.emitPlanUpdate(sendingSession, sessionRunId);
     this.emitRuntimeEvent<"turn_failed">(
@@ -2085,7 +2092,7 @@ const DEEPSEEK_TOOL_RESULT_COMPACTION_POLICY: ToolResultCompactionPolicy = {
 
 const DEFAULT_TOOL_CONTEXT_STRATEGY: ToolContextStrategy = {
   compactionPolicy: DEFAULT_TOOL_RESULT_COMPACTION_POLICY,
-  persistApiOnlyTranscript: false,
+  persistApiOnlyTranscript: true,
   compactToolResultOnCreate: false,
 };
 
@@ -2174,6 +2181,81 @@ export function removeApiOnlyModelContextMessagesForTurn(
   session.messages = session.messages.filter(
     (message) => !(message.apiOnly && message.id.startsWith(prefix)),
   );
+}
+
+/**
+ * Keep only provider-valid completed tool exchanges for an interrupted turn.
+ * UI tool cards remain on the visible assistant message; this hidden transcript
+ * is the trusted model-facing representation of completed tool results.
+ */
+export function retainCompletedApiOnlyModelContextMessagesForTurn(
+  session: ChatSession,
+  assistantMessageId: string,
+): boolean {
+  const prefix = `${assistantMessageId}-api-context-`;
+  const turnMessages = session.messages.filter(
+    (message) => message.apiOnly && message.id.startsWith(prefix),
+  );
+  if (turnMessages.length === 0) {
+    return false;
+  }
+
+  const retained: ChatMessage[] = [];
+  for (let index = 0; index < turnMessages.length; ) {
+    const assistant = turnMessages[index];
+    if (assistant.role !== "assistant" || !assistant.tool_calls?.length) {
+      index += 1;
+      continue;
+    }
+
+    let nextIndex = index + 1;
+    const toolResults = new Map<string, ChatMessage>();
+    while (
+      nextIndex < turnMessages.length &&
+      turnMessages[nextIndex].role === "tool"
+    ) {
+      const toolResult = turnMessages[nextIndex];
+      if (
+        toolResult.tool_call_id &&
+        !toolResults.has(toolResult.tool_call_id)
+      ) {
+        toolResults.set(toolResult.tool_call_id, toolResult);
+      }
+      nextIndex += 1;
+    }
+
+    const seenToolCallIds = new Set<string>();
+    const completedToolCalls = assistant.tool_calls.filter((toolCall) => {
+      const id = toolCall.id;
+      if (!id || seenToolCallIds.has(id) || !toolResults.has(id)) {
+        return false;
+      }
+      seenToolCallIds.add(id);
+      return true;
+    });
+    if (completedToolCalls.length > 0) {
+      retained.push({ ...assistant, tool_calls: completedToolCalls });
+      for (const toolCall of completedToolCalls) {
+        retained.push(toolResults.get(toolCall.id)!);
+      }
+    }
+    index = nextIndex;
+  }
+
+  let inserted = false;
+  const nextMessages: ChatMessage[] = [];
+  for (const message of session.messages) {
+    if (message.apiOnly && message.id.startsWith(prefix)) {
+      if (!inserted) {
+        nextMessages.push(...retained);
+        inserted = true;
+      }
+      continue;
+    }
+    nextMessages.push(message);
+  }
+  session.messages = nextMessages;
+  return true;
 }
 
 function hasApiOnlyModelContextMessages(session: ChatSession): boolean {

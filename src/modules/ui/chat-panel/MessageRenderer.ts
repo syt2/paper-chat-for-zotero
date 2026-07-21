@@ -24,6 +24,7 @@ import {
   renderMarkdownToElement,
 } from "./MarkdownRenderer";
 import { isMaxIterationsNoticeContent } from "../../chat/agent-runtime/messages";
+import { selectChatMessagePresentations } from "../../chat/message-presentation";
 
 export function getStreamingContentSelector(messageId: string): string {
   return `[data-streaming-content-for="${messageId}"]`;
@@ -508,6 +509,64 @@ function createTopupButton(doc: Document): HTMLElement {
   return btn;
 }
 
+function getErrorDisplayDetails(msg: ChatMessage): {
+  display: string;
+  raw: string;
+  quota: ReturnType<typeof parsePaperChatQuotaError>;
+} {
+  const quota = parsePaperChatQuotaError(msg.content);
+  const display =
+    quota?.displayMessage || getPaperChatErrorDisplayMessage(msg.content);
+  return {
+    display,
+    raw: quota?.rawMessage || display,
+    quota,
+  };
+}
+
+function createInterruptedFooter(
+  doc: Document,
+  theme: ThemeColors,
+  attachedError: ChatMessage | undefined,
+  attachedNotices: ChatMessage[],
+): HTMLElement {
+  const footer = createElement(doc, "div", {
+    marginTop: "10px",
+    paddingTop: "9px",
+    borderTop: `1px solid ${theme.borderColor}`,
+    fontSize: "12px",
+    lineHeight: "1.45",
+    color: theme.textSecondary,
+  });
+  footer.setAttribute("data-interrupted-footer", "true");
+
+  for (const notice of attachedNotices) {
+    const noticeLine = createElement(doc, "div", {
+      marginBottom: "6px",
+      color: theme.textMuted,
+    });
+    noticeLine.setAttribute("data-attached-system-notice-id", notice.id);
+    noticeLine.textContent = notice.content;
+    footer.appendChild(noticeLine);
+  }
+
+  const status = createElement(doc, "div", { fontWeight: "600" });
+  if (attachedError) {
+    const details = getErrorDisplayDetails(attachedError);
+    footer.setAttribute("data-attached-error-id", attachedError.id);
+    status.textContent = `⚠️ ${details.display}`;
+    footer.appendChild(status);
+    if (details.quota) {
+      footer.appendChild(createTopupButton(doc));
+    }
+    return footer;
+  }
+
+  status.textContent = getString("chat-interrupted");
+  footer.appendChild(status);
+  return footer;
+}
+
 /**
  * Create a system notice element (for item switching, etc.)
  */
@@ -639,6 +698,8 @@ export function createMessageElement(
   onReroll?: () => void | Promise<void>,
   onRerollError?: (error: Error) => void,
   renderOptions: MessageRenderOptions = {},
+  attachedError?: ChatMessage,
+  attachedNotices: ChatMessage[] = [],
 ): HTMLElement {
   // Handle system notices specially
   if (msg.isSystemNotice) {
@@ -733,13 +794,10 @@ export function createMessageElement(
   } else if (msg.role === "error") {
     // 错误消息显示为纯文本，带警告图标
     // 尝试解析 JSON 错误消息以获取更友好的显示
-    let errorDisplay = getPaperChatErrorDisplayMessage(msg.content);
-    quotaDetails = parsePaperChatQuotaError(msg.content);
-    if (quotaDetails) {
-      errorDisplay = quotaDetails.displayMessage;
-    }
-    content.textContent = `⚠️ ${errorDisplay}`;
-    rawContent = quotaDetails?.rawMessage || errorDisplay;
+    const details = getErrorDisplayDetails(msg);
+    quotaDetails = details.quota;
+    content.textContent = `⚠️ ${details.display}`;
+    rawContent = details.raw;
   } else {
     // Render assistant message as markdown
     const markdownOptions = getMessageMarkdownRenderOptions(
@@ -777,24 +835,6 @@ export function createMessageElement(
 
   // Add reasoning section for assistant messages (before content)
   if (msg.role === "assistant") {
-    if (msg.streamingState === "interrupted") {
-      const interruptedBadge = createElement(doc, "div", {
-        display: "inline-flex",
-        alignItems: "center",
-        gap: "4px",
-        marginBottom: "8px",
-        padding: "3px 8px",
-        fontSize: "11px",
-        fontWeight: "600",
-        color: "#b45309",
-        background: theme.buttonBg,
-        border: `1px solid ${theme.borderColor}`,
-        borderRadius: "999px",
-      });
-      interruptedBadge.textContent = getString("chat-interrupted");
-      bubble.appendChild(interruptedBadge);
-    }
-
     if (msg.reasoning) {
       // Completed message with reasoning - show collapsed
       const reasoningContainer = createReasoningContainer(
@@ -824,6 +864,12 @@ export function createMessageElement(
 
   if (msg.role === "user" && msg.images?.some(isRenderableImageAttachment)) {
     bubble.appendChild(createMessageImagesElement(doc, msg.images));
+  }
+
+  if (msg.role === "assistant" && msg.streamingState === "interrupted") {
+    bubble.appendChild(
+      createInterruptedFooter(doc, theme, attachedError, attachedNotices),
+    );
   }
 
   if (quotaDetails) {
@@ -1206,32 +1252,41 @@ export function renderMessages(
 
   if (emptyState) emptyState.style.display = "none";
 
-  // Find the last assistant message index for streaming content ID
+  const presentations = selectChatMessagePresentations(messages);
   let lastAssistantIndex = -1;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (!messages[i].apiOnly && messages[i].role === "assistant") {
-      lastAssistantIndex = i;
+  for (let index = presentations.length - 1; index >= 0; index--) {
+    if (presentations[index].message.role === "assistant") {
+      lastAssistantIndex = index;
       break;
     }
   }
 
   // Render each message
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i];
-    if (msg.apiOnly) {
-      continue;
-    }
-    const isLastAssistant = i === lastAssistantIndex;
+  for (let index = 0; index < presentations.length; index++) {
+    const {
+      message: msg,
+      attachedError,
+      attachedNotices,
+    } = presentations[index];
+    const isLastAssistant = index === lastAssistantIndex;
+    const attachedQuota = attachedError
+      ? parsePaperChatQuotaError(attachedError.content)
+      : null;
     chatHistory.appendChild(
       createMessageElement(
         doc,
         msg,
         theme,
         isLastAssistant,
-        msg.role === "error" && retryableErrorMessageId === msg.id,
+        (msg.role === "error" && retryableErrorMessageId === msg.id) ||
+          (!!attachedError &&
+            retryableErrorMessageId === attachedError.id &&
+            !attachedQuota),
         onReroll,
         onRerollError,
         renderOptions,
+        attachedError,
+        attachedNotices,
       ),
     );
   }

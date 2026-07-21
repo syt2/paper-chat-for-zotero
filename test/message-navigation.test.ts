@@ -125,6 +125,12 @@ class FakeDocument {
     return new FakeElement(this, tagName);
   }
 
+  createTextNode(value: string): FakeElement {
+    const node = new FakeElement(this, "#text");
+    node.textContent = value;
+    return node;
+  }
+
   querySelector(_selector: string): FakeElement | null {
     return null;
   }
@@ -212,6 +218,193 @@ describe("chat message exact navigation", function () {
     );
 
     assert.equal(renderedId, "rendered");
+  });
+
+  it("groups an adjacent failure into the interrupted assistant footer", function () {
+    const doc = new FakeDocument();
+    const history = new FakeElement(doc, "div");
+    history.scrollHeight = 100;
+    history.clientHeight = 100;
+    let rerolled = false;
+
+    renderMessages(
+      asElement(history),
+      null,
+      [
+        message("assistant-1", {
+          role: "assistant",
+          content: "Partial answer",
+          streamingState: "interrupted",
+        }),
+        message("notice-1", {
+          role: "system",
+          content: "Switched provider",
+          isSystemNotice: true,
+        }),
+        message("error-1", {
+          role: "error",
+          content: "provider failed",
+        }),
+      ],
+      darkTheme,
+      "error-1",
+      () => {
+        rerolled = true;
+      },
+    );
+
+    assert.lengthOf(history.children, 1);
+    const wrapper = history.children[0];
+    assert.equal(wrapper.getAttribute("data-message-id"), "assistant-1");
+    const bubble = wrapper.children[0];
+    const footer = bubble.children.at(-1)!;
+    assert.equal(footer.getAttribute("data-interrupted-footer"), "true");
+    assert.isNull(footer.getAttribute("aria-live"));
+    assert.equal(footer.getAttribute("data-attached-error-id"), "error-1");
+    assert.equal(
+      footer.children[0].getAttribute("data-attached-system-notice-id"),
+      "notice-1",
+    );
+    assert.lengthOf(footer.children, 2);
+    assert.equal(footer.children[1].textContent, "⚠️ provider failed");
+
+    const actions = wrapper.children[1];
+    assert.lengthOf(actions.children, 2);
+    actions.children[1].listeners.get("click")?.[0]?.({
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+    });
+    assert.isTrue(rerolled);
+  });
+
+  it("shows an interrupted footer after restart without an error row", function () {
+    const doc = new FakeDocument();
+    const history = new FakeElement(doc, "div");
+    history.scrollHeight = 100;
+    history.clientHeight = 100;
+
+    renderMessages(
+      asElement(history),
+      null,
+      [
+        message("assistant-after-restart", {
+          role: "assistant",
+          content: "Partial answer preserved after restart",
+          streamingState: "interrupted",
+        }),
+      ],
+      darkTheme,
+    );
+
+    const footer = history.children[0].children[0].children.at(-1)!;
+    assert.equal(footer.getAttribute("data-interrupted-footer"), "true");
+    assert.isNull(footer.getAttribute("aria-live"));
+    assert.equal(footer.children[0].textContent, "paperchat-chat-interrupted");
+    assert.lengthOf(footer.children, 1);
+  });
+
+  it("keeps the interrupted error footer after a later conversation turn", function () {
+    const doc = new FakeDocument();
+    const history = new FakeElement(doc, "div");
+    history.scrollHeight = 100;
+    history.clientHeight = 100;
+
+    renderMessages(
+      asElement(history),
+      null,
+      [
+        message("assistant-1", {
+          role: "assistant",
+          content: "Partial answer",
+          streamingState: "interrupted",
+        }),
+        message("error-1", { role: "error", content: "provider failed" }),
+        message("user-2", { role: "user", content: "继续" }),
+        message("assistant-2", {
+          role: "assistant",
+          content: "Completed continuation",
+        }),
+      ],
+      darkTheme,
+    );
+
+    const footer = history.children[0].children[0].children.at(-1)!;
+    assert.equal(footer.getAttribute("data-interrupted-footer"), "true");
+    assert.equal(footer.getAttribute("data-attached-error-id"), "error-1");
+    assert.lengthOf(footer.children, 1);
+    assert.equal(footer.children[0].textContent, "⚠️ provider failed");
+  });
+
+  it("keeps a standalone error bubble when there is no partial response", function () {
+    const doc = new FakeDocument();
+    const history = new FakeElement(doc, "div");
+    history.scrollHeight = 100;
+    history.clientHeight = 100;
+
+    renderMessages(
+      asElement(history),
+      null,
+      [message("error-1", { role: "error", content: "provider failed" })],
+      darkTheme,
+    );
+
+    assert.lengthOf(history.children, 1);
+    assert.equal(
+      history.children[0].getAttribute("data-message-id"),
+      "error-1",
+    );
+    assert.equal(
+      history.children[0].getAttribute("class"),
+      "chat-message error-message",
+    );
+  });
+
+  it("keeps quota recovery and top-up inside the interrupted footer", function () {
+    const doc = new FakeDocument();
+    const history = new FakeElement(doc, "div");
+    history.scrollHeight = 100;
+    history.clientHeight = 100;
+
+    renderMessages(
+      asElement(history),
+      null,
+      [
+        message("assistant-1", {
+          role: "assistant",
+          content: "Partial answer",
+          streamingState: "interrupted",
+        }),
+        message("quota-error-1", {
+          role: "error",
+          content: JSON.stringify({
+            error: {
+              code: "insufficient_user_quota",
+              message: "quota exceeded",
+            },
+          }),
+        }),
+      ],
+      darkTheme,
+      "quota-error-1",
+      () => undefined,
+    );
+
+    assert.lengthOf(history.children, 1);
+    const wrapper = history.children[0];
+    const footer = wrapper.children[0].children.at(-1)!;
+    assert.equal(
+      footer.children[0].textContent,
+      "⚠️ paperchat-chat-error-paperchat-insufficient-quota",
+    );
+    const topup = footer.children[1];
+    assert.equal(topup.getAttribute("class"), "paperchat-topup-btn");
+    assert.lengthOf(topup.listeners.get("click") || [], 1);
+    const actions = wrapper.children[1];
+    assert.lengthOf(actions.children, 1);
+    assert.equal(
+      actions.children[0].getAttribute("class"),
+      "message-action-btn copy-message-btn",
+    );
   });
 
   it("matches opaque message IDs without CSS selector escaping", function () {

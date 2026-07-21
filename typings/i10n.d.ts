@@ -173,6 +173,7 @@ export type FluentMessageId =
   | 'paperchat-chat-tool-group-earlier'
   | 'paperchat-chat-toolbar-button-tooltip'
   | 'paperchat-chat-turn-cancelled'
+  | 'paperchat-chat-turn-in-progress'
   | 'paperchat-chat-upload-file'
   | 'paperchat-chat-user-input-auto'
   | 'paperchat-chat-user-input-cancel'

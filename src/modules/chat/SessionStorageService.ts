@@ -20,6 +20,7 @@ import type {
 import type { EvidenceRecord } from "../../types/evidence";
 import { filterValidMessages, generateShortId } from "../../utils/common";
 import { normalizeEvidenceRecords } from "./evidence";
+import { stripPendingAndIncompleteToolCallContent } from "./interrupted-message";
 import { getStorageDatabase } from "./db/StorageDatabase";
 import {
   aggregateSearchSessions,
@@ -3086,12 +3087,12 @@ export class SessionStorageService {
     await this.runTransaction(async (tx) => {
       const rows =
         (await tx.queryAsync(
-          `SELECT COUNT(*) as count
+          `SELECT id, content
            FROM messages
            WHERE session_id = ? AND streaming_state = 'in_progress'`,
           [sessionId],
         )) || [];
-      if (Number(rows[0]?.count || 0) === 0) return;
+      if (rows.length === 0) return;
 
       await tx.queryAsync(
         `UPDATE messages
@@ -3099,14 +3100,22 @@ export class SessionStorageService {
          WHERE session_id = ? AND streaming_state = 'in_progress'`,
         [SEARCH_PROJECTION_WRITE_SENTINEL_VERSION, sessionId],
       );
-      await tx.queryAsync(
-        `UPDATE messages
-         SET streaming_state = 'interrupted',
-             search_text = '',
-             search_index_version = ?
-         WHERE session_id = ? AND streaming_state = 'in_progress'`,
-        [CURRENT_SEARCH_VERSION, sessionId],
-      );
+      for (const row of rows) {
+        await tx.queryAsync(
+          `UPDATE messages
+           SET content = ?,
+               streaming_state = 'interrupted',
+               search_text = '',
+               search_index_version = ?
+           WHERE id = ? AND session_id = ? AND streaming_state = 'in_progress'`,
+          [
+            stripPendingAndIncompleteToolCallContent(row.content || ""),
+            CURRENT_SEARCH_VERSION,
+            row.id,
+            sessionId,
+          ],
+        );
+      }
       await tx.queryAsync(
         `UPDATE sessions
          SET execution_plan = NULL,

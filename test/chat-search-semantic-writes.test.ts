@@ -180,6 +180,34 @@ class SemanticWriteFakeDatabase {
         ? [{ ...message }]
         : [];
     }
+    if (
+      statement ===
+      "SELECT id, content FROM messages WHERE session_id = ? AND streaming_state = 'in_progress'"
+    ) {
+      return [...this.messages.values()]
+        .filter(
+          (message) =>
+            message.session_id === params[0] &&
+            message.streaming_state === "in_progress",
+        )
+        .map((message) => ({ id: message.id, content: message.content }));
+    }
+    if (
+      statement ===
+      "UPDATE messages SET content = ?, streaming_state = 'interrupted', search_text = '', search_index_version = ? WHERE id = ? AND session_id = ? AND streaming_state = 'in_progress'"
+    ) {
+      const message = this.messages.get(String(params[2]));
+      if (
+        message?.session_id === params[3] &&
+        message.streaming_state === "in_progress"
+      ) {
+        message.content = String(params[0] || "");
+        message.streaming_state = "interrupted";
+        message.search_text = "";
+        message.search_index_version = Number(params[1]);
+      }
+      return [];
+    }
     if (statement.startsWith("UPDATE messages SET content = ?")) {
       const message = this.messages.get(String(params[7]));
       if (message && message.session_id === params[8]) {

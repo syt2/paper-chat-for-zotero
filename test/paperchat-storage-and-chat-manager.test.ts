@@ -524,7 +524,7 @@ describe("paperchat storage and chat manager", function () {
     assert.deepEqual(deletedSessionIds, ["abandoned-draft"]);
   });
 
-  it("excludes interrupted assistant messages from future context windows", function () {
+  it("keeps interrupted assistant messages in future context windows as sanitized history", function () {
     prefStore.set(`${PREFS_PREFIX}.contextMaxRecentPairs`, 10);
     prefStore.set(`${PREFS_PREFIX}.contextEnableSummary`, false);
 
@@ -544,14 +544,30 @@ describe("paperchat storage and chat manager", function () {
         {
           id: "assistant-1",
           role: "assistant",
-          content: "<tool-call>partial web search</tool-call>",
+          content: [
+            "Partial answer before the tool call.",
+            '<tool-call status="completed">',
+            "<tool-name>web_search</tool-name>",
+            "<tool-result>hidden result</tool-result>",
+            "</tool-call>",
+            "Visible conclusion.",
+            '<tool-call status="calling"><tool-name>create_note</tool-name>',
+          ].join("\n"),
           timestamp: 2,
           streamingState: "interrupted",
+          reasoning: "private reasoning",
+          tool_calls: [
+            {
+              id: "tool-call-1",
+              type: "function",
+              function: { name: "web_search", arguments: "{}" },
+            },
+          ],
         },
         {
           id: "system-notice-1",
           role: "system",
-          content: "Previous run was interrupted.",
+          content: '--- Switched to paper: "Other" ---',
           timestamp: 3,
           isSystemNotice: true,
         },
@@ -568,8 +584,423 @@ describe("paperchat storage and chat manager", function () {
 
     assert.deepEqual(
       filtered.messages.map((message) => message.id),
-      ["user-1", "system-notice-1", "user-2"],
+      ["user-1", "assistant-1", "system-notice-1", "user-2"],
     );
+    const interrupted = filtered.messages[1];
+    assert.include(interrupted.content, "Partial answer before the tool call.");
+    assert.include(interrupted.content, "Visible conclusion.");
+    assert.notInclude(interrupted.content, "hidden result");
+    assert.notInclude(interrupted.content, "create_note");
+    assert.isUndefined(interrupted.streamingState);
+    assert.isUndefined(interrupted.reasoning);
+    assert.isUndefined(interrupted.tool_calls);
+    assert.equal(session.messages[1].streamingState, "interrupted");
+    assert.include(session.messages[1].content, "<tool-call");
+  });
+
+  it("uses retained structured tool context for the next arbitrary user message", function () {
+    prefStore.set(`${PREFS_PREFIX}.contextEnableSummary`, false);
+    const visibleToolCard = [
+      '<tool-call status="completed">',
+      "<tool-name>search_paper_content</tool-name>",
+      "<tool-result>visible preview</tool-result>",
+      "</tool-call>",
+    ].join("\n");
+    const session: ChatSession = {
+      id: "session-interrupted-tool-context",
+      createdAt: 1,
+      updatedAt: 6,
+      lastActiveItemKey: null,
+      messages: [
+        {
+          id: "user-1",
+          role: "user",
+          content: "Search the paper",
+          timestamp: 1,
+        },
+        {
+          id: "assistant-1-api-context-request",
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            {
+              id: "call-1",
+              type: "function",
+              function: { name: "search_paper_content", arguments: "{}" },
+            },
+          ],
+          apiOnly: true,
+          timestamp: 2,
+        },
+        {
+          id: "assistant-1-api-context-result",
+          role: "tool",
+          content: "trusted full result",
+          tool_call_id: "call-1",
+          apiOnly: true,
+          timestamp: 3,
+        },
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: visibleToolCard,
+          streamingState: "interrupted",
+          timestamp: 4,
+        },
+        { id: "error-1", role: "error", content: "cancelled", timestamp: 5 },
+        {
+          id: "user-2",
+          role: "user",
+          content: "请基于刚才结果直接回答，不要重新搜索。",
+          timestamp: 6,
+        },
+      ],
+    };
+
+    const filtered = getContextManager().filterMessages(session).messages;
+
+    assert.deepEqual(
+      filtered.map((message) => message.id),
+      [
+        "user-1",
+        "assistant-1-api-context-request",
+        "assistant-1-api-context-result",
+        "user-2",
+      ],
+    );
+    assert.deepEqual(
+      filtered.map((message) => message.role),
+      ["user", "assistant", "tool", "user"],
+    );
+    assert.equal(filtered[2].content, "trusted full result");
+    assert.equal(session.messages[3].content, visibleToolCard);
+    assert.equal(session.messages[3].streamingState, "interrupted");
+  });
+
+  it("merges an interrupted reply into its exact-reroll replacement only for model context", function () {
+    prefStore.set(`${PREFS_PREFIX}.contextEnableSummary`, false);
+
+    const session: ChatSession = {
+      id: "session-reroll-context",
+      createdAt: 1,
+      updatedAt: 6,
+      lastActiveItemKey: null,
+      messages: [
+        { id: "user-1", role: "user", content: "Question", timestamp: 1 },
+        {
+          id: "assistant-partial",
+          role: "assistant",
+          content: "Interrupted partial",
+          streamingState: "interrupted",
+          timestamp: 2,
+        },
+        { id: "error-1", role: "error", content: "Failed", timestamp: 3 },
+        {
+          id: "notice-1",
+          role: "system",
+          content: "Model rerouted",
+          isSystemNotice: true,
+          timestamp: 4,
+        },
+        {
+          id: "assistant-replacement",
+          role: "assistant",
+          content: "Replacement answer",
+          timestamp: 5,
+        },
+        {
+          id: "user-2",
+          role: "user",
+          content: "Later question",
+          timestamp: 6,
+        },
+      ],
+    };
+
+    const filtered = getContextManager().filterMessages(session).messages;
+
+    assert.deepEqual(
+      filtered.map((message) => message.id),
+      ["user-1", "notice-1", "assistant-replacement", "user-2"],
+    );
+    assert.equal(
+      filtered[2].content,
+      "Interrupted partial\n\nReplacement answer",
+    );
+    assert.equal(session.messages[1].content, "Interrupted partial");
+    assert.equal(session.messages[4].content, "Replacement answer");
+  });
+
+  it("keeps reroll tool protocol intact and merges the partial into the visible replacement", function () {
+    prefStore.set(`${PREFS_PREFIX}.contextEnableSummary`, false);
+
+    const toolCalls = [
+      {
+        id: "call-1",
+        type: "function" as const,
+        function: { name: "web_search", arguments: "{}" },
+      },
+    ];
+    const session: ChatSession = {
+      id: "session-reroll-tool-context",
+      createdAt: 1,
+      updatedAt: 7,
+      lastActiveItemKey: null,
+      messages: [
+        { id: "user-1", role: "user", content: "Question", timestamp: 1 },
+        {
+          id: "assistant-partial",
+          role: "assistant",
+          content: "Interrupted partial",
+          streamingState: "interrupted",
+          timestamp: 2,
+        },
+        { id: "error-1", role: "error", content: "Failed", timestamp: 3 },
+        {
+          id: "notice-1",
+          role: "system",
+          content: "Model rerouted",
+          isSystemNotice: true,
+          timestamp: 4,
+        },
+        {
+          id: "tool-request-1",
+          role: "assistant",
+          content: "",
+          tool_calls: toolCalls,
+          apiOnly: true,
+          timestamp: 5,
+        },
+        {
+          id: "tool-result-1",
+          role: "tool",
+          content: "search result",
+          tool_call_id: "call-1",
+          apiOnly: true,
+          timestamp: 6,
+        },
+        {
+          id: "assistant-replacement",
+          role: "assistant",
+          content: "Replacement answer",
+          timestamp: 7,
+        },
+      ],
+    };
+
+    const filtered = getContextManager().filterMessages(session).messages;
+
+    assert.deepEqual(
+      filtered.map((message) => message.id),
+      [
+        "user-1",
+        "notice-1",
+        "tool-request-1",
+        "tool-result-1",
+        "assistant-replacement",
+      ],
+    );
+    assert.deepEqual(filtered[2].tool_calls, toolCalls);
+    assert.equal(filtered[2].content, "");
+    assert.equal(
+      filtered[4].content,
+      "Interrupted partial\n\nReplacement answer",
+    );
+    assert.isUndefined(filtered[4].tool_calls);
+  });
+
+  it("normalizes replacements only after the context-summary boundary", function () {
+    prefStore.set(`${PREFS_PREFIX}.contextEnableSummary`, false);
+
+    const messages: ChatMessage[] = [
+      { id: "user-1", role: "user", content: "Question", timestamp: 1 },
+      {
+        id: "assistant-partial",
+        role: "assistant",
+        content: "Interrupted partial",
+        streamingState: "interrupted",
+        timestamp: 2,
+      },
+      {
+        id: "notice-1",
+        role: "system",
+        content: "Model rerouted",
+        isSystemNotice: true,
+        timestamp: 3,
+      },
+      {
+        id: "assistant-replacement",
+        role: "assistant",
+        content: "Replacement answer",
+        timestamp: 4,
+      },
+      { id: "user-2", role: "user", content: "Later", timestamp: 5 },
+    ];
+    const coveredPartial: ChatSession = {
+      id: "summary-covered-partial",
+      createdAt: 1,
+      updatedAt: 5,
+      lastActiveItemKey: null,
+      messages,
+      contextSummary: {
+        id: "summary-1",
+        content: "The earlier interrupted reply.",
+        coveredMessageIds: ["user-1", "assistant-partial"],
+        createdAt: 6,
+        messageCountAtCreation: 2,
+      },
+    };
+    const pairAfterBoundary: ChatSession = {
+      ...coveredPartial,
+      id: "summary-before-pair",
+      contextSummary: {
+        ...coveredPartial.contextSummary!,
+        id: "summary-2",
+        coveredMessageIds: ["user-1"],
+        messageCountAtCreation: 1,
+      },
+    };
+
+    const coveredMessages =
+      getContextManager().filterMessages(coveredPartial).messages;
+    const afterBoundaryMessages =
+      getContextManager().filterMessages(pairAfterBoundary).messages;
+
+    assert.notInclude(
+      coveredMessages.map((message) => message.id),
+      "assistant-partial",
+    );
+    assert.equal(
+      coveredMessages.find((message) => message.id === "assistant-replacement")
+        ?.content,
+      "Replacement answer",
+    );
+    assert.notInclude(
+      afterBoundaryMessages.map((message) => message.id),
+      "assistant-partial",
+    );
+    assert.equal(
+      afterBoundaryMessages.find(
+        (message) => message.id === "assistant-replacement",
+      )?.content,
+      "Interrupted partial\n\nReplacement answer",
+    );
+  });
+
+  it("includes sanitized interrupted replies when generating context summaries", async function () {
+    prefStore.set(`${PREFS_PREFIX}.contextMaxRecentPairs`, 1);
+    const providerManager = getProviderManager() as any;
+    const originalGetActiveProvider = providerManager.getActiveProvider;
+    let summaryRequest = "";
+    providerManager.getActiveProvider = () => ({
+      isReady: () => true,
+      chatCompletion: async (messages: ChatMessage[]) => {
+        summaryRequest = messages.at(-1)?.content || "";
+        return "Generated summary";
+      },
+    });
+
+    const session: ChatSession = {
+      id: "session-summary-interrupted",
+      createdAt: 1,
+      updatedAt: 11,
+      lastActiveItemKey: null,
+      messages: [
+        {
+          id: "user-replaced",
+          role: "user",
+          content: "Question that will be rerolled",
+          timestamp: 1,
+        },
+        {
+          id: "assistant-superseded",
+          role: "assistant",
+          content: "Superseded partial",
+          streamingState: "interrupted",
+          timestamp: 2,
+        },
+        {
+          id: "error-replaced",
+          role: "error",
+          content: "failed",
+          timestamp: 3,
+        },
+        {
+          id: "notice-replaced",
+          role: "system",
+          content: "Model rerouted",
+          isSystemNotice: true,
+          timestamp: 4,
+        },
+        {
+          id: "assistant-replacement",
+          role: "assistant",
+          content: "Replacement answer",
+          timestamp: 5,
+        },
+        {
+          id: "user-1",
+          role: "user",
+          content: "First question",
+          timestamp: 6,
+        },
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content:
+            'Useful partial.\n<tool-call status="calling"><tool-name>web_search</tool-name>',
+          streamingState: "interrupted",
+          reasoning: "private reasoning",
+          timestamp: 7,
+        },
+        {
+          id: "user-2",
+          role: "user",
+          content: "Continue",
+          timestamp: 8,
+        },
+        {
+          id: "assistant-2",
+          role: "assistant",
+          content: "Continuation",
+          timestamp: 9,
+        },
+        {
+          id: "user-3",
+          role: "user",
+          content: "Later question",
+          timestamp: 10,
+        },
+        {
+          id: "assistant-3",
+          role: "assistant",
+          content: "Later answer",
+          timestamp: 11,
+        },
+      ],
+    };
+
+    try {
+      const generated = await getContextManager().generateSummaryAsync(session);
+
+      assert.isTrue(generated);
+      assert.include(summaryRequest, "ASSISTANT: Replacement answer");
+      assert.include(summaryRequest, "ASSISTANT: Superseded partial");
+      assert.include(summaryRequest, "ASSISTANT: Useful partial.");
+      assert.notInclude(summaryRequest, "<tool-call");
+      assert.notInclude(summaryRequest, "private reasoning");
+      assert.include(
+        session.contextSummary?.coveredMessageIds || [],
+        "assistant-1",
+      );
+      assert.include(
+        session.contextSummary?.coveredMessageIds || [],
+        "assistant-superseded",
+      );
+      assert.equal(session.messages[6].streamingState, "interrupted");
+    } finally {
+      providerManager.getActiveProvider = originalGetActiveProvider;
+    }
   });
 
   it("keeps the full unsummarized context instead of sliding the prompt prefix", function () {
@@ -844,9 +1275,9 @@ describe("paperchat storage and chat manager", function () {
         }
         if (
           normalized ===
-          "SELECT COUNT(*) as count FROM messages WHERE session_id = ? AND streaming_state = 'in_progress'"
+          "SELECT id, content FROM messages WHERE session_id = ? AND streaming_state = 'in_progress'"
         ) {
-          return [{ count: 0 }];
+          return [];
         }
         if (normalized === "SELECT * FROM sessions WHERE id = ?") {
           return [
@@ -940,6 +1371,97 @@ describe("paperchat storage and chat manager", function () {
     assert.include(
       recorded.map((entry) => entry.sql),
       "UPDATE session_meta SET updated_at = ? WHERE id = ?",
+    );
+  });
+
+  it("cleans incomplete tool cards when recovering an in-progress message", async function () {
+    const recorded: RecordedQuery[] = [];
+    let recoveredContent = [
+      "Visible partial before.",
+      '<tool-call status="calling"><tool-name>web_search</tool-name></tool-call>',
+      "Visible partial after.",
+      '<tool-call status="calling"><tool-name>create_note</tool-name>',
+    ].join("\n");
+    let recoveredState = "in_progress";
+
+    const fakeDb = {
+      async queryAsync(sql: string, params?: unknown[]) {
+        const normalized = normalizeSql(sql);
+        recorded.push({ sql: normalized, params });
+
+        if (normalized === "SELECT value FROM settings WHERE key = ?") {
+          return [];
+        }
+        if (
+          normalized ===
+          "SELECT id, content FROM messages WHERE session_id = ? AND streaming_state = 'in_progress'"
+        ) {
+          return recoveredState === "in_progress"
+            ? [{ id: "assistant-recover", content: recoveredContent }]
+            : [];
+        }
+        if (
+          normalized ===
+          "UPDATE messages SET content = ?, streaming_state = 'interrupted', search_text = '', search_index_version = ? WHERE id = ? AND session_id = ? AND streaming_state = 'in_progress'"
+        ) {
+          recoveredContent = String(params?.[0] || "");
+          recoveredState = "interrupted";
+          return [];
+        }
+        if (normalized === "SELECT * FROM sessions WHERE id = ?") {
+          return [
+            {
+              id: "session-recover-tool-card",
+              created_at: 100,
+              updated_at: 200,
+              last_active_item_key: null,
+              context_summary: null,
+              context_state: null,
+            },
+          ];
+        }
+        if (
+          normalized ===
+          "SELECT * FROM paperchat_session_state WHERE session_id = ?"
+        ) {
+          return [];
+        }
+        if (
+          normalized ===
+          "SELECT * FROM messages WHERE session_id = ? ORDER BY seq ASC"
+        ) {
+          return [
+            {
+              id: "assistant-recover",
+              role: "assistant",
+              content: recoveredContent,
+              timestamp: 201,
+              streaming_state: recoveredState,
+            },
+          ];
+        }
+
+        return [];
+      },
+    };
+
+    const storage = getStorageDatabase() as any;
+    storage.ensureInit = async () => fakeDb;
+
+    const session = await new SessionStorageService().loadSession(
+      "session-recover-tool-card",
+    );
+
+    assert.equal(
+      session?.messages[0].content,
+      "Visible partial before.\nVisible partial after.",
+    );
+    assert.equal(session?.messages[0].streamingState, "interrupted");
+    assert.notInclude(recoveredContent, "web_search");
+    assert.notInclude(recoveredContent, "create_note");
+    assert.include(
+      recorded.map((entry) => entry.sql),
+      "UPDATE messages SET content = ?, streaming_state = 'interrupted', search_text = '', search_index_version = ? WHERE id = ? AND session_id = ? AND streaming_state = 'in_progress'",
     );
   });
 
@@ -1397,7 +1919,6 @@ describe("paperchat storage and chat manager", function () {
 
   it("returns null for stale reroll metadata without mutating the session", async function () {
     const rerollCalls: string[] = [];
-    const deleteCalls: string[] = [];
 
     const session: ChatSession = {
       id: "session-reroll-stale",
@@ -1426,23 +1947,19 @@ describe("paperchat storage and chat manager", function () {
           tier: "paperchat-standard",
         };
       },
-      deleteMessage: async (_sessionId: string, messageId: string) => {
-        deleteCalls.push(messageId);
-      },
       buildSystemNotice: () => "rerouted notice",
-      insertSystemNotice: async () => undefined,
-      resend: async () => undefined,
+      insertSystemNotice: async () => "unused-notice",
+      rollbackReroute: async () => undefined,
+      resend: async () => true,
       getItem: () => null,
     });
 
     assert.isNull(result);
     assert.deepEqual(rerollCalls, []);
-    assert.deepEqual(deleteCalls, []);
     assert.lengthOf(session.messages, 1);
   });
 
   it("replays the original prompt after rerolling within the same tier", async function () {
-    const deleted: Array<[string, string]> = [];
     const notices: string[] = [];
     const sentMessages: Array<{
       content: string;
@@ -1469,6 +1986,13 @@ describe("paperchat storage and chat manager", function () {
       content: "model failed",
       timestamp: 2,
     };
+    const interruptedAssistantMessage: ChatMessage = {
+      id: "assistant-1",
+      role: "assistant",
+      content: "partial answer",
+      streamingState: "interrupted",
+      timestamp: 1.5,
+    };
     const session: ChatSession = {
       id: "session-reroll-1",
       createdAt: 1,
@@ -1483,6 +2007,7 @@ describe("paperchat storage and chat manager", function () {
           isSystemNotice: true,
         },
         userMessage,
+        interruptedAssistantMessage,
         errorMessage,
       ],
       lastRetryableUserMessageId: "user-1",
@@ -1496,9 +2021,6 @@ describe("paperchat storage and chat manager", function () {
         nextModel: "m4",
         tier: "paperchat-standard",
       }),
-      deleteMessage: async (sessionId: string, messageId: string) => {
-        deleted.push([sessionId, messageId]);
-      },
       buildSystemNotice: () => "rerouted notice",
       insertSystemNotice: async (
         targetSession: ChatSession,
@@ -1512,15 +2034,19 @@ describe("paperchat storage and chat manager", function () {
           timestamp: 3,
           isSystemNotice: true,
         });
+        return "notice-1";
       },
-      resend: async ({ content, images, item }) => {
+      rollbackReroute: async () => assert.fail("unexpected rollback"),
+      resend: async ({ content, images, item, sourceUserMessageId }) => {
         sentMessages.push({
           content,
           options: {
             item,
             images,
+            sourceUserMessageId,
           },
         });
+        return true;
       },
       getItem: () => itemRef,
     });
@@ -1530,10 +2056,6 @@ describe("paperchat storage and chat manager", function () {
       nextModel: "m4",
       tier: "paperchat-standard",
     });
-    assert.deepEqual(deleted, [
-      ["session-reroll-1", "error-1"],
-      ["session-reroll-1", "user-1"],
-    ]);
     assert.deepEqual(notices, ["rerouted notice"]);
     assert.deepEqual(sentMessages, [
       {
@@ -1541,12 +2063,286 @@ describe("paperchat storage and chat manager", function () {
         options: {
           item: itemRef,
           images: userMessage.images,
+          sourceUserMessageId: "user-1",
         },
       },
     ]);
     assert.deepEqual(
       session.messages.map((message) => message.id),
-      ["system-1", "notice-1"],
+      ["system-1", "user-1", "assistant-1", "error-1", "notice-1"],
+    );
+  });
+
+  it("rolls back a reroute when replay is not accepted", async function () {
+    const session: ChatSession = {
+      id: "session-reroll-rejected",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      resolvedModelId: "m3",
+      messages: [
+        { id: "user-1", role: "user", content: "retry", timestamp: 1 },
+        { id: "error-1", role: "error", content: "failed", timestamp: 2 },
+      ],
+      lastRetryableUserMessageId: "user-1",
+      lastRetryableErrorMessageId: "error-1",
+      lastRetryableFailedModelId: "m3",
+    };
+    let rolledBack = false;
+
+    const result = await rerollPaperChatFailureAndReplay({
+      session,
+      rerollTier: async () => {
+        session.resolvedModelId = "m4";
+        session.lastRetryableUserMessageId = undefined;
+        session.lastRetryableErrorMessageId = undefined;
+        session.lastRetryableFailedModelId = undefined;
+        return {
+          previousModel: "m3",
+          nextModel: "m4",
+          tier: "paperchat-standard",
+        };
+      },
+      buildSystemNotice: () => "rerouted notice",
+      insertSystemNotice: async (targetSession, content) => {
+        targetSession.messages.push({
+          id: "notice-1",
+          role: "system",
+          content,
+          timestamp: 3,
+          isSystemNotice: true,
+        });
+        return "notice-1";
+      },
+      rollbackReroute: async (_reroute, noticeMessageId) => {
+        rolledBack = true;
+        session.resolvedModelId = "m3";
+        session.lastRetryableUserMessageId = "user-1";
+        session.lastRetryableErrorMessageId = "error-1";
+        session.lastRetryableFailedModelId = "m3";
+        session.messages = session.messages.filter(
+          (message) => message.id !== noticeMessageId,
+        );
+      },
+      resend: async () => false,
+      getItem: () => null,
+    });
+
+    assert.isNull(result);
+    assert.isTrue(rolledBack);
+    assert.equal(session.resolvedModelId, "m3");
+    assert.equal(session.lastRetryableErrorMessageId, "error-1");
+    assert.deepEqual(
+      session.messages.map((message) => message.id),
+      ["user-1", "error-1"],
+    );
+  });
+
+  it("rolls back and rethrows when inserting the reroute notice fails", async function () {
+    const originalError = new Error("notice insert failed");
+    const rollbackCalls: Array<string | undefined> = [];
+    const session: ChatSession = {
+      id: "session-reroll-notice-failure",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      messages: [
+        { id: "user-1", role: "user", content: "retry", timestamp: 1 },
+        { id: "error-1", role: "error", content: "failed", timestamp: 2 },
+      ],
+      lastRetryableUserMessageId: "user-1",
+      lastRetryableErrorMessageId: "error-1",
+    };
+
+    let thrown: unknown;
+    try {
+      await rerollPaperChatFailureAndReplay({
+        session,
+        rerollTier: async () => ({
+          previousModel: "m3",
+          nextModel: "m4",
+          tier: "paperchat-standard",
+        }),
+        buildSystemNotice: () => "rerouted notice",
+        insertSystemNotice: async () => {
+          throw originalError;
+        },
+        rollbackReroute: async (_reroute, noticeMessageId) => {
+          rollbackCalls.push(noticeMessageId);
+        },
+        resend: async () => assert.fail("unexpected resend"),
+        getItem: () => null,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    assert.strictEqual(thrown, originalError);
+    assert.deepEqual(rollbackCalls, [undefined]);
+  });
+
+  it("aggregates replay and rollback failures", async function () {
+    const replayError = new Error("replay failed");
+    const rollbackError = new Error("rollback failed");
+    const session: ChatSession = {
+      id: "session-reroll-aggregate-failure",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      messages: [
+        { id: "user-1", role: "user", content: "retry", timestamp: 1 },
+        { id: "error-1", role: "error", content: "failed", timestamp: 2 },
+      ],
+      lastRetryableUserMessageId: "user-1",
+      lastRetryableErrorMessageId: "error-1",
+    };
+
+    let thrown: unknown;
+    try {
+      await rerollPaperChatFailureAndReplay({
+        session,
+        rerollTier: async () => ({
+          previousModel: "m3",
+          nextModel: "m4",
+          tier: "paperchat-standard",
+        }),
+        buildSystemNotice: () => "rerouted notice",
+        insertSystemNotice: async () => "notice-1",
+        rollbackReroute: async () => {
+          throw rollbackError;
+        },
+        resend: async () => {
+          throw replayError;
+        },
+        getItem: () => null,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    assert.instanceOf(thrown, AggregateError);
+    assert.equal(
+      (thrown as AggregateError).message,
+      "PaperChat replay failed and its reroute could not be rolled back.",
+    );
+    assert.deepEqual((thrown as AggregateError).errors, [
+      replayError,
+      rollbackError,
+    ]);
+  });
+
+  it("does not replay or leave reroute state behind after switching sessions", async function () {
+    const sourceSession: ChatSession = {
+      id: "session-reroll-source",
+      createdAt: 1,
+      updatedAt: 10,
+      lastActiveItemKey: null,
+      selectedTier: "paperchat-standard",
+      resolvedModelId: "m3",
+      messages: [
+        { id: "user-1", role: "user", content: "retry", timestamp: 1 },
+        { id: "error-1", role: "error", content: "failed", timestamp: 2 },
+      ],
+      lastRetryableUserMessageId: "user-1",
+      lastRetryableErrorMessageId: "error-1",
+      lastRetryableFailedModelId: "m3",
+    };
+    const otherSession: ChatSession = {
+      id: "session-reroll-other",
+      createdAt: 2,
+      updatedAt: 2,
+      lastActiveItemKey: null,
+      messages: [],
+    };
+    const deletedMessages: string[] = [];
+    const persistedModels: Array<string | undefined> = [];
+    const manager = Object.create(ChatManager.prototype) as any;
+    manager.currentSession = sourceSession;
+    manager.activeSessionRunIds = new Map();
+    manager.paperChatRerollSessions = new Set();
+    manager.init = async () => undefined;
+    manager.rerollCurrentPaperChatTier = async () => {
+      sourceSession.resolvedModelId = "m4";
+      sourceSession.lastRetryableUserMessageId = undefined;
+      sourceSession.lastRetryableErrorMessageId = undefined;
+      sourceSession.lastRetryableFailedModelId = undefined;
+      manager.currentSession = otherSession;
+      return {
+        previousModel: "m3",
+        nextModel: "m4",
+        tier: "paperchat-standard",
+      };
+    };
+    manager.insertSystemNotice = async (
+      targetSession: ChatSession,
+      content: string,
+    ) => {
+      const notice: ChatMessage = {
+        id: "notice-switched-session",
+        role: "system",
+        content,
+        timestamp: 3,
+        isSystemNotice: true,
+      };
+      targetSession.messages.push(notice);
+      return notice;
+    };
+    manager.sessionStorage = {
+      updateSessionMeta: async (session: ChatSession) => {
+        persistedModels.push(session.resolvedModelId);
+      },
+      deleteMessage: async (_sessionId: string, messageId: string) => {
+        deletedMessages.push(messageId);
+      },
+    };
+
+    const result = await manager.rerollCurrentPaperChatFailureAndRetry();
+
+    assert.isNull(result);
+    assert.equal(sourceSession.resolvedModelId, "m3");
+    assert.equal(sourceSession.lastRetryableUserMessageId, "user-1");
+    assert.equal(sourceSession.lastRetryableErrorMessageId, "error-1");
+    assert.deepEqual(
+      sourceSession.messages.map((message) => message.id),
+      ["user-1", "error-1"],
+    );
+    assert.deepEqual(otherSession.messages, []);
+    assert.deepEqual(persistedModels, ["m3"]);
+    assert.deepEqual(deletedMessages, ["notice-switched-session"]);
+    assert.isFalse(manager.paperChatRerollSessions.has(sourceSession.id));
+  });
+
+  it("returns a persisted system notice even when rendering it throws", async function () {
+    const session: ChatSession = {
+      id: "session-notice-render-failure",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      messages: [],
+    };
+    const inserted: string[] = [];
+    const manager = Object.create(ChatManager.prototype) as any;
+    manager.generateId = () => "notice-1";
+    manager.isSessionActive = () => true;
+    manager.onMessageUpdate = () => {
+      throw new Error("render failed");
+    };
+    manager.sessionStorage = {
+      insertMessage: async (_sessionId: string, message: ChatMessage) => {
+        inserted.push(message.id);
+      },
+    };
+
+    const notice = await manager.insertSystemNotice(
+      session,
+      "persisted notice",
+    );
+
+    assert.equal(notice.id, "notice-1");
+    assert.deepEqual(inserted, ["notice-1"]);
+    assert.deepEqual(
+      session.messages.map((message) => message.id),
+      ["notice-1"],
     );
   });
 
@@ -1790,6 +2586,109 @@ describe("paperchat storage and chat manager", function () {
     assert.deepEqual(renderedPlans, [undefined]);
     assert.lengthOf(renderedMessages, 1);
     assert.equal(renderedMessages[0][1].streamingState, "interrupted");
+  });
+
+  it("persists completed hidden tool context when cancelling a tool-only reply", async function () {
+    const savedSessions: ChatSession[] = [];
+    let metadataUpdates = 0;
+    const visibleContent = [
+      '<tool-call status="completed">',
+      "<tool-name>search_paper_content</tool-name>",
+      "<tool-result>visible preview</tool-result>",
+      "</tool-call>",
+      '<tool-call status="calling">',
+      "<tool-name>search_paper_content</tool-name>",
+      "</tool-call>",
+    ].join("\n");
+    const session: ChatSession = {
+      id: "session-cancel-tool-context",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: "ITEM-1",
+      messages: [
+        { id: "user-1", role: "user", content: "question", timestamp: 1 },
+        {
+          id: "assistant-1-api-context-request",
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            {
+              id: "call-completed",
+              type: "function",
+              function: { name: "search_paper_content", arguments: "{}" },
+            },
+            {
+              id: "call-pending",
+              type: "function",
+              function: { name: "search_paper_content", arguments: "{}" },
+            },
+          ],
+          apiOnly: true,
+          timestamp: 2,
+        },
+        {
+          id: "assistant-1-api-context-result",
+          role: "tool",
+          content: "completed paper result",
+          tool_call_id: "call-completed",
+          apiOnly: true,
+          timestamp: 3,
+        },
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: visibleContent,
+          streamingState: "in_progress",
+          timestamp: 4,
+        },
+      ],
+      executionPlan: {
+        id: "plan-1",
+        summary: "Working",
+        status: "in_progress",
+        steps: [],
+        createdAt: 1,
+        updatedAt: 4,
+      },
+    };
+    const manager = Object.create(ChatManager.prototype) as any;
+    manager.currentSession = session;
+    manager.activeSessionRunIds = new Map([[session.id, 1]]);
+    manager.activeSessionAbortControllers = new Map();
+    manager.streamingSessions = new Map([[session.id, session]]);
+    manager.init = async () => undefined;
+    manager.isSessionActive = () => false;
+    manager.agentRuntime = { cancelPendingUserInputRequests: () => 0 };
+    manager.sessionStorage = {
+      updateMessageContent: async () => undefined,
+      updateSessionMeta: async () => {
+        metadataUpdates++;
+      },
+      saveSession: async (saved: ChatSession) => {
+        savedSessions.push(saved);
+      },
+    };
+
+    assert.isTrue(await manager.cancelCurrentTurn());
+    assert.equal(metadataUpdates, 0);
+    assert.deepEqual(savedSessions, [session]);
+    assert.deepEqual(
+      session.messages.map((message) => message.id),
+      [
+        "user-1",
+        "assistant-1-api-context-request",
+        "assistant-1-api-context-result",
+        "assistant-1",
+      ],
+    );
+    assert.deepEqual(
+      session.messages[1].tool_calls?.map((call) => call.id),
+      ["call-completed"],
+    );
+    assert.equal(session.messages[2].content, "completed paper result");
+    assert.include(session.messages[3].content, 'status="completed"');
+    assert.notInclude(session.messages[3].content, 'status="calling"');
+    assert.equal(session.messages[3].streamingState, "interrupted");
   });
 
   it("removes unfinished calling tool cards when cancelling the current turn", async function () {
@@ -2138,6 +3037,715 @@ describe("paperchat storage and chat manager", function () {
         streamingState: "interrupted",
       },
     ]);
+  });
+
+  it("keeps a non-empty assistant reply when the turn fails", async function () {
+    const assistantMessage: ChatMessage = {
+      id: "assistant-failed-1",
+      role: "assistant",
+      content: [
+        "Partial answer",
+        '<tool-call status="calling">',
+        "<tool-name>web_search</tool-name>",
+      ].join("\n"),
+      streamingState: "in_progress",
+      timestamp: 2,
+    };
+    const session: ChatSession = {
+      id: "session-failed-1",
+      createdAt: 1,
+      updatedAt: 2,
+      lastActiveItemKey: null,
+      messages: [assistantMessage],
+      executionPlan: {
+        id: "plan-1",
+        summary: "working",
+        status: "in_progress",
+        steps: [],
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      toolExecutionState: {
+        turnStartedAt: 1,
+        updatedAt: 2,
+        results: [],
+      },
+    };
+    const updates: Array<{
+      content: string;
+      streamingState?: string | null;
+    }> = [];
+    const deleted: string[] = [];
+    const manager = Object.create(ChatManager.prototype) as any;
+    manager.sessionStorage = {
+      updateMessageContent: async (
+        _sessionId: string,
+        _messageId: string,
+        content: string,
+        _reasoning?: string,
+        options?: { streamingState?: string | null },
+      ) => {
+        updates.push({ content, streamingState: options?.streamingState });
+      },
+      deleteMessage: async (_sessionId: string, messageId: string) => {
+        deleted.push(messageId);
+      },
+    };
+
+    const kept = await manager.finalizeFailedAssistantMessage(
+      session,
+      assistantMessage,
+      null,
+    );
+
+    assert.isTrue(kept);
+    assert.equal(assistantMessage.content, "Partial answer");
+    assert.equal(assistantMessage.streamingState, "interrupted");
+    assert.deepEqual(updates, [
+      { content: "Partial answer", streamingState: "interrupted" },
+    ]);
+    assert.deepEqual(deleted, []);
+    assert.isUndefined(session.executionPlan);
+    assert.isUndefined(session.toolExecutionState);
+
+    const retriedAssistant: ChatMessage = {
+      id: "assistant-failed-retry",
+      role: "assistant",
+      content: "x",
+      streamingState: "in_progress",
+      timestamp: 3,
+    };
+    session.messages.push(retriedAssistant);
+    const restored = await manager.finalizeFailedAssistantMessage(
+      session,
+      retriedAssistant,
+      { content: "Earlier provider partial" },
+    );
+    assert.isTrue(restored);
+    assert.equal(retriedAssistant.content, "Earlier provider partial");
+    assert.equal(retriedAssistant.streamingState, "interrupted");
+
+    const longerCurrentAssistant: ChatMessage = {
+      id: "assistant-failed-current-longer",
+      role: "assistant",
+      content: "The current provider produced the more complete partial.",
+      streamingState: "in_progress",
+      timestamp: 4,
+    };
+    session.messages.push(longerCurrentAssistant);
+    await manager.finalizeFailedAssistantMessage(
+      session,
+      longerCurrentAssistant,
+      { content: "short fallback" },
+    );
+    assert.equal(
+      longerCurrentAssistant.content,
+      "The current provider produced the more complete partial.",
+    );
+  });
+
+  it("persists completed tool context when the final provider attempt fails", async function () {
+    const assistantMessage: ChatMessage = {
+      id: "assistant-failed-tools",
+      role: "assistant",
+      content: [
+        '<tool-call status="completed">',
+        "<tool-name>search_paper_content</tool-name>",
+        "<tool-result>visible preview</tool-result>",
+        "</tool-call>",
+      ].join("\n"),
+      streamingState: "in_progress",
+      timestamp: 4,
+    };
+    const session: ChatSession = {
+      id: "session-failed-tools",
+      createdAt: 1,
+      updatedAt: 4,
+      lastActiveItemKey: null,
+      messages: [
+        {
+          id: "assistant-failed-tools-api-context-request",
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            {
+              id: "call-1",
+              type: "function",
+              function: { name: "search_paper_content", arguments: "{}" },
+            },
+          ],
+          apiOnly: true,
+          timestamp: 2,
+        },
+        {
+          id: "assistant-failed-tools-api-context-result",
+          role: "tool",
+          content: "trusted result",
+          tool_call_id: "call-1",
+          apiOnly: true,
+          timestamp: 3,
+        },
+        assistantMessage,
+      ],
+    };
+    const savedSessions: ChatSession[] = [];
+    const manager = Object.create(ChatManager.prototype) as any;
+    manager.sessionStorage = {
+      updateMessageContent: async () => undefined,
+      deleteMessage: async () => undefined,
+      saveSession: async (saved: ChatSession) => {
+        savedSessions.push(saved);
+      },
+    };
+
+    assert.isTrue(
+      await manager.finalizeFailedAssistantMessage(
+        session,
+        assistantMessage,
+        null,
+      ),
+    );
+    assert.deepEqual(savedSessions, [session]);
+    assert.deepEqual(
+      session.messages.map((message) => message.role),
+      ["assistant", "tool", "assistant"],
+    );
+    assert.equal(session.messages[1].content, "trusted result");
+    assert.equal(assistantMessage.streamingState, "interrupted");
+  });
+
+  it("keeps reasoning-only failures and removes a truly empty placeholder", async function () {
+    const reasoningOnly: ChatMessage = {
+      id: "assistant-reasoning-only",
+      role: "assistant",
+      content: "",
+      reasoning: "Visible reasoning before the failure",
+      streamingState: "in_progress",
+      timestamp: 1,
+    };
+    const empty: ChatMessage = {
+      id: "assistant-empty",
+      role: "assistant",
+      content: "",
+      streamingState: "in_progress",
+      timestamp: 2,
+    };
+    const session: ChatSession = {
+      id: "session-failed-empty",
+      createdAt: 1,
+      updatedAt: 2,
+      lastActiveItemKey: null,
+      messages: [reasoningOnly, empty],
+    };
+    const updated: string[] = [];
+    const deleted: string[] = [];
+    const manager = Object.create(ChatManager.prototype) as any;
+    manager.sessionStorage = {
+      updateMessageContent: async (_sessionId: string, messageId: string) => {
+        updated.push(messageId);
+      },
+      deleteMessage: async (_sessionId: string, messageId: string) => {
+        deleted.push(messageId);
+      },
+    };
+
+    assert.isTrue(
+      await manager.finalizeFailedAssistantMessage(
+        session,
+        reasoningOnly,
+        null,
+      ),
+    );
+    assert.equal(reasoningOnly.streamingState, "interrupted");
+    assert.equal(
+      reasoningOnly.reasoning,
+      "Visible reasoning before the failure",
+    );
+
+    assert.isFalse(
+      await manager.finalizeFailedAssistantMessage(session, empty, null),
+    );
+    assert.deepEqual(updated, ["assistant-reasoning-only"]);
+    assert.deepEqual(deleted, ["assistant-empty"]);
+    assert.deepEqual(
+      session.messages.map((message) => message.id),
+      ["assistant-reasoning-only"],
+    );
+  });
+
+  it("keeps the most substantial partial across provider fallback failures", async function () {
+    const providerManager = getProviderManager() as any;
+    const originalGetActiveProviderId = providerManager.getActiveProviderId;
+    const originalExecuteWithFallback = providerManager.executeWithFallback;
+    const contextManager = getContextManager() as any;
+    const originalCompactBeforeSendIfNeeded =
+      contextManager.compactBeforeSendIfNeeded;
+    const originalFilterMessages = contextManager.filterMessages;
+    const session: ChatSession = {
+      id: "session-provider-partials",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      messages: [],
+    };
+    const createFailingProvider = (id: string, partial: string) => ({
+      config: { id },
+      getName: () => id,
+      isReady: () => true,
+      supportsPdfUpload: () => false,
+      streamChatCompletion: (
+        _messages: ChatMessage[],
+        callbacks: {
+          onChunk: (content: string) => void;
+          onError: (error: Error) => void;
+        },
+      ) => {
+        callbacks.onChunk(partial);
+        callbacks.onError(new Error(`${id} failed`));
+      },
+    });
+    const firstProvider = createFailingProvider(
+      "provider-one",
+      "The first provider produced a useful and substantial partial answer.",
+    );
+    const secondProvider = createFailingProvider("provider-two", "x");
+
+    providerManager.getActiveProviderId = () => firstProvider.config.id;
+    providerManager.executeWithFallback = async (
+      operation: (provider: typeof firstProvider) => Promise<unknown>,
+    ) => {
+      let lastError: unknown;
+      for (const provider of [firstProvider, secondProvider]) {
+        try {
+          return await operation(provider);
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      throw lastError;
+    };
+    contextManager.compactBeforeSendIfNeeded = async () => false;
+    contextManager.filterMessages = (targetSession: ChatSession) => ({
+      messages: [...targetSession.messages],
+      summaryTriggered: false,
+    });
+
+    try {
+      const manager = Object.create(ChatManager.prototype) as any;
+      manager.currentSession = session;
+      manager.activeSessionRunIds = new Map();
+      manager.sessionRunCounters = new Map();
+      manager.activeSessionAbortControllers = new Map();
+      manager.streamingSessions = new Map();
+      manager.currentItemKey = null;
+      manager.init = async () => undefined;
+      manager.getActiveProvider = () => firstProvider;
+      manager.isSessionActive = () => false;
+      manager.sessionStorage = {
+        insertMessage: async () => undefined,
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        deleteMessage: async () => undefined,
+      };
+
+      assert.isTrue(await manager.sendMessage("answer this"));
+
+      const assistant = session.messages.find(
+        (message) => message.role === "assistant",
+      );
+      assert.equal(
+        assistant?.content,
+        "The first provider produced a useful and substantial partial answer.",
+      );
+      assert.equal(assistant?.streamingState, "interrupted");
+      assert.equal(session.messages.at(-1)?.role, "error");
+    } finally {
+      providerManager.getActiveProviderId = originalGetActiveProviderId;
+      providerManager.executeWithFallback = originalExecuteWithFallback;
+      contextManager.compactBeforeSendIfNeeded =
+        originalCompactBeforeSendIfNeeded;
+      contextManager.filterMessages = originalFilterMessages;
+    }
+  });
+
+  it("keeps interrupted replies as ordinary history without disabling tools or duplicating storage", async function () {
+    const providerManager = getProviderManager() as any;
+    const originalGetActiveProviderId = providerManager.getActiveProviderId;
+    const originalExecuteWithFallback = providerManager.executeWithFallback;
+    const contextManager = getContextManager() as any;
+    const originalCompactBeforeSendIfNeeded =
+      contextManager.compactBeforeSendIfNeeded;
+    const capturedRequests: ChatMessage[][] = [];
+    const completedAssistantIds: string[] = [];
+    let toolCallingCount = 0;
+    const insertedMessageIds: string[] = [];
+    const session: ChatSession = {
+      id: "session-continue-1",
+      createdAt: 1,
+      updatedAt: 3,
+      lastActiveItemKey: null,
+      lastRetryableUserMessageId: "user-1",
+      lastRetryableErrorMessageId: "error-1",
+      messages: [
+        {
+          id: "user-1",
+          role: "user",
+          content: "question",
+          timestamp: 1,
+        },
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: "partial answer",
+          streamingState: "interrupted",
+          timestamp: 2,
+        },
+        {
+          id: "error-1",
+          role: "error",
+          content: "provider failed",
+          timestamp: 3,
+        },
+      ],
+    };
+    let providerReady = true;
+    const provider = {
+      config: { id: "openai" },
+      getName: () => "OpenAI",
+      isReady: () => providerReady,
+      supportsPdfUpload: () => false,
+      chatCompletionWithTools: async () => ({ content: "answer" }),
+    };
+
+    providerManager.getActiveProviderId = () => "openai";
+    providerManager.executeWithFallback = async (
+      operation: (currentProvider: typeof provider) => Promise<unknown>,
+    ) => operation(provider);
+    contextManager.compactBeforeSendIfNeeded = async () => false;
+
+    try {
+      const manager = Object.create(ChatManager.prototype) as any;
+      manager.currentSession = session;
+      manager.activeSessionRunIds = new Map();
+      manager.sessionRunCounters = new Map();
+      manager.activeSessionAbortControllers = new Map();
+      manager.streamingSessions = new Map();
+      manager.currentItemKey = null;
+      manager.init = async () => undefined;
+      manager.getActiveProvider = () => provider;
+      manager.isSessionActive = () => false;
+      manager.sendMessageWithToolCalling = async (
+        _provider: unknown,
+        messages: ChatMessage[],
+        assistantMessage: ChatMessage,
+      ) => {
+        toolCallingCount++;
+        capturedRequests.push(messages.map((message) => ({ ...message })));
+        assistantMessage.content = `completed answer ${toolCallingCount}`;
+        delete assistantMessage.streamingState;
+        completedAssistantIds.push(assistantMessage.id);
+        return true;
+      };
+      manager.sessionStorage = {
+        insertMessage: async (_sessionId: string, message: ChatMessage) => {
+          insertedMessageIds.push(message.id);
+        },
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+      };
+
+      const accepted = await manager.sendMessage("重新分析第三节");
+
+      assert.isTrue(accepted);
+      assert.equal(toolCallingCount, 1);
+      assert.lengthOf(capturedRequests, 1);
+      const request = capturedRequests[0];
+      const partialIndex = request.findIndex(
+        (message) =>
+          message.id === "assistant-1" &&
+          message.role === "assistant" &&
+          message.content === "partial answer",
+      );
+      const userIndex = request.findIndex(
+        (message) =>
+          message.role === "user" && message.content === "重新分析第三节",
+      );
+      assert.isAtLeast(partialIndex, 0);
+      assert.isBelow(partialIndex, userIndex);
+      assert.isUndefined(request[partialIndex].apiOnly);
+      assert.isUndefined(request[partialIndex].streamingState);
+      assert.notInclude(insertedMessageIds, "assistant-1");
+      assert.isFalse(session.messages.some((message) => message.apiOnly));
+      assert.equal(session.messages[1].streamingState, "interrupted");
+      assert.isUndefined(session.lastRetryableUserMessageId);
+      assert.isUndefined(session.lastRetryableErrorMessageId);
+
+      const laterAccepted = await manager.sendMessage("继续聊下一个问题");
+
+      assert.isTrue(laterAccepted);
+      assert.equal(toolCallingCount, 2);
+      assert.lengthOf(capturedRequests, 2);
+      const laterRequest = capturedRequests[1];
+      const interruptedIndex = laterRequest.findIndex(
+        (message) => message.id === "assistant-1",
+      );
+      const continuationIndex = laterRequest.findIndex(
+        (message) => message.id === completedAssistantIds[0],
+      );
+      const laterUserIndex = laterRequest.findIndex(
+        (message) =>
+          message.role === "user" && message.content === "继续聊下一个问题",
+      );
+      assert.isAtLeast(interruptedIndex, 0);
+      assert.isAbove(continuationIndex, interruptedIndex);
+      assert.isAbove(laterUserIndex, continuationIndex);
+      assert.equal(
+        laterRequest[continuationIndex].content,
+        "completed answer 1",
+      );
+
+      session.messages = [
+        {
+          id: "replay-original-user",
+          role: "user",
+          content: "original question",
+          timestamp: 7,
+        },
+        {
+          id: "replay-base-assistant",
+          role: "assistant",
+          content: "partial that continue depends on",
+          streamingState: "interrupted",
+          timestamp: 8,
+        },
+        {
+          id: "replay-base-error",
+          role: "error",
+          content: "first failure",
+          timestamp: 9,
+        },
+        {
+          id: "replay-source-user",
+          role: "user",
+          content: "继续",
+          timestamp: 10,
+        },
+        {
+          id: "replay-source-assistant",
+          role: "assistant",
+          content: "replay partial",
+          streamingState: "interrupted",
+          timestamp: 11,
+        },
+        {
+          id: "replay-source-error",
+          role: "error",
+          content: "failed",
+          timestamp: 12,
+        },
+      ];
+      capturedRequests.length = 0;
+      const toolCallsBeforeReplay = toolCallingCount;
+      const replayAccepted = await manager.sendMessage("继续", {
+        reuseUserMessageId: "replay-source-user",
+      });
+      assert.isTrue(replayAccepted);
+      assert.equal(toolCallingCount, toolCallsBeforeReplay + 1);
+      assert.lengthOf(capturedRequests, 1);
+      assert.include(
+        capturedRequests[0].map((message) => message.id),
+        "replay-source-user",
+      );
+      assert.equal(
+        capturedRequests[0].filter(
+          (message) => message.role === "user" && message.content === "继续",
+        ).length,
+        1,
+      );
+      assert.notInclude(
+        capturedRequests[0].map((message) => message.id),
+        "replay-source-assistant",
+      );
+      assert.notInclude(
+        capturedRequests[0].map((message) => message.id),
+        "replay-source-error",
+      );
+      assert.equal(
+        capturedRequests[0].filter(
+          (message) =>
+            message.id === "replay-base-assistant" &&
+            message.role === "assistant" &&
+            message.content === "partial that continue depends on",
+        ).length,
+        1,
+      );
+      assert.isUndefined(
+        capturedRequests[0].find(
+          (message) => message.id === "replay-base-assistant",
+        )?.streamingState,
+      );
+      const futureMessages = contextManager.filterMessages(session).messages;
+      assert.notInclude(
+        futureMessages.map((message: ChatMessage) => message.id),
+        "replay-source-assistant",
+      );
+      assert.include(
+        futureMessages.map((message: ChatMessage) => message.id),
+        completedAssistantIds.at(-1),
+      );
+      const rerolledAssistant = futureMessages.find(
+        (message: ChatMessage) => message.id === completedAssistantIds.at(-1),
+      );
+      assert.include(rerolledAssistant?.content || "", "replay partial");
+      assert.include(rerolledAssistant?.content || "", "completed answer");
+      assert.equal(
+        session.messages.filter((message) => message.role === "user").length,
+        2,
+      );
+
+      const targetUser: ChatMessage = {
+        id: "target-user",
+        role: "user",
+        content: "retry this exact prompt",
+        timestamp: 20,
+      };
+      const targetSession: ChatSession = {
+        id: "target-session",
+        createdAt: 20,
+        updatedAt: 20,
+        lastActiveItemKey: null,
+        messages: [targetUser],
+      };
+      const otherSession: ChatSession = {
+        id: "other-session",
+        createdAt: 21,
+        updatedAt: 21,
+        lastActiveItemKey: null,
+        messages: [],
+      };
+      manager.currentSession = otherSession;
+      manager.sendMessageWithToolCalling = async (
+        _provider: unknown,
+        messages: ChatMessage[],
+      ) => {
+        capturedRequests.push(messages.map((message) => ({ ...message })));
+        return true;
+      };
+      const inactiveTargetAccepted = await manager.sendMessage(
+        targetUser.content,
+        {
+          targetSession,
+          reuseUserMessageId: targetUser.id,
+          requireTargetSessionActive: true,
+        },
+      );
+      assert.isFalse(inactiveTargetAccepted);
+      assert.deepEqual(targetSession.messages, [targetUser]);
+      assert.deepEqual(otherSession.messages, []);
+
+      manager.currentSession = targetSession;
+      const targetAccepted = await manager.sendMessage(targetUser.content, {
+        targetSession,
+        reuseUserMessageId: targetUser.id,
+        requireTargetSessionActive: true,
+      });
+      assert.isTrue(targetAccepted);
+      assert.deepEqual(otherSession.messages, []);
+      assert.include(
+        targetSession.messages.map((message) => message.id),
+        targetUser.id,
+      );
+
+      manager.currentSession = otherSession;
+      const missingReuseAccepted = await manager.sendMessage("missing", {
+        targetSession: otherSession,
+        reuseUserMessageId: "missing-user",
+        requireTargetSessionActive: true,
+      });
+      assert.isFalse(missingReuseAccepted);
+      assert.deepEqual(otherSession.messages, []);
+
+      const unavailableUser: ChatMessage = {
+        id: "unavailable-user",
+        role: "user",
+        content: "retry while unavailable",
+        timestamp: 30,
+      };
+      const unavailableSession: ChatSession = {
+        id: "unavailable-session",
+        createdAt: 30,
+        updatedAt: 30,
+        lastActiveItemKey: null,
+        messages: [unavailableUser],
+      };
+      manager.currentSession = unavailableSession;
+      providerReady = false;
+      const insertedCountBeforeUnavailableRetry = insertedMessageIds.length;
+
+      const unavailableAccepted = await manager.sendMessage(
+        unavailableUser.content,
+        {
+          targetSession: unavailableSession,
+          reuseUserMessageId: unavailableUser.id,
+          requireTargetSessionActive: true,
+          fromPaperChatReroll: true,
+        },
+      );
+
+      assert.isFalse(unavailableAccepted);
+      assert.deepEqual(unavailableSession.messages, [unavailableUser]);
+      assert.equal(
+        insertedMessageIds.length,
+        insertedCountBeforeUnavailableRetry,
+      );
+    } finally {
+      providerManager.getActiveProviderId = originalGetActiveProviderId;
+      providerManager.executeWithFallback = originalExecuteWithFallback;
+      contextManager.compactBeforeSendIfNeeded =
+        originalCompactBeforeSendIfNeeded;
+    }
+  });
+
+  it("rejects a second send without replacing the active session run", async function () {
+    const session: ChatSession = {
+      id: "session-active-run",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      messages: [],
+    };
+    const errors: string[] = [];
+    const manager = Object.create(ChatManager.prototype) as any;
+    manager.currentSession = session;
+    manager.activeSessionRunIds = new Map([[session.id, 7]]);
+    manager.paperChatRerollSessions = new Set();
+    manager.init = async () => undefined;
+    manager.onError = (error: Error) => errors.push(error.message);
+
+    const accepted = await manager.sendMessage("second request");
+
+    assert.isFalse(accepted);
+    assert.equal(manager.activeSessionRunIds.get(session.id), 7);
+    assert.deepEqual(errors, ["paperchat-chat-turn-in-progress"]);
+
+    manager.activeSessionRunIds.clear();
+    manager.paperChatRerollSessions.add(session.id);
+    assert.isFalse(await manager.sendMessage("send during reroll"));
+    assert.deepEqual(errors, [
+      "paperchat-chat-turn-in-progress",
+      "paperchat-chat-turn-in-progress",
+    ]);
+
+    manager.paperChatRerollSessions.clear();
+    manager.activeSessionRunIds.set(session.id, 8);
+    assert.isNull(await manager.rerollCurrentPaperChatFailureAndRetry());
+    manager.activeSessionRunIds.clear();
+    manager.paperChatRerollSessions.add(session.id);
+    assert.isNull(await manager.rerollCurrentPaperChatFailureAndRetry());
+
+    manager.paperChatRerollSessions.clear();
+    assert.isNull(await manager.rerollCurrentPaperChatFailureAndRetry());
+    assert.isFalse(manager.paperChatRerollSessions.has(session.id));
   });
 
   it("treats session invalidation after message persistence as an accepted send", async function () {
