@@ -90,6 +90,24 @@ describe("interrupted assistant context", function () {
     );
   });
 
+  it("keeps content after a literal tool-call mention that is not a card", function () {
+    const content = [
+      "The renderer uses a `<tool-call` prefix for cards.",
+      "Everything after this explanation must survive interruption cleanup.",
+    ].join("\n");
+
+    assert.equal(sanitizeInterruptedAssistantContent(content), content);
+  });
+
+  it("still truncates a stream that stopped mid opening tag", function () {
+    const content = 'Partial answer.\n<tool-call status="calli';
+
+    assert.equal(
+      sanitizeInterruptedAssistantContent(content),
+      "Partial answer.",
+    );
+  });
+
   it("does not apply a recovery-specific length limit", function () {
     const content = "x".repeat(20_000);
 

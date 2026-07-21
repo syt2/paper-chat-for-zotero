@@ -873,21 +873,6 @@ export class AgentRuntime {
       timestamp: Date.now(),
     };
     currentMessages.push(assistantToolMessage);
-    if (contextStrategy.persistApiOnlyTranscript) {
-      insertApiOnlyModelContextMessage(sendingSession, assistantMessage, {
-        ...assistantToolMessage,
-        id: buildApiOnlyModelContextMessageId(
-          assistantMessage.id,
-          this.callbacks.generateId(),
-        ),
-        apiOnly: true,
-      });
-    }
-
-    let accumulatedDisplay = params.accumulatedDisplay;
-    if (roundContent) {
-      accumulatedDisplay += roundContent;
-    }
 
     const executionEntries = this.createRuntimeToolIterationEntries(
       sendingSession,
@@ -898,6 +883,38 @@ export class AgentRuntime {
       reuseCompletedResults,
       currentItemKey,
     );
+
+    // Reused exchanges already live in the previous turn's retained apiOnly
+    // transcript. Re-recording them under the new assistant id would duplicate
+    // the same tool results in every later request.
+    const reusedToolCallIds = new Set(
+      executionEntries.flatMap((entry) =>
+        entry.kind === "reused"
+          ? entry.results.map((result) => result.toolCall.id)
+          : [],
+      ),
+    );
+    if (contextStrategy.persistApiOnlyTranscript) {
+      const persistedToolCalls = toolCalls.filter(
+        (toolCall) => !reusedToolCallIds.has(toolCall.id),
+      );
+      if (persistedToolCalls.length > 0) {
+        insertApiOnlyModelContextMessage(sendingSession, assistantMessage, {
+          ...assistantToolMessage,
+          tool_calls: persistedToolCalls,
+          id: buildApiOnlyModelContextMessageId(
+            assistantMessage.id,
+            this.callbacks.generateId(),
+          ),
+          apiOnly: true,
+        });
+      }
+    }
+
+    let accumulatedDisplay = params.accumulatedDisplay;
+    if (roundContent) {
+      accumulatedDisplay += roundContent;
+    }
 
     const formatCallingToolCards = (calls: ToolCall[]): string =>
       calls
@@ -1031,7 +1048,10 @@ export class AgentRuntime {
           timestamp: Date.now(),
         };
         currentMessages.push(toolResultMessage);
-        if (contextStrategy.persistApiOnlyTranscript) {
+        if (
+          contextStrategy.persistApiOnlyTranscript &&
+          entry.kind !== "reused"
+        ) {
           insertApiOnlyModelContextMessage(sendingSession, assistantMessage, {
             ...toolResultMessage,
             id: buildApiOnlyModelContextMessageId(
@@ -1794,8 +1814,8 @@ export class AgentRuntime {
     );
     this.ensureSessionTracked(sendingSession, sessionRunId);
     this.touchToolExecutionState(sendingSession);
-    // Do not save the hidden transcript here. ChatManager may retry another
-    // provider, and owns the final persistence once all fallbacks are exhausted.
+    // Do not save the hidden transcript here. ChatManager may replay the same
+    // provider/model, and owns the final persistence once retries are exhausted.
     await this.sessionStorage.updateSessionMeta(sendingSession);
     this.emitPlanUpdate(sendingSession, sessionRunId);
     this.emitRuntimeEvent<"turn_failed">(

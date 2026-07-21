@@ -1053,6 +1053,10 @@ export class AuthManager {
           }
           return !!legacyApiKey;
         }
+        // The auto token still exists but its key is temporarily unreadable
+        // (e.g. rate limiting). Do not fall through to token creation, or every
+        // call would mint another auto token on the user's account.
+        return false;
       }
 
       // forceRefresh 只删除 auto token。旧版本默认分组 token 保留作回滚兜底。

@@ -27,8 +27,6 @@ import {
 import { loadCachedRatios } from "../src/modules/preferences/ModelsFetcher.ts";
 import type { ChatMessage, ChatSession } from "../src/types/chat";
 import type { ManagedAbortController } from "../src/utils/abort.ts";
-import { getString } from "../src/utils/locale.ts";
-
 const PREFS_PREFIX = "extensions.zotero.paperchat";
 
 type RecordedQuery = {
@@ -133,6 +131,7 @@ describe("paperchat storage and chat manager", function () {
     const providerManager = getProviderManager() as any;
     const originalGetActiveProvider = providerManager.getActiveProvider;
     const originalFallbackConfig = providerManager.fallbackConfig;
+    const originalRetryBackoffBaseMs = providerManager.retryBackoffBaseMs;
     const provider = {
       config: { id: "paperchat" },
       getName: () => "PaperChat",
@@ -143,6 +142,7 @@ describe("paperchat storage and chat manager", function () {
       ...providerManager.fallbackConfig,
       maxRetries: 3,
     };
+    providerManager.retryBackoffBaseMs = 0;
 
     try {
       let attempts = 0;
@@ -192,6 +192,7 @@ describe("paperchat storage and chat manager", function () {
     } finally {
       providerManager.getActiveProvider = originalGetActiveProvider;
       providerManager.fallbackConfig = originalFallbackConfig;
+      providerManager.retryBackoffBaseMs = originalRetryBackoffBaseMs;
     }
   });
 
@@ -200,6 +201,8 @@ describe("paperchat storage and chat manager", function () {
     const providerManager = getProviderManager() as any;
     const originalEnsurePluginToken = authManager.ensurePluginToken;
     const originalGetActiveProvider = providerManager.getActiveProvider;
+    const originalRetryBackoffBaseMs = providerManager.retryBackoffBaseMs;
+    providerManager.retryBackoffBaseMs = 0;
     let refreshCalls = 0;
     authManager.ensurePluginToken = async (forceRefresh: boolean) => {
       assert.isTrue(forceRefresh);
@@ -272,9 +275,21 @@ describe("paperchat storage and chat manager", function () {
             0,
           ),
       );
+      assert.isFalse(
+        await manager
+          .createProviderRetryOptions()
+          .shouldRetry(
+            new Error(
+              'API Error: 403 - {"error":{"code":"insufficient_user_quota","message":"额度不足"}}',
+            ),
+            provider,
+            0,
+          ),
+      );
     } finally {
       authManager.ensurePluginToken = originalEnsurePluginToken;
       providerManager.getActiveProvider = originalGetActiveProvider;
+      providerManager.retryBackoffBaseMs = originalRetryBackoffBaseMs;
     }
   });
 
@@ -3279,14 +3294,14 @@ describe("paperchat storage and chat manager", function () {
     ]);
   });
 
-  it("falls back to the cancelled message when cancelling a turn whose content is only calling tool cards", async function () {
-    const cancelledMessage = getString("chat-turn-cancelled");
+  it("deletes the assistant message when cancelling a turn whose content is only calling tool cards", async function () {
     const messageUpdates: Array<{
       sessionId: string;
       messageId: string;
       content: string;
       streamingState: string | null | undefined;
     }> = [];
+    const deletedMessages: Array<{ sessionId: string; messageId: string }> = [];
 
     const manager = Object.create(ChatManager.prototype) as ChatManager & {
       currentSession: ChatSession;
@@ -3302,6 +3317,7 @@ describe("paperchat storage and chat manager", function () {
           options?: { streamingState?: string | null },
         ) => Promise<void>;
         updateSessionMeta: (session: ChatSession) => Promise<void>;
+        deleteMessage: (sessionId: string, messageId: string) => Promise<void>;
       };
       init: () => Promise<void>;
       isSessionActive: (session: ChatSession) => boolean;
@@ -3374,6 +3390,9 @@ describe("paperchat storage and chat manager", function () {
         });
       },
       updateSessionMeta: async () => undefined,
+      deleteMessage: async (sessionId, messageId) => {
+        deletedMessages.push({ sessionId, messageId });
+      },
     };
     manager.init = async () => undefined;
     manager.isSessionActive = () => false;
@@ -3383,16 +3402,19 @@ describe("paperchat storage and chat manager", function () {
     const cancelled = await manager.cancelCurrentTurn();
 
     assert.isTrue(cancelled);
-    assert.equal(session.messages[1].streamingState, "interrupted");
-    assert.equal(session.messages[1].content, cancelledMessage);
-    assert.deepEqual(messageUpdates, [
+    // The empty placeholder is deleted so no localized UI text can leak into
+    // model context as fabricated assistant output.
+    assert.deepEqual(
+      session.messages.map((message) => message.id),
+      ["user-1"],
+    );
+    assert.deepEqual(deletedMessages, [
       {
         sessionId: "session-cancel-toolcall-only-1",
         messageId: "assistant-1",
-        content: cancelledMessage,
-        streamingState: "interrupted",
       },
     ]);
+    assert.deepEqual(messageUpdates, []);
   });
 
   it("cleans calling tool cards during cancel even when the assistant message is no longer marked in_progress", async function () {

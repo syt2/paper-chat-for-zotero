@@ -149,7 +149,6 @@ paperchat-chat-evidence-page = Page { $page }
 paperchat-chat-evidence-section = Section: { $section }
 paperchat-chat-interrupted = Interrupted
 paperchat-chat-turn-in-progress = A response is already in progress.
-paperchat-chat-turn-cancelled = Request cancelled.
 paperchat-chat-max-planning-iterations-reached = I apologize, but I was unable to complete the request within the allowed number of iterations.
 paperchat-chat-thinking = Thinking
 paperchat-chat-history-title = Chat { $time }

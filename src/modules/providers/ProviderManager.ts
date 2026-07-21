@@ -111,7 +111,12 @@ export interface ProviderRetryOptions {
     provider: AIProvider,
     completedRetries: number,
   ) => boolean | Promise<boolean>;
+  /** Ends the backoff wait early so user-initiated stops stay responsive. */
+  abortSignal?: AbortSignal;
 }
+
+const RETRY_BACKOFF_BASE_MS = 1000;
+const RETRY_BACKOFF_MAX_MS = 8000;
 
 export class ProviderManager {
   private providers: Map<string, AIProvider> = new Map();
@@ -121,6 +126,8 @@ export class ProviderManager {
   private onProviderChangeCallback?: (providerId: string) => void;
   private prefsObserver: symbol | null = null;
   private isSavingPrefs = false;
+  /** Overridable in tests to avoid real backoff waits. */
+  private retryBackoffBaseMs = RETRY_BACKOFF_BASE_MS;
 
   constructor() {
     this.loadFromPrefs();
@@ -809,6 +816,11 @@ export class ProviderManager {
           throw retryError;
         }
 
+        await this.waitBeforeRetry(attemptNumber, options.abortSignal);
+        if (options.abortSignal?.aborted) {
+          throw retryError;
+        }
+
         attemptNumber += 1;
         ztoolkit.log(
           `[ProviderManager] Retrying the same provider and model (${attemptNumber}/${maxAttempts})`,
@@ -817,6 +829,31 @@ export class ProviderManager {
     }
 
     throw new Error("All retry attempts failed");
+  }
+
+  /** Exponential backoff between same-provider retries (1s, 2s, 4s, ...). */
+  private async waitBeforeRetry(
+    completedAttempts: number,
+    abortSignal?: AbortSignal,
+  ): Promise<void> {
+    const delayMs = Math.min(
+      this.retryBackoffBaseMs * 2 ** (completedAttempts - 1),
+      RETRY_BACKOFF_MAX_MS,
+    );
+    if (delayMs <= 0 || abortSignal?.aborted) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      const onAbort = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        abortSignal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, delayMs);
+      abortSignal?.addEventListener("abort", onAbort, { once: true });
+    });
   }
 
   /** Execute same-provider retries and return detailed attempt information. */

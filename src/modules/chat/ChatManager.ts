@@ -494,10 +494,21 @@ export class ChatManager {
     );
   }
 
-  private createProviderRetryOptions(): ProviderRetryOptions {
+  private createProviderRetryOptions(
+    abortSignal?: AbortSignal,
+  ): ProviderRetryOptions {
     let paperChatAuthReplayUsed = false;
     return {
+      abortSignal,
       shouldRetry: async (error, provider) => {
+        if (
+          provider.config.id === "paperchat" &&
+          isPaperChatQuotaError(error)
+        ) {
+          // Quota exhaustion is deterministic; replaying the same request only
+          // delays the terminal error the UI already treats as non-retryable.
+          return false;
+        }
         if (
           provider.config.id === "paperchat" &&
           isPaperChatModelHardFailure(error)
@@ -677,6 +688,72 @@ export class ChatManager {
       return null;
     }
 
+    return reroute;
+  }
+
+  /**
+   * Shared one-shot reroute for PaperChat hard model failures. Returns the
+   * reroute details when the caller should replay the request on the new
+   * model, or null when the error must be rethrown as-is.
+   */
+  private async reroutePaperChatSessionForHardFailure(params: {
+    session: ChatSession;
+    provider: AIProvider;
+    error: unknown;
+    failedModelId: string | null;
+    alreadyRerouted: boolean;
+    reason: "streaming" | "tool_calling";
+    ensureSessionTracked: () => void;
+  }): Promise<{
+    previousModel: string;
+    nextModel: string;
+    tier: PaperChatTier;
+  } | null> {
+    const {
+      session,
+      provider,
+      error,
+      failedModelId,
+      alreadyRerouted,
+      reason,
+      ensureSessionTracked,
+    } = params;
+    if (
+      provider.config.id !== "paperchat" ||
+      !(error instanceof Error) ||
+      !isPaperChatModelHardFailure(error) ||
+      alreadyRerouted
+    ) {
+      return null;
+    }
+
+    const reroute = await this.repairPaperChatSessionAfterHardFailure(
+      session,
+      failedModelId,
+    );
+    ensureSessionTracked();
+    if (!reroute) {
+      return null;
+    }
+
+    provider.updateConfig({
+      resolvedModelOverride: reroute.nextModel,
+    });
+    await this.insertSystemNotice(
+      session,
+      this.buildPaperChatReroutedNotice(
+        reroute.tier,
+        reroute.previousModel,
+        reroute.nextModel,
+      ),
+    );
+    this.trackPaperChatModelRerouted(
+      reroute.tier,
+      reroute.previousModel,
+      reroute.nextModel,
+      reason,
+    );
+    ensureSessionTracked();
     return reroute;
   }
 
@@ -2523,44 +2600,22 @@ export class ChatManager {
             } catch (error) {
               await checkpointQueue.catch(() => undefined);
               captureFailedAssistantSnapshot();
-              if (
-                currentProvider.config.id !== "paperchat" ||
-                !(error instanceof Error) ||
-                !isPaperChatModelHardFailure(error) ||
-                paperChatHardRerouteUsed
-              ) {
-                throw error;
-              }
-
-              const reroute = await this.repairPaperChatSessionAfterHardFailure(
-                sendingSession,
-                failedPaperChatModelId,
-              );
-              ensureSendingSessionTracked();
+              const reroute = await this.reroutePaperChatSessionForHardFailure({
+                session: sendingSession,
+                provider: currentProvider,
+                error,
+                failedModelId: failedPaperChatModelId,
+                alreadyRerouted: paperChatHardRerouteUsed,
+                reason: "streaming",
+                ensureSessionTracked: ensureSendingSessionTracked,
+              });
               if (!reroute) {
                 throw error;
               }
 
               paperChatHardRerouteUsed = true;
               failedPaperChatModelId = reroute.nextModel;
-              currentProvider.updateConfig({
-                resolvedModelOverride: reroute.nextModel,
-              });
               this.resetAssistantForRetry(assistantMessage);
-              await this.insertSystemNotice(
-                sendingSession,
-                this.buildPaperChatReroutedNotice(
-                  reroute.tier,
-                  reroute.previousModel,
-                  reroute.nextModel,
-                ),
-              );
-              this.trackPaperChatModelRerouted(
-                reroute.tier,
-                reroute.previousModel,
-                reroute.nextModel,
-                "streaming",
-              );
               try {
                 return await streamCurrentProvider();
               } catch (reroutedError) {
@@ -2570,7 +2625,7 @@ export class ChatManager {
               }
             }
           },
-          this.createProviderRetryOptions(),
+          this.createProviderRetryOptions(abortSignal),
         );
 
         trackChatCompleted(true);
@@ -2787,6 +2842,21 @@ export class ChatManager {
       const attemptMessagesWithContext = messagesWithContext.map((message) => ({
         ...message,
       }));
+      // Tracks the runtime state of the most recent prompt build so a
+      // mid-iteration reroute resync does not drop iteration/final-answer info.
+      let latestRuntimeState:
+        | {
+            currentIteration?: number;
+            remainingIterations?: number;
+            maxIterations: number;
+            forceFinalAnswer: boolean;
+          }
+        | undefined = {
+        maxIterations: normalizeAgentMaxPlanningIterations(
+          getPref("agentMaxPlanningIterations") as number | undefined,
+        ),
+        forceFinalAnswer: false,
+      };
       const syncModelSpecificRequestContext = () => {
         const isDeepSeek = isDeepSeekToolPromptCacheTarget(
           currentProvider,
@@ -2827,6 +2897,7 @@ export class ChatManager {
               content: buildRuntimeSystemPrompt(
                 attemptMessagesWithContext,
                 sendingSession,
+                latestRuntimeState,
               ),
               timestamp: Date.now(),
             },
@@ -2843,13 +2914,15 @@ export class ChatManager {
           maxIterations: number;
           forceFinalAnswer: boolean;
         },
-      ) =>
-        isDeepSeekToolPromptCacheTarget(
+      ) => {
+        latestRuntimeState = runtimeState ?? latestRuntimeState;
+        return isDeepSeekToolPromptCacheTarget(
           currentProvider,
           failedPaperChatModelId || sendingSession.resolvedModelId,
         )
           ? null
           : buildRuntimeSystemPrompt(currentMessages, session, runtimeState);
+      };
 
       const executeProviderRequest = async <T>(
         operation: () => Promise<T>,
@@ -2861,49 +2934,26 @@ export class ChatManager {
             try {
               return await operation();
             } catch (error) {
-              if (
-                currentProvider.config.id !== "paperchat" ||
-                !(error instanceof Error) ||
-                !isPaperChatModelHardFailure(error) ||
-                paperChatHardRerouteUsed
-              ) {
-                throw error;
-              }
-
-              const reroute = await this.repairPaperChatSessionAfterHardFailure(
-                sendingSession,
-                failedPaperChatModelId,
-              );
-              ensureSendingSessionTracked();
+              const reroute = await this.reroutePaperChatSessionForHardFailure({
+                session: sendingSession,
+                provider: currentProvider,
+                error,
+                failedModelId: failedPaperChatModelId,
+                alreadyRerouted: paperChatHardRerouteUsed,
+                reason: "tool_calling",
+                ensureSessionTracked: ensureSendingSessionTracked,
+              });
               if (!reroute) {
                 throw error;
               }
 
               paperChatHardRerouteUsed = true;
               failedPaperChatModelId = reroute.nextModel;
-              currentProvider.updateConfig({
-                resolvedModelOverride: reroute.nextModel,
-              });
               syncModelSpecificRequestContext();
-              await this.insertSystemNotice(
-                sendingSession,
-                this.buildPaperChatReroutedNotice(
-                  reroute.tier,
-                  reroute.previousModel,
-                  reroute.nextModel,
-                ),
-              );
-              this.trackPaperChatModelRerouted(
-                reroute.tier,
-                reroute.previousModel,
-                reroute.nextModel,
-                "tool_calling",
-              );
-              ensureSendingSessionTracked();
               return operation();
             }
           },
-          this.createProviderRetryOptions(),
+          this.createProviderRetryOptions(abortSignal),
         );
 
       if (providerSupportsStreamingToolCalling(currentProvider)) {
@@ -3237,15 +3287,23 @@ export class ChatManager {
           message.id,
         ) || toolContextChanged;
       const cleanedContent = this.stripPendingToolCallCards(message.content);
-      if (cleanedContent) {
-        message.content = cleanedContent;
-      } else {
-        message.content = getString("chat-turn-cancelled");
-      }
       const sanitizedEvidence = sanitizeEvidenceReferences(
-        message.content,
+        cleanedContent,
         message.evidence || [],
       );
+      if (!sanitizedEvidence.content && !message.reasoning?.trim()) {
+        // Mirror finalizeFailedAssistantMessage: drop an empty interrupted
+        // placeholder instead of persisting UI text that would later be
+        // projected into model context as fabricated assistant output.
+        const messageIndex = session.messages.findIndex(
+          (entry) => entry.id === message.id,
+        );
+        if (messageIndex >= 0) {
+          session.messages.splice(messageIndex, 1);
+        }
+        await this.sessionStorage.deleteMessage(session.id, message.id);
+        continue;
+      }
       message.content = sanitizedEvidence.content;
       message.evidence = sanitizedEvidence.referencedRecords.length
         ? sanitizedEvidence.referencedRecords

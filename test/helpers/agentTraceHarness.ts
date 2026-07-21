@@ -48,6 +48,10 @@ export interface AgentTraceRunOptions {
   isSessionTracked?: () => boolean;
   paperStructure?: PaperStructure | PaperStructureExtended | null;
   tools?: ToolDefinition[];
+  /** Completed results from a previous failed attempt of the same turn. */
+  previousToolResults?: ToolExecutionResult[];
+  /** Mirrors ChatManager's resumeFailedTurn flag (enables result reuse). */
+  preserveToolExecutionState?: boolean;
 }
 
 export interface AgentTraceRunResult {
@@ -128,6 +132,13 @@ export async function runAgentTraceScenario(
 ): Promise<AgentTraceRunResult> {
   ensureRuntimeGlobals();
   const session = createTraceSession(options.userContent);
+  if (options.previousToolResults) {
+    session.toolExecutionState = {
+      turnStartedAt: Date.now() - 1,
+      updatedAt: Date.now(),
+      results: options.previousToolResults,
+    };
+  }
   const assistantMessage: ChatMessage = {
     id: "assistant-1",
     role: "assistant",
@@ -314,6 +325,7 @@ export async function runAgentTraceScenario(
     tools: options.tools || [],
     paperStructure: options.paperStructure,
     sendingSession: session,
+    preserveToolExecutionState: options.preserveToolExecutionState,
   });
 
   provider.assertExhausted();

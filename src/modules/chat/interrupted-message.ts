@@ -9,10 +9,26 @@ export function stripPendingAndIncompleteToolCallContent(
   );
   const lastOpen = sanitized.toLowerCase().lastIndexOf("<tool-call");
   const lastClose = sanitized.toLowerCase().lastIndexOf("</tool-call>");
-  if (lastOpen > lastClose) {
+  if (
+    lastOpen > lastClose &&
+    isDanglingToolCallCardStart(sanitized.slice(lastOpen))
+  ) {
     sanitized = sanitized.slice(0, lastOpen);
   }
   return sanitized.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
+ * Truncation is destructive (it also runs in permanent DB rewrite paths), so
+ * only treat the unmatched `<tool-call` as an interrupted card when it is a
+ * real card opening (status attribute) or the stream stopped mid-tag. A bare
+ * literal mention (e.g. inside a code example) must not truncate the message.
+ */
+function isDanglingToolCallCardStart(tail: string): boolean {
+  if (!tail.includes(">")) {
+    return /^<tool-call[\w\s="'-]{0,160}$/i.test(tail);
+  }
+  return /^<tool-call[^>]*\bstatus\s*=\s*"/i.test(tail);
 }
 
 export function sanitizeInterruptedAssistantContent(content: string): string {

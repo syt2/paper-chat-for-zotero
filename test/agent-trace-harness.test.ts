@@ -1,4 +1,5 @@
 import { assert } from "chai";
+import type { ToolExecutionResult } from "../src/types/tool";
 import {
   assertAssistantContentMatches,
   assertExecutedTools,
@@ -67,7 +68,11 @@ describe("agent trace eval harness", function () {
       /^turn_completed:I will check outside Zotero first\./,
     ]);
     assertExecutedTools(result, ["get_item_metadata"]);
-    assertExecutionPlanTerminalState(result, "completed", "Compose final answer");
+    assertExecutionPlanTerminalState(
+      result,
+      "completed",
+      "Compose final answer",
+    );
     assertRecoveryNoticeIncludes(result, "permission_denied", [
       "Do not retry this tool",
       "permission_denied",
@@ -93,7 +98,8 @@ describe("agent trace eval harness", function () {
           ],
         },
         {
-          content: "I should narrow down the evidence before fetching full text again, so I will search the method section.",
+          content:
+            "I should narrow down the evidence before fetching full text again, so I will search the method section.",
           toolCalls: [
             createToolCall("tool-full-2", "get_full_text", {
               itemKey: "ITEM-1",
@@ -157,16 +163,21 @@ describe("agent trace eval harness", function () {
       "search_paper_content:completed:executor:none",
     ]);
     assertExecutedTools(result, ["get_full_text", "search_paper_content"]);
-    assertExecutionPlanTerminalState(result, "completed", "Compose final answer");
+    assertExecutionPlanTerminalState(
+      result,
+      "completed",
+      "Compose final answer",
+    );
     assertRecoveryNoticeIncludes(result, "evidence_required", [
       "search_paper_content",
       "get_paper_section",
     ]);
-    const blockedFullTextResult = result.session.toolExecutionState?.results.find(
-      (entry) =>
-        entry.toolCall.function.name === "get_full_text" &&
-        entry.status === "failed",
-    );
+    const blockedFullTextResult =
+      result.session.toolExecutionState?.results.find(
+        (entry) =>
+          entry.toolCall.function.name === "get_full_text" &&
+          entry.status === "failed",
+      );
     assert.isDefined(blockedFullTextResult);
     assert.include(
       blockedFullTextResult?.content || "",
@@ -210,7 +221,11 @@ describe("agent trace eval harness", function () {
       /^turn_completed:I will save the summary to Zotero\./,
     ]);
     assertExecutedTools(result, []);
-    assertExecutionPlanTerminalState(result, "completed", "Compose final answer");
+    assertExecutionPlanTerminalState(
+      result,
+      "completed",
+      "Compose final answer",
+    );
     assertRecoveryNoticeIncludes(result, "permission_denied", [
       "Replan around read-only or already-allowed tools",
     ]);
@@ -254,7 +269,11 @@ describe("agent trace eval harness", function () {
       /^turn_completed:I will search the paper for the main claim\./,
     ]);
     assertExecutedTools(result, ["search_paper_content"]);
-    assertExecutionPlanTerminalState(result, "completed", "Compose final answer");
+    assertExecutionPlanTerminalState(
+      result,
+      "completed",
+      "Compose final answer",
+    );
     assertRecoveryNoticeIncludes(result, "execution_failed", [
       "avoid repeating the same call unchanged",
     ]);
@@ -291,5 +310,80 @@ describe("agent trace eval harness", function () {
     assert.includeMembers(getToolCompletionPolicies(result), [
       "search_paper_content:failed:executor:none",
     ]);
+  });
+
+  it("does not re-record reused tool exchanges in the apiOnly transcript on a resumed turn", async function () {
+    const reusedArgs = { itemKey: "ITEM-1", query: "IDR" };
+    const previousResult: ToolExecutionResult = {
+      toolCall: createToolCall(
+        "tool-old-1",
+        "search_paper_content",
+        reusedArgs,
+      ),
+      args: reusedArgs,
+      status: "completed",
+      content: "previous completed result",
+    };
+
+    const result = await runAgentTraceScenario({
+      userContent: "Resume the failed turn.",
+      previousToolResults: [previousResult],
+      preserveToolExecutionState: true,
+      rounds: [
+        {
+          content: "Replaying the earlier lookup and adding a narrower one.",
+          toolCalls: [
+            createToolCall("tool-new-1", "search_paper_content", reusedArgs),
+            createToolCall("tool-new-2", "search_paper_content", {
+              itemKey: "ITEM-1",
+              query: "disorder",
+            }),
+          ],
+        },
+        {
+          content: "Final answer based on both results.",
+        },
+      ],
+      executeTool: () => "fresh narrower result",
+    });
+
+    // Only the genuinely new call executes; the reused one is replayed from
+    // the previous attempt's completed results.
+    assertExecutedTools(result, ["search_paper_content"]);
+    assert.deepEqual(
+      result.executedToolCalls.map((entry) => entry.toolCallId),
+      ["tool-new-2"],
+    );
+
+    // The reused exchange must not be re-recorded under the new assistant id:
+    // the previous turn's retained transcript already carries it.
+    const apiOnlyMessages = result.session.messages.filter(
+      (message) => message.apiOnly,
+    );
+    const apiOnlyAssistant = apiOnlyMessages.filter(
+      (message) => message.role === "assistant",
+    );
+    assert.lengthOf(apiOnlyAssistant, 1);
+    assert.deepEqual(
+      apiOnlyAssistant[0].tool_calls?.map((call) => call.id),
+      ["tool-new-2"],
+    );
+    const apiOnlyToolResults = apiOnlyMessages.filter(
+      (message) => message.role === "tool",
+    );
+    assert.deepEqual(
+      apiOnlyToolResults.map((message) => message.tool_call_id),
+      ["tool-new-2"],
+    );
+
+    // The in-run transcript still contains both exchanges for the model.
+    const inRunToolResults = result.currentMessages.filter(
+      (message) => message.role === "tool",
+    );
+    assert.deepEqual(
+      inRunToolResults.map((message) => message.tool_call_id),
+      ["tool-new-1", "tool-new-2"],
+    );
+    assert.equal(inRunToolResults[0].content, "previous completed result");
   });
 });
