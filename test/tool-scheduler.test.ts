@@ -94,6 +94,33 @@ describe("tool scheduler execution hooks", function () {
     );
   });
 
+  it("passes the request-scoped item key to the tool executor", async function () {
+    const { ToolScheduler } =
+      await import("../src/modules/chat/tool-scheduler/ToolScheduler.ts");
+    let receivedItemKey: string | null | undefined;
+    const scheduler = new ToolScheduler(
+      async (_toolCall, _fallback, _args, currentItemKey) => {
+        receivedItemKey = currentItemKey;
+        return "ok";
+      },
+    );
+
+    await scheduler.execute({
+      toolCall: {
+        id: "tool-item-context",
+        type: "function",
+        function: {
+          name: "get_item_metadata",
+          arguments: JSON.stringify({ itemKey: "EXPLICIT-ITEM" }),
+        },
+      },
+      sessionId: "session-item-context",
+      currentItemKey: "SESSION-PAPER-A",
+    });
+
+    assert.equal(receivedItemKey, "SESSION-PAPER-A");
+  });
+
   it("stores large completed tool results as session artifacts and reads them back", async function () {
     const files = new Map<string, string>();
     const dirs = new Set<string>();

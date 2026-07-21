@@ -77,12 +77,12 @@ const REMOVED_BUILTIN_PROVIDER_IDS = new Set(["mistral", "groq", "openrouter"]);
  * Auto-fallback is enabled by default (no explicit 'enabled' flag needed)
  */
 const DEFAULT_FALLBACK_CONFIG: FallbackConfig = {
-  fallbackProviderIds: [], // Empty = auto-detect all ready providers
+  fallbackProviderIds: [], // Legacy preference field, no longer used for request routing
   maxRetries: 3,
 };
 
 /**
- * Error patterns that trigger fallback to next provider
+ * Error patterns that allow retrying the current provider and model
  */
 const RETRYABLE_ERROR_PATTERNS = [
   /rate.?limit/i,
@@ -101,7 +101,17 @@ const RETRYABLE_ERROR_PATTERNS = [
   /fetch.?failed/i,
   /quota.?exceeded/i,
   /insufficient.?quota/i,
+  /insufficient_user_quota/i,
+  /额度不足/,
 ];
+
+export interface ProviderRetryOptions {
+  shouldRetry?: (
+    error: Error,
+    provider: AIProvider,
+    completedRetries: number,
+  ) => boolean | Promise<boolean>;
+}
 
 export class ProviderManager {
   private providers: Map<string, AIProvider> = new Map();
@@ -109,11 +119,6 @@ export class ProviderManager {
   private configs: ProviderConfig[] = [];
   private fallbackConfig: FallbackConfig = { ...DEFAULT_FALLBACK_CONFIG };
   private onProviderChangeCallback?: (providerId: string) => void;
-  private onFallbackCallback?: (
-    fromProvider: string,
-    toProvider: string,
-    error: Error,
-  ) => void;
   private prefsObserver: symbol | null = null;
   private isSavingPrefs = false;
 
@@ -128,15 +133,6 @@ export class ProviderManager {
    */
   setOnProviderChange(callback: (providerId: string) => void): void {
     this.onProviderChangeCallback = callback;
-  }
-
-  /**
-   * Set callback for when fallback occurs
-   */
-  setOnFallback(
-    callback: (fromProvider: string, toProvider: string, error: Error) => void,
-  ): void {
-    this.onFallbackCallback = callback;
   }
 
   private notifyProviderChange(
@@ -665,18 +661,18 @@ export class ProviderManager {
   }
 
   // ============================================
-  // Fallback Configuration Methods
+  // Legacy Fallback Configuration Methods
   // ============================================
 
   /**
-   * Get current fallback configuration
+   * Get the persisted legacy configuration and current attempt limit.
    */
   getFallbackConfig(): FallbackConfig {
     return { ...this.fallbackConfig };
   }
 
   /**
-   * Update fallback configuration
+   * Update the persisted legacy configuration and current attempt limit.
    */
   updateFallbackConfig(updates: Partial<FallbackConfig>): void {
     this.fallbackConfig = { ...this.fallbackConfig, ...updates };
@@ -688,8 +684,7 @@ export class ProviderManager {
   }
 
   /**
-   * Set fallback provider order (optional)
-   * If not set, all ready providers will be used automatically
+   * @deprecated Provider ordering is no longer used by request execution.
    */
   setFallbackProviders(providerIds: string[]): void {
     // Filter to only include valid, enabled providers
@@ -701,23 +696,19 @@ export class ProviderManager {
   }
 
   /**
-   * Clear custom fallback order (use auto-detection)
+   * @deprecated Provider ordering is no longer used by request execution.
    */
   clearFallbackProviders(): void {
     this.updateFallbackConfig({ fallbackProviderIds: [] });
   }
 
   // ============================================
-  // Fallback Execution Methods
+  // Legacy fallback configuration helpers and retry execution
   // ============================================
 
   /**
-   * Get the fallback chain: active provider + other ready providers
-   *
-   * Auto-fallback behavior:
-   * - If user has configured fallbackProviderIds, use that order
-   * - Otherwise, automatically include all ready providers as fallback
-   * - Active provider is always first in the chain
+   * @deprecated Retained for compatibility with callers that inspect the old
+   * provider order. Chat execution does not use this chain.
    */
   getFallbackChain(): AIProvider[] {
     const chain: AIProvider[] = [];
@@ -755,7 +746,7 @@ export class ProviderManager {
   }
 
   /**
-   * Check if an error should trigger fallback to next provider
+   * Check if an error can be retried on the current provider and model
    */
   isRetryableError(error: unknown): boolean {
     const errorMessage = getErrorMessage(error);
@@ -764,94 +755,71 @@ export class ProviderManager {
     );
   }
 
-  /**
-   * Execute an operation with automatic fallback on retryable errors
-   *
-   * @param operation - Async function that takes a provider and returns a result
-   * @returns The result from the first successful provider
-   * @throws The last error if all providers fail
-   *
-   * @example
-   * // Simple usage
-   * const result = await providerManager.executeWithFallback(
-   *   (provider) => provider.chatCompletion(messages)
-   * );
-   *
-   * @example
-   * // With streaming
-   * await providerManager.executeWithFallback(
-   *   (provider) => provider.streamChatCompletion(messages, callbacks)
-   * );
-   */
+  /** Retry the active provider without silently switching providers or models. */
   async executeWithFallback<T>(
     operation: (provider: AIProvider) => Promise<T>,
+    options: ProviderRetryOptions = {},
   ): Promise<T> {
-    const chain = this.getFallbackChain();
-
-    if (chain.length === 0) {
+    const provider = this.getActiveProvider();
+    if (!provider?.isReady()) {
       throw new Error("No available providers configured");
     }
 
-    let lastError: Error | null = null;
-    let attemptCount = 0;
+    return this.executeWithRetry(provider, () => operation(provider), options);
+  }
 
-    for (let i = 0; i < chain.length; i++) {
-      const provider = chain[i];
-      attemptCount++;
+  /** Retry one specific provider without consulting or changing active state. */
+  async executeWithRetry<T>(
+    provider: AIProvider,
+    operation: () => Promise<T>,
+    options: ProviderRetryOptions = {},
+  ): Promise<T> {
+    if (!provider.isReady()) {
+      throw new Error("Provider is not ready");
+    }
 
-      // Check max retries
-      if (attemptCount > this.fallbackConfig.maxRetries) {
-        ztoolkit.log("[ProviderManager] Max retries exceeded");
-        break;
-      }
-
+    const maxAttempts = Math.max(1, this.fallbackConfig.maxRetries);
+    let attemptNumber = 1;
+    while (attemptNumber <= maxAttempts) {
       try {
         ztoolkit.log(
-          `[ProviderManager] Attempting with provider: ${provider.getName()} (attempt ${attemptCount})`,
+          `[ProviderManager] Attempting with provider: ${provider.getName()} (attempt ${attemptNumber})`,
         );
-        const result = await operation(provider);
-        return result;
+        return await operation();
       } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error));
+        const retryError =
+          error instanceof Error ? error : new Error(String(error));
 
         ztoolkit.log(
           `[ProviderManager] Provider ${provider.getName()} failed:`,
-          lastError.message,
+          retryError.message,
         );
 
-        // Check if error is retryable
-        if (!this.isRetryableError(error)) {
+        const canRetry =
+          attemptNumber < maxAttempts &&
+          (await (options.shouldRetry?.(
+            retryError,
+            provider,
+            attemptNumber - 1,
+          ) ?? this.isRetryableError(retryError)));
+        if (!canRetry) {
           ztoolkit.log(
-            "[ProviderManager] Error is not retryable, stopping fallback chain",
+            "[ProviderManager] Error is not retryable or retry limit was reached",
           );
-          throw lastError;
+          throw retryError;
         }
 
-        // Notify about fallback if there's a next provider AND we haven't exceeded max retries
-        const hasNextProvider = i < chain.length - 1;
-        const canRetry = attemptCount < this.fallbackConfig.maxRetries;
-        if (hasNextProvider && canRetry) {
-          const nextProvider = chain[i + 1];
-          ztoolkit.log(
-            `[ProviderManager] Falling back to: ${nextProvider.getName()}`,
-          );
-          this.onFallbackCallback?.(
-            provider.getName(),
-            nextProvider.getName(),
-            lastError,
-          );
-        }
+        attemptNumber += 1;
+        ztoolkit.log(
+          `[ProviderManager] Retrying the same provider and model (${attemptNumber}/${maxAttempts})`,
+        );
       }
     }
 
-    // All providers failed
-    throw lastError || new Error("All providers failed");
+    throw new Error("All retry attempts failed");
   }
 
-  /**
-   * Execute with fallback and return detailed result information
-   * Useful for debugging or showing fallback history to users
-   */
+  /** Execute same-provider retries and return detailed attempt information. */
   async executeWithFallbackDetailed<T>(
     operation: (provider: AIProvider) => Promise<T>,
   ): Promise<{
@@ -860,30 +828,25 @@ export class ProviderManager {
     providerName: string;
     attempts: FallbackExecutionResult<T>[];
   }> {
-    const chain = this.getFallbackChain();
+    const provider = this.getActiveProvider();
     const attempts: FallbackExecutionResult<T>[] = [];
 
-    if (chain.length === 0) {
+    if (!provider?.isReady()) {
       throw new Error("No available providers configured");
     }
 
-    for (
-      let i = 0;
-      i < chain.length && i < this.fallbackConfig.maxRetries;
-      i++
-    ) {
-      const provider = chain[i];
-      const providerId = provider.config.id;
-
+    const providerId = provider.config.id;
+    const maxAttempts = Math.max(1, this.fallbackConfig.maxRetries);
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
         const result = await operation(provider);
-        const attempt: FallbackExecutionResult<T> = {
+        const successfulAttempt: FallbackExecutionResult<T> = {
           success: true,
           result,
           providerId,
-          attemptNumber: i + 1,
+          attemptNumber: attempt + 1,
         };
-        attempts.push(attempt);
+        attempts.push(successfulAttempt);
 
         return {
           result,
@@ -898,26 +861,18 @@ export class ProviderManager {
           success: false,
           error: errorObj,
           providerId,
-          attemptNumber: i + 1,
+          attemptNumber: attempt + 1,
         });
 
-        if (!this.isRetryableError(error)) {
+        if (!this.isRetryableError(error) || attempt >= maxAttempts - 1) {
           throw errorObj;
-        }
-
-        if (i < chain.length - 1) {
-          this.onFallbackCallback?.(
-            provider.getName(),
-            chain[i + 1].getName(),
-            errorObj,
-          );
         }
       }
     }
 
     // All failed
     const lastAttempt = attempts[attempts.length - 1];
-    throw lastAttempt?.error || new Error("All providers failed");
+    throw lastAttempt?.error || new Error("All retry attempts failed");
   }
 
   /**

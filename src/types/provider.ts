@@ -120,20 +120,19 @@ export interface ProviderStorageData {
 }
 
 /**
- * Fallback configuration for provider failover
- *
- * Auto-fallback is enabled by default when multiple providers are ready.
- * User can optionally specify fallbackProviderIds to control the order.
+ * Legacy retry configuration persisted under the original fallback key.
+ * Provider ordering is retained for storage compatibility but is no longer
+ * consulted by chat request execution.
  */
 export interface FallbackConfig {
-  /** Provider IDs to try in order after primary fails (optional, auto-detected if empty) */
+  /** @deprecated Legacy provider ordering retained for preference compatibility. */
   fallbackProviderIds: string[];
-  /** Maximum number of retries across all providers (default: 3) */
+  /** Maximum attempts on the same provider/model, including the first request. */
   maxRetries: number;
 }
 
 /**
- * Error types that trigger fallback to next provider
+ * Error types that allow retrying the same provider/model.
  */
 export type RetryableErrorType =
   | "rate_limit"
@@ -142,9 +141,7 @@ export type RetryableErrorType =
   | "network_error"
   | "quota_exceeded";
 
-/**
- * Result of a fallback execution attempt
- */
+/** Result of one same-provider execution attempt. */
 export interface FallbackExecutionResult<T> {
   success: boolean;
   result?: T;

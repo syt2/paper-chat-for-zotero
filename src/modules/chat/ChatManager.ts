@@ -49,7 +49,8 @@ import {
 import { getToolScheduler } from "./tool-scheduler";
 import { getSkillRegistry, type SelectedPaperChatSkill } from "./skills";
 import { getSessionArtifactStore } from "./session-artifacts";
-import { getProviderManager } from "../providers";
+import { getProviderManager, PaperChatProvider } from "../providers";
+import type { ProviderRetryOptions } from "../providers/ProviderManager";
 import { getAuthManager } from "../auth";
 import { getString } from "../../utils/locale";
 import { getPref, setPref } from "../../utils/prefs";
@@ -126,6 +127,7 @@ type FailedAssistantSnapshot = Pick<
 type InternalSendMessageOptions = SendMessageOptions & {
   item?: Zotero.Item | null;
   fromPaperChatReroll?: boolean;
+  resumeFailedTurn?: boolean;
   reuseUserMessageId?: string;
   targetSession?: ChatSession;
   requireTargetSessionActive?: boolean;
@@ -142,7 +144,7 @@ function selectMoreSubstantialSnapshot(
 
 /**
  * Type guard: check if provider supports tool calling
- * Works with any AIProvider (for fallback compatibility)
+ * Works with any AIProvider (for same-provider retry compatibility)
  */
 function providerSupportsToolCalling(
   provider: AIProvider,
@@ -203,36 +205,6 @@ function buildStableToolCatalogForPromptCache(tools: ToolDefinition[]): string {
     lines.push(`Parameters: ${JSON.stringify(fn.parameters)}`);
   }
   return lines.join("\n");
-}
-
-function withDeepSeekStableToolCatalogPrefix(
-  messages: ChatMessage[],
-  tools: ToolDefinition[],
-): ChatMessage[] {
-  if (messages.length === 0 || tools.length === 0) {
-    return messages;
-  }
-
-  return messages.map((message, index) => {
-    if (index !== 0 || message.role !== "system") {
-      return message;
-    }
-    return {
-      ...message,
-      content: `${message.content}\n\n${buildStableToolCatalogForPromptCache(
-        tools,
-      )}`,
-    };
-  });
-}
-
-function withoutRuntimePromptCacheBoundary(
-  messages: ChatMessage[],
-): ChatMessage[] {
-  return messages.filter(
-    (message) =>
-      message.id !== "cache-checkpoint" && message.id !== "runtime-context",
-  );
 }
 
 function pickRandomCandidate(
@@ -320,7 +292,6 @@ export class ChatManager {
   private onExecutionPlanUpdate?: (plan?: ExecutionPlan) => void;
   private onSessionListUpdate?: () => void | Promise<void>;
   private onRuntimeEvent?: (event: AgentRuntimeEvent) => void;
-  private onFallbackNotice?: (fromProvider: string, toProvider: string) => void; // 降级通知回调
   private approvalObserver: ToolApprovalObserver;
 
   constructor() {
@@ -523,12 +494,45 @@ export class ChatManager {
     );
   }
 
-  /**
-   * 检查当前 provider 是否为 PaperChat (支持 token 刷新)
-   */
-  private isPaperChatProvider(): boolean {
-    const provider = this.getActiveProvider();
-    return provider?.getName() === "PaperChat";
+  private createProviderRetryOptions(): ProviderRetryOptions {
+    let paperChatAuthReplayUsed = false;
+    return {
+      shouldRetry: async (error, provider) => {
+        if (
+          provider.config.id === "paperchat" &&
+          isPaperChatModelHardFailure(error)
+        ) {
+          // The request path already reroutes once within the same tier.
+          return false;
+        }
+        if (provider.config.id === "paperchat" && this.isAuthError(error)) {
+          if (paperChatAuthReplayUsed) {
+            return false;
+          }
+          paperChatAuthReplayUsed = true;
+          try {
+            const refreshed = await getAuthManager().ensurePluginToken(true);
+            if (!refreshed) {
+              ztoolkit.log(
+                "[API Retry] PaperChat token refresh did not produce a usable token",
+              );
+              return false;
+            }
+            ztoolkit.log(
+              "[API Retry] PaperChat token refreshed; replaying the same request",
+            );
+            return true;
+          } catch (refreshError) {
+            ztoolkit.log(
+              "[API Retry] Failed to refresh PaperChat token:",
+              refreshError,
+            );
+            return false;
+          }
+        }
+        return getProviderManager().isRetryableError(error);
+      },
+    };
   }
 
   private syncSessionItemState(session: ChatSession | null): void {
@@ -812,7 +816,6 @@ export class ChatManager {
     onMessageComplete?: () => void;
     onExecutionPlanUpdate?: (plan?: ExecutionPlan) => void;
     onRuntimeEvent?: (event: AgentRuntimeEvent) => void;
-    onFallbackNotice?: (fromProvider: string, toProvider: string) => void;
   }): void {
     this.onMessageUpdate = callbacks.onMessageUpdate;
     this.onStreamingUpdate = callbacks.onStreamingUpdate;
@@ -822,17 +825,6 @@ export class ChatManager {
     this.onMessageComplete = callbacks.onMessageComplete;
     this.onExecutionPlanUpdate = callbacks.onExecutionPlanUpdate;
     this.onRuntimeEvent = callbacks.onRuntimeEvent;
-    this.onFallbackNotice = callbacks.onFallbackNotice;
-
-    // 设置 ProviderManager 的降级回调
-    const providerManager = getProviderManager();
-    providerManager.setOnFallback((from, to, error) => {
-      ztoolkit.log(
-        `[ChatManager] Provider fallback: ${from} -> ${to}, error: ${error.message}`,
-      );
-      // 通知 UI 层（如果需要额外处理）
-      this.onFallbackNotice?.(from, to);
-    });
   }
 
   setSessionListUpdateCallback(callback?: () => void | Promise<void>): void {
@@ -1552,6 +1544,51 @@ export class ChatManager {
     }
   }
 
+  async retryCurrentPaperChatFailure(): Promise<boolean> {
+    await this.init();
+
+    const session = this.currentSession;
+    if (
+      !session ||
+      getProviderManager().getActiveProviderId() !== "paperchat" ||
+      this.activeSessionRunIds.has(session.id) ||
+      this.paperChatRerollSessions.has(session.id) ||
+      !session.lastRetryableUserMessageId ||
+      !session.lastRetryableErrorMessageId
+    ) {
+      return false;
+    }
+
+    const userMessage = session.messages.find(
+      (message) =>
+        message.id === session.lastRetryableUserMessageId &&
+        message.role === "user",
+    );
+    const errorMessage = session.messages.find(
+      (message) =>
+        message.id === session.lastRetryableErrorMessageId &&
+        message.role === "error",
+    );
+    if (!userMessage || !errorMessage) {
+      return false;
+    }
+
+    this.paperChatRerollSessions.add(session.id);
+    try {
+      return await this.sendMessage(userMessage.content, {
+        item: this.getSessionItem(session),
+        images: userMessage.images,
+        fromPaperChatReroll: true,
+        resumeFailedTurn: true,
+        reuseUserMessageId: userMessage.id,
+        targetSession: session,
+        requireTargetSessionActive: true,
+      });
+    } finally {
+      this.paperChatRerollSessions.delete(session.id);
+    }
+  }
+
   async rerollCurrentPaperChatFailureAndRetry(): Promise<{
     previousModel: string;
     nextModel: string;
@@ -1651,6 +1688,7 @@ export class ChatManager {
             item,
             images,
             fromPaperChatReroll: true,
+            resumeFailedTurn: true,
             reuseUserMessageId: sourceUserMessageId,
             targetSession: session,
             requireTargetSessionActive: true,
@@ -1681,33 +1719,6 @@ export class ChatManager {
     failedModelId: string | null,
   ): Promise<void> {
     const isPaperChatFailure = failedProviderId === "paperchat";
-    const isHardFailure =
-      isPaperChatFailure &&
-      error instanceof Error &&
-      isPaperChatModelHardFailure(error);
-
-    if (isHardFailure) {
-      try {
-        const reroute = await this.repairPaperChatSessionAfterHardFailure(
-          session,
-          failedModelId,
-          false,
-        );
-        if (reroute) {
-          this.trackPaperChatModelRerouted(
-            reroute.tier,
-            reroute.previousModel,
-            reroute.nextModel,
-            "failure_repair",
-          );
-        }
-      } catch (repairError) {
-        ztoolkit.log(
-          "[ChatManager] Failed to repair PaperChat tier state after hard failure:",
-          getErrorMessage(repairError),
-        );
-      }
-    }
 
     if (isPaperChatFailure && isPaperChatQuotaError(error)) {
       getAnalyticsService().track(ANALYTICS_EVENTS.paperChatQuotaError, {
@@ -1731,7 +1742,9 @@ export class ChatManager {
 
   private clearFailedTurnRuntimeState(session: ChatSession): void {
     session.executionPlan = undefined;
-    session.toolExecutionState = undefined;
+    if (!session.toolExecutionState?.results.length) {
+      session.toolExecutionState = undefined;
+    }
     session.toolApprovalState = undefined;
   }
 
@@ -1835,29 +1848,6 @@ export class ChatManager {
         "[ChatManager] Failed to apply provider failure state:",
         getErrorMessage(stateError),
       );
-    }
-  }
-
-  /**
-   * 插入降级通知消息到聊天界面
-   */
-  private async insertFallbackNotice(
-    session: ChatSession,
-    fromProvider: string,
-    toProvider: string,
-  ): Promise<void> {
-    const notice: ChatMessage = {
-      id: this.generateId(),
-      role: "system",
-      content: `⚠️ ${fromProvider} unavailable, switching to ${toProvider}...`,
-      timestamp: Date.now(),
-      isSystemNotice: true,
-    };
-
-    session.messages.push(notice);
-    await this.sessionStorage.insertMessage(session.id, notice);
-    if (this.isSessionActive(session)) {
-      this.onMessageUpdate?.(session.messages);
     }
   }
 
@@ -2025,14 +2015,17 @@ export class ChatManager {
           await this.sessionStorage.insertMessage(sendingSession.id, notice);
           sendingSession.lastActiveItemKey = null;
         }
-        // 更新当前 itemKey
-        this.currentItemKey = itemKey;
-        getPdfToolManager().setCurrentItemKey(itemKey);
       }
+
+      // The reader can move independently from the chat session. Bind every
+      // send to its explicit item so retrying an older failed turn cannot run
+      // tools against the newly opened paper.
+      this.currentItemKey = itemKey;
+      getPdfToolManager().setCurrentItemKey(itemKey);
 
       // 获取活动的 AI 提供商
       const providerManager = getProviderManager();
-      const provider = this.getActiveProvider();
+      let provider = this.getActiveProvider();
       chatProviderId = providerManager.getActiveProviderId();
       ztoolkit.log(
         "[ChatManager] provider:",
@@ -2041,8 +2034,16 @@ export class ChatManager {
         provider?.isReady(),
       );
 
-      if (providerManager.getActiveProviderId() === "paperchat") {
-        await this.ensurePaperChatModelResolved(sendingSession);
+      if (
+        providerManager.getActiveProviderId() === "paperchat" &&
+        provider?.config.type === "paperchat"
+      ) {
+        const resolvedModelId =
+          await this.ensurePaperChatModelResolved(sendingSession);
+        provider = new PaperChatProvider({
+          ...provider.config,
+          resolvedModelOverride: resolvedModelId,
+        });
       }
 
       if (!provider || !provider.isReady()) {
@@ -2182,15 +2183,16 @@ export class ChatManager {
             (message) => message.id === reusedUserMessage.id,
           )
         : -1;
-      const requestContextSession = reusedUserMessage
-        ? {
-            ...sendingSession,
-            messages: sendingSession.messages.slice(0, reusedUserIndex + 1),
-            contextState: sendingSession.contextState
-              ? { ...sendingSession.contextState }
-              : undefined,
-          }
-        : sendingSession;
+      const requestContextSession =
+        reusedUserMessage && !options.resumeFailedTurn
+          ? {
+              ...sendingSession,
+              messages: sendingSession.messages.slice(0, reusedUserIndex + 1),
+              contextState: sendingSession.contextState
+                ? { ...sendingSession.contextState }
+                : undefined,
+            }
+          : sendingSession;
       sendingSession.updatedAt = Date.now();
       if (wasDraftSession) {
         this.notifySessionListUpdated();
@@ -2256,7 +2258,9 @@ export class ChatManager {
         assistantMessage,
       );
       sendingSession.executionPlan = undefined;
-      sendingSession.toolExecutionState = undefined;
+      if (!options.resumeFailedTurn) {
+        sendingSession.toolExecutionState = undefined;
+      }
       sendingSession.toolApprovalState = undefined;
       await this.sessionStorage.updateSessionMeta(sendingSession);
       if (this.isSessionActive(sendingSession)) {
@@ -2303,6 +2307,7 @@ export class ChatManager {
           (providerId) => {
             chatProviderId = providerId;
           },
+          options.resumeFailedTurn === true,
           abortSignal,
         );
         if (toolCallingResult !== null) {
@@ -2312,10 +2317,13 @@ export class ChatManager {
       }
 
       let failedProviderId = provider.config.id;
-      let failedProvider: AIProvider = provider;
-      let failedPaperChatModelId: string | null = null;
-      let fallbackFromProviderName: string | null = null;
-      let fallbackToProviderName: string | null = null;
+      let failedPaperChatModelId: string | null =
+        provider.config.type === "paperchat"
+          ? provider.config.resolvedModelOverride ||
+            sendingSession.resolvedModelId ||
+            null
+          : null;
+      let paperChatHardRerouteUsed = false;
       let latestFailedAssistantSnapshot: FailedAssistantSnapshot | null = null;
 
       const captureFailedAssistantSnapshot = () => {
@@ -2325,296 +2333,245 @@ export class ChatManager {
         );
       };
 
-      const handleFallbackNotice = async () => {
-        if (!fallbackFromProviderName || !fallbackToProviderName) {
-          return;
-        }
-        ensureSendingSessionTracked();
-        try {
-          await this.insertFallbackNotice(
-            sendingSession,
-            fallbackFromProviderName,
-            fallbackToProviderName,
-          );
-        } catch (noticeError) {
-          ztoolkit.log(
-            "[ChatManager] Failed to persist fallback notice:",
-            noticeError,
-          );
-          this.onError?.(
-            new Error(
-              `Switched from ${fallbackFromProviderName} to ${fallbackToProviderName}, but failed to show the fallback notice: ${getErrorMessage(noticeError)}`,
-            ),
-          );
-        } finally {
-          fallbackFromProviderName = null;
-          fallbackToProviderName = null;
-        }
-      };
-
-      // 传统模式：流式调用（带自动降级）
+      // 传统模式：流式调用（可恢复错误使用同一 Provider/模型重试）
       try {
-        await providerManager.executeWithFallback(async (currentProvider) => {
-          chatProviderId = currentProvider.config.id;
-          if (currentProvider.config.id !== failedProviderId) {
-            fallbackFromProviderName = failedProvider.getName();
-            fallbackToProviderName = currentProvider.getName();
-          }
-          failedProviderId = currentProvider.config.id;
-          failedProvider = currentProvider;
-          await handleFallbackNotice();
+        await providerManager.executeWithRetry(
+          provider,
+          async () => {
+            const currentProvider = provider;
+            chatProviderId = currentProvider.config.id;
+            failedProviderId = currentProvider.config.id;
 
-          if (currentProvider.config.id === "paperchat") {
-            failedPaperChatModelId = await this.ensurePaperChatModelResolved(
-              sendingSession,
-              false,
-            );
-          } else {
-            failedPaperChatModelId = null;
-          }
+            ensureSendingSessionTracked();
 
-          ensureSendingSessionTracked();
+            // 重试时清空当前显示，但保留最后一份非空输出供终态失败恢复。
+            captureFailedAssistantSnapshot();
+            this.resetAssistantForRetry(assistantMessage);
 
-          // 重试时清空当前显示，但保留最后一份非空输出供终态失败恢复。
-          captureFailedAssistantSnapshot();
-          this.resetAssistantForRetry(assistantMessage);
+            let checkpointTimer: ReturnType<typeof setTimeout> | null = null;
+            let checkpointQueue: Promise<void> = Promise.resolve();
 
-          let checkpointTimer: ReturnType<typeof setTimeout> | null = null;
-          let checkpointQueue: Promise<void> = Promise.resolve();
-
-          const enqueueCheckpoint = (
-            streamingState: ChatMessageStreamingState | null,
-          ): Promise<void> => {
-            if (!this.isSessionTracked(sendingSession, sessionRunId)) {
+            const enqueueCheckpoint = (
+              streamingState: ChatMessageStreamingState | null,
+            ): Promise<void> => {
+              if (!this.isSessionTracked(sendingSession, sessionRunId)) {
+                return checkpointQueue;
+              }
+              checkpointQueue = checkpointQueue
+                .catch(() => undefined)
+                .then(async () => {
+                  if (!this.isSessionTracked(sendingSession, sessionRunId)) {
+                    return;
+                  }
+                  const sanitizedCheckpoint = sanitizeEvidenceReferences(
+                    assistantMessage.content,
+                    [],
+                  );
+                  await this.sessionStorage.updateMessageContent(
+                    sendingSession.id,
+                    assistantMessage.id,
+                    sanitizedCheckpoint.content,
+                    assistantMessage.reasoning,
+                    { streamingState, evidence: [] },
+                  );
+                });
               return checkpointQueue;
-            }
-            checkpointQueue = checkpointQueue
-              .catch(() => undefined)
-              .then(async () => {
-                if (!this.isSessionTracked(sendingSession, sessionRunId)) {
-                  return;
-                }
-                const sanitizedCheckpoint = sanitizeEvidenceReferences(
-                  assistantMessage.content,
-                  [],
-                );
-                await this.sessionStorage.updateMessageContent(
-                  sendingSession.id,
-                  assistantMessage.id,
-                  sanitizedCheckpoint.content,
-                  assistantMessage.reasoning,
-                  { streamingState, evidence: [] },
-                );
-              });
-            return checkpointQueue;
-          };
+            };
 
-          const scheduleCheckpoint = (): void => {
-            if (!this.isSessionTracked(sendingSession, sessionRunId)) {
-              return;
-            }
-            if (checkpointTimer) {
-              return;
-            }
-            checkpointTimer = setTimeout(() => {
-              checkpointTimer = null;
+            const scheduleCheckpoint = (): void => {
               if (!this.isSessionTracked(sendingSession, sessionRunId)) {
                 return;
               }
-              void enqueueCheckpoint("in_progress");
-            }, 1000);
-          };
+              if (checkpointTimer) {
+                return;
+              }
+              checkpointTimer = setTimeout(() => {
+                checkpointTimer = null;
+                if (!this.isSessionTracked(sendingSession, sessionRunId)) {
+                  return;
+                }
+                void enqueueCheckpoint("in_progress");
+              }, 1000);
+            };
 
-          const flushCheckpoint = async (
-            streamingState: ChatMessageStreamingState | null,
-          ): Promise<void> => {
-            if (checkpointTimer) {
-              clearTimeout(checkpointTimer);
-              checkpointTimer = null;
-            }
-            if (!this.isSessionTracked(sendingSession, sessionRunId)) {
-              return;
-            }
-            await enqueueCheckpoint(streamingState);
-          };
+            const flushCheckpoint = async (
+              streamingState: ChatMessageStreamingState | null,
+            ): Promise<void> => {
+              if (checkpointTimer) {
+                clearTimeout(checkpointTimer);
+                checkpointTimer = null;
+              }
+              if (!this.isSessionTracked(sendingSession, sessionRunId)) {
+                return;
+              }
+              await enqueueCheckpoint(streamingState);
+            };
 
-          const streamCurrentProvider = () =>
-            new Promise<void>((resolve, reject) => {
-              const callbacks: StreamCallbacks = {
-                onChunk: (chunk: string) => {
-                  if (!this.isSessionTracked(sendingSession, sessionRunId)) {
-                    return;
-                  }
-                  assistantMessage.content += chunk;
-                  scheduleCheckpoint();
-                  if (this.isSessionActive(sendingSession)) {
-                    this.onStreamingUpdate?.(
-                      assistantMessage.content,
-                      assistantMessage.id,
-                    );
-                  }
-                },
-                onReasoningChunk: (chunk: string) => {
-                  if (!this.isSessionTracked(sendingSession, sessionRunId)) {
-                    return;
-                  }
-                  assistantMessage.reasoning =
-                    (assistantMessage.reasoning || "") + chunk;
-                  scheduleCheckpoint();
-                  if (this.isSessionActive(sendingSession)) {
-                    this.onReasoningUpdate?.(
-                      assistantMessage.reasoning,
-                      assistantMessage.id,
-                    );
-                  }
-                },
-                onComplete: async (fullContent: string) => {
-                  if (!this.isSessionTracked(sendingSession, sessionRunId)) {
+            const streamCurrentProvider = () =>
+              new Promise<void>((resolve, reject) => {
+                const callbacks: StreamCallbacks = {
+                  onChunk: (chunk: string) => {
+                    if (!this.isSessionTracked(sendingSession, sessionRunId)) {
+                      return;
+                    }
+                    assistantMessage.content += chunk;
+                    scheduleCheckpoint();
+                    if (this.isSessionActive(sendingSession)) {
+                      this.onStreamingUpdate?.(
+                        assistantMessage.content,
+                        assistantMessage.id,
+                      );
+                    }
+                  },
+                  onReasoningChunk: (chunk: string) => {
+                    if (!this.isSessionTracked(sendingSession, sessionRunId)) {
+                      return;
+                    }
+                    assistantMessage.reasoning =
+                      (assistantMessage.reasoning || "") + chunk;
+                    scheduleCheckpoint();
+                    if (this.isSessionActive(sendingSession)) {
+                      this.onReasoningUpdate?.(
+                        assistantMessage.reasoning,
+                        assistantMessage.id,
+                      );
+                    }
+                  },
+                  onComplete: async (fullContent: string) => {
+                    if (!this.isSessionTracked(sendingSession, sessionRunId)) {
+                      if (checkpointTimer) {
+                        clearTimeout(checkpointTimer);
+                        checkpointTimer = null;
+                      }
+                      resolve();
+                      return;
+                    }
+                    assistantMessage.content = sanitizeEvidenceReferences(
+                      sanitizeSourceGroupTargets(
+                        fullContent,
+                        collectTrustedSourceTargets([]),
+                      ),
+                      [],
+                    ).content;
+                    assistantMessage.evidence = undefined;
+                    assistantMessage.streamingState = undefined;
+                    assistantMessage.timestamp = Date.now();
+                    sendingSession.updatedAt = Date.now();
+                    clearPaperChatRetryableState(sendingSession);
+
+                    // Clean up empty reasoning
+                    if (!assistantMessage.reasoning) {
+                      delete assistantMessage.reasoning;
+                    }
+
+                    await flushCheckpoint(null);
+                    await this.sessionStorage.updateSessionMeta(sendingSession);
+                    if (this.isSessionActive(sendingSession)) {
+                      this.onMessageUpdate?.(sendingSession.messages);
+
+                      if (pdfWasAttached) {
+                        this.onPdfAttached?.();
+                      }
+                      this.onMessageComplete?.();
+                    }
+
+                    // 异步触发摘要生成（不阻塞主流程）
+                    if (summaryTriggered) {
+                      contextManager
+                        .generateSummaryAsync(sendingSession, async () => {
+                          ensureSendingSessionTracked();
+                          await this.sessionStorage.updateSessionMeta(
+                            sendingSession,
+                          );
+                        })
+                        .catch((err: unknown) => {
+                          ztoolkit.log(
+                            "[ChatManager] Summary generation failed:",
+                            err,
+                          );
+                        });
+                    }
+
+                    resolve();
+                  },
+                  onError: async (error: Error) => {
+                    ztoolkit.log("[API Error]", error.message);
                     if (checkpointTimer) {
                       clearTimeout(checkpointTimer);
                       checkpointTimer = null;
                     }
-                    resolve();
-                    return;
-                  }
-                  assistantMessage.content = sanitizeEvidenceReferences(
-                    sanitizeSourceGroupTargets(
-                      fullContent,
-                      collectTrustedSourceTargets([]),
-                    ),
-                    [],
-                  ).content;
-                  assistantMessage.evidence = undefined;
-                  assistantMessage.streamingState = undefined;
-                  assistantMessage.timestamp = Date.now();
-                  sendingSession.updatedAt = Date.now();
-                  clearPaperChatRetryableState(sendingSession);
-
-                  // Clean up empty reasoning
-                  if (!assistantMessage.reasoning) {
-                    delete assistantMessage.reasoning;
-                  }
-
-                  await flushCheckpoint(null);
-                  await this.sessionStorage.updateSessionMeta(sendingSession);
-                  if (this.isSessionActive(sendingSession)) {
-                    this.onMessageUpdate?.(sendingSession.messages);
-
-                    if (pdfWasAttached) {
-                      this.onPdfAttached?.();
+                    if (!this.isSessionTracked(sendingSession, sessionRunId)) {
+                      resolve();
+                      return;
                     }
-                    this.onMessageComplete?.();
-                  }
 
-                  // 异步触发摘要生成（不阻塞主流程）
-                  if (summaryTriggered) {
-                    contextManager
-                      .generateSummaryAsync(sendingSession, async () => {
-                        ensureSendingSessionTracked();
-                        await this.sessionStorage.updateSessionMeta(
-                          sendingSession,
-                        );
-                      })
-                      .catch((err: unknown) => {
-                        ztoolkit.log(
-                          "[ChatManager] Summary generation failed:",
-                          err,
-                        );
-                      });
-                  }
+                    // Reject so the same-provider retry policy can decide whether to replay.
+                    reject(error);
+                  },
+                };
 
-                  resolve();
-                },
-                onError: async (error: Error) => {
-                  ztoolkit.log("[API Error]", error.message);
-                  if (checkpointTimer) {
-                    clearTimeout(checkpointTimer);
-                    checkpointTimer = null;
-                  }
-                  if (!this.isSessionTracked(sendingSession, sessionRunId)) {
-                    resolve();
-                    return;
-                  }
+                currentProvider.streamChatCompletion(
+                  messagesForApi,
+                  callbacks,
+                  pdfAttachment,
+                  abortSignal,
+                );
+              });
 
-                  // 对于 PaperChat 的认证错误，尝试刷新 token
-                  if (
-                    this.isAuthError(error) &&
-                    currentProvider.getName() === "PaperChat"
-                  ) {
-                    try {
-                      const authManager = getAuthManager();
-                      await authManager.ensurePluginToken(true);
-                      ztoolkit.log(
-                        "[API Retry] Token refreshed, but will use fallback mechanism",
-                      );
-                    } catch (refreshError) {
-                      ztoolkit.log(
-                        "[API Retry] Failed to refresh token:",
-                        refreshError,
-                      );
-                    }
-                  }
+            try {
+              return await streamCurrentProvider();
+            } catch (error) {
+              await checkpointQueue.catch(() => undefined);
+              captureFailedAssistantSnapshot();
+              if (
+                currentProvider.config.id !== "paperchat" ||
+                !(error instanceof Error) ||
+                !isPaperChatModelHardFailure(error) ||
+                paperChatHardRerouteUsed
+              ) {
+                throw error;
+              }
 
-                  // 拒绝 Promise，让 executeWithFallback 处理降级
-                  reject(error);
-                },
-              };
-
-              currentProvider.streamChatCompletion(
-                messagesForApi,
-                callbacks,
-                pdfAttachment,
-                abortSignal,
+              const reroute = await this.repairPaperChatSessionAfterHardFailure(
+                sendingSession,
+                failedPaperChatModelId,
               );
-            });
+              ensureSendingSessionTracked();
+              if (!reroute) {
+                throw error;
+              }
 
-          try {
-            return await streamCurrentProvider();
-          } catch (error) {
-            await checkpointQueue.catch(() => undefined);
-            captureFailedAssistantSnapshot();
-            if (
-              currentProvider.config.id !== "paperchat" ||
-              !(error instanceof Error) ||
-              !isPaperChatModelHardFailure(error)
-            ) {
-              throw error;
-            }
-
-            const reroute = await this.repairPaperChatSessionAfterHardFailure(
-              sendingSession,
-              failedPaperChatModelId,
-            );
-            ensureSendingSessionTracked();
-            if (!reroute) {
-              throw error;
-            }
-
-            failedPaperChatModelId = reroute.nextModel;
-            this.resetAssistantForRetry(assistantMessage);
-            await this.insertSystemNotice(
-              sendingSession,
-              this.buildPaperChatReroutedNotice(
+              paperChatHardRerouteUsed = true;
+              failedPaperChatModelId = reroute.nextModel;
+              currentProvider.updateConfig({
+                resolvedModelOverride: reroute.nextModel,
+              });
+              this.resetAssistantForRetry(assistantMessage);
+              await this.insertSystemNotice(
+                sendingSession,
+                this.buildPaperChatReroutedNotice(
+                  reroute.tier,
+                  reroute.previousModel,
+                  reroute.nextModel,
+                ),
+              );
+              this.trackPaperChatModelRerouted(
                 reroute.tier,
                 reroute.previousModel,
                 reroute.nextModel,
-              ),
-            );
-            this.trackPaperChatModelRerouted(
-              reroute.tier,
-              reroute.previousModel,
-              reroute.nextModel,
-              "streaming",
-            );
-            try {
-              return await streamCurrentProvider();
-            } catch (reroutedError) {
-              await checkpointQueue.catch(() => undefined);
-              captureFailedAssistantSnapshot();
-              throw reroutedError;
+                "streaming",
+              );
+              try {
+                return await streamCurrentProvider();
+              } catch (reroutedError) {
+                await checkpointQueue.catch(() => undefined);
+                captureFailedAssistantSnapshot();
+                throw reroutedError;
+              }
             }
-          }
-        });
+          },
+          this.createProviderRetryOptions(),
+        );
 
         trackChatCompleted(true);
         return true;
@@ -2628,8 +2585,10 @@ export class ChatManager {
         ) {
           return true;
         }
-        // 所有 provider 都失败了
-        ztoolkit.log("[ChatManager] All providers failed:", error);
+        ztoolkit.log(
+          "[ChatManager] Provider request failed after retries:",
+          error,
+        );
 
         await this.finalizeFailedAssistantMessage(
           sendingSession,
@@ -2685,11 +2644,11 @@ export class ChatManager {
 
   /**
    * 使用 Tool Calling 发送消息
-   * 优先使用流式模式，fallback 到非流式
-   * 支持 provider 降级：在第一次调用时选择可用的 provider
+   * 优先使用 provider 支持的流式模式，否则使用非流式模式。
+   * 每次模型请求独立重试，已完成的工具结果保留在当前上下文中。
    */
   private async sendMessageWithToolCalling(
-    _provider: ToolCallingProvider, // 原始 provider，可能被降级替换
+    _provider: ToolCallingProvider,
     messagesForApi: ChatMessage[],
     assistantMessage: ChatMessage,
     pdfWasAttached: boolean,
@@ -2699,6 +2658,7 @@ export class ChatManager {
     sendingSession: ChatSession,
     sessionRunId: number,
     onProviderUsed: (providerId: string) => void,
+    preserveToolExecutionState: boolean,
     abortSignal?: AbortSignal,
   ): Promise<boolean | null> {
     const pdfToolManager = getPdfToolManager();
@@ -2792,195 +2752,199 @@ export class ChatManager {
       },
     ];
 
-    // 使用 executeWithFallback 找到第一个可用的支持 tool calling 的 provider
-    // 注意：一旦开始 tool calling 循环，就不再降级（状态难以恢复）
-    let failedProviderId = _provider.config.id;
-    let failedProvider: AIProvider = _provider;
-    let failedPaperChatModelId: string | null = null;
-
-    let fallbackFromProviderName: string | null = null;
-    let fallbackToProviderName: string | null = null;
-    let latestFailedAssistantSnapshot: FailedAssistantSnapshot | null = null;
-
-    const captureFailedAssistantSnapshot = () => {
-      latestFailedAssistantSnapshot = selectMoreSubstantialSnapshot(
-        this.createFailedAssistantSnapshot(assistantMessage),
-        latestFailedAssistantSnapshot,
-      );
-    };
-
-    const handleFallbackNotice = async () => {
-      if (!fallbackFromProviderName || !fallbackToProviderName) {
-        return;
-      }
-      ensureSendingSessionTracked();
-      try {
-        await this.insertFallbackNotice(
-          sendingSession,
-          fallbackFromProviderName,
-          fallbackToProviderName,
-        );
-      } catch (noticeError) {
-        ztoolkit.log(
-          "[ChatManager] Failed to persist fallback notice:",
-          noticeError,
-        );
-        this.onError?.(
-          new Error(
-            `Switched from ${fallbackFromProviderName} to ${fallbackToProviderName}, but failed to show the fallback notice: ${getErrorMessage(noticeError)}`,
-          ),
-        );
-      } finally {
-        fallbackFromProviderName = null;
-        fallbackToProviderName = null;
-      }
-    };
+    // Tool calling retries each failed model request in place so completed tool
+    // results remain in currentMessages and are never executed a second time.
+    const currentProvider = _provider as AIProvider & ToolCallingProvider;
+    const failedProviderId = currentProvider.config.id;
+    let failedPaperChatModelId: string | null =
+      currentProvider.config.type === "paperchat"
+        ? currentProvider.config.resolvedModelOverride ||
+          sendingSession.resolvedModelId ||
+          null
+        : null;
+    let paperChatHardRerouteUsed = false;
 
     try {
-      await providerManager.executeWithFallback(async (currentProvider) => {
-        onProviderUsed(currentProvider.config.id);
-        if (currentProvider.config.id !== failedProviderId) {
-          fallbackFromProviderName = failedProvider.getName();
-          fallbackToProviderName = currentProvider.getName();
-        }
-        failedProviderId = currentProvider.config.id;
-        failedProvider = currentProvider;
-        await handleFallbackNotice();
-
-        if (currentProvider.config.id === "paperchat") {
-          failedPaperChatModelId = await this.ensurePaperChatModelResolved(
-            sendingSession,
-            false,
-          );
-        } else {
-          failedPaperChatModelId = null;
-        }
-        ensureSendingSessionTracked();
-
-        // 检查 provider 是否支持 tool calling
-        if (!providerSupportsToolCalling(currentProvider)) {
-          throw new Error(
-            `Provider ${currentProvider.getName()} does not support tool calling`,
-          );
-        }
-
-        const toolProvider = currentProvider as AIProvider &
-          ToolCallingProvider;
-        removeApiOnlyModelContextMessagesForTurn(
+      onProviderUsed(currentProvider.config.id);
+      if (
+        currentProvider.config.id === "paperchat" &&
+        !failedPaperChatModelId
+      ) {
+        failedPaperChatModelId = await this.ensurePaperChatModelResolved(
           sendingSession,
-          assistantMessage.id,
+          false,
         );
-        const isDeepSeekPromptCacheTarget = isDeepSeekToolPromptCacheTarget(
+        currentProvider.updateConfig({
+          resolvedModelOverride: failedPaperChatModelId,
+        });
+      }
+      ensureSendingSessionTracked();
+
+      removeApiOnlyModelContextMessagesForTurn(
+        sendingSession,
+        assistantMessage.id,
+      );
+      const attemptMessagesWithContext = messagesWithContext.map((message) => ({
+        ...message,
+      }));
+      const syncModelSpecificRequestContext = () => {
+        const isDeepSeek = isDeepSeekToolPromptCacheTarget(
           currentProvider,
           failedPaperChatModelId || sendingSession.resolvedModelId,
         );
-        const attemptMessagesWithContext = isDeepSeekPromptCacheTarget
-          ? withDeepSeekStableToolCatalogPrefix(
-              withoutRuntimePromptCacheBoundary(messagesWithContext),
-              tools,
-            )
-          : messagesWithContext;
-        const runtimePromptBuilder = isDeepSeekPromptCacheTarget
-          ? undefined
-          : buildRuntimeSystemPrompt;
-
-        // 重试时清空当前显示，但保留最后一份非空输出供终态失败恢复。
-        captureFailedAssistantSnapshot();
-        this.resetAssistantForRetry(assistantMessage);
-
-        const executeToolCallingAttempt = async () => {
-          if (providerSupportsStreamingToolCalling(currentProvider)) {
-            ztoolkit.log(
-              `[Tool Calling] Using streaming mode with ${currentProvider.getName()}`,
-            );
-            await this.sendMessageWithStreamingToolCalling(
-              currentProvider as AIProvider &
-                ToolCallingProvider & {
-                  streamChatCompletionWithTools: NonNullable<
-                    ToolCallingProvider["streamChatCompletionWithTools"]
-                  >;
-                },
-              attemptMessagesWithContext,
-              assistantMessage,
-              pdfWasAttached,
-              summaryTriggered,
-              tools,
-              paperStructure,
-              sendingSession,
-              sessionRunId,
-              runtimePromptBuilder,
-              abortSignal,
-            );
-            return;
-          }
-
-          ztoolkit.log(
-            `[Tool Calling] Using non-streaming mode with ${currentProvider.getName()}`,
-          );
-          await this.sendMessageWithNonStreamingToolCalling(
-            toolProvider,
-            attemptMessagesWithContext,
-            assistantMessage,
-            pdfWasAttached,
-            summaryTriggered,
-            tools,
-            paperStructure,
-            sendingSession,
-            sessionRunId,
-            runtimePromptBuilder,
-            abortSignal,
-          );
-        };
-
-        try {
-          await executeToolCallingAttempt();
-        } catch (error) {
-          captureFailedAssistantSnapshot();
+        const paperContextMessage = attemptMessagesWithContext.find(
+          (message) => message.id === "paper-context",
+        );
+        if (paperContextMessage) {
+          paperContextMessage.content = isDeepSeek
+            ? `${paperContextPrompt}\n\n${buildStableToolCatalogForPromptCache(tools)}`
+            : paperContextPrompt;
+        }
+        for (
+          let index = attemptMessagesWithContext.length - 1;
+          index >= 0;
+          index--
+        ) {
           if (
-            currentProvider.config.id !== "paperchat" ||
-            !(error instanceof Error) ||
-            !isPaperChatModelHardFailure(error)
+            attemptMessagesWithContext[index].id === "cache-checkpoint" ||
+            attemptMessagesWithContext[index].id === "runtime-context"
           ) {
-            throw error;
-          }
-
-          const reroute = await this.repairPaperChatSessionAfterHardFailure(
-            sendingSession,
-            failedPaperChatModelId,
-          );
-          ensureSendingSessionTracked();
-          if (!reroute) {
-            throw error;
-          }
-
-          failedPaperChatModelId = reroute.nextModel;
-          removeApiOnlyModelContextMessagesForTurn(
-            sendingSession,
-            assistantMessage.id,
-          );
-          this.resetAssistantForRetry(assistantMessage);
-          await this.insertSystemNotice(
-            sendingSession,
-            this.buildPaperChatReroutedNotice(
-              reroute.tier,
-              reroute.previousModel,
-              reroute.nextModel,
-            ),
-          );
-          this.trackPaperChatModelRerouted(
-            reroute.tier,
-            reroute.previousModel,
-            reroute.nextModel,
-            "tool_calling",
-          );
-          try {
-            await executeToolCallingAttempt();
-          } catch (reroutedError) {
-            captureFailedAssistantSnapshot();
-            throw reroutedError;
+            attemptMessagesWithContext.splice(index, 1);
           }
         }
-      });
+        if (!isDeepSeek) {
+          attemptMessagesWithContext.push(
+            {
+              id: "cache-checkpoint",
+              role: "system",
+              content:
+                "Prompt cache checkpoint. This is not user content or an instruction.",
+              timestamp: Date.now(),
+            },
+            {
+              id: "runtime-context",
+              role: "system",
+              content: buildRuntimeSystemPrompt(
+                attemptMessagesWithContext,
+                sendingSession,
+              ),
+              timestamp: Date.now(),
+            },
+          );
+        }
+      };
+      syncModelSpecificRequestContext();
+      const runtimePromptBuilder = (
+        currentMessages: ChatMessage[],
+        session: ChatSession,
+        runtimeState?: {
+          currentIteration?: number;
+          remainingIterations?: number;
+          maxIterations: number;
+          forceFinalAnswer: boolean;
+        },
+      ) =>
+        isDeepSeekToolPromptCacheTarget(
+          currentProvider,
+          failedPaperChatModelId || sendingSession.resolvedModelId,
+        )
+          ? null
+          : buildRuntimeSystemPrompt(currentMessages, session, runtimeState);
+
+      const executeProviderRequest = async <T>(
+        operation: () => Promise<T>,
+      ): Promise<T> =>
+        providerManager.executeWithRetry(
+          currentProvider,
+          async () => {
+            ensureSendingSessionTracked();
+            try {
+              return await operation();
+            } catch (error) {
+              if (
+                currentProvider.config.id !== "paperchat" ||
+                !(error instanceof Error) ||
+                !isPaperChatModelHardFailure(error) ||
+                paperChatHardRerouteUsed
+              ) {
+                throw error;
+              }
+
+              const reroute = await this.repairPaperChatSessionAfterHardFailure(
+                sendingSession,
+                failedPaperChatModelId,
+              );
+              ensureSendingSessionTracked();
+              if (!reroute) {
+                throw error;
+              }
+
+              paperChatHardRerouteUsed = true;
+              failedPaperChatModelId = reroute.nextModel;
+              currentProvider.updateConfig({
+                resolvedModelOverride: reroute.nextModel,
+              });
+              syncModelSpecificRequestContext();
+              await this.insertSystemNotice(
+                sendingSession,
+                this.buildPaperChatReroutedNotice(
+                  reroute.tier,
+                  reroute.previousModel,
+                  reroute.nextModel,
+                ),
+              );
+              this.trackPaperChatModelRerouted(
+                reroute.tier,
+                reroute.previousModel,
+                reroute.nextModel,
+                "tool_calling",
+              );
+              ensureSendingSessionTracked();
+              return operation();
+            }
+          },
+          this.createProviderRetryOptions(),
+        );
+
+      if (providerSupportsStreamingToolCalling(currentProvider)) {
+        ztoolkit.log(
+          `[Tool Calling] Using streaming mode with ${currentProvider.getName()}`,
+        );
+        await this.sendMessageWithStreamingToolCalling(
+          currentProvider,
+          attemptMessagesWithContext,
+          assistantMessage,
+          pdfWasAttached,
+          summaryTriggered,
+          tools,
+          paperStructure,
+          sendingSession,
+          sessionRunId,
+          runtimePromptBuilder,
+          executeProviderRequest,
+          preserveToolExecutionState,
+          abortSignal,
+        );
+      } else {
+        ztoolkit.log(
+          `[Tool Calling] Using non-streaming mode with ${currentProvider.getName()}`,
+        );
+        await this.sendMessageWithNonStreamingToolCalling(
+          currentProvider,
+          attemptMessagesWithContext,
+          assistantMessage,
+          pdfWasAttached,
+          summaryTriggered,
+          tools,
+          paperStructure,
+          sendingSession,
+          sessionRunId,
+          runtimePromptBuilder,
+          executeProviderRequest,
+          preserveToolExecutionState,
+          abortSignal,
+        );
+      }
 
       return true;
     } catch (error) {
@@ -2993,13 +2957,12 @@ export class ChatManager {
       ) {
         return null;
       }
-      // 所有 provider 都失败了
-      ztoolkit.log("[Tool Calling] All providers failed:", error);
+      ztoolkit.log("[Tool Calling] Model request failed after retries:", error);
 
       await this.finalizeFailedAssistantMessage(
         sendingSession,
         assistantMessage,
-        latestFailedAssistantSnapshot,
+        null,
       );
 
       const errorMessage: ChatMessage = {
@@ -3144,8 +3107,10 @@ export class ChatManager {
             maxIterations: number;
             forceFinalAnswer: boolean;
           },
-        ) => string)
+        ) => string | null)
       | undefined,
+    executeProviderRequest: <T>(operation: () => Promise<T>) => Promise<T>,
+    preserveToolExecutionState: boolean,
     abortSignal?: AbortSignal,
   ): Promise<void> {
     await this.agentRuntime.executeStreamingToolLoop({
@@ -3157,8 +3122,11 @@ export class ChatManager {
       tools,
       paperStructure,
       sendingSession,
+      currentItemKey: sendingSession.lastActiveItemKey,
       sessionRunId,
       abortSignal,
+      executeProviderRequest,
+      preserveToolExecutionState,
       refreshSystemPrompt: buildSystemPrompt,
     });
     clearPaperChatRetryableState(sendingSession);
@@ -3191,8 +3159,10 @@ export class ChatManager {
             maxIterations: number;
             forceFinalAnswer: boolean;
           },
-        ) => string)
+        ) => string | null)
       | undefined,
+    executeProviderRequest: <T>(operation: () => Promise<T>) => Promise<T>,
+    preserveToolExecutionState: boolean,
     abortSignal?: AbortSignal,
   ): Promise<void> {
     await this.agentRuntime.executeNonStreamingToolLoop({
@@ -3204,8 +3174,11 @@ export class ChatManager {
       tools,
       paperStructure,
       sendingSession,
+      currentItemKey: sendingSession.lastActiveItemKey,
       sessionRunId,
       abortSignal,
+      executeProviderRequest,
+      preserveToolExecutionState,
       refreshSystemPrompt: buildSystemPrompt,
     });
     clearPaperChatRetryableState(sendingSession);

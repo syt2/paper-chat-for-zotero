@@ -998,7 +998,7 @@ export class AuthManager {
    * 公开方法，允许在 API key 失效时刷新
    * @param forceRefresh 是否强制刷新（删除旧 token 并创建新的）
    */
-  async ensurePluginToken(forceRefresh: boolean = false): Promise<void> {
+  async ensurePluginToken(forceRefresh: boolean = false): Promise<boolean> {
     // 先检查是否已有插件Token
     const tokensResult = await this.withSessionRetry(
       () => this.authService.getTokens(0, 100),
@@ -1022,7 +1022,7 @@ export class AuthManager {
             "[AuthManager] Using existing auto plugin token:",
             apiKey.substring(0, 10) + "...",
           );
-          return;
+          return true;
         }
         // getTokenKey failed (e.g. 429 rate limit) — keep using cached apiKey if available
         const cachedApiKey = getPref("apiKey") as string;
@@ -1034,7 +1034,7 @@ export class AuthManager {
             "[AuthManager] getTokenKey failed, using cached apiKey:",
             cachedApiKey.substring(0, 10) + "...",
           );
-          return;
+          return true;
         }
         // No cached key — cannot proceed, log warning
         ztoolkit.log(
@@ -1051,8 +1051,8 @@ export class AuthManager {
               legacyApiKey.substring(0, 10) + "...",
             );
           }
+          return !!legacyApiKey;
         }
-        return;
       }
 
       // forceRefresh 只删除 auto token。旧版本默认分组 token 保留作回滚兜底。
@@ -1080,7 +1080,7 @@ export class AuthManager {
         "[AuthManager] Auto plugin token created and saved:",
         autoApiKey.substring(0, 10) + "...",
       );
-      return;
+      return true;
     }
 
     if (legacyToken && !forceRefresh) {
@@ -1092,7 +1092,7 @@ export class AuthManager {
         "getLegacyTokenKey",
       );
       if (legacyApiKey) {
-        return;
+        return true;
       }
     }
 
@@ -1107,8 +1107,9 @@ export class AuthManager {
         "[AuthManager] Legacy plugin token created and saved:",
         legacyCreateApiKey.substring(0, 10) + "...",
       );
-      return;
+      return true;
     }
+    return false;
   }
 
   /**

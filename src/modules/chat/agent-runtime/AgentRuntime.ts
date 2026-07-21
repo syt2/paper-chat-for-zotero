@@ -28,6 +28,8 @@ import type {
 } from "../tool-scheduler";
 import { ExecutionPlanManager } from "./ExecutionPlanManager";
 import {
+  createReusedCompletedToolResult,
+  findCompletedToolResultMatch,
   planToolExecutionEntries,
   type ToolExecutionBatchEntry,
 } from "./ToolExecutionEntryPlanner";
@@ -99,6 +101,8 @@ interface RuntimeToolScheduler {
   ): Promise<ToolExecutionResult[]>;
 }
 
+type ProviderRequestExecutor = <T>(operation: () => Promise<T>) => Promise<T>;
+
 interface RuntimeExecutionOptions {
   provider: ToolCallingProvider;
   currentMessages: ChatMessage[];
@@ -108,8 +112,11 @@ interface RuntimeExecutionOptions {
   tools: ToolDefinition[];
   paperStructure?: PaperStructure | PaperStructureExtended | null;
   sendingSession: ChatSession;
+  currentItemKey?: string | null;
   sessionRunId?: number;
   abortSignal?: AbortSignal;
+  executeProviderRequest?: ProviderRequestExecutor;
+  preserveToolExecutionState?: boolean;
   refreshSystemPrompt?: (
     currentMessages: ChatMessage[],
     session: ChatSession,
@@ -119,7 +126,7 @@ interface RuntimeExecutionOptions {
       maxIterations: number;
       forceFinalAnswer: boolean;
     },
-  ) => string;
+  ) => string | null;
 }
 
 interface StreamingRuntimeExecutionOptions extends RuntimeExecutionOptions {
@@ -149,6 +156,8 @@ interface ToolIterationParams {
   iteration: number;
   logPrefix: string;
   budgetLimits: ToolBudgetLimits;
+  reuseCompletedResults: boolean;
+  currentItemKey?: string | null;
 }
 
 // Hard stop for a single assistant turn. Keeps malformed tool loops bounded
@@ -243,8 +252,11 @@ export class AgentRuntime {
       tools,
       paperStructure,
       sendingSession,
+      currentItemKey,
       sessionRunId,
       abortSignal,
+      executeProviderRequest = (operation) => operation(),
+      preserveToolExecutionState = false,
       refreshSystemPrompt,
     } = options;
     const logPrefix = "Streaming Tool Calling";
@@ -258,6 +270,7 @@ export class AgentRuntime {
       assistantMessage,
       currentMessages,
       true,
+      preserveToolExecutionState,
     );
 
     try {
@@ -296,6 +309,7 @@ export class AgentRuntime {
           displayBeforeThisRound,
           iteration,
           iterationControl.toolChoice,
+          executeProviderRequest,
         );
 
         this.ensureSessionTracked(sendingSession, sessionRunId);
@@ -328,6 +342,8 @@ export class AgentRuntime {
             iteration,
             logPrefix,
             budgetLimits,
+            reuseCompletedResults: preserveToolExecutionState,
+            currentItemKey,
           });
           continue;
         }
@@ -411,8 +427,11 @@ export class AgentRuntime {
       tools,
       paperStructure,
       sendingSession,
+      currentItemKey,
       sessionRunId,
       abortSignal,
+      executeProviderRequest = (operation) => operation(),
+      preserveToolExecutionState = false,
       refreshSystemPrompt,
     } = options;
     const logPrefix = "Tool Calling";
@@ -426,6 +445,7 @@ export class AgentRuntime {
       assistantMessage,
       currentMessages,
       false,
+      preserveToolExecutionState,
     );
 
     try {
@@ -452,11 +472,13 @@ export class AgentRuntime {
           );
         }
 
-        const result = await provider.chatCompletionWithTools(
-          currentMessages,
-          iterationControl.toolsForRound,
-          abortSignal,
-          { toolChoice: iterationControl.toolChoice },
+        const result = await executeProviderRequest(() =>
+          provider.chatCompletionWithTools(
+            currentMessages,
+            iterationControl.toolsForRound,
+            abortSignal,
+            { toolChoice: iterationControl.toolChoice },
+          ),
         );
 
         this.ensureSessionTracked(sendingSession, sessionRunId);
@@ -487,6 +509,8 @@ export class AgentRuntime {
             iteration,
             logPrefix,
             budgetLimits,
+            reuseCompletedResults: preserveToolExecutionState,
+            currentItemKey,
           });
           continue;
         }
@@ -564,9 +588,15 @@ export class AgentRuntime {
     assistantMessage: ChatMessage,
     currentMessages: ChatMessage[],
     streaming: boolean,
+    preserveToolExecutionState: boolean,
   ): Promise<void> {
     const plan = this.executionPlanManager.startPlan(session, currentMessages);
-    this.initializeToolExecutionState(session);
+    if (preserveToolExecutionState && session.toolExecutionState) {
+      session.toolExecutionState.planId = plan.id;
+      session.toolExecutionState.updatedAt = Date.now();
+    } else {
+      this.initializeToolExecutionState(session);
+    }
     await this.sessionStorage.updateSessionMeta(session);
     this.emitPlanUpdate(session, sessionRunId);
     this.emitRuntimeEvent<"turn_started">(
@@ -592,6 +622,7 @@ export class AgentRuntime {
     displayBeforeThisRound: string,
     iteration: number,
     toolChoice: "auto" | "none",
+    executeProviderRequest: ProviderRequestExecutor,
   ): Promise<{
     content: string;
     reasoning?: string;
@@ -599,159 +630,211 @@ export class AgentRuntime {
     suppressedToolCall?: boolean;
     stopReason: string;
   }> {
-    const pendingToolCalls = new Map<
-      number,
-      { id: string; name: string; arguments: string }
-    >();
+    const reasoningBeforeRound = assistantMessage.reasoning || "";
+    const failedAttemptState: {
+      best?: { content: string; reasoning: string };
+    } = {};
 
-    return new Promise((resolve, reject) => {
-      let roundContent = "";
-      let roundReasoning = "";
-      let stopReason = "end_turn";
+    const runAttempt = () =>
+      new Promise<{
+        content: string;
+        reasoning?: string;
+        toolCalls?: ToolCall[];
+        suppressedToolCall?: boolean;
+        stopReason: string;
+      }>((resolve, reject) => {
+        const pendingToolCalls = new Map<
+          number,
+          { id: string; name: string; arguments: string }
+        >();
+        let roundContent = "";
+        let roundReasoning = "";
+        let stopReason = "end_turn";
 
-      const buildDraftToolCallDisplay = (): string => {
-        const ordered = [...pendingToolCalls.entries()].sort(
-          ([leftIndex], [rightIndex]) => leftIndex - rightIndex,
-        );
-        return ordered
-          .map(([, toolCall]) =>
-            this.callbacks.formatToolCallCard(
-              toolCall.name,
-              toolCall.arguments,
-              "calling",
-            ),
-          )
-          .join("");
-      };
+        assistantMessage.content = displayBeforeThisRound;
+        assistantMessage.reasoning = reasoningBeforeRound || undefined;
 
-      const getPersistedStreamingContent = (): string =>
-        displayBeforeThisRound + roundContent;
-
-      const getUiStreamingContent = (): string =>
-        getPersistedStreamingContent() + buildDraftToolCallDisplay();
-
-      const updateAssistantStreamingContent = (): string | undefined => {
-        if (!this.callbacks.isSessionTracked(sendingSession, sessionRunId)) {
-          return undefined;
-        }
-        const uiContent = getUiStreamingContent();
-        assistantMessage.content = getPersistedStreamingContent();
-        assistantMessage.streamingState = "in_progress";
-        this.scheduleAssistantMessageCheckpoint(
-          sendingSession,
-          sessionRunId,
-          assistantMessage,
-        );
-        if (this.callbacks.isSessionActive(sendingSession)) {
-          this.callbacks.onStreamingUpdate?.(uiContent, assistantMessage.id);
-        }
-        return uiContent;
-      };
-
-      const callbacks: StreamToolCallingCallbacks = {
-        onTextDelta: (text) => {
-          if (!this.callbacks.isSessionTracked(sendingSession, sessionRunId)) {
-            return;
-          }
-          roundContent += text;
-          const uiContent = updateAssistantStreamingContent();
-          this.emitRuntimeEvent<"text_delta">(
-            sendingSession,
-            sessionRunId,
-            assistantMessage,
-            {
-              type: "text_delta",
-              delta: text,
-              content: uiContent || assistantMessage.content,
-              iteration,
-            },
+        const buildDraftToolCallDisplay = (): string => {
+          const ordered = [...pendingToolCalls.entries()].sort(
+            ([leftIndex], [rightIndex]) => leftIndex - rightIndex,
           );
-        },
-        onReasoningDelta: (text) => {
+          return ordered
+            .map(([, toolCall]) =>
+              this.callbacks.formatToolCallCard(
+                toolCall.name,
+                toolCall.arguments,
+                "calling",
+              ),
+            )
+            .join("");
+        };
+
+        const getPersistedStreamingContent = (): string =>
+          displayBeforeThisRound + roundContent;
+
+        const getUiStreamingContent = (): string =>
+          getPersistedStreamingContent() + buildDraftToolCallDisplay();
+
+        const updateAssistantStreamingContent = (): string | undefined => {
           if (!this.callbacks.isSessionTracked(sendingSession, sessionRunId)) {
-            return;
+            return undefined;
           }
-          assistantMessage.reasoning =
-            (assistantMessage.reasoning || "") + text;
-          roundReasoning += text;
+          const uiContent = getUiStreamingContent();
+          assistantMessage.content = getPersistedStreamingContent();
           assistantMessage.streamingState = "in_progress";
           this.scheduleAssistantMessageCheckpoint(
             sendingSession,
             sessionRunId,
             assistantMessage,
           );
-          this.emitRuntimeEvent<"reasoning_delta">(
-            sendingSession,
-            sessionRunId,
-            assistantMessage,
-            {
-              type: "reasoning_delta",
-              delta: text,
-              reasoning: assistantMessage.reasoning,
-              iteration,
-            },
-          );
           if (this.callbacks.isSessionActive(sendingSession)) {
-            this.callbacks.onReasoningUpdate?.(
-              assistantMessage.reasoning,
-              assistantMessage.id,
-            );
+            this.callbacks.onStreamingUpdate?.(uiContent, assistantMessage.id);
           }
-        },
-        onToolCallStart: ({ index, id, name }) => {
-          pendingToolCalls.set(index, { id, name, arguments: "" });
-          ztoolkit.log(
-            `[Streaming Tool Calling] Tool call started: ${name} (${id})`,
-          );
-          updateAssistantStreamingContent();
-        },
-        onToolCallDelta: (index, argumentsDelta) => {
-          const tc = pendingToolCalls.get(index);
-          if (tc) {
-            tc.arguments += argumentsDelta;
-            updateAssistantStreamingContent();
-          }
-        },
-        onComplete: (result) => {
-          stopReason = result.stopReason;
-          const streamedToolCalls: ToolCall[] = [];
-          for (const [, tc] of pendingToolCalls) {
-            streamedToolCalls.push({
-              id: tc.id,
-              type: "function",
-              function: {
-                name: tc.name,
-                arguments: tc.arguments,
-              },
-            });
-          }
-          const toolCalls =
-            result.toolCalls && result.toolCalls.length > 0
-              ? result.toolCalls
-              : streamedToolCalls;
-          resolve({
-            content: result.content,
-            reasoning: result.reasoning || roundReasoning || undefined,
-            toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-            suppressedToolCall: result.suppressedToolCall,
-            stopReason,
-          });
-        },
-        onError: (error) => {
-          reject(error);
-        },
-      };
+          return uiContent;
+        };
 
-      provider
-        .streamChatCompletionWithTools(
-          currentMessages,
-          tools,
-          callbacks,
-          abortSignal,
-          { toolChoice },
-        )
-        .catch(reject);
-    });
+        const rejectAttempt = (error: Error) => {
+          const failedAttempt = {
+            content: roundContent,
+            reasoning: roundReasoning,
+          };
+          if (
+            !failedAttemptState.best ||
+            failedAttempt.content.length >
+              failedAttemptState.best.content.length ||
+            (failedAttempt.content.length ===
+              failedAttemptState.best.content.length &&
+              failedAttempt.reasoning.length >
+                failedAttemptState.best.reasoning.length)
+          ) {
+            failedAttemptState.best = failedAttempt;
+          }
+          reject(error);
+        };
+
+        const callbacks: StreamToolCallingCallbacks = {
+          onTextDelta: (text) => {
+            if (
+              !this.callbacks.isSessionTracked(sendingSession, sessionRunId)
+            ) {
+              return;
+            }
+            roundContent += text;
+            const uiContent = updateAssistantStreamingContent();
+            this.emitRuntimeEvent<"text_delta">(
+              sendingSession,
+              sessionRunId,
+              assistantMessage,
+              {
+                type: "text_delta",
+                delta: text,
+                content: uiContent || assistantMessage.content,
+                iteration,
+              },
+            );
+          },
+          onReasoningDelta: (text) => {
+            if (
+              !this.callbacks.isSessionTracked(sendingSession, sessionRunId)
+            ) {
+              return;
+            }
+            roundReasoning += text;
+            const fullReasoning = reasoningBeforeRound + roundReasoning;
+            assistantMessage.reasoning = fullReasoning;
+            assistantMessage.streamingState = "in_progress";
+            this.scheduleAssistantMessageCheckpoint(
+              sendingSession,
+              sessionRunId,
+              assistantMessage,
+            );
+            this.emitRuntimeEvent<"reasoning_delta">(
+              sendingSession,
+              sessionRunId,
+              assistantMessage,
+              {
+                type: "reasoning_delta",
+                delta: text,
+                reasoning: fullReasoning,
+                iteration,
+              },
+            );
+            if (this.callbacks.isSessionActive(sendingSession)) {
+              this.callbacks.onReasoningUpdate?.(
+                fullReasoning,
+                assistantMessage.id,
+              );
+            }
+          },
+          onToolCallStart: ({ index, id, name }) => {
+            pendingToolCalls.set(index, { id, name, arguments: "" });
+            ztoolkit.log(
+              `[Streaming Tool Calling] Tool call started: ${name} (${id})`,
+            );
+            updateAssistantStreamingContent();
+          },
+          onToolCallDelta: (index, argumentsDelta) => {
+            const tc = pendingToolCalls.get(index);
+            if (tc) {
+              tc.arguments += argumentsDelta;
+              updateAssistantStreamingContent();
+            }
+          },
+          onComplete: (result) => {
+            stopReason = result.stopReason;
+            const streamedToolCalls: ToolCall[] = [];
+            for (const [, tc] of pendingToolCalls) {
+              streamedToolCalls.push({
+                id: tc.id,
+                type: "function",
+                function: {
+                  name: tc.name,
+                  arguments: tc.arguments,
+                },
+              });
+            }
+            const toolCalls =
+              result.toolCalls && result.toolCalls.length > 0
+                ? result.toolCalls
+                : streamedToolCalls;
+            resolve({
+              content: result.content,
+              reasoning: result.reasoning || roundReasoning || undefined,
+              toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+              suppressedToolCall: result.suppressedToolCall,
+              stopReason,
+            });
+          },
+          onError: rejectAttempt,
+        };
+
+        provider
+          .streamChatCompletionWithTools(
+            currentMessages,
+            tools,
+            callbacks,
+            abortSignal,
+            { toolChoice },
+          )
+          .catch((error: unknown) =>
+            rejectAttempt(
+              error instanceof Error ? error : new Error(String(error)),
+            ),
+          );
+      });
+
+    try {
+      return await executeProviderRequest(runAttempt);
+    } catch (error) {
+      const bestFailedAttempt = failedAttemptState.best;
+      if (bestFailedAttempt) {
+        assistantMessage.content =
+          displayBeforeThisRound + bestFailedAttempt.content;
+        assistantMessage.reasoning =
+          reasoningBeforeRound + bestFailedAttempt.reasoning || undefined;
+      }
+      throw error;
+    }
   }
 
   /**
@@ -776,6 +859,8 @@ export class AgentRuntime {
       iteration,
       logPrefix,
       budgetLimits,
+      reuseCompletedResults,
+      currentItemKey,
     } = params;
     const contextStrategy = getToolContextStrategy(provider);
 
@@ -810,6 +895,8 @@ export class AgentRuntime {
       toolCalls,
       budgetLimits,
       paperStructure,
+      reuseCompletedResults,
+      currentItemKey,
     );
 
     const formatCallingToolCards = (calls: ToolCall[]): string =>
@@ -906,9 +993,11 @@ export class AgentRuntime {
                 ),
               ]
             : entry.results;
-      this.appendToolExecutionResults(sendingSession, batchResults);
-      await this.sessionStorage.updateSessionMeta(sendingSession);
-      this.emitPlanUpdate(sendingSession, sessionRunId);
+      if (entry.kind !== "reused") {
+        this.appendToolExecutionResults(sendingSession, batchResults);
+        await this.sessionStorage.updateSessionMeta(sendingSession);
+        this.emitPlanUpdate(sendingSession, sessionRunId);
+      }
 
       for (const executionResult of batchResults) {
         this.ensureSessionTracked(sendingSession, sessionRunId);
@@ -951,6 +1040,10 @@ export class AgentRuntime {
             ),
             apiOnly: true,
           });
+        }
+
+        if (entry.kind === "reused") {
+          continue;
         }
 
         const toolSucceeded = executionResult.status === "completed";
@@ -1071,6 +1164,8 @@ export class AgentRuntime {
     toolCalls: ToolCall[],
     budgetLimits: ToolBudgetLimits,
     paperStructure?: PaperStructure | PaperStructureExtended | null,
+    reuseCompletedResults: boolean = false,
+    currentItemKey?: string | null,
   ): ToolExecutionBatchEntry[] {
     return planToolExecutionEntries({
       sessionId: session.id,
@@ -1081,6 +1176,8 @@ export class AgentRuntime {
       createExecutionBatches: (requests) =>
         this.toolScheduler.createExecutionBatches(requests),
       budgetLimits,
+      reuseCompletedResults,
+      currentItemKey,
     });
   }
 
@@ -1090,6 +1187,8 @@ export class AgentRuntime {
     toolCalls: ToolCall[],
     budgetLimits: ToolBudgetLimits,
     paperStructure?: PaperStructure | PaperStructureExtended | null,
+    reuseCompletedResults: boolean = false,
+    currentItemKey?: string | null,
   ): RuntimeToolIterationEntry[] {
     const entries: RuntimeToolIterationEntry[] = [];
     let runnableSegment: ToolCall[] = [];
@@ -1106,6 +1205,8 @@ export class AgentRuntime {
           runnableSegment,
           budgetLimits,
           paperStructure,
+          reuseCompletedResults,
+          currentItemKey,
         ),
       );
       runnableSegment = [];
@@ -1114,6 +1215,21 @@ export class AgentRuntime {
     for (const toolCall of toolCalls) {
       if (toolCall.function.name === "request_user_input") {
         flushRunnableSegment();
+        const completedResult = reuseCompletedResults
+          ? findCompletedToolResultMatch(
+              toolCall,
+              session.toolExecutionState?.results || [],
+            )
+          : null;
+        if (completedResult) {
+          entries.push({
+            kind: "reused",
+            results: [
+              createReusedCompletedToolResult(toolCall, completedResult),
+            ],
+          });
+          continue;
+        }
         const fingerprint = fingerprintToolCall(toolCall);
         if (seenUserInputFingerprints.has(fingerprint)) {
           entries.push({
@@ -1899,7 +2015,7 @@ export class AgentRuntime {
         maxIterations: number;
         forceFinalAnswer: boolean;
       },
-    ) => string,
+    ) => string | null,
     runtimeState?: {
       currentIteration: number;
       remainingIterations: number;
@@ -1910,6 +2026,17 @@ export class AgentRuntime {
     if (!promptBuilder) return;
 
     const content = promptBuilder(currentMessages, session, runtimeState);
+    if (content === null) {
+      for (let index = currentMessages.length - 1; index >= 0; index--) {
+        if (
+          currentMessages[index].id === "cache-checkpoint" ||
+          currentMessages[index].id === "runtime-context"
+        ) {
+          currentMessages.splice(index, 1);
+        }
+      }
+      return;
+    }
     const currentCheckpointIndex = currentMessages.findIndex(
       (message) => message.id === "cache-checkpoint",
     );

@@ -220,11 +220,12 @@ describe("chat message exact navigation", function () {
     assert.equal(renderedId, "rendered");
   });
 
-  it("groups an adjacent failure into the interrupted assistant footer", function () {
+  it("groups an adjacent failure into the interrupted assistant footer", async function () {
     const doc = new FakeDocument();
     const history = new FakeElement(doc, "div");
     history.scrollHeight = 100;
     history.clientHeight = 100;
+    let retried = false;
     let rerolled = false;
 
     renderMessages(
@@ -251,6 +252,12 @@ describe("chat message exact navigation", function () {
       () => {
         rerolled = true;
       },
+      undefined,
+      {
+        onRetry: () => {
+          retried = true;
+        },
+      },
     );
 
     assert.lengthOf(history.children, 1);
@@ -269,8 +276,41 @@ describe("chat message exact navigation", function () {
     assert.equal(footer.children[1].textContent, "⚠️ provider failed");
 
     const actions = wrapper.children[1];
-    assert.lengthOf(actions.children, 2);
+    assert.lengthOf(actions.children, 3);
+    assert.equal(
+      actions.children[1].getAttribute("class"),
+      "message-action-btn retry-btn",
+    );
+    assert.equal(actions.children[1].textContent, "paperchat-chat-retry");
     actions.children[1].listeners.get("click")?.[0]?.({
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+    });
+    assert.isTrue(retried);
+    assert.equal(actions.children[1].getAttribute("data-busy"), "true");
+    assert.equal(actions.children[2].getAttribute("data-busy"), "true");
+    assert.equal(actions.children[1].getAttribute("aria-busy"), "true");
+    assert.equal(actions.children[2].getAttribute("aria-busy"), "true");
+    assert.equal(
+      actions.children[2].getAttribute("class"),
+      "message-action-btn reroll-btn",
+    );
+    assert.equal(
+      actions.children[2].getAttribute("aria-label"),
+      "paperchat-chat-reroll-model",
+    );
+    actions.children[2].listeners.get("click")?.[0]?.({
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+    });
+    assert.isFalse(rerolled);
+
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.isNull(actions.children[1].getAttribute("data-busy"));
+    assert.isNull(actions.children[2].getAttribute("data-busy"));
+
+    actions.children[2].listeners.get("click")?.[0]?.({
       preventDefault: () => undefined,
       stopPropagation: () => undefined,
     });

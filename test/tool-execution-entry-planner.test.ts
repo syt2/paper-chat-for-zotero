@@ -43,9 +43,8 @@ describe("tool execution entry planner", function () {
   }
 
   it("blocks unchanged retries as synthetic entries", async function () {
-    const { planToolExecutionEntries } = await import(
-      "../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts"
-    );
+    const { planToolExecutionEntries } =
+      await import("../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts");
 
     const previousResults: ToolExecutionResult[] = [
       {
@@ -72,7 +71,10 @@ describe("tool execution entry planner", function () {
     assert.equal(entries[0].kind, "synthetic");
     if (entries[0].kind === "synthetic") {
       assert.equal(entries[0].results[0].status, "failed");
-      assert.include(entries[0].results[0].content, "Repeated unchanged tool call blocked");
+      assert.include(
+        entries[0].results[0].content,
+        "Repeated unchanged tool call blocked",
+      );
       assert.deepInclude(entries[0].results[0].policyTrace?.[0], {
         stage: "planner",
         policy: "retry_block",
@@ -82,9 +84,8 @@ describe("tool execution entry planner", function () {
   });
 
   it("keeps changed retries executable and passes them into batching", async function () {
-    const { planToolExecutionEntries } = await import(
-      "../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts"
-    );
+    const { planToolExecutionEntries } =
+      await import("../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts");
 
     const previousResults: ToolExecutionResult[] = [
       {
@@ -105,6 +106,7 @@ describe("tool execution entry planner", function () {
         batchCalls.push(requests.map((request) => request.toolCall.id));
         return [requests];
       },
+      currentItemKey: "ITEM-RUN",
     });
 
     assert.lengthOf(entries, 1);
@@ -113,13 +115,51 @@ describe("tool execution entry planner", function () {
     if (entries[0].kind === "execute") {
       assert.equal(entries[0].requests[0].assistantMessageId, "assistant-1");
       assert.equal(entries[0].requests[0].sessionId, "session-1");
+      assert.equal(entries[0].requests[0].currentItemKey, "ITEM-RUN");
+    }
+  });
+
+  it("reuses a completed result only for failed-turn recovery", async function () {
+    const { planToolExecutionEntries } =
+      await import("../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts");
+    const previousResult: ToolExecutionResult = {
+      toolCall: createToolCall("tool-1", "ITEM-1", "create_note"),
+      args: { itemKey: "ITEM-1" },
+      status: "completed",
+      content: "created note NOTE-1",
+    };
+    const repeatedCall = createToolCall("tool-2", "ITEM-1", "create_note");
+
+    const normalEntries = planToolExecutionEntries({
+      sessionId: "session-1",
+      assistantMessage,
+      toolCalls: [repeatedCall],
+      previousResults: [previousResult],
+      createExecutionBatches: (requests) => [requests],
+    });
+    assert.equal(normalEntries[0].kind, "execute");
+
+    const recoveryEntries = planToolExecutionEntries({
+      sessionId: "session-1",
+      assistantMessage,
+      toolCalls: [repeatedCall],
+      previousResults: [previousResult],
+      createExecutionBatches: (requests) => [requests],
+      reuseCompletedResults: true,
+    });
+    assert.equal(recoveryEntries[0].kind, "reused");
+    if (recoveryEntries[0].kind === "reused") {
+      assert.equal(recoveryEntries[0].results[0].toolCall.id, "tool-2");
+      assert.equal(
+        recoveryEntries[0].results[0].content,
+        "created note NOTE-1",
+      );
     }
   });
 
   it("allows the first get_full_text call in a turn", async function () {
-    const { planToolExecutionEntries } = await import(
-      "../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts"
-    );
+    const { planToolExecutionEntries } =
+      await import("../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts");
 
     const entries = planToolExecutionEntries({
       sessionId: "session-1",
@@ -135,14 +175,16 @@ describe("tool execution entry planner", function () {
     if (entries[0].kind === "execute") {
       assert.lengthOf(entries[0].requests, 1);
       assert.equal(entries[0].requests[0].toolCall.id, "tool-1");
-      assert.equal(entries[0].requests[0].toolCall.function.name, "get_full_text");
+      assert.equal(
+        entries[0].requests[0].toolCall.function.name,
+        "get_full_text",
+      );
     }
   });
 
   it("blocks repeated get_full_text calls until a narrower paper tool has been used for the same target", async function () {
-    const { planToolExecutionEntries } = await import(
-      "../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts"
-    );
+    const { planToolExecutionEntries } =
+      await import("../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts");
 
     const previousResults: ToolExecutionResult[] = [
       {
@@ -165,8 +207,14 @@ describe("tool execution entry planner", function () {
     assert.lengthOf(entries, 1);
     assert.equal(entries[0].kind, "synthetic");
     if (entries[0].kind === "synthetic") {
-      assert.include(entries[0].results[0].content, "Category: evidence_required");
-      assert.include(entries[0].results[0].content, "requires narrower paper evidence");
+      assert.include(
+        entries[0].results[0].content,
+        "Category: evidence_required",
+      );
+      assert.include(
+        entries[0].results[0].content,
+        "requires narrower paper evidence",
+      );
       assert.deepInclude(entries[0].results[0].policyTrace?.[0], {
         stage: "planner",
         policy: "budget_block",
@@ -176,9 +224,8 @@ describe("tool execution entry planner", function () {
   });
 
   it("blocks a fourth get_full_text call in the same turn after three already ran", async function () {
-    const { planToolExecutionEntries } = await import(
-      "../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts"
-    );
+    const { planToolExecutionEntries } =
+      await import("../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts");
 
     const previousResults: ToolExecutionResult[] = [
       {
@@ -224,15 +271,20 @@ describe("tool execution entry planner", function () {
     assert.lengthOf(entries, 1);
     assert.equal(entries[0].kind, "synthetic");
     if (entries[0].kind === "synthetic") {
-      assert.include(entries[0].results[0].content, "Category: budget_exhausted");
-      assert.include(entries[0].results[0].content, "may only run 3 times per user turn");
+      assert.include(
+        entries[0].results[0].content,
+        "Category: budget_exhausted",
+      );
+      assert.include(
+        entries[0].results[0].content,
+        "may only run 3 times per user turn",
+      );
     }
   });
 
   it("blocks obviously repeated web searches in the same turn", async function () {
-    const { planToolExecutionEntries } = await import(
-      "../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts"
-    );
+    const { planToolExecutionEntries } =
+      await import("../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts");
 
     const previousResults: ToolExecutionResult[] = [
       {
@@ -257,15 +309,20 @@ describe("tool execution entry planner", function () {
     assert.lengthOf(entries, 1);
     assert.equal(entries[0].kind, "synthetic");
     if (entries[0].kind === "synthetic") {
-      assert.include(entries[0].results[0].content, "Category: budget_exhausted");
-      assert.include(entries[0].results[0].content, "similar web_search query already used");
+      assert.include(
+        entries[0].results[0].content,
+        "Category: budget_exhausted",
+      );
+      assert.include(
+        entries[0].results[0].content,
+        "similar web_search query already used",
+      );
     }
   });
 
   it("blocks web_search after the turn budget is exhausted", async function () {
-    const { planToolExecutionEntries } = await import(
-      "../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts"
-    );
+    const { planToolExecutionEntries } =
+      await import("../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts");
 
     const previousResults: ToolExecutionResult[] = [
       {
@@ -312,8 +369,14 @@ describe("tool execution entry planner", function () {
     assert.lengthOf(entries, 1);
     assert.equal(entries[0].kind, "synthetic");
     if (entries[0].kind === "synthetic") {
-      assert.include(entries[0].results[0].content, "Category: budget_exhausted");
-      assert.include(entries[0].results[0].content, "may only run 5 times per user turn");
+      assert.include(
+        entries[0].results[0].content,
+        "Category: budget_exhausted",
+      );
+      assert.include(
+        entries[0].results[0].content,
+        "may only run 5 times per user turn",
+      );
     }
   });
 });

@@ -1367,6 +1367,7 @@ export class PdfToolManager {
     toolCall: ToolCall,
     fallbackStructure?: PaperStructure | PaperStructureExtended,
     parsedArgs?: Record<string, unknown>,
+    currentItemKeyOverride?: string | null,
   ): Promise<string> {
     const { name, arguments: argsString } = toolCall.function;
 
@@ -1387,6 +1388,10 @@ export class PdfToolManager {
       }
     }
     args = preflightToolArguments(name, args);
+    const effectiveCurrentItemKey =
+      currentItemKeyOverride === undefined
+        ? this.currentItemKey
+        : currentItemKeyOverride;
 
     // === Zotero Library 工具（不需要 PDF）===
     switch (name) {
@@ -1409,7 +1414,7 @@ export class PdfToolManager {
         if (!this.isGetItemNotesArgs(args)) {
           return "Error: Invalid arguments for get_item_notes";
         }
-        return executeGetItemNotes(args, this.currentItemKey);
+        return executeGetItemNotes(args, effectiveCurrentItemKey);
       case "get_note_content":
         if (!this.isGetNoteContentArgs(args)) {
           return "Error: Invalid arguments for get_note_content. Required: noteKey (string)";
@@ -1421,7 +1426,7 @@ export class PdfToolManager {
         if (!this.isGetAnnotationsArgs(args)) {
           return "Error: Invalid arguments for get_annotations";
         }
-        return executeGetAnnotations(args, this.currentItemKey);
+        return executeGetAnnotations(args, effectiveCurrentItemKey);
 
       case "get_pdf_selection":
         return executeGetPdfSelection();
@@ -1472,14 +1477,14 @@ export class PdfToolManager {
         if (!this.isCreateNoteArgs(args)) {
           return "Error: Invalid arguments for create_note. Required: content (string)";
         }
-        return executeCreateNote(args, this.currentItemKey);
+        return executeCreateNote(args, effectiveCurrentItemKey);
       }
 
       case "append_to_note": {
         if (!this.isAppendToNoteArgs(args)) {
           return "Error: Invalid arguments for append_to_note. Required: content (string)";
         }
-        return executeAppendToNote(args, this.currentItemKey);
+        return executeAppendToNote(args, effectiveCurrentItemKey);
       }
 
       case "batch_update_tags": {
@@ -1507,7 +1512,7 @@ export class PdfToolManager {
     // === PDF 内容工具（需要 PDF）===
     // 解析 itemKey：优先使用参数中的 itemKey，否则使用当前 itemKey
     const requestedItemKey = (args as BaseToolArgs).itemKey;
-    const targetItemKey = requestedItemKey ?? this.currentItemKey;
+    const targetItemKey = requestedItemKey ?? effectiveCurrentItemKey;
     let resolvedSourceItemKey: string | null = null;
 
     // 获取 paperStructure（按需提取）
@@ -1527,10 +1532,10 @@ export class PdfToolManager {
       // fallbackStructure represents the current reader paper. Never attribute
       // it to a different explicit itemKey that failed to resolve.
       if (
-        this.currentItemKey &&
-        (!requestedItemKey || requestedItemKey === this.currentItemKey)
+        effectiveCurrentItemKey &&
+        (!requestedItemKey || requestedItemKey === effectiveCurrentItemKey)
       ) {
-        resolvedSourceItemKey = this.currentItemKey;
+        resolvedSourceItemKey = effectiveCurrentItemKey;
       }
     }
 

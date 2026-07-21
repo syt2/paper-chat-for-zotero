@@ -265,6 +265,691 @@ describe("agent runtime plan semantics", function () {
     }
   });
 
+  it("retries only the failed model request after a tool result", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    const session = createSession();
+    const assistantMessage: ChatMessage = {
+      id: "assistant-request-retry",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+    };
+    session.messages.push(assistantMessage);
+    const toolCall: ToolCall = {
+      id: "call-create-note",
+      type: "function",
+      function: { name: "create_note", arguments: '{"content":"note"}' },
+    };
+    let providerCalls = 0;
+    let toolExecutions = 0;
+    const requestSnapshots: ChatMessage[][] = [];
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        saveSession: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => false,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "<tool-call />",
+        generateId: (() => {
+          let id = 0;
+          return () => `request-retry-${++id}`;
+        })(),
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async (requests: any[]) => {
+          toolExecutions += 1;
+          return [
+            {
+              toolCall: requests[0].toolCall,
+              status: "completed",
+              content: "created note NOTE-1",
+            },
+          ];
+        },
+      },
+    ) as any;
+    runtime.getMaxIterations = () => 3;
+    const provider = {
+      config: {
+        id: "paperchat",
+        type: "paperchat",
+        defaultModel: "test-model",
+      },
+      chatCompletionWithTools: async (messages: ChatMessage[]) => {
+        providerCalls += 1;
+        requestSnapshots.push(messages.map((message) => ({ ...message })));
+        if (providerCalls === 1) {
+          return { content: "", toolCalls: [toolCall] };
+        }
+        if (providerCalls === 2) {
+          throw new Error("API Error: 503 Service Unavailable");
+        }
+        return { content: "note created successfully" };
+      },
+    };
+
+    try {
+      await runtime.executeNonStreamingToolLoop({
+        provider,
+        currentMessages: session.messages,
+        assistantMessage,
+        pdfWasAttached: false,
+        summaryTriggered: false,
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "create_note",
+              description: "Create a note",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
+        sendingSession: session,
+        executeProviderRequest: async (operation) => {
+          try {
+            return await operation();
+          } catch {
+            return operation();
+          }
+        },
+      });
+
+      assert.equal(providerCalls, 3);
+      assert.equal(toolExecutions, 1);
+      for (const snapshot of requestSnapshots.slice(1)) {
+        assert.include(
+          snapshot.map((message) => message.role),
+          "tool",
+        );
+        assert.include(
+          snapshot.map((message) => message.content),
+          "created note NOTE-1",
+        );
+      }
+      assert.equal(
+        assistantMessage.content,
+        "<tool-call />note created successfully",
+      );
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
+  });
+
+  it("does not replay a completed tool when later non-streaming retries are exhausted", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    const session = createSession();
+    const assistantMessage: ChatMessage = {
+      id: "assistant-request-exhausted",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+    };
+    session.messages.push(assistantMessage);
+    const toolCall: ToolCall = {
+      id: "call-create-note-exhausted",
+      type: "function",
+      function: { name: "create_note", arguments: '{"content":"note"}' },
+    };
+    let providerCalls = 0;
+    let toolExecutions = 0;
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        saveSession: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => false,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "<tool-call />",
+        generateId: (() => {
+          let id = 0;
+          return () => `request-exhausted-${++id}`;
+        })(),
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async (requests: any[]) => {
+          toolExecutions += 1;
+          return [
+            {
+              toolCall: requests[0].toolCall,
+              status: "completed",
+              content: "created note NOTE-EXHAUSTED",
+            },
+          ];
+        },
+      },
+    ) as any;
+    runtime.getMaxIterations = () => 3;
+    const provider = {
+      config: {
+        id: "paperchat",
+        type: "paperchat",
+        defaultModel: "test-model",
+      },
+      chatCompletionWithTools: async () => {
+        providerCalls += 1;
+        if (providerCalls === 1) {
+          return { content: "", toolCalls: [toolCall] };
+        }
+        throw new Error("API Error: 503 Service Unavailable");
+      },
+    };
+
+    try {
+      let finalError: unknown;
+      try {
+        await runtime.executeNonStreamingToolLoop({
+          provider,
+          currentMessages: session.messages,
+          assistantMessage,
+          pdfWasAttached: false,
+          summaryTriggered: false,
+          tools: [],
+          sendingSession: session,
+          executeProviderRequest: async (operation) => {
+            let lastError: unknown;
+            for (let attempt = 0; attempt < 3; attempt += 1) {
+              try {
+                return await operation();
+              } catch (error) {
+                lastError = error;
+              }
+            }
+            throw lastError;
+          },
+        });
+      } catch (error) {
+        finalError = error;
+      }
+
+      assert.instanceOf(finalError, Error);
+      assert.equal(providerCalls, 4);
+      assert.equal(toolExecutions, 1);
+      assert.equal(session.toolExecutionState?.results.length, 1);
+      assert.include(
+        session.messages.map((message) => message.content),
+        "created note NOTE-EXHAUSTED",
+      );
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
+  });
+
+  it("retries a failed streaming model request without replaying its tool", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    const session = createSession();
+    const assistantMessage: ChatMessage = {
+      id: "assistant-stream-request-retry",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+    };
+    session.messages.push(assistantMessage);
+    const toolCall: ToolCall = {
+      id: "call-create-note-stream",
+      type: "function",
+      function: { name: "create_note", arguments: '{"content":"note"}' },
+    };
+    let providerCalls = 0;
+    let toolExecutions = 0;
+    const requestSnapshots: ChatMessage[][] = [];
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        saveSession: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => false,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "<tool-call />",
+        generateId: (() => {
+          let id = 0;
+          return () => `stream-request-retry-${++id}`;
+        })(),
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async (requests: any[]) => {
+          toolExecutions += 1;
+          return [
+            {
+              toolCall: requests[0].toolCall,
+              status: "completed",
+              content: "created note NOTE-2",
+            },
+          ];
+        },
+      },
+    ) as any;
+    runtime.getMaxIterations = () => 3;
+    const provider = {
+      config: {
+        id: "paperchat",
+        type: "paperchat",
+        defaultModel: "test-model",
+      },
+      chatCompletionWithTools: async () => ({ content: "unused" }),
+      streamChatCompletionWithTools: async (
+        messages: ChatMessage[],
+        _tools: unknown[],
+        callbacks: any,
+      ) => {
+        providerCalls += 1;
+        requestSnapshots.push(messages.map((message) => ({ ...message })));
+        if (providerCalls === 1) {
+          callbacks.onToolCallStart({
+            index: 0,
+            id: toolCall.id,
+            name: toolCall.function.name,
+          });
+          callbacks.onToolCallDelta(0, toolCall.function.arguments);
+          callbacks.onComplete({
+            content: "",
+            toolCalls: [toolCall],
+            stopReason: "tool_calls",
+          });
+          return;
+        }
+        if (providerCalls === 2) {
+          callbacks.onTextDelta("discarded partial");
+          throw new Error("API Error: 503 Service Unavailable");
+        }
+        callbacks.onTextDelta("note created successfully");
+        callbacks.onComplete({
+          content: "note created successfully",
+          stopReason: "end_turn",
+        });
+      },
+    };
+
+    try {
+      await runtime.executeStreamingToolLoop({
+        provider,
+        currentMessages: session.messages,
+        assistantMessage,
+        pdfWasAttached: false,
+        summaryTriggered: false,
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "create_note",
+              description: "Create a note",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
+        sendingSession: session,
+        executeProviderRequest: async (operation) => {
+          try {
+            return await operation();
+          } catch {
+            return operation();
+          }
+        },
+      });
+
+      assert.equal(providerCalls, 3);
+      assert.equal(toolExecutions, 1);
+      for (const snapshot of requestSnapshots.slice(1)) {
+        assert.include(
+          snapshot.map((message) => message.content),
+          "created note NOTE-2",
+        );
+      }
+      assert.equal(
+        assistantMessage.content,
+        "<tool-call />note created successfully",
+      );
+      assert.notInclude(assistantMessage.content, "discarded partial");
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
+  });
+
+  it("does not replay a completed tool when later streaming retries are exhausted", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    const session = createSession();
+    const assistantMessage: ChatMessage = {
+      id: "assistant-stream-exhausted",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+    };
+    session.messages.push(assistantMessage);
+    const toolCall: ToolCall = {
+      id: "call-create-note-stream-exhausted",
+      type: "function",
+      function: { name: "create_note", arguments: '{"content":"note"}' },
+    };
+    let providerCalls = 0;
+    let toolExecutions = 0;
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        saveSession: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => false,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "<tool-call />",
+        generateId: (() => {
+          let id = 0;
+          return () => `stream-exhausted-${++id}`;
+        })(),
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async (requests: any[]) => {
+          toolExecutions += 1;
+          return [
+            {
+              toolCall: requests[0].toolCall,
+              status: "completed",
+              content: "created note NOTE-STREAM-EXHAUSTED",
+            },
+          ];
+        },
+      },
+    ) as any;
+    runtime.getMaxIterations = () => 3;
+    const provider = {
+      config: {
+        id: "paperchat",
+        type: "paperchat",
+        defaultModel: "test-model",
+      },
+      chatCompletionWithTools: async () => ({ content: "unused" }),
+      streamChatCompletionWithTools: async (
+        _messages: ChatMessage[],
+        _tools: unknown[],
+        callbacks: any,
+      ) => {
+        providerCalls += 1;
+        if (providerCalls === 1) {
+          callbacks.onComplete({
+            content: "",
+            toolCalls: [toolCall],
+            stopReason: "tool_calls",
+          });
+          return;
+        }
+        if (providerCalls === 2) {
+          callbacks.onTextDelta("longest visible partial");
+        } else if (providerCalls === 3) {
+          callbacks.onReasoningDelta("r".repeat(100));
+        } else {
+          callbacks.onTextDelta("short");
+        }
+        throw new Error("API Error: 503 Service Unavailable");
+      },
+    };
+
+    try {
+      let finalError: unknown;
+      try {
+        await runtime.executeStreamingToolLoop({
+          provider,
+          currentMessages: session.messages,
+          assistantMessage,
+          pdfWasAttached: false,
+          summaryTriggered: false,
+          tools: [],
+          sendingSession: session,
+          executeProviderRequest: async (operation) => {
+            let lastError: unknown;
+            for (let attempt = 0; attempt < 3; attempt += 1) {
+              try {
+                return await operation();
+              } catch (error) {
+                lastError = error;
+              }
+            }
+            throw lastError;
+          },
+        });
+      } catch (error) {
+        finalError = error;
+      }
+
+      assert.instanceOf(finalError, Error);
+      assert.equal(providerCalls, 4);
+      assert.equal(toolExecutions, 1);
+      assert.equal(session.toolExecutionState?.results.length, 1);
+      assert.equal(
+        assistantMessage.content,
+        "<tool-call />longest visible partial",
+      );
+      assert.include(
+        session.messages.map((message) => message.content),
+        "created note NOTE-STREAM-EXHAUSTED",
+      );
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
+  });
+
+  it("keeps the longest visible partial when streaming retries are exhausted", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    const session = createSession();
+    const assistantMessage: ChatMessage = {
+      id: "assistant-stream-partial-priority",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+    };
+    session.messages.push(assistantMessage);
+    let providerCalls = 0;
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        saveSession: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => false,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "<tool-call />",
+        generateId: () => "stream-partial-priority-id",
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async () => [],
+      },
+    ) as any;
+    runtime.getMaxIterations = () => 2;
+    const provider = {
+      config: {
+        id: "paperchat",
+        type: "paperchat",
+        defaultModel: "test-model",
+      },
+      chatCompletionWithTools: async () => ({ content: "unused" }),
+      streamChatCompletionWithTools: async (
+        _messages: ChatMessage[],
+        _tools: unknown[],
+        callbacks: any,
+      ) => {
+        providerCalls += 1;
+        if (providerCalls === 1) {
+          callbacks.onTextDelta("visible partial answer");
+        } else {
+          callbacks.onReasoningDelta("r".repeat(100));
+        }
+        throw new Error("API Error: 503 Service Unavailable");
+      },
+    };
+
+    try {
+      let finalError: unknown;
+      try {
+        await runtime.executeStreamingToolLoop({
+          provider,
+          currentMessages: session.messages,
+          assistantMessage,
+          pdfWasAttached: false,
+          summaryTriggered: false,
+          tools: [],
+          sendingSession: session,
+          executeProviderRequest: async (operation) => {
+            try {
+              return await operation();
+            } catch {
+              return operation();
+            }
+          },
+        });
+      } catch (error) {
+        finalError = error;
+      }
+
+      assert.instanceOf(finalError, Error);
+      assert.equal(providerCalls, 2);
+      assert.equal(assistantMessage.content, "visible partial answer");
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
+  });
+
+  it("keeps completed tool results when resuming a failed turn", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    const session = createSession();
+    const priorToolCall: ToolCall = {
+      id: "prior-create-note",
+      type: "function",
+      function: { name: "create_note", arguments: '{"content":"note"}' },
+    };
+    session.toolExecutionState = {
+      turnStartedAt: 1,
+      updatedAt: 2,
+      results: [
+        {
+          toolCall: priorToolCall,
+          status: "completed",
+          content: "created note NOTE-1",
+        },
+      ],
+    };
+    const assistantMessage: ChatMessage = {
+      id: "assistant-resumed-turn",
+      role: "assistant",
+      content: "",
+      timestamp: 3,
+    };
+    session.messages.push(assistantMessage);
+    let providerCalls = 0;
+    let toolExecutions = 0;
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        saveSession: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => false,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "<tool-call />",
+        generateId: (() => {
+          let id = 0;
+          return () => `resumed-turn-${++id}`;
+        })(),
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async () => {
+          toolExecutions += 1;
+          return [];
+        },
+      },
+    ) as any;
+    runtime.getMaxIterations = () => 3;
+    const provider = {
+      config: {
+        id: "paperchat",
+        type: "paperchat",
+        defaultModel: "test-model",
+      },
+      chatCompletionWithTools: async () => {
+        providerCalls += 1;
+        if (providerCalls === 1) {
+          return {
+            content: "",
+            toolCalls: [
+              {
+                ...priorToolCall,
+                id: "model-repeated-create-note",
+              },
+            ],
+          };
+        }
+        return { content: "continued without rewriting the note" };
+      },
+    };
+
+    try {
+      await runtime.executeNonStreamingToolLoop({
+        provider,
+        currentMessages: session.messages,
+        assistantMessage,
+        pdfWasAttached: false,
+        summaryTriggered: false,
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "create_note",
+              description: "Create a note",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
+        sendingSession: session,
+        preserveToolExecutionState: true,
+      });
+
+      assert.equal(providerCalls, 2);
+      assert.equal(toolExecutions, 0);
+      assert.equal(session.toolExecutionState?.results.length, 1);
+      assert.equal(
+        assistantMessage.content,
+        "continued without rewriting the note",
+      );
+      assert.include(
+        session.messages.map((message) => message.content),
+        "created note NOTE-1",
+      );
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
+  });
+
   it("persists completed tool context when a turn reaches the iteration limit", async function () {
     const session = createSession();
     const assistantMessage: ChatMessage = {
@@ -532,6 +1217,81 @@ describe("agent runtime plan semantics", function () {
     assert.equal(entries[1].kind, "synthetic");
     assert.equal(entries[1].results[0].status, "failed");
     assert.include(entries[1].results[0].content, "Duplicate user input");
+  });
+
+  it("reuses a completed request_user_input result when resuming a failed turn", function () {
+    const runtime = new AgentRuntime(
+      {
+        updateSessionUserInputRequestState: async () => undefined,
+        updateSessionMeta: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => true,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "",
+        generateId: () => "generated-id",
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async () => [],
+      },
+    ) as any;
+    const session = createSession();
+    const assistantMessage: ChatMessage = {
+      id: "assistant-user-input-recovery",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+    };
+    const previousCall: ToolCall = {
+      id: "ask-previous",
+      type: "function",
+      function: {
+        name: "request_user_input",
+        arguments: JSON.stringify({
+          questions: [
+            {
+              id: "scope",
+              header: "Scope",
+              question: "Which scope?",
+              type: "single_choice",
+              options: [
+                { label: "Methods", description: "Read methods." },
+                { label: "Results", description: "Read results." },
+              ],
+            },
+          ],
+        }),
+      },
+    };
+    session.toolExecutionState = {
+      turnStartedAt: 1,
+      updatedAt: 2,
+      results: [
+        {
+          toolCall: previousCall,
+          status: "completed",
+          content: '{"scope":"Methods"}',
+        },
+      ],
+    };
+
+    const entries = runtime.createRuntimeToolIterationEntries(
+      session,
+      assistantMessage,
+      [{ ...previousCall, id: "ask-replayed" }],
+      {
+        maxWebSearchCallsPerTurn: 8,
+        maxFullTextCallsPerTurn: 3,
+      },
+      undefined,
+      true,
+    );
+
+    assert.equal(entries[0].kind, "reused");
+    assert.equal(entries[0].results[0].toolCall.id, "ask-replayed");
+    assert.equal(entries[0].results[0].content, '{"scope":"Methods"}');
+    assert.isUndefined(session.userInputRequestState);
   });
 
   it("uses user-task-oriented step titles instead of raw tool names", function () {

@@ -16,6 +16,7 @@ import type {
   ChatMessageStreamingState,
   ChatSession,
   SessionMeta,
+  ToolExecutionState,
 } from "../../types/chat";
 import type { EvidenceRecord } from "../../types/evidence";
 import { filterValidMessages, generateShortId } from "../../utils/common";
@@ -702,6 +703,38 @@ export function mapSessionRowToChatSession(
       row.last_retryable_error_message_id || undefined,
     lastRetryableFailedModelId: row.last_retryable_failed_model_id || undefined,
   };
+}
+
+function retainRecoverableToolExecutionState(
+  state: ToolExecutionState | null | undefined,
+  updatedAt: number,
+): ToolExecutionState | undefined {
+  const results = state?.results || [];
+  if (results.length === 0) {
+    return undefined;
+  }
+  return {
+    turnStartedAt: state?.turnStartedAt || updatedAt,
+    updatedAt,
+    results,
+  };
+}
+
+function parseRetainedToolExecutionState(
+  raw: unknown,
+  updatedAt: number,
+): ToolExecutionState | undefined {
+  if (typeof raw !== "string" || !raw) {
+    return undefined;
+  }
+  try {
+    return retainRecoverableToolExecutionState(
+      JSON.parse(raw) as ToolExecutionState,
+      updatedAt,
+    );
+  } catch {
+    return undefined;
+  }
 }
 
 export class SessionStorageService {
@@ -3094,6 +3127,16 @@ export class SessionStorageService {
         )) || [];
       if (rows.length === 0) return;
 
+      const sessionRows =
+        (await tx.queryAsync(
+          "SELECT tool_execution_state FROM sessions WHERE id = ?",
+          [sessionId],
+        )) || [];
+      const retainedToolExecutionState = parseRetainedToolExecutionState(
+        sessionRows[0]?.tool_execution_state,
+        now,
+      );
+
       await tx.queryAsync(
         `UPDATE messages
          SET search_index_version = ?
@@ -3119,11 +3162,17 @@ export class SessionStorageService {
       await tx.queryAsync(
         `UPDATE sessions
          SET execution_plan = NULL,
-             tool_execution_state = NULL,
+             tool_execution_state = ?,
              tool_approval_state = NULL,
              updated_at = ?
          WHERE id = ?`,
-        [now, sessionId],
+        [
+          retainedToolExecutionState
+            ? JSON.stringify(retainedToolExecutionState)
+            : null,
+          now,
+          sessionId,
+        ],
       );
       await tx.queryAsync(
         `UPDATE session_meta
@@ -3157,15 +3206,25 @@ export class SessionStorageService {
 
     await getStorageDatabase().ensureInit();
     const now = Date.now();
+    const retainedToolExecutionState = retainRecoverableToolExecutionState(
+      session.toolExecutionState,
+      now,
+    );
     await this.runTransaction(async (db) => {
       await db.queryAsync(
         `UPDATE sessions
          SET execution_plan = NULL,
-             tool_execution_state = NULL,
+             tool_execution_state = ?,
              tool_approval_state = NULL,
              updated_at = ?
          WHERE id = ?`,
-        [now, session.id],
+        [
+          retainedToolExecutionState
+            ? JSON.stringify(retainedToolExecutionState)
+            : null,
+          now,
+          session.id,
+        ],
       );
       await db.queryAsync(
         `UPDATE session_meta
@@ -3177,7 +3236,7 @@ export class SessionStorageService {
     });
 
     session.executionPlan = undefined;
-    session.toolExecutionState = undefined;
+    session.toolExecutionState = retainedToolExecutionState;
     session.toolApprovalState = undefined;
     session.updatedAt = now;
   }

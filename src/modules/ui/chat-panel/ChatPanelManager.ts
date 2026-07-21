@@ -470,6 +470,8 @@ function getQuoteNavigationItem(
 
 interface ChatMessageRenderCallbacks {
   retryableErrorMessageId?: string;
+  onRetry?: () => void | Promise<void>;
+  onRetryError?: (error: Error) => void;
   onReroll?: () => void | Promise<void>;
   onRerollError?: (error: Error) => void;
   onFork?: (assistantMessageId: string) => void | Promise<void>;
@@ -498,6 +500,8 @@ function renderMessageElementsWithMarkdownActions(
         getCurrentItem: getNavigationItem,
         appendError: callbacks.onMarkdownError,
       }),
+      onRetry: callbacks.onRetry,
+      onRetryError: callbacks.onRetryError,
       onFork: callbacks.onFork,
       onForkError: callbacks.onForkError,
       onRenderComplete: callbacks.onRenderComplete,
@@ -1907,11 +1911,6 @@ function setupChatManagerCallbacks(
           ztoolkit.log("[NextQuestionHint] request failed:", error);
         });
     },
-    onFallbackNotice: (fromProvider: string, toProvider: string) => {
-      ztoolkit.log(
-        `[Fallback] Provider ${fromProvider} unavailable, switching to ${toProvider}`,
-      );
-    },
   });
 }
 
@@ -2570,6 +2569,15 @@ function createContext(container: HTMLElement): ChatPanelContext {
             () => getQuoteNavigationItem(session, moduleCurrentItem),
             {
               retryableErrorMessageId,
+              onRetry: async () => {
+                const retried = await manager.retryCurrentPaperChatFailure();
+                if (!retried) {
+                  throw new Error(getString("chat-retry-unavailable"));
+                }
+              },
+              onRetryError: (error) => {
+                context.appendError(error.message);
+              },
               onReroll: async () => {
                 await context.rerollPaperChatTierForCurrentSession();
               },
@@ -2645,9 +2653,7 @@ function createContext(container: HTMLElement): ChatPanelContext {
     rerollPaperChatTierForCurrentSession: async () => {
       const reroute = await manager.rerollCurrentPaperChatFailureAndRetry();
       if (!reroute) {
-        throw new Error(
-          "No alternate PaperChat model is available for this tier.",
-        );
+        throw new Error(getString("chat-reroll-unavailable"));
       }
       updateModelSelectorDisplay(container);
       return reroute;

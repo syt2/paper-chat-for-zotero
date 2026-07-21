@@ -420,6 +420,8 @@ interface ExecutionBannerState {
 
 export interface MessageRenderOptions {
   markdown?: MarkdownRenderOptions;
+  onRetry?: () => void | Promise<void>;
+  onRetryError?: (error: Error) => void;
   onFork?: (assistantMessageId: string) => void | Promise<void>;
   onForkError?: (error: Error) => void;
   onRenderComplete?: () => void;
@@ -884,6 +886,8 @@ export function createMessageElement(
     msg,
     rawContent,
     showReroll && !quotaDetails,
+    renderOptions.onRetry,
+    renderOptions.onRetryError,
     onReroll,
     onRerollError,
     renderOptions.onFork,
@@ -978,14 +982,15 @@ function createReasoningContainer(
   return container;
 }
 
-/**
- * Create a reroll button for retryable error messages
- */
-function createRerollButton(
+function createRetryActionButton(
   doc: Document,
   theme: ThemeColors,
+  label: string,
+  className: string,
   onClick: () => void | Promise<void>,
   onError?: (error: Error) => void,
+  onBusyChange?: (busy: boolean) => void,
+  displayLabel: string = label,
 ): HTMLElement {
   const btn = createElement(
     doc,
@@ -1005,13 +1010,13 @@ function createRerollButton(
       transition: "box-shadow 0.2s, opacity 0.2s, transform 0.2s",
     },
     {
-      class: "message-action-btn reroll-btn",
-      title: getString("chat-reroll-model"),
+      class: `message-action-btn ${className}`,
+      title: label,
     },
   );
   btn.setAttribute("type", "button");
-  btn.setAttribute("aria-label", getString("chat-reroll-model"));
-  btn.textContent = `${getString("chat-reroll-model")} 🎲`;
+  btn.setAttribute("aria-label", label);
+  btn.textContent = displayLabel;
   btn.addEventListener("mouseenter", () => {
     btn.style.transform = "translateY(-1px)";
   });
@@ -1030,19 +1035,16 @@ function createRerollButton(
     if (btn.getAttribute("data-busy") === "true") {
       return;
     }
-    btn.setAttribute("data-busy", "true");
-    btn.style.opacity = "1";
-    btn.style.cursor = "wait";
+    onBusyChange?.(true);
     Promise.resolve(onClick())
       .catch((error: unknown) => {
-        const rerollError =
+        const retryError =
           error instanceof Error ? error : new Error(String(error));
-        ztoolkit.log("[MessageRenderer] Reroll failed:", rerollError);
-        onError?.(rerollError);
+        ztoolkit.log("[MessageRenderer] Retry action failed:", retryError);
+        onError?.(retryError);
       })
       .finally(() => {
-        btn.removeAttribute("data-busy");
-        btn.style.cursor = "pointer";
+        onBusyChange?.(false);
       });
   });
   return btn;
@@ -1120,6 +1122,8 @@ function createMessageActions(
   msg: ChatMessage,
   rawContent: string,
   showReroll: boolean,
+  onRetry?: () => void | Promise<void>,
+  onRetryError?: (error: Error) => void,
   onReroll?: () => void | Promise<void>,
   onRerollError?: (error: Error) => void,
   onFork?: (assistantMessageId: string) => void | Promise<void>,
@@ -1154,6 +1158,24 @@ function createMessageActions(
 
   actions.appendChild(createCopyButton(doc, theme, copyContent));
 
+  const retryActionButtons: HTMLElement[] = [];
+  const setRetryActionsBusy = (busy: boolean) => {
+    for (const button of retryActionButtons) {
+      if (busy) {
+        button.setAttribute("data-busy", "true");
+        button.setAttribute("disabled", "true");
+        button.setAttribute("aria-busy", "true");
+        button.style.opacity = "1";
+        button.style.cursor = "wait";
+      } else {
+        button.removeAttribute("data-busy");
+        button.removeAttribute("disabled");
+        button.removeAttribute("aria-busy");
+        button.style.cursor = "pointer";
+      }
+    }
+  };
+
   if (
     msg.role === "assistant" &&
     !msg.apiOnly &&
@@ -1165,10 +1187,34 @@ function createMessageActions(
     );
   }
 
-  if (showReroll && onReroll) {
-    actions.appendChild(
-      createRerollButton(doc, theme, onReroll, onRerollError),
+  if (showReroll && onRetry) {
+    const retryButton = createRetryActionButton(
+      doc,
+      theme,
+      getString("chat-retry"),
+      "retry-btn",
+      onRetry,
+      onRetryError,
+      setRetryActionsBusy,
     );
+    retryActionButtons.push(retryButton);
+    actions.appendChild(retryButton);
+  }
+
+  if (showReroll && onReroll) {
+    const rerollLabel = getString("chat-reroll-model");
+    const rerollButton = createRetryActionButton(
+      doc,
+      theme,
+      rerollLabel,
+      "reroll-btn",
+      onReroll,
+      onRerollError,
+      setRetryActionsBusy,
+      `${rerollLabel} 🎲`,
+    );
+    retryActionButtons.push(rerollButton);
+    actions.appendChild(rerollButton);
   }
 
   actions.addEventListener("mouseenter", () => {

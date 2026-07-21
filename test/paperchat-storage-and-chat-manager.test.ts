@@ -1,5 +1,8 @@
 import { assert } from "chai";
-import { destroyAuthManager } from "../src/modules/auth/index.ts";
+import {
+  destroyAuthManager,
+  getAuthManager,
+} from "../src/modules/auth/index.ts";
 import { ChatManager } from "../src/modules/chat/ChatManager.ts";
 import {
   destroyContextManager,
@@ -124,6 +127,189 @@ describe("paperchat storage and chat manager", function () {
     (globalThis as any).Services = originalServices;
     (globalThis as any).Ci = originalCi;
     (globalThis as any).addon = originalAddon;
+  });
+
+  it("retries the active provider three times without switching providers", async function () {
+    const providerManager = getProviderManager() as any;
+    const originalGetActiveProvider = providerManager.getActiveProvider;
+    const originalFallbackConfig = providerManager.fallbackConfig;
+    const provider = {
+      config: { id: "paperchat" },
+      getName: () => "PaperChat",
+      isReady: () => true,
+    };
+    providerManager.getActiveProvider = () => provider;
+    providerManager.fallbackConfig = {
+      ...providerManager.fallbackConfig,
+      maxRetries: 3,
+    };
+
+    try {
+      let attempts = 0;
+      const result = await providerManager.executeWithFallback(
+        async (attemptedProvider: typeof provider) => {
+          attempts += 1;
+          assert.strictEqual(attemptedProvider, provider);
+          if (attempts < 3) {
+            throw new Error("timeout");
+          }
+          return "ok";
+        },
+      );
+
+      assert.equal(result, "ok");
+      assert.equal(attempts, 3);
+
+      attempts = 0;
+      let finalError: unknown;
+      try {
+        await providerManager.executeWithFallback(async () => {
+          attempts += 1;
+          throw new Error("network error");
+        });
+      } catch (error) {
+        finalError = error;
+      }
+      assert.equal(attempts, 3);
+      assert.equal((finalError as Error).message, "network error");
+
+      attempts = 0;
+      try {
+        await providerManager.executeWithFallback(async () => {
+          attempts += 1;
+          throw new Error("bad request");
+        });
+        assert.fail("expected a non-retryable error");
+      } catch (error) {
+        assert.equal((error as Error).message, "bad request");
+      }
+      assert.equal(attempts, 1);
+      assert.isTrue(
+        providerManager.isRetryableError(
+          new Error('{"error":{"code":"insufficient_user_quota"}}'),
+        ),
+      );
+    } finally {
+      providerManager.getActiveProvider = originalGetActiveProvider;
+      providerManager.fallbackConfig = originalFallbackConfig;
+    }
+  });
+
+  it("refreshes PaperChat auth once before replaying the same request", async function () {
+    const authManager = getAuthManager() as any;
+    const providerManager = getProviderManager() as any;
+    const originalEnsurePluginToken = authManager.ensurePluginToken;
+    const originalGetActiveProvider = providerManager.getActiveProvider;
+    let refreshCalls = 0;
+    authManager.ensurePluginToken = async (forceRefresh: boolean) => {
+      assert.isTrue(forceRefresh);
+      refreshCalls += 1;
+      return true;
+    };
+
+    try {
+      const manager = Object.create(ChatManager.prototype) as any;
+      const provider = {
+        config: { id: "paperchat" },
+        getName: () => "PaperChat",
+        isReady: () => true,
+      };
+      providerManager.getActiveProvider = () => provider;
+
+      let attempts = 0;
+      const replayed = await providerManager.executeWithFallback(
+        async (attemptedProvider: typeof provider) => {
+          attempts += 1;
+          assert.strictEqual(attemptedProvider, provider);
+          if (attempts === 1) {
+            throw new Error("API Error: 401 Unauthorized");
+          }
+          return "ok";
+        },
+        manager.createProviderRetryOptions(),
+      );
+      assert.equal(replayed, "ok");
+      assert.equal(attempts, 2);
+      assert.equal(refreshCalls, 1);
+
+      attempts = 0;
+      refreshCalls = 0;
+      let repeatedAuthError: unknown;
+      try {
+        await providerManager.executeWithFallback(async () => {
+          attempts += 1;
+          throw new Error("API Error: 403 Forbidden");
+        }, manager.createProviderRetryOptions());
+      } catch (error) {
+        repeatedAuthError = error;
+      }
+      assert.equal(attempts, 2);
+      assert.equal(refreshCalls, 1);
+      assert.equal(
+        (repeatedAuthError as Error).message,
+        "API Error: 403 Forbidden",
+      );
+
+      authManager.ensurePluginToken = async () => false;
+      attempts = 0;
+      try {
+        await providerManager.executeWithFallback(async () => {
+          attempts += 1;
+          throw new Error("API Error: 401 Unauthorized");
+        }, manager.createProviderRetryOptions());
+      } catch (error) {
+        assert.equal((error as Error).message, "API Error: 401 Unauthorized");
+      }
+      assert.equal(attempts, 1);
+
+      authManager.ensurePluginToken = async () => true;
+      assert.isFalse(
+        await manager
+          .createProviderRetryOptions()
+          .shouldRetry(
+            new Error('API Error: 503 - {"error":{"code":"model_not_found"}}'),
+            provider,
+            0,
+          ),
+      );
+    } finally {
+      authManager.ensurePluginToken = originalEnsurePluginToken;
+      providerManager.getActiveProvider = originalGetActiveProvider;
+    }
+  });
+
+  it("keeps the last attempted PaperChat model after a final hard failure", async function () {
+    const session: ChatSession = {
+      id: "session-final-hard-failure",
+      createdAt: 1,
+      updatedAt: 2,
+      lastActiveItemKey: null,
+      resolvedModelId: "m2",
+      messages: [],
+    };
+    const errorMessage: ChatMessage = {
+      id: "error-1",
+      role: "error",
+      content: "model not found",
+      timestamp: 2,
+    };
+    const manager = Object.create(ChatManager.prototype) as any;
+    manager.repairPaperChatSessionAfterHardFailure = async () =>
+      assert.fail("final failure state must not reroute without replaying");
+
+    await manager.applyPaperChatFailureState(
+      session,
+      "user-1",
+      errorMessage,
+      new Error("API Error: 503 - model not found"),
+      "paperchat",
+      "m2",
+    );
+
+    assert.equal(session.resolvedModelId, "m2");
+    assert.equal(session.lastRetryableUserMessageId, "user-1");
+    assert.equal(session.lastRetryableErrorMessageId, "error-1");
+    assert.equal(session.lastRetryableFailedModelId, "m2");
   });
 
   it("backfills companion session state during schema v5 migration", async function () {
@@ -1263,7 +1449,7 @@ describe("paperchat storage and chat manager", function () {
     assert.isTrue(contextManager.filterMessages(session).summaryTriggered);
   });
 
-  it("clears stale turn state when loading an interrupted assistant session", async function () {
+  it("keeps terminal tool state when loading an interrupted assistant session", async function () {
     const recorded: RecordedQuery[] = [];
     const fakeDb = {
       async queryAsync(sql: string, params?: unknown[]) {
@@ -1312,6 +1498,19 @@ describe("paperchat storage and chat manager", function () {
                     args: { query: "stale query" },
                     status: "completed",
                     content: "stale result",
+                  },
+                  {
+                    toolCall: {
+                      id: "tool-2",
+                      type: "function",
+                      function: {
+                        name: "web_search",
+                        arguments: JSON.stringify({ query: "failed query" }),
+                      },
+                    },
+                    args: { query: "failed query" },
+                    status: "failed",
+                    content: "request failed",
                   },
                 ],
               }),
@@ -1362,11 +1561,14 @@ describe("paperchat storage and chat manager", function () {
     assert.exists(session);
     assert.equal(session?.id, "session-load-2");
     assert.isUndefined(session?.executionPlan);
-    assert.isUndefined(session?.toolExecutionState);
+    assert.deepEqual(
+      session?.toolExecutionState?.results.map((result) => result.toolCall.id),
+      ["tool-1", "tool-2"],
+    );
     assert.isUndefined(session?.toolApprovalState);
     assert.include(
       recorded.map((entry) => entry.sql),
-      "UPDATE sessions SET execution_plan = NULL, tool_execution_state = NULL, tool_approval_state = NULL, updated_at = ? WHERE id = ?",
+      "UPDATE sessions SET execution_plan = NULL, tool_execution_state = ?, tool_approval_state = NULL, updated_at = ? WHERE id = ?",
     );
     assert.include(
       recorded.map((entry) => entry.sql),
@@ -1957,6 +2159,276 @@ describe("paperchat storage and chat manager", function () {
     assert.isNull(result);
     assert.deepEqual(rerollCalls, []);
     assert.lengthOf(session.messages, 1);
+  });
+
+  it("replays the original prompt with the same PaperChat model", async function () {
+    const providerManager = getProviderManager() as any;
+    const originalGetActiveProviderId = providerManager.getActiveProviderId;
+    providerManager.getActiveProviderId = () => "paperchat";
+    const userMessage: ChatMessage = {
+      id: "user-1",
+      role: "user",
+      content: "retry this",
+      images: [
+        {
+          type: "url",
+          data: "https://example.com/a.png",
+          mimeType: "image/png",
+        },
+      ],
+      timestamp: 1,
+    };
+    const session: ChatSession = {
+      id: "session-simple-retry",
+      createdAt: 1,
+      updatedAt: 2,
+      lastActiveItemKey: "ITEM-1",
+      resolvedModelId: "m3",
+      messages: [
+        userMessage,
+        { id: "error-1", role: "error", content: "failed", timestamp: 2 },
+      ],
+      lastRetryableUserMessageId: "user-1",
+      lastRetryableErrorMessageId: "error-1",
+      lastRetryableFailedModelId: "m3",
+    };
+    const sends: Array<{ content: string; options: Record<string, unknown> }> =
+      [];
+
+    try {
+      const manager = Object.create(ChatManager.prototype) as any;
+      manager.currentSession = session;
+      manager.activeSessionRunIds = new Map();
+      manager.paperChatRerollSessions = new Set();
+      manager.init = async () => undefined;
+      manager.getSessionItem = () => ({ id: 42 });
+      manager.sendMessage = async (
+        content: string,
+        options: Record<string, unknown>,
+      ) => {
+        sends.push({ content, options });
+        return true;
+      };
+
+      assert.isTrue(await manager.retryCurrentPaperChatFailure());
+      assert.equal(session.resolvedModelId, "m3");
+      assert.deepEqual(sends, [
+        {
+          content: "retry this",
+          options: {
+            item: { id: 42 },
+            images: userMessage.images,
+            fromPaperChatReroll: true,
+            resumeFailedTurn: true,
+            reuseUserMessageId: "user-1",
+            targetSession: session,
+            requireTargetSessionActive: true,
+          },
+        },
+      ]);
+      assert.isFalse(manager.paperChatRerollSessions.has(session.id));
+    } finally {
+      providerManager.getActiveProviderId = originalGetActiveProviderId;
+    }
+  });
+
+  it("guards failed-request replay and always releases its session lock", async function () {
+    const providerManager = getProviderManager() as any;
+    const originalGetActiveProviderId = providerManager.getActiveProviderId;
+    providerManager.getActiveProviderId = () => "paperchat";
+    const session: ChatSession = {
+      id: "session-retry-guards",
+      createdAt: 1,
+      updatedAt: 2,
+      lastActiveItemKey: null,
+      messages: [
+        { id: "user-1", role: "user", content: "retry", timestamp: 1 },
+        { id: "error-1", role: "error", content: "failed", timestamp: 2 },
+      ],
+      lastRetryableUserMessageId: "user-1",
+      lastRetryableErrorMessageId: "error-1",
+    };
+
+    try {
+      const manager = Object.create(ChatManager.prototype) as any;
+      manager.currentSession = session;
+      manager.activeSessionRunIds = new Map([[session.id, 1]]);
+      manager.paperChatRerollSessions = new Set();
+      manager.init = async () => undefined;
+      manager.getSessionItem = () => null;
+      let sendCalls = 0;
+      manager.sendMessage = async () => {
+        sendCalls += 1;
+        throw new Error("replay failed");
+      };
+
+      assert.isFalse(await manager.retryCurrentPaperChatFailure());
+      assert.equal(sendCalls, 0);
+
+      manager.activeSessionRunIds.clear();
+      session.lastRetryableErrorMessageId = "missing-error";
+      assert.isFalse(await manager.retryCurrentPaperChatFailure());
+      assert.equal(sendCalls, 0);
+
+      session.lastRetryableErrorMessageId = "error-1";
+      let replayError: unknown;
+      try {
+        await manager.retryCurrentPaperChatFailure();
+      } catch (error) {
+        replayError = error;
+      }
+      assert.equal((replayError as Error).message, "replay failed");
+      assert.equal(sendCalls, 1);
+      assert.isFalse(manager.paperChatRerollSessions.has(session.id));
+    } finally {
+      providerManager.getActiveProviderId = originalGetActiveProviderId;
+    }
+  });
+
+  it("resumes a failed turn with its completed tool transcript and state", async function () {
+    const providerManager = getProviderManager() as any;
+    const originalGetActiveProviderId = providerManager.getActiveProviderId;
+    const contextManager = getContextManager() as any;
+    const originalCompactBeforeSendIfNeeded =
+      contextManager.compactBeforeSendIfNeeded;
+    const originalFilterMessages = contextManager.filterMessages;
+    const userMessage: ChatMessage = {
+      id: "resume-user",
+      role: "user",
+      content: "create a note",
+      timestamp: 1,
+    };
+    const toolCall = {
+      id: "resume-tool-call",
+      type: "function" as const,
+      function: { name: "create_note", arguments: '{"content":"note"}' },
+    };
+    const toolResult = {
+      toolCall,
+      status: "completed" as const,
+      content: "created note NOTE-1",
+    };
+    const session: ChatSession = {
+      id: "session-resume-tools",
+      createdAt: 1,
+      updatedAt: 5,
+      lastActiveItemKey: null,
+      messages: [
+        userMessage,
+        {
+          id: "resume-api-assistant",
+          role: "assistant",
+          content: "",
+          tool_calls: [toolCall],
+          apiOnly: true,
+          timestamp: 2,
+        },
+        {
+          id: "resume-api-tool",
+          role: "tool",
+          content: toolResult.content,
+          tool_call_id: toolCall.id,
+          apiOnly: true,
+          timestamp: 3,
+        },
+        {
+          id: "resume-partial",
+          role: "assistant",
+          content: "partial answer",
+          streamingState: "interrupted",
+          timestamp: 4,
+        },
+        { id: "resume-error", role: "error", content: "503", timestamp: 5 },
+      ],
+      toolExecutionState: {
+        turnStartedAt: 1,
+        updatedAt: 3,
+        results: [toolResult],
+      },
+    };
+    const provider = {
+      config: { id: "openai" },
+      getName: () => "OpenAI",
+      isReady: () => true,
+      supportsPdfUpload: () => false,
+      chatCompletionWithTools: async () => ({ content: "unused" }),
+    };
+    const capturedRequests: ChatMessage[][] = [];
+    let preservedToolState = false;
+
+    providerManager.getActiveProviderId = () => "openai";
+    contextManager.compactBeforeSendIfNeeded = async () => false;
+    contextManager.filterMessages = (targetSession: ChatSession) => ({
+      messages: [...targetSession.messages],
+      summaryTriggered: false,
+    });
+
+    try {
+      const manager = Object.create(ChatManager.prototype) as any;
+      manager.currentSession = session;
+      manager.activeSessionRunIds = new Map();
+      manager.sessionRunCounters = new Map();
+      manager.activeSessionAbortControllers = new Map();
+      manager.paperChatRerollSessions = new Set();
+      manager.streamingSessions = new Map();
+      manager.currentItemKey = null;
+      manager.init = async () => undefined;
+      manager.getActiveProvider = () => provider;
+      manager.isSessionActive = () => false;
+      manager.sendMessageWithToolCalling = async (
+        _provider: unknown,
+        messages: ChatMessage[],
+        _assistant: ChatMessage,
+        _pdfAttached: boolean,
+        _summaryTriggered: boolean,
+        _hasItem: boolean,
+        _item: unknown,
+        targetSession: ChatSession,
+        _runId: number,
+        _onProviderUsed: unknown,
+        preserveToolExecutionState: boolean,
+      ) => {
+        capturedRequests.push(messages.map((message) => ({ ...message })));
+        preservedToolState =
+          preserveToolExecutionState &&
+          targetSession.toolExecutionState?.results.length === 1;
+        return true;
+      };
+      manager.sessionStorage = {
+        insertMessage: async () => undefined,
+        updateSessionMeta: async () => undefined,
+      };
+
+      assert.isTrue(
+        await manager.sendMessage(userMessage.content, {
+          reuseUserMessageId: userMessage.id,
+          resumeFailedTurn: true,
+          targetSession: session,
+          requireTargetSessionActive: true,
+        }),
+      );
+
+      assert.isTrue(preservedToolState);
+      assert.lengthOf(capturedRequests, 1);
+      assert.include(
+        capturedRequests[0].map((message) => message.id),
+        "resume-api-assistant",
+      );
+      assert.include(
+        capturedRequests[0].map((message) => message.id),
+        "resume-api-tool",
+      );
+      assert.equal(
+        session.messages.filter((message) => message.id === userMessage.id)
+          .length,
+        1,
+      );
+    } finally {
+      providerManager.getActiveProviderId = originalGetActiveProviderId;
+      contextManager.compactBeforeSendIfNeeded =
+        originalCompactBeforeSendIfNeeded;
+      contextManager.filterMessages = originalFilterMessages;
+    }
   });
 
   it("replays the original prompt after rerolling within the same tier", async function () {
@@ -3187,6 +3659,24 @@ describe("paperchat storage and chat manager", function () {
         },
         assistantMessage,
       ],
+      toolExecutionState: {
+        turnStartedAt: 1,
+        updatedAt: 3,
+        results: [
+          {
+            toolCall: {
+              id: "call-1",
+              type: "function",
+              function: {
+                name: "search_paper_content",
+                arguments: "{}",
+              },
+            },
+            status: "completed",
+            content: "trusted result",
+          },
+        ],
+      },
     };
     const savedSessions: ChatSession[] = [];
     const manager = Object.create(ChatManager.prototype) as any;
@@ -3212,6 +3702,7 @@ describe("paperchat storage and chat manager", function () {
     );
     assert.equal(session.messages[1].content, "trusted result");
     assert.equal(assistantMessage.streamingState, "interrupted");
+    assert.equal(session.toolExecutionState?.results.length, 1);
   });
 
   it("keeps reasoning-only failures and removes a truly empty placeholder", async function () {
@@ -3273,10 +3764,10 @@ describe("paperchat storage and chat manager", function () {
     );
   });
 
-  it("keeps the most substantial partial across provider fallback failures", async function () {
+  it("keeps the most substantial partial across same-provider retry failures", async function () {
     const providerManager = getProviderManager() as any;
     const originalGetActiveProviderId = providerManager.getActiveProviderId;
-    const originalExecuteWithFallback = providerManager.executeWithFallback;
+    const originalExecuteWithRetry = providerManager.executeWithRetry;
     const contextManager = getContextManager() as any;
     const originalCompactBeforeSendIfNeeded =
       contextManager.compactBeforeSendIfNeeded;
@@ -3288,9 +3779,14 @@ describe("paperchat storage and chat manager", function () {
       lastActiveItemKey: null,
       messages: [],
     };
-    const createFailingProvider = (id: string, partial: string) => ({
-      config: { id },
-      getName: () => id,
+    const partials = [
+      "The provider produced a useful and substantial partial answer.",
+      "x",
+    ];
+    let providerAttempt = 0;
+    const firstProvider = {
+      config: { id: "provider-one" },
+      getName: () => "provider-one",
       isReady: () => true,
       supportsPdfUpload: () => false,
       streamChatCompletion: (
@@ -3300,24 +3796,21 @@ describe("paperchat storage and chat manager", function () {
           onError: (error: Error) => void;
         },
       ) => {
-        callbacks.onChunk(partial);
-        callbacks.onError(new Error(`${id} failed`));
+        callbacks.onChunk(partials[providerAttempt] || "");
+        providerAttempt += 1;
+        callbacks.onError(new Error("timeout"));
       },
-    });
-    const firstProvider = createFailingProvider(
-      "provider-one",
-      "The first provider produced a useful and substantial partial answer.",
-    );
-    const secondProvider = createFailingProvider("provider-two", "x");
+    };
 
     providerManager.getActiveProviderId = () => firstProvider.config.id;
-    providerManager.executeWithFallback = async (
-      operation: (provider: typeof firstProvider) => Promise<unknown>,
+    providerManager.executeWithRetry = async (
+      _provider: typeof firstProvider,
+      operation: () => Promise<unknown>,
     ) => {
       let lastError: unknown;
-      for (const provider of [firstProvider, secondProvider]) {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
-          return await operation(provider);
+          return await operation();
         } catch (error) {
           lastError = error;
         }
@@ -3355,13 +3848,129 @@ describe("paperchat storage and chat manager", function () {
       );
       assert.equal(
         assistant?.content,
-        "The first provider produced a useful and substantial partial answer.",
+        "The provider produced a useful and substantial partial answer.",
       );
       assert.equal(assistant?.streamingState, "interrupted");
       assert.equal(session.messages.at(-1)?.role, "error");
     } finally {
       providerManager.getActiveProviderId = originalGetActiveProviderId;
-      providerManager.executeWithFallback = originalExecuteWithFallback;
+      providerManager.executeWithRetry = originalExecuteWithRetry;
+      contextManager.compactBeforeSendIfNeeded =
+        originalCompactBeforeSendIfNeeded;
+      contextManager.filterMessages = originalFilterMessages;
+    }
+  });
+
+  it("reroutes a hard PaperChat model failure at most once across provider retries", async function () {
+    const providerManager = getProviderManager() as any;
+    const originalGetActiveProviderId = providerManager.getActiveProviderId;
+    const originalGetActiveProvider = providerManager.getActiveProvider;
+    const originalFallbackConfig = providerManager.fallbackConfig;
+    const contextManager = getContextManager() as any;
+    const originalCompactBeforeSendIfNeeded =
+      contextManager.compactBeforeSendIfNeeded;
+    const originalFilterMessages = contextManager.filterMessages;
+    const session: ChatSession = {
+      id: "session-single-hard-reroute",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      selectedTier: "paperchat-standard",
+      resolvedModelId: "m1",
+      messages: [],
+    };
+    const errors = [
+      new Error('API Error: 503 - {"error":{"code":"model_not_found"}}'),
+      new Error("timeout"),
+      new Error('API Error: 503 - {"error":{"code":"model_not_found"}}'),
+    ];
+    let streamCalls = 0;
+    let repairCalls = 0;
+    let currentModel = "m1";
+    const provider = {
+      config: { id: "paperchat" },
+      getName: () => "PaperChat",
+      isReady: () => true,
+      supportsPdfUpload: () => false,
+      updateConfig: (config: Record<string, unknown>) => {
+        Object.assign(provider.config, config);
+      },
+      streamChatCompletion: (
+        _messages: ChatMessage[],
+        callbacks: { onError: (error: Error) => void },
+      ) => {
+        const error = errors[streamCalls];
+        streamCalls += 1;
+        callbacks.onError(error || new Error("unexpected extra replay"));
+      },
+    };
+
+    providerManager.getActiveProviderId = () => "paperchat";
+    providerManager.getActiveProvider = () => provider;
+    providerManager.fallbackConfig = {
+      ...providerManager.fallbackConfig,
+      maxRetries: 3,
+    };
+    contextManager.compactBeforeSendIfNeeded = async () => false;
+    contextManager.filterMessages = (targetSession: ChatSession) => ({
+      messages: [...targetSession.messages],
+      summaryTriggered: false,
+    });
+
+    try {
+      const manager = Object.create(ChatManager.prototype) as any;
+      manager.currentSession = session;
+      manager.activeSessionRunIds = new Map();
+      manager.sessionRunCounters = new Map();
+      manager.activeSessionAbortControllers = new Map();
+      manager.streamingSessions = new Map();
+      manager.currentItemKey = null;
+      manager.init = async () => undefined;
+      manager.getActiveProvider = () => provider;
+      manager.isSessionActive = () => false;
+      manager.ensurePaperChatModelResolved = async () => currentModel;
+      manager.repairPaperChatSessionAfterHardFailure = async () => {
+        repairCalls += 1;
+        currentModel = "m2";
+        session.resolvedModelId = currentModel;
+        return {
+          previousModel: "m1",
+          nextModel: "m2",
+          tier: "paperchat-standard",
+        };
+      };
+      manager.buildPaperChatReroutedNotice = () => "rerouted";
+      manager.trackPaperChatModelRerouted = () => undefined;
+      manager.insertSystemNotice = async (
+        targetSession: ChatSession,
+        content: string,
+      ) => {
+        const notice: ChatMessage = {
+          id: "notice-1",
+          role: "system",
+          content,
+          timestamp: 2,
+          isSystemNotice: true,
+        };
+        targetSession.messages.push(notice);
+        return notice;
+      };
+      manager.sessionStorage = {
+        insertMessage: async () => undefined,
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        deleteMessage: async () => undefined,
+      };
+
+      assert.isTrue(await manager.sendMessage("answer this"));
+      assert.equal(streamCalls, 3);
+      assert.equal(repairCalls, 1);
+      assert.equal(session.resolvedModelId, "m2");
+      assert.equal(session.messages.at(-1)?.role, "error");
+    } finally {
+      providerManager.getActiveProviderId = originalGetActiveProviderId;
+      providerManager.getActiveProvider = originalGetActiveProvider;
+      providerManager.fallbackConfig = originalFallbackConfig;
       contextManager.compactBeforeSendIfNeeded =
         originalCompactBeforeSendIfNeeded;
       contextManager.filterMessages = originalFilterMessages;
@@ -3371,7 +3980,7 @@ describe("paperchat storage and chat manager", function () {
   it("keeps interrupted replies as ordinary history without disabling tools or duplicating storage", async function () {
     const providerManager = getProviderManager() as any;
     const originalGetActiveProviderId = providerManager.getActiveProviderId;
-    const originalExecuteWithFallback = providerManager.executeWithFallback;
+    const originalExecuteWithRetry = providerManager.executeWithRetry;
     const contextManager = getContextManager() as any;
     const originalCompactBeforeSendIfNeeded =
       contextManager.compactBeforeSendIfNeeded;
@@ -3418,9 +4027,10 @@ describe("paperchat storage and chat manager", function () {
     };
 
     providerManager.getActiveProviderId = () => "openai";
-    providerManager.executeWithFallback = async (
-      operation: (currentProvider: typeof provider) => Promise<unknown>,
-    ) => operation(provider);
+    providerManager.executeWithRetry = async (
+      _provider: typeof provider,
+      operation: () => Promise<unknown>,
+    ) => operation();
     contextManager.compactBeforeSendIfNeeded = async () => false;
 
     try {
@@ -3700,7 +4310,7 @@ describe("paperchat storage and chat manager", function () {
       );
     } finally {
       providerManager.getActiveProviderId = originalGetActiveProviderId;
-      providerManager.executeWithFallback = originalExecuteWithFallback;
+      providerManager.executeWithRetry = originalExecuteWithRetry;
       contextManager.compactBeforeSendIfNeeded =
         originalCompactBeforeSendIfNeeded;
     }
@@ -3751,7 +4361,7 @@ describe("paperchat storage and chat manager", function () {
   it("treats session invalidation after message persistence as an accepted send", async function () {
     const providerManager = getProviderManager() as any;
     const originalGetActiveProviderId = providerManager.getActiveProviderId;
-    const originalExecuteWithFallback = providerManager.executeWithFallback;
+    const originalExecuteWithRetry = providerManager.executeWithRetry;
     const contextManager = getContextManager() as any;
     const originalFilterMessages = contextManager.filterMessages;
 
@@ -3772,9 +4382,10 @@ describe("paperchat storage and chat manager", function () {
     };
 
     providerManager.getActiveProviderId = () => "openai";
-    providerManager.executeWithFallback = async (
-      operation: (currentProvider: typeof provider) => Promise<unknown>,
-    ) => operation(provider);
+    providerManager.executeWithRetry = async (
+      _provider: typeof provider,
+      operation: () => Promise<unknown>,
+    ) => operation();
     contextManager.filterMessages = (targetSession: ChatSession) => ({
       messages: [...targetSession.messages],
       summaryTriggered: false,
@@ -3833,7 +4444,7 @@ describe("paperchat storage and chat manager", function () {
       assert.lengthOf(updatedSessions, 1);
     } finally {
       providerManager.getActiveProviderId = originalGetActiveProviderId;
-      providerManager.executeWithFallback = originalExecuteWithFallback;
+      providerManager.executeWithRetry = originalExecuteWithRetry;
       contextManager.filterMessages = originalFilterMessages;
     }
   });
@@ -3950,7 +4561,7 @@ describe("paperchat storage and chat manager", function () {
   it("aborts the in-flight provider request when cancelling the current turn", async function () {
     const providerManager = getProviderManager() as any;
     const originalGetActiveProviderId = providerManager.getActiveProviderId;
-    const originalExecuteWithFallback = providerManager.executeWithFallback;
+    const originalExecuteWithRetry = providerManager.executeWithRetry;
     const contextManager = getContextManager() as any;
     const originalFilterMessages = contextManager.filterMessages;
 
@@ -4005,9 +4616,10 @@ describe("paperchat storage and chat manager", function () {
     };
 
     providerManager.getActiveProviderId = () => "openai";
-    providerManager.executeWithFallback = async (
-      operation: (currentProvider: typeof provider) => Promise<unknown>,
-    ) => operation(provider);
+    providerManager.executeWithRetry = async (
+      _provider: typeof provider,
+      operation: () => Promise<unknown>,
+    ) => operation();
     contextManager.filterMessages = (targetSession: ChatSession) => ({
       messages: [...targetSession.messages],
       summaryTriggered: false,
@@ -4102,7 +4714,7 @@ describe("paperchat storage and chat manager", function () {
       assert.isAtLeast(updatedSessions.length, 2);
     } finally {
       providerManager.getActiveProviderId = originalGetActiveProviderId;
-      providerManager.executeWithFallback = originalExecuteWithFallback;
+      providerManager.executeWithRetry = originalExecuteWithRetry;
       contextManager.filterMessages = originalFilterMessages;
     }
   });

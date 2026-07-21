@@ -15,6 +15,8 @@ import {
 import { DEFAULT_AGENT_MAX_PLANNING_ITERATIONS } from "./IterationLimitConfig";
 import {
   createBlockedRetryResult,
+  fingerprintToolCall,
+  fingerprintToolExecutionResult,
   findBlockedRetryMatch,
 } from "../tool-retry/ToolRetryPolicy";
 
@@ -26,7 +28,46 @@ export type ToolExecutionBatchEntry =
   | {
       kind: "synthetic";
       results: ToolExecutionResult[];
+    }
+  | {
+      kind: "reused";
+      results: ToolExecutionResult[];
     };
+
+export function findCompletedToolResultMatch(
+  toolCall: ToolCall,
+  previousResults: ToolExecutionResult[],
+): ToolExecutionResult | null {
+  const fingerprint = fingerprintToolCall(toolCall);
+  for (let index = previousResults.length - 1; index >= 0; index--) {
+    const result = previousResults[index];
+    if (
+      result.status === "completed" &&
+      fingerprintToolExecutionResult(result) === fingerprint
+    ) {
+      return result;
+    }
+  }
+  return null;
+}
+
+export function createReusedCompletedToolResult(
+  toolCall: ToolCall,
+  previousResult: ToolExecutionResult,
+): ToolExecutionResult {
+  return {
+    toolCall,
+    args: previousResult.args,
+    metadata: previousResult.metadata,
+    artifact: previousResult.artifact,
+    references: previousResult.references,
+    evidence: previousResult.evidence,
+    permissionDecision: previousResult.permissionDecision,
+    policyTrace: previousResult.policyTrace,
+    status: "completed",
+    content: previousResult.content,
+  };
+}
 
 export function planToolExecutionEntries(params: {
   sessionId: string;
@@ -38,6 +79,8 @@ export function planToolExecutionEntries(params: {
     requests: ToolSchedulerRequest[],
   ) => ToolSchedulerRequest[][];
   budgetLimits?: ToolBudgetLimits;
+  reuseCompletedResults?: boolean;
+  currentItemKey?: string | null;
 }): ToolExecutionBatchEntry[] {
   const {
     sessionId,
@@ -47,6 +90,8 @@ export function planToolExecutionEntries(params: {
     paperStructure,
     createExecutionBatches,
     budgetLimits,
+    reuseCompletedResults = false,
+    currentItemKey,
   } = params;
   const entries: ToolExecutionBatchEntry[] = [];
   let runnableSegment: ToolSchedulerRequest[] = [];
@@ -68,12 +113,26 @@ export function planToolExecutionEntries(params: {
   };
 
   for (const toolCall of toolCalls) {
+    const completedResult = reuseCompletedResults
+      ? findCompletedToolResultMatch(toolCall, previousResults)
+      : null;
+    if (completedResult) {
+      flushRunnableSegment();
+      entries.push({
+        kind: "reused",
+        results: [createReusedCompletedToolResult(toolCall, completedResult)],
+      });
+      continue;
+    }
+
     const blockedRetry = findBlockedRetryMatch(toolCall, previousResults);
     if (blockedRetry) {
       flushRunnableSegment();
       entries.push({
         kind: "synthetic",
-        results: [createBlockedRetryResult(toolCall, blockedRetry.previousResult)],
+        results: [
+          createBlockedRetryResult(toolCall, blockedRetry.previousResult),
+        ],
       });
       continue;
     }
@@ -97,6 +156,7 @@ export function planToolExecutionEntries(params: {
       sessionId,
       assistantMessageId: assistantMessage.id,
       fallbackStructure: paperStructure || undefined,
+      currentItemKey,
     });
   }
 
