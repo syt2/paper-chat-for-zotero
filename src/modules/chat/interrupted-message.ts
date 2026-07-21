@@ -1,34 +1,28 @@
 import type { ChatMessage } from "../../types/chat";
 
+/**
+ * An unclosed calling card is only removed when everything after its opening
+ * tag is card-internal structure (tool-name/args/status/result elements). Real
+ * cards are appended atomically, so a dangling fragment like this can only be
+ * a card cut off exactly at its structural boundary; anything followed by
+ * prose (e.g. a literal `<tool-call` mention or a documentation example) is
+ * ordinary text and must never be truncated. Removal is destructive: this
+ * also runs in permanent DB rewrite paths.
+ */
+const INCOMPLETE_CALLING_CARD_TAIL =
+  /\n?<tool-call\s+status="calling">\s*(?:<tool-(?:name|args|status|result)>[^<]*(?:<\/tool-(?:name|args|status|result)>)?\s*)+$/i;
+
 export function stripPendingAndIncompleteToolCallContent(
   content: string,
 ): string {
-  let sanitized = content.replace(
-    /\n?<tool-call\s+status="calling">[\s\S]*?<\/tool-call>\n?/gi,
-    "\n",
-  );
-  const lastOpen = sanitized.toLowerCase().lastIndexOf("<tool-call");
-  const lastClose = sanitized.toLowerCase().lastIndexOf("</tool-call>");
-  if (
-    lastOpen > lastClose &&
-    isDanglingToolCallCardStart(sanitized.slice(lastOpen))
-  ) {
-    sanitized = sanitized.slice(0, lastOpen);
-  }
-  return sanitized.replace(/\n{3,}/g, "\n\n").trim();
-}
-
-/**
- * Truncation is destructive (it also runs in permanent DB rewrite paths), so
- * only treat the unmatched `<tool-call` as an interrupted card when it is a
- * real card opening (status attribute) or the stream stopped mid-tag. A bare
- * literal mention (e.g. inside a code example) must not truncate the message.
- */
-function isDanglingToolCallCardStart(tail: string): boolean {
-  if (!tail.includes(">")) {
-    return /^<tool-call[\w\s="'-]{0,160}$/i.test(tail);
-  }
-  return /^<tool-call[^>]*\bstatus\s*=\s*"/i.test(tail);
+  return content
+    .replace(
+      /\n?<tool-call\s+status="calling">[\s\S]*?<\/tool-call>\n?/gi,
+      "\n",
+    )
+    .replace(INCOMPLETE_CALLING_CARD_TAIL, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 export function sanitizeInterruptedAssistantContent(content: string): string {

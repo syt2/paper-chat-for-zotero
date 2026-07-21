@@ -189,6 +189,30 @@ describe("paperchat storage and chat manager", function () {
           new Error('{"error":{"code":"insufficient_user_quota"}}'),
         ),
       );
+
+      // A stop during the backoff wait surfaces as a cancellation, not as the
+      // provider error, so ChatManager will not persist a failure bubble.
+      attempts = 0;
+      const abortController = new AbortController();
+      let abortedError: unknown;
+      try {
+        await providerManager.executeWithFallback(
+          async () => {
+            attempts += 1;
+            abortController.abort();
+            throw new Error("network error");
+          },
+          { abortSignal: abortController.signal },
+        );
+      } catch (error) {
+        abortedError = error;
+      }
+      assert.equal(attempts, 1);
+      assert.equal((abortedError as Error).name, "AbortError");
+      assert.equal(
+        ((abortedError as Error).cause as Error | undefined)?.message,
+        "network error",
+      );
     } finally {
       providerManager.getActiveProvider = originalGetActiveProvider;
       providerManager.fallbackConfig = originalFallbackConfig;
@@ -275,7 +299,10 @@ describe("paperchat storage and chat manager", function () {
             0,
           ),
       );
-      assert.isFalse(
+      // Quota errors take part in the standard same-model retries (they are
+      // listed in RETRYABLE_ERROR_PATTERNS); only the manual retry affordance
+      // is withheld for them after the turn fails.
+      assert.isTrue(
         await manager
           .createProviderRetryOptions()
           .shouldRetry(

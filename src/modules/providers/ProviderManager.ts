@@ -118,6 +118,19 @@ export interface ProviderRetryOptions {
 const RETRY_BACKOFF_BASE_MS = 1000;
 const RETRY_BACKOFF_MAX_MS = 8000;
 
+/**
+ * A stop during the backoff wait must surface as a cancellation, not as the
+ * provider error that triggered the retry, so callers treat it like any other
+ * user-initiated abort instead of persisting a failure.
+ */
+function createRetryAbortError(cause: Error): Error {
+  const abortError = new Error("Request aborted during retry backoff", {
+    cause,
+  });
+  abortError.name = "AbortError";
+  return abortError;
+}
+
 export class ProviderManager {
   private providers: Map<string, AIProvider> = new Map();
   private activeProviderId: string = "paperchat";
@@ -818,7 +831,7 @@ export class ProviderManager {
 
         await this.waitBeforeRetry(attemptNumber, options.abortSignal);
         if (options.abortSignal?.aborted) {
-          throw retryError;
+          throw createRetryAbortError(retryError);
         }
 
         attemptNumber += 1;

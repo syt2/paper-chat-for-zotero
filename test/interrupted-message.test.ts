@@ -2,6 +2,7 @@ import { assert } from "chai";
 import {
   createInterruptedAssistantContextMessage,
   sanitizeInterruptedAssistantContent,
+  stripPendingAndIncompleteToolCallContent,
 } from "../src/modules/chat/interrupted-message.ts";
 import type { ChatMessage } from "../src/types/chat.ts";
 
@@ -99,13 +100,34 @@ describe("interrupted assistant context", function () {
     assert.equal(sanitizeInterruptedAssistantContent(content), content);
   });
 
-  it("still truncates a stream that stopped mid opening tag", function () {
-    const content = 'Partial answer.\n<tool-call status="calli';
+  it("keeps prose after a literal unclosed card-opening tag", function () {
+    const content = [
+      'Cards are rendered as <tool-call status="calling"> tags in the UI.',
+      "This explanation after the literal tag must survive cleanup.",
+    ].join("\n");
 
+    // The stray literal tag itself is dropped from the model-facing text, but
+    // the surrounding prose is preserved instead of being truncated.
     assert.equal(
       sanitizeInterruptedAssistantContent(content),
-      "Partial answer.",
+      [
+        "Cards are rendered as  tags in the UI.",
+        "This explanation after the literal tag must survive cleanup.",
+      ].join("\n"),
     );
+  });
+
+  it("keeps a trailing literal tool-call fragment followed by prose", function () {
+    const content =
+      "Use the <tool-call example from the docs and adapt it to your needs.";
+
+    assert.equal(sanitizeInterruptedAssistantContent(content), content);
+  });
+
+  it("keeps a literal calling tag at the end of stored content", function () {
+    const content = 'Keep this literal: <tool-call status="calling">';
+
+    assert.equal(stripPendingAndIncompleteToolCallContent(content), content);
   });
 
   it("does not apply a recovery-specific length limit", function () {

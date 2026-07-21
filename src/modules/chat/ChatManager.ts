@@ -503,14 +503,6 @@ export class ChatManager {
       shouldRetry: async (error, provider) => {
         if (
           provider.config.id === "paperchat" &&
-          isPaperChatQuotaError(error)
-        ) {
-          // Quota exhaustion is deterministic; replaying the same request only
-          // delays the terminal error the UI already treats as non-retryable.
-          return false;
-        }
-        if (
-          provider.config.id === "paperchat" &&
           isPaperChatModelHardFailure(error)
         ) {
           // The request path already reroutes once within the same tier.
