@@ -41,7 +41,10 @@ function createPdfAttachment(id: number): object {
   };
 }
 
-function createOverlayReaderDocument(text: string): {
+function createOverlayReaderDocument(
+  text: string,
+  pageNumber = 1,
+): {
   document: Document;
   page: {
     children: Array<{ getAttribute: (name: string) => string | null }>;
@@ -139,8 +142,15 @@ function createOverlayReaderDocument(text: string): {
       getComputedStyle: () => ({ position: "relative" }),
     };
 
-    querySelector(): FakeElement | null {
-      return this.layer;
+    querySelector(selector: string): FakeElement | null {
+      const pageNumber = selector.match(
+        /^\[data-page-number="(\d+)"\] \.textLayer$/,
+      )?.[1];
+      return pageNumber &&
+        this.layer.parentElement?.getAttribute("data-page-number") ===
+          pageNumber
+        ? this.layer
+        : null;
     }
 
     createTreeWalker(root: FakeElement): { nextNode: () => FakeText | null } {
@@ -165,7 +175,7 @@ function createOverlayReaderDocument(text: string): {
 
   const document = new FakeDocument();
   const page = new FakeElement(document);
-  page.setAttribute("data-page-number", "1");
+  page.setAttribute("data-page-number", String(pageNumber));
   const layer = new FakeElement(document);
   layer.textContent = text;
   page.appendChild(layer);
@@ -594,6 +604,87 @@ describe("typed source navigation", function () {
     assert.equal(findOverlay()?.style.opacity, "1");
     await new Promise((resolve) => setTimeout(resolve, 600));
     assert.isUndefined(findOverlay());
+  });
+
+  it("highlights a PDF quote when the rendered blockquote adds quotation marks", async function () {
+    const sourceText =
+      "We plan to investigate this approach further in future work, including longer sequence models and more realistic evaluation settings.";
+    const renderedQuote = `“${sourceText}”`;
+    const misleadingEarlierPage =
+      "We plan to investigate this approach further in future work, including longer sequence models.";
+    const overlayDocument = createOverlayReaderDocument(sourceText, 2);
+    const pdf = {
+      ...createPdfAttachment(20),
+      attachmentText: `${misleadingEarlierPage}\f${sourceText}`,
+    };
+    let navigatedLocation: unknown;
+    const reader = {
+      itemID: 20,
+      type: "pdf",
+      focus: () => undefined,
+      navigate: async (location: unknown) => {
+        navigatedLocation = location;
+      },
+      _internalReader: {
+        _lastView: {
+          _iframeWindow: { document: overlayDocument.document },
+        },
+      },
+    };
+    setZoteroMock({
+      Libraries: { userLibraryID: 1 },
+      Items: {
+        getByLibraryAndKey: () => false,
+        get: () => pdf,
+        getAsync: async () => false,
+      },
+      Reader: {
+        getByTabID: () => reader,
+        open: async () => {
+          assert.fail("the existing reader should be reused");
+        },
+      },
+      getActiveZoteroPane: () => null,
+      getMainWindow: () => ({ Zotero_Tabs: { selectedID: "reader-tab" } }),
+    });
+
+    assert.isTrue(await navigateToPdfQuote(renderedQuote, pdf as Zotero.Item));
+    assert.deepEqual(navigatedLocation, { pageIndex: 1 });
+    assert.isDefined(
+      overlayDocument.page.children.find((child) =>
+        child.getAttribute("data-paperchat-pdf-quote-overlay"),
+      ),
+    );
+  });
+
+  it("locates a quoted CJK passage without relying on word-based fallback", async function () {
+    const sourceText =
+      "这是一段足够长的中文原文，用于验证查看原文时仍能定位并高亮。";
+    const pdf = {
+      ...createPdfAttachment(20),
+      attachmentText: sourceText,
+    };
+    let openedLocation: unknown;
+    setZoteroMock({
+      Libraries: { userLibraryID: 1 },
+      Items: {
+        getByLibraryAndKey: () => false,
+        get: () => false,
+        getAsync: async () => false,
+      },
+      Reader: {
+        open: async (_itemID, location) => {
+          openedLocation = location;
+        },
+      },
+      getActiveZoteroPane: () => null,
+      getMainWindow: () => ({}),
+    });
+
+    assert.isTrue(
+      await navigateToPdfQuote(`「${sourceText}」`, pdf as Zotero.Item),
+    );
+    assert.deepEqual(openedLocation, { pageIndex: 0 });
   });
 
   it("serializes Reader navigation so the latest rapid click wins", async function () {

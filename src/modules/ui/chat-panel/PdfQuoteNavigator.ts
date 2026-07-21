@@ -9,6 +9,14 @@ const SCROLL_SETTLE_MS = 120;
 const HIGHLIGHT_ON_MS = 600;
 const HIGHLIGHT_OFF_MS = 160;
 const OVERLAY_ATTRIBUTE = "data-paperchat-pdf-quote-overlay";
+const WRAPPING_QUOTE_PAIRS = [
+  ['"', '"'],
+  ["'", "'"],
+  ["「", "」"],
+  ["『", "』"],
+  ["«", "»"],
+  ["‹", "›"],
+] as const;
 
 type PdfReaderWindow = Window & {
   PDFViewerApplication?: {
@@ -161,26 +169,43 @@ function normalizeForSearch(text: string): string {
     .toLowerCase();
 }
 
+function unwrapQuotedText(text: string): string {
+  for (const [opening, closing] of WRAPPING_QUOTE_PAIRS) {
+    if (text.startsWith(opening) && text.endsWith(closing)) {
+      return text.slice(opening.length, -closing.length).trim();
+    }
+  }
+  return text;
+}
+
 function getSearchNeedles(quoteText: string): string[] {
   const normalized = normalizeForSearch(quoteText);
   if (normalized.length < MIN_QUOTE_SEARCH_LENGTH) {
     return [];
   }
 
-  const truncated = normalized.slice(0, MAX_QUOTE_SEARCH_LENGTH);
-  const sentences = truncated
-    .split(/[.!?。！？]\s+/)
-    .map((sentence) => sentence.trim())
-    .filter((sentence) => sentence.length >= MIN_QUOTE_SEARCH_LENGTH);
+  const unquoted = unwrapQuotedText(normalized);
+  const variants = Array.from(new Set([normalized, unquoted])).filter(
+    (variant) => variant.length >= MIN_QUOTE_SEARCH_LENGTH,
+  );
 
   return Array.from(
-    new Set([
-      truncated,
-      truncated.slice(0, 240).trim(),
-      truncated.slice(0, 120).trim(),
-      truncated.slice(0, 72).trim(),
-      ...sentences.slice(0, 2),
-    ]),
+    new Set(
+      variants.flatMap((variant) => {
+        const truncated = variant.slice(0, MAX_QUOTE_SEARCH_LENGTH);
+        const sentences = truncated
+          .split(/[.!?。！？]\s+/)
+          .map((sentence) => sentence.trim())
+          .filter((sentence) => sentence.length >= MIN_QUOTE_SEARCH_LENGTH);
+        return [
+          truncated,
+          truncated.slice(0, 240).trim(),
+          truncated.slice(0, 120).trim(),
+          truncated.slice(0, 72).trim(),
+          ...sentences.slice(0, 2),
+        ];
+      }),
+    ),
   )
     .filter((needle) => needle.length >= MIN_QUOTE_SEARCH_LENGTH)
     .sort((left, right) => right.length - left.length);
@@ -230,11 +255,15 @@ async function locateQuotePageIndex(
     return null;
   }
 
-  const pages = parsePages(pdfText);
-  for (const page of pages) {
-    const pageText = normalizeForSearch(page.content);
-    if (needles.some((needle) => pageText.includes(needle))) {
-      return Math.max(0, page.pageNumber - 1);
+  const pages = parsePages(pdfText).map((page) => ({
+    pageIndex: Math.max(0, page.pageNumber - 1),
+    exactText: normalizeForSearch(page.content),
+  }));
+  for (const needle of needles) {
+    for (const page of pages) {
+      if (page.exactText.includes(needle)) {
+        return page.pageIndex;
+      }
     }
   }
 
