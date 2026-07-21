@@ -281,7 +281,14 @@ describe("chat message exact navigation", function () {
       actions.children[1].getAttribute("class"),
       "message-action-btn retry-btn",
     );
-    assert.equal(actions.children[1].textContent, "paperchat-chat-retry");
+    assert.equal(
+      actions.children[1].getAttribute("aria-label"),
+      "paperchat-chat-retry",
+    );
+    assert.equal(
+      actions.children[1].children[0].getAttribute("src"),
+      "chrome://paperchat/content/icons/refresh.svg",
+    );
     actions.children[1].listeners.get("click")?.[0]?.({
       preventDefault: () => undefined,
       stopPropagation: () => undefined,
@@ -298,6 +305,10 @@ describe("chat message exact navigation", function () {
     assert.equal(
       actions.children[2].getAttribute("aria-label"),
       "paperchat-chat-reroll-model",
+    );
+    assert.equal(
+      actions.children[2].children[0].getAttribute("src"),
+      "chrome://paperchat/content/icons/change.svg",
     );
     actions.children[2].listeners.get("click")?.[0]?.({
       preventDefault: () => undefined,

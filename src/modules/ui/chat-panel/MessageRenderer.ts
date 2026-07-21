@@ -47,7 +47,7 @@ const STREAMING_TYPING_INDICATOR_ATTR = "data-streaming-typing-indicator";
 const MESSAGE_ACTION_ICON_SIZE = "15px";
 const MESSAGE_HIGHLIGHT_DURATION_MS = 1050;
 const MESSAGE_HIGHLIGHT_OVERLAY_CLASS = "paperchat-message-highlight-overlay";
-type MessageActionIconName = "copy" | "fork";
+type MessageActionIconName = "change" | "copy" | "fork" | "refresh";
 const userInputCountdownTimers = new WeakMap<
   HTMLElement,
   ReturnType<typeof setInterval>
@@ -987,23 +987,24 @@ function createRetryActionButton(
   theme: ThemeColors,
   label: string,
   className: string,
+  iconName: Extract<MessageActionIconName, "change" | "refresh">,
   onClick: () => void | Promise<void>,
   onError?: (error: Error) => void,
   onBusyChange?: (busy: boolean) => void,
-  displayLabel: string = label,
 ): HTMLElement {
   const btn = createElement(
     doc,
     "button",
     {
+      width: "28px",
       height: "28px",
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
       background: "transparent",
       border: "none",
       borderRadius: "4px",
-      padding: "0 8px",
-      fontSize: "12px",
-      lineHeight: "1.2",
-      whiteSpace: "nowrap",
+      padding: "0",
       cursor: "pointer",
       opacity: "1",
       color: theme.textPrimary,
@@ -1016,7 +1017,7 @@ function createRetryActionButton(
   );
   btn.setAttribute("type", "button");
   btn.setAttribute("aria-label", label);
-  btn.textContent = displayLabel;
+  setIconButtonImage(btn, iconName, "");
   btn.addEventListener("mouseenter", () => {
     btn.style.transform = "translateY(-1px)";
   });
@@ -1193,6 +1194,7 @@ function createMessageActions(
       theme,
       getString("chat-retry"),
       "retry-btn",
+      "refresh",
       onRetry,
       onRetryError,
       setRetryActionsBusy,
@@ -1208,10 +1210,10 @@ function createMessageActions(
       theme,
       rerollLabel,
       "reroll-btn",
+      "change",
       onReroll,
       onRerollError,
       setRetryActionsBusy,
-      `${rerollLabel} 🎲`,
     );
     retryActionButtons.push(rerollButton);
     actions.appendChild(rerollButton);
