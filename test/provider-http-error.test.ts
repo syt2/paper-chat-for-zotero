@@ -113,6 +113,18 @@ describe("provider HTTP errors", function () {
     );
   });
 
+  it("retries Gemini per-minute quota limits", function () {
+    assert.isTrue(
+      isRetryableProviderError(
+        new HttpResponseError({
+          status: 429,
+          responseBody:
+            "Quota exceeded for quota metric GenerateContent requests per minute",
+        }),
+      ),
+    );
+  });
+
   it("keeps rate-limit and legacy transport fallbacks", function () {
     assert.isTrue(
       isRetryableProviderError(

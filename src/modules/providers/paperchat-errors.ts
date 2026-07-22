@@ -66,7 +66,6 @@ export function parsePaperChatQuotaError(
     normalized.includes("insufficient_quota") ||
     normalized.includes("insufficient_user_quota") ||
     normalized.includes("insufficient quota") ||
-    normalized.includes("quota exceeded") ||
     normalized.includes("额度不足");
 
   if (!isQuotaError) {

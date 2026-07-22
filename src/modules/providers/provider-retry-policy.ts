@@ -25,7 +25,6 @@ const RETRYABLE_TRANSIENT_ERROR_PATTERNS = [
 /** Persistent account quota exhaustion must win over an HTTP 429 status. */
 const NON_RETRYABLE_QUOTA_PATTERNS = [
   /insufficient(?:[_ .-]?user)?[_ .-]?quota/i,
-  /quota.?exceeded/i,
   /额度不足/,
 ];
 

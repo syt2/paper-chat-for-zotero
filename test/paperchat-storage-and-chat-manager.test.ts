@@ -256,6 +256,13 @@ describe("paperchat storage and chat manager", function () {
         new Error('API Error: 429 - {"error":{"code":"insufficient_quota"}}'),
       ),
     );
+    assert.isFalse(
+      isPaperChatQuotaError(
+        new Error(
+          "API Error: 429 - Quota exceeded for quota metric requests per minute",
+        ),
+      ),
+    );
   });
 
   it("refreshes PaperChat auth once before replaying the same request", async function () {
