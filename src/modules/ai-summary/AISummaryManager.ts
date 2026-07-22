@@ -26,6 +26,8 @@ import { ANALYTICS_EVENTS, getAnalyticsService } from "../analytics";
 
 export class AISummaryManager {
   private config: AISummaryConfig = { ...DEFAULT_AISUMMARY_CONFIG };
+  private persistedConfig: AISummaryConfig = { ...DEFAULT_AISUMMARY_CONFIG };
+  private configRevision: number = 0;
   private progress: AISummaryProgress = {
     status: "idle",
     totalItems: 0,
@@ -39,6 +41,7 @@ export class AISummaryManager {
   private storage: AISummaryStorage;
   private abortController: ManagedAbortController | null = null;
   private initialized: boolean = false;
+  private configUpdateQueue: Promise<void> = Promise.resolve();
 
   // 回调
   private onProgressUpdate?: (progress: AISummaryProgress) => void;
@@ -60,6 +63,7 @@ export class AISummaryManager {
 
     // 加载配置
     this.config = await this.storage.loadConfig();
+    this.persistedConfig = { ...this.config };
 
     // 恢复进度（如果有中断的任务）
     const storedState = await this.storage.loadProgress();
@@ -106,9 +110,26 @@ export class AISummaryManager {
    * 更新配置
    */
   async updateConfig(newConfig: Partial<AISummaryConfig>): Promise<void> {
+    const revision = ++this.configRevision;
     this.config = { ...this.config, ...newConfig };
-    await this.storage.saveConfig(this.config);
-    ztoolkit.log("[AISummary] Config updated");
+    const nextConfig = { ...this.config };
+
+    const update = this.configUpdateQueue.then(async () => {
+      await this.storage.saveConfig(nextConfig);
+      this.persistedConfig = nextConfig;
+      ztoolkit.log("[AISummary] Config updated");
+    });
+
+    // A failed write must not block later preference changes.
+    this.configUpdateQueue = update.catch(() => undefined);
+    try {
+      await update;
+    } catch (error) {
+      if (this.configRevision === revision) {
+        this.config = { ...this.persistedConfig };
+      }
+      throw error;
+    }
   }
 
   /**

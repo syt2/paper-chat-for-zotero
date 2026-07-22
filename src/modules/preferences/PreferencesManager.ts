@@ -630,6 +630,13 @@ function initAISummarySettings(doc: Document): void {
   const aiSummaryManager = getAISummaryManager();
   const config = aiSummaryManager.getConfig();
 
+  const autoGenerateCheckbox = doc.getElementById(
+    "pref-aisummary-auto-generate-on-item-add",
+  ) as XUL.Checkbox | null;
+  if (autoGenerateCheckbox) {
+    autoGenerateCheckbox.checked = config.autoGenerateOnItemAdd ?? false;
+  }
+
   // Template dropdown
   populateAISummaryTemplates(doc, config.templateId);
 
@@ -726,13 +733,42 @@ function updateAISummaryStatus(doc: Document): void {
 function bindAISummarySettingsEvents(doc: Document): void {
   const aiSummaryManager = getAISummaryManager();
 
+  const autoGenerateCheckbox = doc.getElementById(
+    "pref-aisummary-auto-generate-on-item-add",
+  ) as XUL.Checkbox | null;
+  if (autoGenerateCheckbox) {
+    autoGenerateCheckbox.addEventListener("command", async () => {
+      try {
+        await aiSummaryManager.updateConfig({
+          autoGenerateOnItemAdd: autoGenerateCheckbox.checked,
+        });
+      } catch (error) {
+        initAISummarySettings(doc);
+        ztoolkit.log(
+          "[Preferences] Failed to update automatic AI summary setting:",
+          error,
+        );
+      }
+    });
+  }
+
   // Template
   const templateSelect = doc.getElementById(
     "pref-aisummary-template",
   ) as XUL.MenuList | null;
   if (templateSelect) {
     templateSelect.addEventListener("command", async () => {
-      await aiSummaryManager.updateConfig({ templateId: templateSelect.value });
+      try {
+        await aiSummaryManager.updateConfig({
+          templateId: templateSelect.value,
+        });
+      } catch (error) {
+        initAISummarySettings(doc);
+        ztoolkit.log(
+          "[Preferences] Failed to update AI summary template:",
+          error,
+        );
+      }
     });
   }
 
@@ -742,9 +778,17 @@ function bindAISummarySettingsEvents(doc: Document): void {
   ) as XUL.Checkbox | null;
   if (includeAnnotationsCheckbox) {
     includeAnnotationsCheckbox.addEventListener("command", async () => {
-      await aiSummaryManager.updateConfig({
-        includeAnnotations: includeAnnotationsCheckbox.checked,
-      });
+      try {
+        await aiSummaryManager.updateConfig({
+          includeAnnotations: includeAnnotationsCheckbox.checked,
+        });
+      } catch (error) {
+        initAISummarySettings(doc);
+        ztoolkit.log(
+          "[Preferences] Failed to update AI summary annotations setting:",
+          error,
+        );
+      }
     });
   }
 

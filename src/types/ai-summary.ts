@@ -6,6 +6,7 @@
 export type AISummaryMode = "quick" | "deep";
 
 export interface AISummaryConfig {
+  autoGenerateOnItemAdd: boolean; // 新增文献时是否自动生成摘要
   templateId: string; // 使用的模板 ID
   noteLocation: "child" | "standalone"; // 笔记位置
   markProcessedTag: string; // 处理后添加的标签
@@ -71,6 +72,7 @@ export interface AISummaryProcessResult {
 
 // 默认配置
 export const DEFAULT_AISUMMARY_CONFIG: AISummaryConfig = {
+  autoGenerateOnItemAdd: false,
   templateId: "summary-brief",
   noteLocation: "child",
   markProcessedTag: "ai-processed",
@@ -80,3 +82,9 @@ export const DEFAULT_AISUMMARY_CONFIG: AISummaryConfig = {
   excludeProcessedItems: true,
   includeAnnotations: true, // 默认包含标注
 };
+
+export function isAISummaryAutoGenerationEnabled(
+  config: Partial<Pick<AISummaryConfig, "autoGenerateOnItemAdd">>,
+): boolean {
+  return config.autoGenerateOnItemAdd === true;
+}

@@ -135,8 +135,11 @@ pref-paper-skills-reload-failed = 刷新 Skills 失败
 
 # AISummary Settings
 pref-aisummary-settings = AI摘要
+pref-aisummary-auto-generate-on-item-add =
+    .label = 新增文献时自动生成 AI 摘要
 pref-aisummary-template = 模板
-pref-aisummary-include-annotations = 包含用户高亮和笔记
+pref-aisummary-include-annotations =
+    .label = 包含用户高亮和笔记
 pref-aisummary-run-now = 生成摘要
 pref-aisummary-desc = 为文献库中未处理的论文生成AI摘要笔记（每次最多10篇）。
 

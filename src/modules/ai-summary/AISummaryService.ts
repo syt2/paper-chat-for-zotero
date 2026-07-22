@@ -11,7 +11,10 @@ import { getAISummaryManager } from "./AISummaryManager";
 import { getDeepSummaryTag } from "./AISummaryProcessor";
 import { getString } from "../../utils/locale";
 import { getErrorMessage, getItemTitle } from "../../utils/common";
-import type { AISummaryMode } from "../../types/ai-summary";
+import {
+  isAISummaryAutoGenerationEnabled,
+  type AISummaryMode,
+} from "../../types/ai-summary";
 import { ANALYTICS_EVENTS, getAnalyticsService } from "../analytics";
 import { getProviderManager } from "../providers";
 
@@ -330,8 +333,8 @@ class AISummaryService {
    * 处理新增 items
    */
   private async handleItemsAdded(ids: number[]): Promise<void> {
-    // 如果服务已销毁，直接返回
-    if (this.isDestroyed) return;
+    // 自动监听只处理明确开启了自动摘要的用户。
+    if (this.isDestroyed || !this.isAutomaticGenerationEnabled()) return;
 
     for (const id of ids) {
       const item = Zotero.Items.get(id);
@@ -377,8 +380,7 @@ class AISummaryService {
    * 安排条目处理（延迟 30 秒）
    */
   private scheduleItemProcessing(item: Zotero.Item): void {
-    // 如果服务已销毁，直接返回
-    if (this.isDestroyed) return;
+    if (this.isDestroyed || !this.isAutomaticGenerationEnabled()) return;
 
     const itemKey = item.key;
     const libraryID = item.libraryID;
@@ -396,6 +398,8 @@ class AISummaryService {
     // 只保存 itemKey 和 libraryID，在回调时重新获取 item
     const timer = setTimeout(() => {
       this.pendingTimers.delete(itemKey);
+      // 用户可能在 30 秒等待期间关闭开关。
+      if (this.isDestroyed || !this.isAutomaticGenerationEnabled()) return;
       // 重新获取 item，确保使用最新状态
       const freshItem = Zotero.Items.getByLibraryAndKey(libraryID, itemKey);
       if (freshItem) {
@@ -412,6 +416,10 @@ class AISummaryService {
     }, this.delayMs);
 
     this.pendingTimers.set(itemKey, timer);
+  }
+
+  private isAutomaticGenerationEnabled(): boolean {
+    return isAISummaryAutoGenerationEnabled(getAISummaryManager().getConfig());
   }
 
   /**

@@ -236,6 +236,7 @@ export type FluentMessageId =
   | 'pref-agent-max-planning-iterations'
   | 'pref-agent-max-planning-iterations-desc'
   | 'pref-ai-tools-settings'
+  | 'pref-aisummary-auto-generate-on-item-add'
   | 'pref-aisummary-desc'
   | 'pref-aisummary-include-annotations'
   | 'pref-aisummary-run-now'

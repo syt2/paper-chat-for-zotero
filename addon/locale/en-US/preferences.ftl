@@ -135,8 +135,11 @@ pref-paper-skills-reload-failed = Failed to reload skills
 
 # AISummary Settings
 pref-aisummary-settings = AI Summary
+pref-aisummary-auto-generate-on-item-add =
+    .label = Automatically generate AI summaries for newly added papers
 pref-aisummary-template = Template
-pref-aisummary-include-annotations = Include user highlights and notes
+pref-aisummary-include-annotations =
+    .label = Include user highlights and notes
 pref-aisummary-run-now = Generate Summaries
 pref-aisummary-desc = Generate AI summaries for unprocessed papers in your library (up to 10 per run).
 

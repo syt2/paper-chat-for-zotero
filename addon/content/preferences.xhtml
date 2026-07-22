@@ -636,7 +636,7 @@
         data-l10n-id="pref-upload-raw-pdf"
         style="margin-right: 8px"
       ></label>
-      <checkbox id="pref-upload-raw-pdf-checkbox" />
+      <checkbox id="pref-upload-raw-pdf-checkbox" native="true" />
     </hbox>
     <label
       data-l10n-id="pref-upload-raw-pdf-desc"
@@ -792,6 +792,17 @@
   <groupbox style="margin-top: 16px">
     <label><html:h3 data-l10n-id="pref-aisummary-settings"></html:h3></label>
 
+    <!-- Automatically summarize newly added papers -->
+    <hbox align="center" style="margin-bottom: 8px">
+      <label style="width: 80px"></label>
+      <checkbox
+        id="pref-aisummary-auto-generate-on-item-add"
+        data-l10n-id="pref-aisummary-auto-generate-on-item-add"
+        native="true"
+        style="margin-left: 8px"
+      />
+    </hbox>
+
     <!-- Template Selection -->
     <hbox align="center" style="margin-bottom: 8px">
       <label
@@ -815,6 +826,7 @@
       <checkbox
         id="pref-aisummary-include-annotations"
         data-l10n-id="pref-aisummary-include-annotations"
+        native="true"
         style="margin-left: 8px"
       />
     </hbox>
