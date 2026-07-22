@@ -127,27 +127,6 @@ export interface ProviderStorageData {
 export interface FallbackConfig {
   /** @deprecated Legacy provider ordering retained for preference compatibility. */
   fallbackProviderIds: string[];
-  /** Maximum attempts on the same provider/model, including the first request. */
-  maxRetries: number;
-}
-
-/**
- * Error types that allow retrying the same provider/model.
- */
-export type RetryableErrorType =
-  | "rate_limit"
-  | "timeout"
-  | "service_unavailable"
-  | "network_error"
-  | "quota_exceeded";
-
-/** Result of one same-provider execution attempt. */
-export interface FallbackExecutionResult<T> {
-  success: boolean;
-  result?: T;
-  error?: Error;
-  providerId: string;
-  attemptNumber: number;
 }
 
 /**

@@ -12,15 +12,19 @@ import type {
   PaperChatProviderConfig,
   ModelInfo,
   FallbackConfig,
-  FallbackExecutionResult,
 } from "../../types/provider";
 import { OpenAICompatibleProvider } from "./OpenAICompatibleProvider";
 import { AnthropicProvider } from "./AnthropicProvider";
 import { GeminiProvider } from "./GeminiProvider";
 import { PaperChatProvider } from "./PaperChatProvider";
 import { config } from "../../../package.json";
-import { getErrorMessage } from "../../utils/common";
 import { getPref } from "../../utils/prefs";
+import {
+  getProviderRetryBackoffDelayMs,
+  isRetryableProviderError,
+  PROVIDER_REQUEST_MAX_ATTEMPTS,
+  PROVIDER_RETRY_BACKOFF_BASE_MS,
+} from "./provider-retry-policy";
 
 /**
  * Built-in provider metadata. Model lists are loaded from provider APIs or
@@ -78,32 +82,7 @@ const REMOVED_BUILTIN_PROVIDER_IDS = new Set(["mistral", "groq", "openrouter"]);
  */
 const DEFAULT_FALLBACK_CONFIG: FallbackConfig = {
   fallbackProviderIds: [], // Legacy preference field, no longer used for request routing
-  maxRetries: 3,
 };
-
-/**
- * Error patterns that allow retrying the current provider and model
- */
-const RETRYABLE_ERROR_PATTERNS = [
-  /rate.?limit/i,
-  /too.?many.?requests/i,
-  /429/,
-  /timeout/i,
-  /timed?.?out/i,
-  /ETIMEDOUT/,
-  /service.?unavailable/i,
-  /503/,
-  /502/,
-  /bad.?gateway/i,
-  /network.?error/i,
-  /ECONNREFUSED/,
-  /ENOTFOUND/,
-  /fetch.?failed/i,
-  /quota.?exceeded/i,
-  /insufficient.?quota/i,
-  /insufficient_user_quota/i,
-  /额度不足/,
-];
 
 export interface ProviderRetryOptions {
   shouldRetry?: (
@@ -114,9 +93,6 @@ export interface ProviderRetryOptions {
   /** Ends the backoff wait early so user-initiated stops stay responsive. */
   abortSignal?: AbortSignal;
 }
-
-const RETRY_BACKOFF_BASE_MS = 1000;
-const RETRY_BACKOFF_MAX_MS = 8000;
 
 /**
  * A stop during the backoff wait must surface as a cancellation, not as the
@@ -140,7 +116,7 @@ export class ProviderManager {
   private prefsObserver: symbol | null = null;
   private isSavingPrefs = false;
   /** Overridable in tests to avoid real backoff waits. */
-  private retryBackoffBaseMs = RETRY_BACKOFF_BASE_MS;
+  private retryBackoffBaseMs = PROVIDER_RETRY_BACKOFF_BASE_MS;
 
   constructor() {
     this.loadFromPrefs();
@@ -185,6 +161,7 @@ export class ProviderManager {
    * Load configuration from Zotero preferences
    */
   private loadFromPrefs(): void {
+    this.fallbackConfig = { ...DEFAULT_FALLBACK_CONFIG };
     try {
       const stored = Zotero.Prefs.get(PREFS_KEY, true) as string | undefined;
       ztoolkit.log(
@@ -231,20 +208,27 @@ export class ProviderManager {
         }
         // Load fallback config
         if (data.fallbackConfig) {
+          const legacyFallbackConfig = data.fallbackConfig as FallbackConfig & {
+            maxRetries?: unknown;
+          };
           const fallbackProviderIds = (
-            data.fallbackConfig.fallbackProviderIds || []
+            legacyFallbackConfig.fallbackProviderIds || []
           ).filter((id) => !REMOVED_BUILTIN_PROVIDER_IDS.has(id));
           this.fallbackConfig = {
-            ...DEFAULT_FALLBACK_CONFIG,
-            ...data.fallbackConfig,
             fallbackProviderIds,
           };
           if (
             fallbackProviderIds.length !==
-            (data.fallbackConfig.fallbackProviderIds || []).length
+              (legacyFallbackConfig.fallbackProviderIds || []).length ||
+            Object.prototype.hasOwnProperty.call(
+              legacyFallbackConfig,
+              "maxRetries",
+            )
           ) {
             prefsChanged = true;
           }
+        } else {
+          prefsChanged = true;
         }
         if (prefsChanged) {
           this.saveToPrefs();
@@ -685,17 +669,20 @@ export class ProviderManager {
   // ============================================
 
   /**
-   * Get the persisted legacy configuration and current attempt limit.
+   * Get the persisted legacy provider-order configuration.
    */
   getFallbackConfig(): FallbackConfig {
     return { ...this.fallbackConfig };
   }
 
   /**
-   * Update the persisted legacy configuration and current attempt limit.
+   * Update the persisted legacy provider-order configuration.
    */
   updateFallbackConfig(updates: Partial<FallbackConfig>): void {
-    this.fallbackConfig = { ...this.fallbackConfig, ...updates };
+    this.fallbackConfig = {
+      fallbackProviderIds:
+        updates.fallbackProviderIds ?? this.fallbackConfig.fallbackProviderIds,
+    };
     this.saveToPrefs();
     ztoolkit.log(
       "[ProviderManager] Fallback config updated:",
@@ -769,10 +756,7 @@ export class ProviderManager {
    * Check if an error can be retried on the current provider and model
    */
   isRetryableError(error: unknown): boolean {
-    const errorMessage = getErrorMessage(error);
-    return RETRYABLE_ERROR_PATTERNS.some((pattern) =>
-      pattern.test(errorMessage),
-    );
+    return isRetryableProviderError(error);
   }
 
   /** Retry the active provider without silently switching providers or models. */
@@ -798,7 +782,7 @@ export class ProviderManager {
       throw new Error("Provider is not ready");
     }
 
-    const maxAttempts = Math.max(1, this.fallbackConfig.maxRetries);
+    const maxAttempts = PROVIDER_REQUEST_MAX_ATTEMPTS;
     let attemptNumber = 1;
     while (attemptNumber <= maxAttempts) {
       try {
@@ -844,14 +828,14 @@ export class ProviderManager {
     throw new Error("All retry attempts failed");
   }
 
-  /** Exponential backoff between same-provider retries (1s, 2s, 4s, ...). */
+  /** Exponential backoff between same-provider retries (2s, 4s, 8s). */
   private async waitBeforeRetry(
     completedAttempts: number,
     abortSignal?: AbortSignal,
   ): Promise<void> {
-    const delayMs = Math.min(
-      this.retryBackoffBaseMs * 2 ** (completedAttempts - 1),
-      RETRY_BACKOFF_MAX_MS,
+    const delayMs = getProviderRetryBackoffDelayMs(
+      completedAttempts,
+      this.retryBackoffBaseMs,
     );
     if (delayMs <= 0 || abortSignal?.aborted) {
       return;
@@ -867,62 +851,6 @@ export class ProviderManager {
       }, delayMs);
       abortSignal?.addEventListener("abort", onAbort, { once: true });
     });
-  }
-
-  /** Execute same-provider retries and return detailed attempt information. */
-  async executeWithFallbackDetailed<T>(
-    operation: (provider: AIProvider) => Promise<T>,
-  ): Promise<{
-    result: T;
-    providerId: string;
-    providerName: string;
-    attempts: FallbackExecutionResult<T>[];
-  }> {
-    const provider = this.getActiveProvider();
-    const attempts: FallbackExecutionResult<T>[] = [];
-
-    if (!provider?.isReady()) {
-      throw new Error("No available providers configured");
-    }
-
-    const providerId = provider.config.id;
-    const maxAttempts = Math.max(1, this.fallbackConfig.maxRetries);
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      try {
-        const result = await operation(provider);
-        const successfulAttempt: FallbackExecutionResult<T> = {
-          success: true,
-          result,
-          providerId,
-          attemptNumber: attempt + 1,
-        };
-        attempts.push(successfulAttempt);
-
-        return {
-          result,
-          providerId,
-          providerName: provider.getName(),
-          attempts,
-        };
-      } catch (error) {
-        const errorObj =
-          error instanceof Error ? error : new Error(String(error));
-        attempts.push({
-          success: false,
-          error: errorObj,
-          providerId,
-          attemptNumber: attempt + 1,
-        });
-
-        if (!this.isRetryableError(error) || attempt >= maxAttempts - 1) {
-          throw errorObj;
-        }
-      }
-    }
-
-    // All failed
-    const lastAttempt = attempts[attempts.length - 1];
-    throw lastAttempt?.error || new Error("All retry attempts failed");
   }
 
   /**

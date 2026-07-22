@@ -20,6 +20,7 @@ import {
   rerollPaperChatFailureAndReplay,
 } from "../src/modules/chat/paperchat-retry-orchestration.ts";
 import { PaperChatProvider } from "../src/modules/providers/PaperChatProvider.ts";
+import { isPaperChatQuotaError } from "../src/modules/providers/paperchat-errors.ts";
 import {
   destroyProviderManager,
   getProviderManager,
@@ -127,10 +128,9 @@ describe("paperchat storage and chat manager", function () {
     (globalThis as any).addon = originalAddon;
   });
 
-  it("retries the active provider three times without switching providers", async function () {
+  it("retries the active provider four times without switching providers", async function () {
     const providerManager = getProviderManager() as any;
     const originalGetActiveProvider = providerManager.getActiveProvider;
-    const originalFallbackConfig = providerManager.fallbackConfig;
     const originalRetryBackoffBaseMs = providerManager.retryBackoffBaseMs;
     const provider = {
       config: { id: "paperchat" },
@@ -138,10 +138,6 @@ describe("paperchat storage and chat manager", function () {
       isReady: () => true,
     };
     providerManager.getActiveProvider = () => provider;
-    providerManager.fallbackConfig = {
-      ...providerManager.fallbackConfig,
-      maxRetries: 3,
-    };
     providerManager.retryBackoffBaseMs = 0;
 
     try {
@@ -150,7 +146,7 @@ describe("paperchat storage and chat manager", function () {
         async (attemptedProvider: typeof provider) => {
           attempts += 1;
           assert.strictEqual(attemptedProvider, provider);
-          if (attempts < 3) {
+          if (attempts < 4) {
             throw new Error("timeout");
           }
           return "ok";
@@ -158,7 +154,7 @@ describe("paperchat storage and chat manager", function () {
       );
 
       assert.equal(result, "ok");
-      assert.equal(attempts, 3);
+      assert.equal(attempts, 4);
 
       attempts = 0;
       let finalError: unknown;
@@ -170,7 +166,7 @@ describe("paperchat storage and chat manager", function () {
       } catch (error) {
         finalError = error;
       }
-      assert.equal(attempts, 3);
+      assert.equal(attempts, 4);
       assert.equal((finalError as Error).message, "network error");
 
       attempts = 0;
@@ -184,7 +180,7 @@ describe("paperchat storage and chat manager", function () {
         assert.equal((error as Error).message, "bad request");
       }
       assert.equal(attempts, 1);
-      assert.isTrue(
+      assert.isFalse(
         providerManager.isRetryableError(
           new Error('{"error":{"code":"insufficient_user_quota"}}'),
         ),
@@ -215,9 +211,51 @@ describe("paperchat storage and chat manager", function () {
       );
     } finally {
       providerManager.getActiveProvider = originalGetActiveProvider;
-      providerManager.fallbackConfig = originalFallbackConfig;
       providerManager.retryBackoffBaseMs = originalRetryBackoffBaseMs;
     }
+  });
+
+  it("removes the legacy persisted attempt limit", function () {
+    prefStore.set(
+      `${PREFS_PREFIX}.providersConfig`,
+      JSON.stringify({
+        activeProviderId: "paperchat",
+        providers: [
+          {
+            id: "paperchat",
+            name: "PaperChat",
+            type: "paperchat",
+            enabled: true,
+            isBuiltin: true,
+            order: 0,
+            availableModels: [],
+          },
+        ],
+        fallbackConfig: {
+          fallbackProviderIds: [],
+          maxRetries: 3,
+        },
+      }),
+    );
+
+    const providerManager = getProviderManager();
+    assert.notProperty(providerManager.getFallbackConfig(), "maxRetries");
+
+    const persisted = JSON.parse(
+      String(prefStore.get(`${PREFS_PREFIX}.providersConfig`)),
+    ) as { fallbackConfig: Record<string, unknown> };
+    assert.notProperty(persisted.fallbackConfig, "maxRetries");
+
+    providerManager.updateFallbackConfig({ fallbackProviderIds: [] });
+    assert.notProperty(providerManager.getFallbackConfig(), "maxRetries");
+  });
+
+  it("recognizes OpenAI-style insufficient_quota as exhausted quota", function () {
+    assert.isTrue(
+      isPaperChatQuotaError(
+        new Error('API Error: 429 - {"error":{"code":"insufficient_quota"}}'),
+      ),
+    );
   });
 
   it("refreshes PaperChat auth once before replaying the same request", async function () {
@@ -299,10 +337,9 @@ describe("paperchat storage and chat manager", function () {
             0,
           ),
       );
-      // Quota errors take part in the standard same-model retries (they are
-      // listed in RETRYABLE_ERROR_PATTERNS); only the manual retry affordance
-      // is withheld for them after the turn fails.
-      assert.isTrue(
+      // Exhausted quota is persistent and should surface immediately instead
+      // of making the user wait through the transport retry schedule.
+      assert.isFalse(
         await manager
           .createProviderRetryOptions()
           .shouldRetry(
@@ -3914,7 +3951,7 @@ describe("paperchat storage and chat manager", function () {
     const providerManager = getProviderManager() as any;
     const originalGetActiveProviderId = providerManager.getActiveProviderId;
     const originalGetActiveProvider = providerManager.getActiveProvider;
-    const originalFallbackConfig = providerManager.fallbackConfig;
+    const originalRetryBackoffBaseMs = providerManager.retryBackoffBaseMs;
     const contextManager = getContextManager() as any;
     const originalCompactBeforeSendIfNeeded =
       contextManager.compactBeforeSendIfNeeded;
@@ -3956,10 +3993,7 @@ describe("paperchat storage and chat manager", function () {
 
     providerManager.getActiveProviderId = () => "paperchat";
     providerManager.getActiveProvider = () => provider;
-    providerManager.fallbackConfig = {
-      ...providerManager.fallbackConfig,
-      maxRetries: 3,
-    };
+    providerManager.retryBackoffBaseMs = 0;
     contextManager.compactBeforeSendIfNeeded = async () => false;
     contextManager.filterMessages = (targetSession: ChatSession) => ({
       messages: [...targetSession.messages],
@@ -4019,7 +4053,7 @@ describe("paperchat storage and chat manager", function () {
     } finally {
       providerManager.getActiveProviderId = originalGetActiveProviderId;
       providerManager.getActiveProvider = originalGetActiveProvider;
-      providerManager.fallbackConfig = originalFallbackConfig;
+      providerManager.retryBackoffBaseMs = originalRetryBackoffBaseMs;
       contextManager.compactBeforeSendIfNeeded =
         originalCompactBeforeSendIfNeeded;
       contextManager.filterMessages = originalFilterMessages;

@@ -24,6 +24,7 @@ import {
   type SSEFormat,
   type SSEParserCallbacks,
 } from "./SSEParser";
+import { HttpResponseError } from "./HttpResponseError";
 import { sanitizeOpenAIToolCallMessages } from "./openai-tool-call-messages";
 
 export abstract class BaseProvider implements AIProvider {
@@ -90,8 +91,19 @@ export abstract class BaseProvider implements AIProvider {
    */
   protected async validateResponse(response: Response): Promise<void> {
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`API Error: ${response.status} - ${errorText}`);
+      let responseBody = "";
+      let bodyReadError: unknown;
+      try {
+        responseBody = await response.text();
+      } catch (error) {
+        bodyReadError = error;
+      }
+      throw new HttpResponseError({
+        status: response.status,
+        statusText: response.statusText,
+        responseBody,
+        cause: bodyReadError,
+      });
     }
   }
 

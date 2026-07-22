@@ -61,7 +61,9 @@ export function parsePaperChatQuotaError(
   const normalized = `${raw}\n${message}\n${code || ""}`.toLowerCase();
 
   const isQuotaError =
+    code === "insufficient_quota" ||
     code === "insufficient_user_quota" ||
+    normalized.includes("insufficient_quota") ||
     normalized.includes("insufficient_user_quota") ||
     normalized.includes("insufficient quota") ||
     normalized.includes("quota exceeded") ||

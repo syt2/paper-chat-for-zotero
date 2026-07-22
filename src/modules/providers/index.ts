@@ -31,6 +31,4 @@ export type {
   ModelInfo,
   ModelCapability,
   FallbackConfig,
-  FallbackExecutionResult,
-  RetryableErrorType,
 } from "../../types/provider";
