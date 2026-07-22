@@ -29,6 +29,7 @@ import {
   getStorageDatabase,
   destroyStorageDatabase,
 } from "./modules/chat/db/StorageDatabase";
+import { destroyPdfToolManager } from "./modules/chat/pdf-tools";
 import { checkAndMigrateToV3 } from "./modules/chat/migration/migrateToSQLite";
 import { destroyMemoryStores } from "./modules/chat/memory/MemoryStore";
 import {
@@ -189,6 +190,8 @@ async function onShutdown(): Promise<void> {
   // Destroy Memory stores
   destroyMemoryStores();
   destroyMemoryIndexers();
+  // Destroy PdfToolManager (clears in-memory paper structure cache)
+  destroyPdfToolManager();
   // Destroy StorageDatabase
   await destroyStorageDatabase();
   await destroyAnalyticsService();

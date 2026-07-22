@@ -300,6 +300,13 @@ export interface PaperSection {
   endIndex: number;
 }
 
+// PDF 原生大纲条目（pdf.js getOutline 结果）
+export interface NativeOutlineItem {
+  title: string;
+  pageNumber: number; // 1-based PDF 页码；无法解析时为 0
+  children: NativeOutlineItem[];
+}
+
 // 工具名称枚举
 export type PaperToolName =
   | "request_user_input"
@@ -400,10 +407,12 @@ export interface PageInfo {
   content: string;
 }
 
-// 扩展 PaperStructure 包含页面信息
+// 扩展 PaperStructure 包含页面信息和大纲
 export interface PaperStructureExtended extends PaperStructure {
   pages: PageInfo[];
   pageCount: number;
+  nativeOutline?: NativeOutlineItem[]; // PDF 原生大纲（如果可用）
+  nativePageCount?: number; // PDF.js 报告的真实 PDF 页数
 }
 
 // ========== 新增工具参数类型 ==========
