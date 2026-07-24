@@ -624,7 +624,7 @@ describe("agent runtime plan semantics", function () {
     }
   });
 
-  it("renders hosted Web Search as transient UI without executing or persisting a tool", async function () {
+  it("renders hosted Web Search without local execution and records one budget entry", async function () {
     const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
     (globalThis as { ztoolkit?: unknown }).ztoolkit = {
       log: () => undefined,
@@ -745,7 +745,243 @@ describe("agent runtime plan semantics", function () {
       assert.isUndefined(assistantMessage.tool_calls);
       assert.notInclude(assistantMessage.content, "web_search");
       assert.isFalse(session.messages.some((message) => message.apiOnly));
-      assert.deepEqual(session.toolExecutionState?.results, []);
+      assert.lengthOf(session.toolExecutionState?.results || [], 1);
+      assert.equal(
+        session.toolExecutionState?.results[0]?.toolCall.id,
+        "hosted-web-search:ws_123",
+      );
+      assert.equal(
+        session.toolExecutionState?.results[0]?.toolCall.function.name,
+        "web_search",
+      );
+      assert.deepEqual(session.toolExecutionState?.results[0]?.args, {
+        query: "Zotero AI tools",
+      });
+      assert.deepInclude(session.toolExecutionState?.results[0]?.references, {
+        type: "web",
+        url: "https://example.test/paperchat",
+      });
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
+  });
+
+  it("records a hosted search that started before the stream failed", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    const session = createSession();
+    const assistantMessage: ChatMessage = {
+      id: "assistant-hosted-search-error",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+    };
+    session.messages.push(assistantMessage);
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        saveSession: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => false,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "",
+        generateId: () => "generated-hosted-search-error",
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async () => [],
+      },
+    ) as any;
+    runtime.getMaxIterations = () => 2;
+    const provider = {
+      config: {
+        id: "paperchat",
+        type: "paperchat",
+        defaultModel: "test-model",
+      },
+      chatCompletionWithTools: async () => ({ content: "unused" }),
+      streamChatCompletionWithTools: async (
+        _messages: ChatMessage[],
+        _tools: unknown[],
+        callbacks: any,
+      ) => {
+        callbacks.onHostedWebSearchStatus({
+          index: 0,
+          id: "ws_failed_stream",
+          status: "searching",
+          queries: ["paid hosted query"],
+        });
+        callbacks.onError(new Error("API Error: 503 Service Unavailable"));
+      },
+    };
+
+    try {
+      let finalError: unknown;
+      try {
+        await runtime.executeStreamingToolLoop({
+          provider,
+          currentMessages: session.messages,
+          assistantMessage,
+          pdfWasAttached: false,
+          summaryTriggered: false,
+          tools: [],
+          sendingSession: session,
+        });
+      } catch (error) {
+        finalError = error;
+      }
+
+      assert.instanceOf(finalError, Error);
+      assert.lengthOf(session.toolExecutionState?.results || [], 1);
+      assert.equal(
+        session.toolExecutionState?.results[0]?.toolCall.id,
+        "hosted-web-search:ws_failed_stream",
+      );
+      assert.equal(session.toolExecutionState?.results[0]?.status, "failed");
+      assert.deepEqual(session.toolExecutionState?.results[0]?.args, {
+        query: "paid hosted query",
+      });
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
+  });
+
+  it("counts hosted search against the shared budget and removes both search tools next round", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    const session = createSession();
+    const assistantMessage: ChatMessage = {
+      id: "assistant-shared-search-budget",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+    };
+    session.messages.push(assistantMessage);
+    const receivedToolNames: string[][] = [];
+    let providerCalls = 0;
+    let localExecutions = 0;
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        saveSession: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => true,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "",
+        generateId: () => `generated-${Date.now()}`,
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async () => {
+          localExecutions += 1;
+          return [];
+        },
+      },
+    ) as any;
+    runtime.getMaxIterations = () => 3;
+    const scholarlyCall: ToolCall = {
+      id: "scholarly-after-hosted",
+      type: "function",
+      function: {
+        name: "search_scholarly_sources",
+        arguments: JSON.stringify({ query: "same evidence" }),
+      },
+    };
+    const provider = {
+      config: {
+        id: "paperchat",
+        type: "paperchat",
+        defaultModel: "test-model",
+      },
+      chatCompletionWithTools: async () => ({ content: "unused" }),
+      streamChatCompletionWithTools: async (
+        _messages: ChatMessage[],
+        tools: Array<{ function: { name: string } }>,
+        callbacks: any,
+        _signal: AbortSignal | undefined,
+        _options: unknown,
+      ) => {
+        providerCalls += 1;
+        receivedToolNames.push(tools.map((tool) => tool.function.name));
+        if (providerCalls === 1) {
+          callbacks.onHostedWebSearchStatus({
+            index: 0,
+            id: "ws-budget-1",
+            status: "completed",
+            queries: ["hosted evidence"],
+          });
+          callbacks.onComplete({
+            content: "",
+            toolCalls: [scholarlyCall],
+            stopReason: "tool_calls",
+          });
+          return;
+        }
+        callbacks.onTextDelta("final answer");
+        callbacks.onComplete({
+          content: "final answer",
+          stopReason: "end_turn",
+        });
+      },
+    };
+    const searchTools = [
+      {
+        type: "function" as const,
+        function: {
+          name: "web_search",
+          description: "Web",
+          parameters: { type: "object" as const, properties: {} },
+        },
+      },
+      {
+        type: "function" as const,
+        function: {
+          name: "search_scholarly_sources",
+          description: "Scholarly",
+          parameters: { type: "object" as const, properties: {} },
+        },
+      },
+    ];
+
+    try {
+      await runtime.executeStreamingToolLoop({
+        provider,
+        currentMessages: session.messages,
+        assistantMessage,
+        pdfWasAttached: false,
+        summaryTriggered: false,
+        tools: searchTools,
+        sendingSession: session,
+      });
+
+      assert.equal(providerCalls, 2);
+      assert.deepEqual(receivedToolNames[0], [
+        "web_search",
+        "search_scholarly_sources",
+      ]);
+      assert.deepEqual(receivedToolNames[1], []);
+      assert.equal(localExecutions, 0);
+      assert.include(assistantMessage.content, "final answer");
+      assert.equal(
+        session.toolExecutionState?.results.filter(
+          (result) => result.toolCall.id === "hosted-web-search:ws-budget-1",
+        ).length,
+        1,
+      );
+      assert.include(
+        session.toolExecutionState?.results.find(
+          (result) => result.toolCall.id === "scholarly-after-hosted",
+        )?.content || "",
+        "Category: budget_exhausted",
+      );
     } finally {
       (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
     }
@@ -1636,6 +1872,35 @@ describe("agent runtime plan semantics", function () {
     assert.notInclude(stablePrompt, "FINAL ANSWER REQUIREMENTS");
     assert.include(runtimePrompt, "Current iteration: 2/4");
     assert.include(runtimePrompt, "FINAL ANSWER REQUIREMENTS");
+  });
+
+  it("routes hosted web and local scholarly search by evidence type", function () {
+    const prompt = generatePaperContextPrompt(
+      undefined,
+      undefined,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      true,
+    );
+
+    assert.include(
+      prompt,
+      "For papers, authors, DOI, citations, or related work, use search_scholarly_sources before web_search",
+    );
+    assert.include(
+      prompt,
+      "For current events, news, official websites, policies, products, or real-time facts, use web_search directly",
+    );
+    assert.include(
+      prompt,
+      "Do not call both search tools for the same query initially",
+    );
+    assert.include(
+      prompt,
+      "If the user requires Scholar, OpenAlex, or scholarly-only sources, do not downgrade",
+    );
   });
 
   it("persists only trusted evidence referenced by the final answer", async function () {

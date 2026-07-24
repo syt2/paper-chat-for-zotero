@@ -94,6 +94,17 @@ describe("session artifact store", function () {
     assert.isTrue(read.hasMore);
   });
 
+  it("stores scholarly search output as a search-result artifact", async function () {
+    const store = new SessionArtifactStore(10, 20);
+    const stored = await store.maybeStoreToolResult({
+      sessionId: "session-1",
+      toolCall: createToolCall("search_scholarly_sources"),
+      content: "large scholarly result content",
+    });
+
+    assert.equal(stored?.ref.kind, "search_result");
+  });
+
   it("rejects path traversal and cross-session artifact reads", async function () {
     const store = new SessionArtifactStore(10, 20);
     const stored = await store.maybeStoreToolResult({

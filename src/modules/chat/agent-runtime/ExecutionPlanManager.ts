@@ -58,6 +58,8 @@ function getToolIntentTitle(toolName: string): string {
       return "Read paper evidence";
     case "web_search":
       return "Check information outside Zotero";
+    case "search_scholarly_sources":
+      return "Search scholarly sources";
     case "create_note":
     case "append_to_note":
       return "Write findings to a Zotero note";

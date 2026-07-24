@@ -251,6 +251,24 @@ describe("tool source reference extraction", function () {
     ]);
   });
 
+  it("collects trusted URLs from local scholarly search results", function () {
+    const references = deriveToolSourceReferences(
+      createToolCall("search_scholarly_sources", { query: "evidence" }),
+      { query: "evidence" },
+      [
+        "Web source URLs:",
+        '- "https://doi.org/10.1000/example"',
+        "End web source URLs",
+        "",
+        'Scholarly search results for "evidence" via OpenAlex (1 found):',
+      ].join("\n"),
+    );
+
+    assert.deepEqual(identities(references), [
+      "web:https://doi.org/10.1000/example",
+    ]);
+  });
+
   it("rejects non-http web targets", function () {
     const references = deriveToolSourceReferences(
       createToolCall("web_search", { query: "unsafe" }),

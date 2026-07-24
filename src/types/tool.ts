@@ -312,6 +312,7 @@ export type PaperToolName =
   | "request_user_input"
   | "read_artifact"
   | "web_search"
+  | "search_scholarly_sources"
   | "get_paper_section"
   | "search_paper_content"
   | "get_paper_metadata"
@@ -462,6 +463,14 @@ export const MODEL_VISIBLE_WEB_SEARCH_SOURCES = [
   "duckduckgo",
 ] as const;
 
+export const SCHOLARLY_SEARCH_SOURCES = [
+  "auto",
+  "google_scholar",
+  "openalex",
+] as const;
+
+export type ScholarlySearchSource = (typeof SCHOLARLY_SEARCH_SOURCES)[number];
+
 export const WEB_SEARCH_INTENTS = [
   "auto",
   "paper",
@@ -473,6 +482,16 @@ export const WEB_SEARCH_INTENTS = [
 
 export type WebSearchIntent = (typeof WEB_SEARCH_INTENTS)[number];
 
+export const SCHOLARLY_SEARCH_INTENTS = [
+  "auto",
+  "paper",
+  "related",
+  "discover",
+  "biomedical",
+] as const;
+
+export type ScholarlySearchIntent = (typeof SCHOLARLY_SEARCH_INTENTS)[number];
+
 export interface WebSearchArgs {
   query: string;
   source?: WebSearchSource;
@@ -480,6 +499,19 @@ export interface WebSearchArgs {
   max_results?: number;
   domain_filter?: string[];
   include_content?: boolean;
+  year_from?: number;
+  year_to?: number;
+  open_access_only?: boolean;
+  seed_title?: string;
+  seed_doi?: string;
+  seed_paper_id?: string;
+}
+
+export interface ScholarlySearchArgs {
+  query: string;
+  source?: ScholarlySearchSource;
+  intent?: ScholarlySearchIntent;
+  max_results?: number;
   year_from?: number;
   year_to?: number;
   open_access_only?: boolean;

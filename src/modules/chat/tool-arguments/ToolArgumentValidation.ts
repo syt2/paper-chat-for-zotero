@@ -1,5 +1,11 @@
-import type { ToolDefinition, ToolParameterProperty } from "../../../types/tool";
-import { WEB_SEARCH_SOURCES } from "../../../types/tool";
+import type {
+  ToolDefinition,
+  ToolParameterProperty,
+} from "../../../types/tool";
+import {
+  SCHOLARLY_SEARCH_SOURCES,
+  WEB_SEARCH_SOURCES,
+} from "../../../types/tool";
 import { getPdfToolManager } from "../pdf-tools";
 
 export interface ToolArgumentValidationResult {
@@ -10,8 +16,10 @@ export interface ToolArgumentValidationResult {
   issues: string[];
 }
 
-let cachedToolDefinitions: Map<string, ToolDefinition["function"]["parameters"]> | null =
-  null;
+let cachedToolDefinitions: Map<
+  string,
+  ToolDefinition["function"]["parameters"]
+> | null = null;
 
 const CSV_STRING_KEYS = new Set(["tags", "addTags", "removeTags"]);
 
@@ -50,7 +58,12 @@ export function validateAndRepairToolArguments(
     if (!(key in normalized)) {
       continue;
     }
-    const repaired = repairPropertyValue(toolName, key, property, normalized[key]);
+    const repaired = repairPropertyValue(
+      toolName,
+      key,
+      property,
+      normalized[key],
+    );
     if (!repaired.changed) {
       continue;
     }
@@ -181,9 +194,10 @@ function repairStringValue(
   return { changed, value: nextValue };
 }
 
-function repairNumberValue(
-  value: unknown,
-): { changed: boolean; value: unknown } {
+function repairNumberValue(value: unknown): {
+  changed: boolean;
+  value: unknown;
+} {
   if (typeof value !== "string") {
     return { changed: false, value };
   }
@@ -199,9 +213,10 @@ function repairNumberValue(
   };
 }
 
-function repairBooleanValue(
-  value: unknown,
-): { changed: boolean; value: unknown } {
+function repairBooleanValue(value: unknown): {
+  changed: boolean;
+  value: unknown;
+} {
   if (typeof value === "number") {
     if (value === 1) {
       return { changed: true, value: true };
@@ -240,7 +255,10 @@ function repairArrayValue(
     return { changed: false, value };
   }
 
-  if (Array.isArray(value) && JSON.stringify(value) === JSON.stringify(normalized)) {
+  if (
+    Array.isArray(value) &&
+    JSON.stringify(value) === JSON.stringify(normalized)
+  ) {
     return { changed: false, value };
   }
 
@@ -292,7 +310,9 @@ function validatePropertyType(
 ): string | null {
   switch (property.type) {
     case "string":
-      return typeof value === "string" ? null : `expected string, got ${describeType(value)}`;
+      return typeof value === "string"
+        ? null
+        : `expected string, got ${describeType(value)}`;
     case "number":
       return typeof value === "number" && Number.isFinite(value)
         ? null
@@ -334,6 +354,9 @@ function getAllowedEnum(
 ): readonly string[] | undefined {
   if (toolName === "web_search" && key === "source") {
     return WEB_SEARCH_SOURCES;
+  }
+  if (toolName === "search_scholarly_sources" && key === "source") {
+    return SCHOLARLY_SEARCH_SOURCES;
   }
   return property.enum;
 }

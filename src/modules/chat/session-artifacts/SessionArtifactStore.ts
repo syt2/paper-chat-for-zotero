@@ -67,6 +67,7 @@ function artifactKindForTool(toolName: string): ToolResultArtifactRef["kind"] {
     case "search_with_regex":
       return "paper_excerpt";
     case "web_search":
+    case "search_scholarly_sources":
       return "search_result";
     case "create_note":
     case "append_to_note":

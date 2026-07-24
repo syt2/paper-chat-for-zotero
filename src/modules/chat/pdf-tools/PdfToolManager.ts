@@ -18,10 +18,6 @@
  * - get_full_text: 获取完整原文（高 token 消耗）
  */
 
-import {
-  MODEL_VISIBLE_WEB_SEARCH_SOURCES,
-  WEB_SEARCH_INTENTS,
-} from "../../../types/tool";
 import type {
   ToolDefinition,
   ToolParameterProperty,
@@ -41,6 +37,7 @@ import type {
   // 新增类型
   GetAnnotationsArgs,
   SearchItemsArgs,
+  ScholarlySearchArgs,
   WebSearchArgs,
   GetCollectionsArgs,
   GetCollectionItemsArgs,
@@ -56,7 +53,12 @@ import type {
   SaveMemoryArgs,
 } from "../../../types/tool";
 import { getMemoryService } from "../memory/MemoryService";
-import { executeWebSearch, isValidWebSearchArgs } from "../web-search";
+import {
+  executeScholarlySearch,
+  executeWebSearch,
+  isValidScholarlySearchArgs,
+  isValidWebSearchArgs,
+} from "../web-search";
 import { preflightToolArguments } from "../tool-arguments/ToolArgumentPreflight";
 import { parsePaperStructure, parsePages } from "./paperParser";
 import {
@@ -65,6 +67,7 @@ import {
 } from "./nativeOutlineExtractor";
 import type { AgentPromptContext } from "./promptGenerator";
 import { generatePaperContextPrompt as generatePaperContextPromptFn } from "./promptGenerator";
+import { createSearchToolDefinitions } from "./SearchToolDefinitions";
 import {
   executeGetPaperSection,
   executeSearchPaperContent,
@@ -543,83 +546,7 @@ export class PdfToolManager {
           },
         },
       },
-      {
-        type: "function" as const,
-        function: {
-          name: "web_search",
-          description:
-            "Search external sources beyond the local Zotero library. Use this for recent information, related papers, broader literature discovery, biomedical lookup, or general websites. Prefer scholarly sources unless the task is clearly general web browsing.",
-          parameters: {
-            type: "object" as const,
-            properties: {
-              query: {
-                type: "string" as const,
-                description:
-                  "The search query. Be specific and include paper titles, topics, authors, or claims to verify.",
-              },
-              source: {
-                type: "string" as const,
-                enum: [...MODEL_VISIBLE_WEB_SEARCH_SOURCES],
-                description:
-                  "Preferred source selector. Specify this explicitly whenever you know the target source. auto uses lightweight fallback routing with duckduckgo only as the final fallback. google_scholar is useful for broad scholarly lookup and cited-by style discovery, openalex for author/institution metadata, and bing or duckduckgo are for general web pages.",
-              },
-              intent: {
-                type: "string" as const,
-                enum: [...WEB_SEARCH_INTENTS],
-                description:
-                  "Optional search intent for auto mode. related finds adjacent papers, discover broadens a topic, biomedical prefers broad biomedical scholarly discovery, web prefers Bing then DuckDuckGo, and paper is for direct scholarly lookup.",
-              },
-              max_results: {
-                type: "number" as const,
-                description:
-                  "Maximum number of results to return (default: 5, max: 8).",
-              },
-              domain_filter: {
-                type: "array" as const,
-                items: { type: "string" },
-                description:
-                  "Optional list of domains to keep results from, for example ['arxiv.org', 'nature.com'].",
-              },
-              include_content: {
-                type: "boolean" as const,
-                description:
-                  "Whether to fetch untrusted page content excerpts for top results. Default: false.",
-              },
-              year_from: {
-                type: "number" as const,
-                description:
-                  "Optional lower bound publication year for scholarly sources.",
-              },
-              year_to: {
-                type: "number" as const,
-                description:
-                  "Optional upper bound publication year for scholarly sources.",
-              },
-              open_access_only: {
-                type: "boolean" as const,
-                description:
-                  "If true, require structured open-access evidence from the selected source.",
-              },
-              seed_title: {
-                type: "string" as const,
-                description:
-                  "Optional seed paper title to anchor related-work searches.",
-              },
-              seed_doi: {
-                type: "string" as const,
-                description:
-                  "Optional seed DOI to anchor related-work or paper lookup searches.",
-              },
-              seed_paper_id: {
-                type: "string" as const,
-                description:
-                  "Optional source-specific paper ID when the model already has one from prior search results.",
-              },
-            },
-            required: ["query"],
-          },
-        },
-      },
+      ...createSearchToolDefinitions(),
       {
         type: "function",
         function: {
@@ -1361,6 +1288,10 @@ export class PdfToolManager {
     return isValidWebSearchArgs(args);
   }
 
+  private isScholarlySearchArgs(args: unknown): args is ScholarlySearchArgs {
+    return isValidScholarlySearchArgs(args);
+  }
+
   private isGetCollectionsArgs(args: unknown): args is GetCollectionsArgs {
     return typeof args === "object" && args !== null;
   }
@@ -1496,6 +1427,11 @@ export class PdfToolManager {
           return "Error: Invalid arguments for web_search. Required: query (string)";
         }
         return executeWebSearch(args);
+      case "search_scholarly_sources":
+        if (!this.isScholarlySearchArgs(args)) {
+          return "Error: Invalid arguments for search_scholarly_sources. Required: query (string)";
+        }
+        return executeScholarlySearch(args);
       case "list_all_items":
         if (!this.isListAllItemsArgs(args)) {
           return "Error: Invalid arguments for list_all_items";
@@ -1744,6 +1680,7 @@ export class PdfToolManager {
     hasCurrentItem: boolean = true,
     memoryContext?: string,
     agentContext?: AgentPromptContext,
+    splitSearchTools: boolean = false,
   ): string {
     return generatePaperContextPromptFn(
       currentPaperStructure,
@@ -1752,6 +1689,7 @@ export class PdfToolManager {
       hasCurrentItem,
       memoryContext,
       agentContext,
+      splitSearchTools,
     );
   }
 }

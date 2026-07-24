@@ -145,6 +145,21 @@ const localPaperTool: ToolDefinition = {
   },
 };
 
+const localScholarlySearchTool: ToolDefinition = {
+  type: "function",
+  function: {
+    name: "search_scholarly_sources",
+    description: "Search scholarly sources",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Query" },
+      },
+      required: ["query"],
+    },
+  },
+};
+
 const originalFetch = globalThis.fetch;
 
 describe("OpenAIResponsesProvider", function () {
@@ -172,7 +187,7 @@ describe("OpenAIResponsesProvider", function () {
     });
     const result = await provider.chatCompletionWithTools(
       [message("u1", "user", "find it")],
-      [localWebSearchTool, localPaperTool],
+      [localWebSearchTool, localScholarlySearchTool, localPaperTool],
     );
 
     assert.equal(result.content, "done");
@@ -186,6 +201,13 @@ describe("OpenAIResponsesProvider", function () {
       createResponsesPromptCacheKey("session-1", "gpt-5.4"),
     );
     assert.deepInclude(requestBody.tools, { type: "web_search_preview" });
+    assert.notProperty(requestBody, "max_tool_calls");
+    assert.deepInclude(requestBody.tools, {
+      type: "function",
+      name: "search_scholarly_sources",
+      description: "Search scholarly sources",
+      parameters: localScholarlySearchTool.function.parameters,
+    });
     assert.deepInclude(requestBody.tools, {
       type: "function",
       name: "search_pdf",
@@ -196,6 +218,83 @@ describe("OpenAIResponsesProvider", function () {
       type: "function",
       name: "web_search",
     });
+  });
+
+  it("does not expose split scholarly search when hosted search is disabled", async function () {
+    let requestBody: Record<string, any> = {};
+    globalThis.fetch = (async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body));
+      return jsonResponse(completedResponse("resp_local_search", "done"));
+    }) as typeof fetch;
+
+    const provider = createProvider({
+      sessionId: "session-local-search",
+      hostedWebSearch: false,
+    });
+    await provider.chatCompletionWithTools(
+      [message("u1", "user", "find it")],
+      [localWebSearchTool, localScholarlySearchTool],
+    );
+
+    assert.isTrue(
+      requestBody.tools.some(
+        (tool: any) => tool.type === "function" && tool.name === "web_search",
+      ),
+    );
+    assert.isFalse(
+      requestBody.tools.some(
+        (tool: any) =>
+          tool.type === "function" && tool.name === "search_scholarly_sources",
+      ),
+    );
+    assert.notDeepInclude(requestBody.tools, { type: "web_search_preview" });
+  });
+
+  it("returns non-streaming hosted search telemetry from response output", async function () {
+    globalThis.fetch = (async () =>
+      jsonResponse(
+        completedResponse("resp_hosted_telemetry", "done", {
+          output: [
+            {
+              id: "ws_telemetry",
+              type: "web_search_call",
+              status: "completed",
+              action: {
+                type: "search",
+                query: "latest Zotero release",
+                sources: [
+                  {
+                    title: "Zotero",
+                    url: "https://www.zotero.org/",
+                  },
+                ],
+              },
+            },
+            {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: "done", annotations: [] }],
+            },
+          ],
+        }),
+      )) as typeof fetch;
+
+    const provider = createProvider({ hostedWebSearch: true });
+    const result = await provider.chatCompletionWithTools(
+      [message("u1", "user", "latest Zotero release")],
+      [localWebSearchTool, localScholarlySearchTool],
+    );
+
+    assert.deepEqual(result.hostedWebSearches, [
+      {
+        index: 0,
+        id: "ws_telemetry",
+        status: "completed",
+        actionType: "search",
+        queries: ["latest Zotero release"],
+        sources: [{ title: "Zotero", url: "https://www.zotero.org/" }],
+      },
+    ]);
   });
 
   it("continues the same model with previous_response_id and only new input", async function () {

@@ -119,6 +119,12 @@ import type {
 } from "./search/SearchTypes";
 // V1 migration now handled by migrateToSQLite.ts at startup
 
+const SUPPRESS_AUTOMATIC_RETRY = "paperChatSuppressAutomaticRetry";
+
+type RetryGuardedError = Error & {
+  [SUPPRESS_AUTOMATIC_RETRY]?: boolean;
+};
+
 type FailedAssistantSnapshot = Pick<
   ChatMessage,
   "content" | "reasoning" | "evidence"
@@ -395,14 +401,34 @@ export class ChatManager {
     return getProviderManager().getActiveProvider();
   }
 
+  private getToolDefinitionsForProvider(
+    provider: AIProvider | null | undefined,
+    hasCurrentItem: boolean,
+  ): ToolDefinition[] {
+    const supportsHostedWebSearch =
+      provider?.supportsHostedWebSearch?.() === true;
+    return getPdfToolManager()
+      .getToolDefinitions(hasCurrentItem)
+      .filter(
+        (tool) =>
+          supportsHostedWebSearch ||
+          tool.function.name !== "search_scholarly_sources",
+      )
+      .slice()
+      .sort((left, right) =>
+        left.function.name.localeCompare(right.function.name),
+      );
+  }
+
   private buildToolCallingStableSystemPrompt(params: {
     paperStructure?: Awaited<
       ReturnType<typeof getPdfToolManager.prototype.extractAndParsePaper>
     >;
     hasCurrentItem: boolean;
     item?: Zotero.Item;
+    splitSearchTools?: boolean;
   }): string {
-    const { paperStructure, hasCurrentItem, item } = params;
+    const { paperStructure, hasCurrentItem, item, splitSearchTools } = params;
     const pdfToolManager = getPdfToolManager();
 
     return pdfToolManager.generatePaperContextPrompt(
@@ -410,6 +436,9 @@ export class ChatManager {
       hasCurrentItem ? item?.key : undefined,
       hasCurrentItem && item ? getItemTitleSmart(item) : undefined,
       hasCurrentItem,
+      undefined,
+      undefined,
+      splitSearchTools,
     );
   }
 
@@ -507,6 +536,9 @@ export class ChatManager {
     return {
       abortSignal,
       shouldRetry: async (error, provider) => {
+        if ((error as RetryGuardedError)[SUPPRESS_AUTOMATIC_RETRY] === true) {
+          return false;
+        }
         if (
           provider.config.id === "paperchat" &&
           isPaperChatModelHardFailure(error)
@@ -1007,12 +1039,10 @@ export class ChatManager {
     if (supportsToolCalling) {
       const hasCurrentItem = !!item?.key && !!item.id;
       const pdfToolManager = getPdfToolManager();
-      toolDefinitions = pdfToolManager
-        .getToolDefinitions(hasCurrentItem)
-        .slice()
-        .sort((left, right) =>
-          left.function.name.localeCompare(right.function.name),
-        );
+      toolDefinitions = this.getToolDefinitionsForProvider(
+        provider,
+        hasCurrentItem,
+      );
       const paperStructure = hasCurrentItem
         ? await pdfToolManager.extractAndParsePaper(item.key)
         : undefined;
@@ -1031,6 +1061,9 @@ export class ChatManager {
         paperStructure,
         hasCurrentItem,
         item: hasCurrentItem ? item : undefined,
+        splitSearchTools: toolDefinitions.some(
+          (tool) => tool.function.name === "search_scholarly_sources",
+        ),
       });
       runtimeContextPrompt = this.buildToolCallingRuntimeSystemPrompt({
         memoryContext,
@@ -2722,12 +2755,7 @@ export class ChatManager {
     };
 
     // 获取动态工具列表
-    const tools = pdfToolManager
-      .getToolDefinitions(hasCurrentItem)
-      .slice()
-      .sort((left, right) =>
-        left.function.name.localeCompare(right.function.name),
-      );
+    const tools = this.getToolDefinitionsForProvider(_provider, hasCurrentItem);
 
     // 实时提取论文结构
     const paperStructure = hasCurrentItem
@@ -2767,10 +2795,13 @@ export class ChatManager {
         runtimeState,
       });
 
-    const paperContextPrompt = this.buildToolCallingStableSystemPrompt({
+    let paperContextPrompt = this.buildToolCallingStableSystemPrompt({
       paperStructure,
       hasCurrentItem,
       item: hasCurrentItem ? item : undefined,
+      splitSearchTools: tools.some(
+        (tool) => tool.function.name === "search_scholarly_sources",
+      ),
     });
     const runtimeContextPrompt = buildRuntimeSystemPrompt(
       messagesForApi,
@@ -2856,6 +2887,21 @@ export class ChatManager {
         ),
         forceFinalAnswer: false,
       };
+      const refreshSearchToolsForCurrentModel = () => {
+        const nextTools = this.getToolDefinitionsForProvider(
+          currentProvider,
+          hasCurrentItem,
+        );
+        tools.splice(0, tools.length, ...nextTools);
+        paperContextPrompt = this.buildToolCallingStableSystemPrompt({
+          paperStructure,
+          hasCurrentItem,
+          item: hasCurrentItem ? item : undefined,
+          splitSearchTools: tools.some(
+            (tool) => tool.function.name === "search_scholarly_sources",
+          ),
+        });
+      };
       const syncModelSpecificRequestContext = () => {
         const isDeepSeek = isDeepSeekToolPromptCacheTarget(
           currentProvider,
@@ -2930,9 +2976,22 @@ export class ChatManager {
           currentProvider,
           async () => {
             ensureSendingSessionTracked();
+            const searchCallsBeforeAttempt = createToolBudgetState(
+              sendingSession.toolExecutionState?.results || [],
+            ).webSearchCalls;
             try {
               return await operation();
             } catch (error) {
+              const searchCallsAfterAttempt = createToolBudgetState(
+                sendingSession.toolExecutionState?.results || [],
+              ).webSearchCalls;
+              if (searchCallsAfterAttempt > searchCallsBeforeAttempt) {
+                const guardedError = (
+                  error instanceof Error ? error : new Error(String(error))
+                ) as RetryGuardedError;
+                guardedError[SUPPRESS_AUTOMATIC_RETRY] = true;
+                throw guardedError;
+              }
               const reroute = await this.reroutePaperChatSessionForHardFailure({
                 session: sendingSession,
                 provider: currentProvider,
@@ -2948,6 +3007,7 @@ export class ChatManager {
 
               paperChatHardRerouteUsed = true;
               failedPaperChatModelId = reroute.nextModel;
+              refreshSearchToolsForCurrentModel();
               syncModelSpecificRequestContext();
               return operation();
             }

@@ -20,6 +20,17 @@ const TOOL_SPECIFIC_ALIASES: Record<string, Record<string, string>> = {
     seedDoi: "seed_doi",
     seedPaperId: "seed_paper_id",
   },
+  search_scholarly_sources: {
+    maxResults: "max_results",
+    provider: "source",
+    searchIntent: "intent",
+    yearFrom: "year_from",
+    yearTo: "year_to",
+    openAccessOnly: "open_access_only",
+    seedTitle: "seed_title",
+    seedDoi: "seed_doi",
+    seedPaperId: "seed_paper_id",
+  },
   list_all_items: {
     page_size: "pageSize",
     has_pdf: "hasPdf",

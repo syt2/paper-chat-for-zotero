@@ -4,6 +4,7 @@
 
 import type {
   ChatMessage,
+  HostedWebSearchCall,
   StreamCallbacks,
   StreamToolCallingCallbacks,
 } from "./chat";
@@ -229,6 +230,9 @@ export interface AIProvider {
   /** Check if provider supports PDF file upload */
   supportsPdfUpload(): boolean;
 
+  /** Whether the currently selected model exposes provider-hosted Web Search. */
+  supportsHostedWebSearch?(): boolean;
+
   /** Update configuration */
   updateConfig(config: Partial<ProviderConfig>): void;
 
@@ -273,6 +277,7 @@ export interface ToolCallingProvider extends AIProvider {
     content: string;
     reasoning?: string;
     toolCalls?: ToolCall[];
+    hostedWebSearches?: HostedWebSearchCall[];
     /** Provider returned tool protocol even though this round disabled tools. */
     suppressedToolCall?: boolean;
   }>;

@@ -1,5 +1,6 @@
 import type {
   ChatMessage,
+  HostedWebSearchCall,
   StreamCallbacks,
   StreamToolCallingCallbacks,
 } from "../../types/chat";
@@ -78,17 +79,7 @@ export interface ResponsesStreamHandlers {
     name: string;
   }) => void;
   onToolCallDelta?: (index: number, argumentsDelta: string) => void;
-  onHostedWebSearchStatus?: (event: {
-    index: number;
-    id: string;
-    status: "searching" | "completed" | "error";
-    actionType?: string;
-    queries?: string[];
-    sources?: Array<{
-      title?: string;
-      url: string;
-    }>;
-  }) => void;
+  onHostedWebSearchStatus?: (event: HostedWebSearchCall) => void;
 }
 
 const conversationStates = new Map<string, ResponsesConversationState>();
@@ -427,6 +418,9 @@ function convertTools(
   const converted: ResponsesInputItem[] = [];
   let addedHostedWebSearch = false;
   for (const tool of tools || []) {
+    if (tool.function.name === "search_scholarly_sources" && !hostedWebSearch) {
+      continue;
+    }
     if (hostedWebSearch && tool.function.name === "web_search") {
       if (!addedHostedWebSearch) {
         converted.push({ type: "web_search_preview" });
@@ -694,6 +688,33 @@ function extractHostedWebSearchDetails(item: Record<string, unknown>): {
         index,
     ),
   };
+}
+
+function extractHostedWebSearchCalls(
+  response: ResponsesApiResponse,
+): HostedWebSearchCall[] {
+  const calls: HostedWebSearchCall[] = [];
+  for (const [index, item] of (response.output || []).entries()) {
+    if (item.type !== "web_search_call") {
+      continue;
+    }
+    const id = typeof item.id === "string" ? item.id : "";
+    if (!id) {
+      continue;
+    }
+    calls.push({
+      index,
+      id,
+      status:
+        item.status === "completed"
+          ? "completed"
+          : item.status === "failed"
+            ? "error"
+            : "searching",
+      ...extractHostedWebSearchDetails(item),
+    });
+  }
+  return calls;
 }
 
 /** Parse OpenAI Responses SSE events into the provider's existing callbacks. */
@@ -1319,6 +1340,7 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     content: string;
     reasoning?: string;
     toolCalls?: ToolCall[];
+    hostedWebSearches?: HostedWebSearchCall[];
     suppressedToolCall?: boolean;
   }> {
     if (!this.isReady()) {
@@ -1337,6 +1359,7 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
       throw error;
     }
     const toolCalls = extractToolCalls(completed);
+    const hostedWebSearches = extractHostedWebSearchCalls(completed);
     const allowToolCalls = options?.toolChoice !== "none";
     if (!allowToolCalls && toolCalls.length > 0) {
       this.clearConversationState();
@@ -1347,6 +1370,8 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     return {
       content: extractResponsesText(completed),
       toolCalls: allowToolCalls && toolCalls.length > 0 ? toolCalls : undefined,
+      hostedWebSearches:
+        hostedWebSearches.length > 0 ? hostedWebSearches : undefined,
       suppressedToolCall: !allowToolCalls && toolCalls.length > 0,
     };
   }
@@ -1385,6 +1410,7 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
         throw error;
       }
       const toolCalls = extractToolCalls(completed);
+      const hostedWebSearches = extractHostedWebSearchCalls(completed);
       const allowToolCalls = options?.toolChoice !== "none";
       if (!allowToolCalls && toolCalls.length > 0) {
         this.clearConversationState();
@@ -1396,6 +1422,8 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
         content: extractResponsesText(completed),
         toolCalls:
           allowToolCalls && toolCalls.length > 0 ? toolCalls : undefined,
+        hostedWebSearches:
+          hostedWebSearches.length > 0 ? hostedWebSearches : undefined,
         suppressedToolCall: !allowToolCalls && toolCalls.length > 0,
         stopReason:
           allowToolCalls && toolCalls.length > 0

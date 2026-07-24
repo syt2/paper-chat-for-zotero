@@ -72,6 +72,13 @@ const TOOL_PERMISSION_DESCRIPTORS: Record<
       "Search external web content.",
     ),
   },
+  search_scholarly_sources: {
+    ...createDescriptor(
+      "search_scholarly_sources",
+      "network",
+      "Search external scholarly sources with local providers.",
+    ),
+  },
   get_paper_section: createDescriptor(
     "get_paper_section",
     "read",

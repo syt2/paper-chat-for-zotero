@@ -36,6 +36,13 @@ const TOOL_RUNTIME_METADATA: Record<PaperToolName, ToolRuntimeMetadata> = {
     targetScope: "external",
     mutatesState: false,
   },
+  search_scholarly_sources: {
+    name: "search_scholarly_sources",
+    executionClass: "network",
+    concurrency: "parallel_safe",
+    targetScope: "external",
+    mutatesState: false,
+  },
   get_paper_section: {
     name: "get_paper_section",
     executionClass: "read",

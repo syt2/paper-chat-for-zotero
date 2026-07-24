@@ -1,5 +1,8 @@
-export { executeWebSearch } from "./WebSearchService";
-export { isValidWebSearchArgs } from "./WebSearchArgs";
+export { executeScholarlySearch, executeWebSearch } from "./WebSearchService";
+export {
+  isValidScholarlySearchArgs,
+  isValidWebSearchArgs,
+} from "./WebSearchArgs";
 export {
   createWebSearchProvider,
   DEFAULT_WEB_SEARCH_PROVIDER_ID,

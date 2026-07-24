@@ -199,6 +199,14 @@ function getDirectiveTemplate(
           "For missing context, first fetch or establish the missing target context before retrying. Prefer metadata, notes, or search tools if they can answer the request without full PDF access.",
       };
     case "not_found":
+      if (toolName === "search_scholarly_sources") {
+        return {
+          immediateAction:
+            "Broaden or correct the scholarly query. Use web_search only if ordinary web evidence is acceptable; otherwise state that scholarly evidence was not found.",
+          planningInstruction:
+            "When Scholar and OpenAlex return no results, try a materially broader scholarly query or use hosted web_search only if the task permits general web evidence. Never downgrade a scholarly-only request.",
+        };
+      }
       return {
         immediateAction:
           "Discover valid Zotero keys or identifiers first, then retry with the resolved target.",
@@ -208,9 +216,13 @@ function getDirectiveTemplate(
     case "unavailable":
       return {
         immediateAction:
-          "Treat this tool as unavailable for the current settings. Continue without it unless the user explicitly enables it.",
+          toolName === "search_scholarly_sources"
+            ? "Do not retry the same scholarly search unchanged. Use web_search only if ordinary web evidence is acceptable; otherwise explain the scholarly-source limitation."
+            : "Treat this tool as unavailable for the current settings. Continue without it unless the user explicitly enables it.",
         planningInstruction:
-          "For unavailable tools, stop retrying in this turn and pivot to tools that are currently enabled.",
+          toolName === "search_scholarly_sources"
+            ? "When local scholarly search is unavailable, fall back to hosted web_search only for requests that permit general web evidence. Never downgrade when the user requires Scholar, OpenAlex, or scholarly-only sources."
+            : "For unavailable tools, stop retrying in this turn and pivot to tools that are currently enabled.",
       };
     case "unknown_tool":
       return {
@@ -222,6 +234,14 @@ function getDirectiveTemplate(
     case "execution_failed":
     case "unspecified":
     default:
+      if (toolName === "search_scholarly_sources") {
+        return {
+          immediateAction:
+            "Do not repeat the same scholarly query unchanged. Use web_search only if ordinary web evidence is acceptable, or continue with Zotero evidence.",
+          planningInstruction:
+            "After scholarly-search failure, use hosted web_search only when the task allows general web evidence. If the user requires scholarly-only sources, stop and state the evidence gap instead of downgrading.",
+        };
+      }
       return {
         immediateAction:
           parsed?.suggestedFix ||
@@ -240,7 +260,8 @@ function getDefaultAlternative(
     case "permission_denied":
       return "Continue with lower-risk read-only tools.";
     case "budget_exhausted":
-      return toolName === "web_search"
+      return toolName === "web_search" ||
+        toolName === "search_scholarly_sources"
         ? "Use Zotero library tools or the current-turn web results instead of another search."
         : "Use the evidence already gathered or synthesize without another full-text fetch.";
     case "evidence_required":
@@ -248,11 +269,16 @@ function getDefaultAlternative(
     case "missing_context":
       return "Use metadata, notes, annotations, or library search first.";
     case "not_found":
+      if (toolName === "search_scholarly_sources") {
+        return "Use web_search only when ordinary web evidence is acceptable; otherwise explain that no scholarly result was found.";
+      }
       return "Resolve the target with list/search tools before acting on it.";
     case "unavailable":
-      return toolName === "web_search"
-        ? "Use Zotero library tools instead of external web search."
-        : "Use another enabled read-only tool.";
+      return toolName === "search_scholarly_sources"
+        ? "Use web_search only when ordinary web evidence is acceptable; otherwise explain that scholarly search is unavailable."
+        : toolName === "web_search"
+          ? "Use Zotero library tools instead of external web search."
+          : "Use another enabled read-only tool.";
     case "invalid_arguments":
       return "Start from a minimal valid payload.";
     case "unknown_tool":
@@ -260,6 +286,9 @@ function getDefaultAlternative(
     case "execution_failed":
     case "unspecified":
     default:
+      if (toolName === "search_scholarly_sources") {
+        return "Use web_search only when ordinary web evidence is acceptable; do not downgrade if the user requires scholarly-only sources.";
+      }
       return "Continue with successful tool outputs if they already answer the question.";
   }
 }
@@ -278,6 +307,9 @@ function getRecommendedTools(
         "list_all_items",
       ]);
     case "not_found":
+      if (toolName === "search_scholarly_sources") {
+        return ["web_search", "search_items", "search_notes", "list_all_items"];
+      }
       return dedupeStrings([
         "search_items",
         "list_all_items",
@@ -292,7 +324,8 @@ function getRecommendedTools(
         "get_item_notes",
       ]);
     case "budget_exhausted":
-      return toolName === "web_search"
+      return toolName === "web_search" ||
+        toolName === "search_scholarly_sources"
         ? ["search_items", "search_notes", "list_all_items"]
         : dedupeStrings([
             ...getReaderIndependentFallbacks(toolName),
@@ -313,16 +346,21 @@ function getRecommendedTools(
         "get_paper_metadata",
       ];
     case "unavailable":
-      return toolName === "web_search"
-        ? ["search_items", "search_notes", "list_all_items"]
-        : dedupeStrings([
-            ...getReadOnlyNeighborTools(toolName),
-            "list_all_items",
-          ]);
+      return toolName === "search_scholarly_sources"
+        ? ["web_search", "search_items", "search_notes", "list_all_items"]
+        : toolName === "web_search"
+          ? ["search_items", "search_notes", "list_all_items"]
+          : dedupeStrings([
+              ...getReadOnlyNeighborTools(toolName),
+              "list_all_items",
+            ]);
     case "unknown_tool":
       return ["search_items", "get_item_metadata", "list_all_items"];
     case "execution_failed":
     case "unspecified":
+      if (toolName === "search_scholarly_sources") {
+        return ["web_search", "search_items", "search_notes", "list_all_items"];
+      }
       return getReadOnlyNeighborTools(toolName);
     case "invalid_arguments":
     default:

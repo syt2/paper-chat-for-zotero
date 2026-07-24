@@ -27,6 +27,7 @@ import {
 } from "../src/modules/providers/ProviderManager.ts";
 import { loadCachedRatios } from "../src/modules/preferences/ModelsFetcher.ts";
 import type { ChatMessage, ChatSession } from "../src/types/chat";
+import type { ToolDefinition } from "../src/types/tool";
 import type { ManagedAbortController } from "../src/utils/abort.ts";
 const PREFS_PREFIX = "extensions.zotero.paperchat";
 
@@ -1892,6 +1893,140 @@ describe("paperchat storage and chat manager", function () {
       assert.match(requests[2].url, /\/responses$/);
       assert.notProperty(requests[2].body, "previous_response_id");
       assert.lengthOf(requests[2].body.input as unknown[], 5);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("exposes split search tools only for models declaring hosted web search", async function () {
+    prefStore.set(`${PREFS_PREFIX}.apiKey`, "test-key");
+    prefStore.set(`${PREFS_PREFIX}.userId`, 1);
+    prefStore.set(`${PREFS_PREFIX}.username`, "tester");
+    prefStore.set(
+      `${PREFS_PREFIX}.paperchatRoutingConfigCache`,
+      JSON.stringify({
+        vendorCapable: {
+          tierCode: 2,
+          apiCapabilities: {
+            responses: true,
+            hostedWebSearch: true,
+          },
+        },
+        localOnly: { tierCode: 2 },
+      }),
+    );
+    loadCachedRatios();
+    destroyAuthManager();
+
+    const tools: ToolDefinition[] = [
+      {
+        type: "function",
+        function: {
+          name: "web_search",
+          description: "Search",
+          parameters: {
+            type: "object",
+            properties: { query: { type: "string" } },
+            required: ["query"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "search_scholarly_sources",
+          description: "Search scholarly sources",
+          parameters: {
+            type: "object",
+            properties: { query: { type: "string" } },
+            required: ["query"],
+          },
+        },
+      },
+    ];
+    const requests: Array<{ url: string; body: Record<string, any> }> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      const body = JSON.parse(String(init?.body));
+      requests.push({ url, body });
+      if (url.endsWith("/responses")) {
+        return new Response(
+          JSON.stringify({
+            id: "resp_split_tools",
+            status: "completed",
+            store: true,
+            output: [
+              {
+                type: "message",
+                role: "assistant",
+                content: [
+                  { type: "output_text", text: "done", annotations: [] },
+                ],
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: "done" } }] }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+
+    try {
+      const provider = new PaperChatProvider({
+        id: "paperchat",
+        name: "PaperChat",
+        type: "paperchat",
+        enabled: true,
+        isBuiltin: true,
+        order: 0,
+        resolvedModelOverride: "vendorCapable",
+        requestSessionId: "session-split-search-tools",
+        availableModels: ["vendorCapable", "localOnly"],
+      });
+
+      assert.isTrue(provider.supportsHostedWebSearch());
+      await provider.chatCompletionWithTools(
+        [{ id: "u1", role: "user", content: "first", timestamp: 1 }],
+        tools,
+      );
+      provider.updateConfig({ resolvedModelOverride: "localOnly" });
+      assert.isFalse(provider.supportsHostedWebSearch());
+      await provider.chatCompletionWithTools(
+        [{ id: "u2", role: "user", content: "second", timestamp: 2 }],
+        tools,
+      );
+
+      assert.match(requests[0].url, /\/responses$/);
+      assert.isTrue(
+        requests[0].body.tools.some(
+          (tool: any) => tool.type === "web_search_preview",
+        ),
+      );
+      assert.isTrue(
+        requests[0].body.tools.some(
+          (tool: any) =>
+            tool.type === "function" &&
+            tool.name === "search_scholarly_sources",
+        ),
+      );
+      assert.match(requests[1].url, /\/chat\/completions$/);
+      assert.isTrue(
+        requests[1].body.tools.some(
+          (tool: any) =>
+            tool.type === "function" && tool.function?.name === "web_search",
+        ),
+      );
+      assert.isFalse(
+        requests[1].body.tools.some(
+          (tool: any) =>
+            tool.type === "function" &&
+            tool.function?.name === "search_scholarly_sources",
+        ),
+      );
     } finally {
       globalThis.fetch = originalFetch;
     }

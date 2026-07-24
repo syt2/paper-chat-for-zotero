@@ -3,9 +3,8 @@ import type { ToolExecutionResult } from "../src/types/tool";
 
 describe("tool recovery policy", function () {
   it("maps missing-context failures to context-acquisition guidance", async function () {
-    const { getRecoveryDirective } = await import(
-      "../src/modules/chat/tool-recovery/ToolRecoveryPolicy.ts"
-    );
+    const { getRecoveryDirective } =
+      await import("../src/modules/chat/tool-recovery/ToolRecoveryPolicy.ts");
 
     const result: ToolExecutionResult = {
       toolCall: {
@@ -45,9 +44,7 @@ describe("tool recovery policy", function () {
       createRecoveryGuidanceSystemMessage,
       formatRecoveryNotice,
       getRecoveryDirective,
-    } = await import(
-      "../src/modules/chat/tool-recovery/ToolRecoveryPolicy.ts"
-    );
+    } = await import("../src/modules/chat/tool-recovery/ToolRecoveryPolicy.ts");
 
     const deniedResult = {
       toolCall: {
@@ -86,7 +83,10 @@ describe("tool recovery policy", function () {
     assert.include(notice || "", "Do not retry this tool in the current turn");
     assert.include(notice || "", "Replanning rules:");
     assert.include(notice || "", "do not repeat the call");
-    assert.include(notice || "", "Suggested tools: get_item_metadata, get_item_notes, get_note_content");
+    assert.include(
+      notice || "",
+      "Suggested tools: get_item_metadata, get_item_notes, get_note_content",
+    );
     assert.deepEqual(systemMessage, {
       id: "system-1",
       role: "system",
@@ -96,9 +96,8 @@ describe("tool recovery policy", function () {
   });
 
   it("maps not-found failures to discovery-first guidance", async function () {
-    const { summarizeRecoveryDirectives } = await import(
-      "../src/modules/chat/tool-recovery/ToolRecoveryPolicy.ts"
-    );
+    const { summarizeRecoveryDirectives } =
+      await import("../src/modules/chat/tool-recovery/ToolRecoveryPolicy.ts");
 
     const lines = summarizeRecoveryDirectives([
       {
@@ -109,15 +108,15 @@ describe("tool recovery policy", function () {
             name: "get_note_content",
             arguments: JSON.stringify({ noteKey: "MISSING" }),
           },
-      },
-      status: "failed",
-      content: [
-        "Error: Requested resource for get_note_content was not found.",
-        "Category: not_found",
-        "Retryable: yes",
-        "Fix hint: Retry with a valid Zotero key, collection key, note key, or identifier.",
-        "Alternative: Discover valid targets first with list or search tools before retrying.",
-      ].join("\n"),
+        },
+        status: "failed",
+        content: [
+          "Error: Requested resource for get_note_content was not found.",
+          "Category: not_found",
+          "Retryable: yes",
+          "Fix hint: Retry with a valid Zotero key, collection key, note key, or identifier.",
+          "Alternative: Discover valid targets first with list or search tools before retrying.",
+        ].join("\n"),
       } satisfies ToolExecutionResult,
     ]);
 
@@ -127,9 +126,8 @@ describe("tool recovery policy", function () {
   });
 
   it("maps budget-exhausted full-text failures to cheaper fallback tools", async function () {
-    const { getRecoveryDirective } = await import(
-      "../src/modules/chat/tool-recovery/ToolRecoveryPolicy.ts"
-    );
+    const { getRecoveryDirective } =
+      await import("../src/modules/chat/tool-recovery/ToolRecoveryPolicy.ts");
 
     const directive = getRecoveryDirective({
       toolCall: {
@@ -150,11 +148,102 @@ describe("tool recovery policy", function () {
     } satisfies ToolExecutionResult);
 
     assert.equal(directive.category, "budget_exhausted");
-    assert.include(directive.immediateAction, "Do not call get_full_text again");
+    assert.include(
+      directive.immediateAction,
+      "Do not call get_full_text again",
+    );
     assert.includeMembers(directive.recommendedTools, [
       "get_paper_section",
       "search_paper_content",
       "get_pages",
     ]);
+  });
+
+  it("falls back from failed scholarly search only when general web evidence is acceptable", async function () {
+    const { getRecoveryDirective } =
+      await import("../src/modules/chat/tool-recovery/ToolRecoveryPolicy.ts");
+
+    const directive = getRecoveryDirective({
+      toolCall: {
+        id: "scholarly-1",
+        type: "function",
+        function: {
+          name: "search_scholarly_sources",
+          arguments: JSON.stringify({ query: "transformer interpretability" }),
+        },
+      },
+      args: { query: "transformer interpretability" },
+      status: "failed",
+      content: [
+        "Error: Tool execution failed for search_scholarly_sources.",
+        "Category: execution_failed",
+        "Retryable: yes",
+      ].join("\n"),
+    } satisfies ToolExecutionResult);
+
+    assert.include(
+      directive.immediateAction,
+      "ordinary web evidence is acceptable",
+    );
+    assert.include(directive.planningInstruction, "scholarly-only sources");
+    assert.include(directive.recommendedTools, "web_search");
+  });
+
+  it("treats empty scholarly results as a conditional hosted-search fallback", async function () {
+    const { getRecoveryDirective } =
+      await import("../src/modules/chat/tool-recovery/ToolRecoveryPolicy.ts");
+
+    const directive = getRecoveryDirective({
+      toolCall: {
+        id: "scholarly-empty",
+        type: "function",
+        function: {
+          name: "search_scholarly_sources",
+          arguments: JSON.stringify({ query: "missing scholarly work" }),
+        },
+      },
+      status: "failed",
+      content: [
+        'Error: No scholarly results found for "missing scholarly work".',
+        "Category: not_found",
+        "Retryable: no",
+      ].join("\n"),
+    } satisfies ToolExecutionResult);
+
+    assert.equal(directive.category, "not_found");
+    assert.include(
+      directive.immediateAction,
+      "ordinary web evidence is acceptable",
+    );
+    assert.include(directive.planningInstruction, "Never downgrade");
+    assert.include(directive.recommendedTools, "web_search");
+  });
+
+  it("does not bypass exhausted scholarly-search budget through web_search", async function () {
+    const { getRecoveryDirective } =
+      await import("../src/modules/chat/tool-recovery/ToolRecoveryPolicy.ts");
+
+    const directive = getRecoveryDirective({
+      toolCall: {
+        id: "scholarly-budget",
+        type: "function",
+        function: {
+          name: "search_scholarly_sources",
+          arguments: JSON.stringify({ query: "transformer interpretability" }),
+        },
+      },
+      status: "failed",
+      content: [
+        "Error: Tool budget exhausted for search_scholarly_sources.",
+        "Category: budget_exhausted",
+        "Retryable: no",
+      ].join("\n"),
+    } satisfies ToolExecutionResult);
+
+    assert.notInclude(directive.recommendedTools, "web_search");
+    assert.include(
+      directive.immediateAction,
+      "Do not spend more web-search budget",
+    );
   });
 });

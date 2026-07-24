@@ -435,10 +435,23 @@ export interface StreamCallbacks {
 }
 
 // 流式 Tool Calling 完成结果
+export interface HostedWebSearchCall {
+  index: number;
+  id: string;
+  status: "searching" | "completed" | "error";
+  actionType?: string;
+  queries?: string[];
+  sources?: Array<{
+    title?: string;
+    url: string;
+  }>;
+}
+
 export interface StreamToolCallingResult {
   content: string;
   reasoning?: string;
   toolCalls?: ToolCall[];
+  hostedWebSearches?: HostedWebSearchCall[];
   /** Provider returned tool protocol even though this round disabled tools. */
   suppressedToolCall?: boolean;
   stopReason: "tool_calls" | "end_turn" | "max_tokens" | "stop";
@@ -463,17 +476,7 @@ export interface StreamToolCallingCallbacks {
   onToolCallDelta: (index: number, argumentsDelta: string) => void;
 
   /** Provider-hosted Web Search 状态（仅用于流式 UI，不是本地工具调用） */
-  onHostedWebSearchStatus?: (event: {
-    index: number;
-    id: string;
-    status: "searching" | "completed" | "error";
-    actionType?: string;
-    queries?: string[];
-    sources?: Array<{
-      title?: string;
-      url: string;
-    }>;
-  }) => void;
+  onHostedWebSearchStatus?: (event: HostedWebSearchCall) => void;
 
   /** 所有内容完成 */
   onComplete: (result: StreamToolCallingResult) => void;

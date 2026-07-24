@@ -32,11 +32,19 @@ describe("tool execution entry planner", function () {
   }
 
   function createWebSearchCall(id: string, query: string): ToolCall {
+    return createSearchCall(id, query, "web_search");
+  }
+
+  function createSearchCall(
+    id: string,
+    query: string,
+    name: "web_search" | "search_scholarly_sources",
+  ): ToolCall {
     return {
       id,
       type: "function",
       function: {
-        name: "web_search",
+        name,
         arguments: JSON.stringify({ query }),
       },
     };
@@ -315,7 +323,52 @@ describe("tool execution entry planner", function () {
       );
       assert.include(
         entries[0].results[0].content,
-        "similar web_search query already used",
+        "similar external-search query already used",
+      );
+    }
+  });
+
+  it("shares duplicate-query and call limits across hosted web and scholarly search", async function () {
+    const { planToolExecutionEntries } =
+      await import("../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts");
+
+    const previousResults: ToolExecutionResult[] = [
+      {
+        toolCall: createWebSearchCall(
+          "hosted-web-search:ws-1",
+          "transformer interpretability",
+        ),
+        args: { query: "transformer interpretability" },
+        status: "completed",
+        content: "Hosted web search completed.",
+      },
+    ];
+
+    const entries = planToolExecutionEntries({
+      sessionId: "session-1",
+      assistantMessage,
+      toolCalls: [
+        createSearchCall(
+          "tool-2",
+          "transformer interpretability review",
+          "search_scholarly_sources",
+        ),
+      ],
+      previousResults,
+      createExecutionBatches: (requests) => [requests],
+      budgetLimits: DEFAULT_TEST_BUDGET,
+    });
+
+    assert.lengthOf(entries, 1);
+    assert.equal(entries[0].kind, "synthetic");
+    if (entries[0].kind === "synthetic") {
+      assert.include(
+        entries[0].results[0].content,
+        "Category: budget_exhausted",
+      );
+      assert.include(
+        entries[0].results[0].content,
+        "similar external-search query already used",
       );
     }
   });

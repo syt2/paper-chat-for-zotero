@@ -1,7 +1,4 @@
-import type {
-  ToolCall,
-  ToolPermissionDecision,
-} from "../../../types/tool";
+import type { ToolCall, ToolPermissionDecision } from "../../../types/tool";
 import { getString } from "../../../utils/locale";
 
 export type ToolErrorCategory =
@@ -48,7 +45,9 @@ function getFixHintLabel(): string {
 
 function getAlternativeLabel(): string {
   try {
-    return getString("tool-error-alternative-label") || DEFAULT_ALTERNATIVE_LABEL;
+    return (
+      getString("tool-error-alternative-label") || DEFAULT_ALTERNATIVE_LABEL
+    );
   } catch {
     return DEFAULT_ALTERNATIVE_LABEL;
   }
@@ -123,7 +122,7 @@ function inferToolError(
   if (
     /budget exhausted/i.test(message) ||
     /high-cost tool limit/i.test(message) ||
-    /similar web_search query already used/i.test(message)
+    /similar .*search query already used/i.test(message)
   ) {
     return {
       summary: `Tool budget exhausted for ${toolName}.`,
@@ -135,7 +134,7 @@ function inferToolError(
           ? "Use the full-text result already gathered in this turn, or wait for a new user turn before requesting full text again."
           : "Use the existing search results, narrow the question, or wait for a new user turn before searching again.",
       saferAlternative:
-        toolName === "web_search"
+        toolName === "web_search" || toolName === "search_scholarly_sources"
           ? "Use Zotero library tools or synthesize from results already gathered in this turn."
           : "Use targeted section, page, metadata, notes, or annotation tools instead of full text.",
     };
@@ -254,7 +253,9 @@ export function parseToolError(content: string): ParsedToolError | null {
       continue;
     }
     if (line.startsWith("Category: ")) {
-      result.category = line.slice("Category: ".length).trim() as ToolErrorCategory;
+      result.category = line
+        .slice("Category: ".length)
+        .trim() as ToolErrorCategory;
       continue;
     }
     if (line.startsWith("Retryable: ")) {
@@ -277,7 +278,7 @@ export function parseToolError(content: string): ParsedToolError | null {
             ? fixHintLabel.length
             : line.startsWith(DEFAULT_FIX_HINT_LABEL)
               ? DEFAULT_FIX_HINT_LABEL.length
-            : LEGACY_FIX_HINT_LABEL.length,
+              : LEGACY_FIX_HINT_LABEL.length,
         )
         .trim();
       continue;
@@ -293,7 +294,7 @@ export function parseToolError(content: string): ParsedToolError | null {
             ? alternativeLabel.length
             : line.startsWith(DEFAULT_ALTERNATIVE_LABEL)
               ? DEFAULT_ALTERNATIVE_LABEL.length
-            : LEGACY_ALTERNATIVE_LABEL.length,
+              : LEGACY_ALTERNATIVE_LABEL.length,
         )
         .trim();
     }

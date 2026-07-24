@@ -1,6 +1,12 @@
 import { assert } from "chai";
-import { executeWebSearch } from "../src/modules/chat/web-search/WebSearchService.ts";
-import { isValidWebSearchArgs } from "../src/modules/chat/web-search/WebSearchArgs.ts";
+import {
+  executeScholarlySearch,
+  executeWebSearch,
+} from "../src/modules/chat/web-search/WebSearchService.ts";
+import {
+  isValidScholarlySearchArgs,
+  isValidWebSearchArgs,
+} from "../src/modules/chat/web-search/WebSearchArgs.ts";
 import {
   __setHiddenBrowserConstructorForTests,
   loadPageWithHiddenBrowser,
@@ -646,6 +652,45 @@ describe("web search", function () {
     );
   });
 
+  it("keeps scholarly search on Google Scholar and OpenAlex without web fallback", async function () {
+    prefStore.set(
+      "extensions.zotero.paperchat.webSearchProvider",
+      "duckduckgo",
+    );
+    queueHiddenBrowserPageData({
+      title: "Google Scholar",
+      bodyText: "Search results",
+      html: `<html><body><main>No scholar results</main></body></html>`,
+    });
+    queueJsonResponse({ results: [] });
+
+    const result = await executeScholarlySearch({
+      query: "local scholarly only",
+      intent: "related",
+    });
+
+    assert.include(
+      result,
+      'No scholarly results found for "local scholarly only".',
+    );
+    assert.include(result, "Google Scholar: no results");
+    assert.include(result, "OpenAlex: no results");
+    assert.include(
+      result,
+      "Use web_search only if ordinary web evidence is acceptable",
+    );
+    assert.lengthOf(FakeHiddenBrowser.requestedUrls, 1);
+    assert.lengthOf(FakeXMLHttpRequest.requestedUrls, 1);
+    assert.match(
+      FakeXMLHttpRequest.requestedUrls[0],
+      /^https:\/\/api\.openalex\.org\/works\?/,
+    );
+    assert.notInclude(
+      FakeXMLHttpRequest.requestedUrls.join("\n"),
+      "duckduckgo.com",
+    );
+  });
+
   it("respects explicit DuckDuckGo source and reports timeouts as errors", async function () {
     FakeXMLHttpRequest.queue.push({
       mode: "timeout",
@@ -970,6 +1015,15 @@ describe("web search", function () {
       query: "invalid domain filter",
       domain_filter: [123],
     });
+    const validScholarly = isValidScholarlySearchArgs({
+      query: "scholarly source",
+      source: "openalex",
+      intent: "discover",
+    });
+    const invalidScholarlyWebSource = isValidScholarlySearchArgs({
+      query: "not scholarly",
+      source: "duckduckgo",
+    });
 
     assert.isTrue(validGoogleScholar);
     assert.isTrue(validSemanticScholarWeb);
@@ -977,6 +1031,8 @@ describe("web search", function () {
     assert.isFalse(invalidSource);
     assert.isFalse(removedEuropePmc);
     assert.isFalse(invalidDomainFilter);
+    assert.isTrue(validScholarly);
+    assert.isFalse(invalidScholarlyWebSource);
     assert.deepEqual(FakeXMLHttpRequest.requestedMethods, []);
   });
 

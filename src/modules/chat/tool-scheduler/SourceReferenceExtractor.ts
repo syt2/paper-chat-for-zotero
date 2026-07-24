@@ -414,7 +414,7 @@ export function deriveToolSourceReferences(
     addCollection(args.collectionKey);
   }
 
-  if (toolName === "web_search") {
+  if (toolName === "web_search" || toolName === "search_scholarly_sources") {
     for (const rawUrl of extractWebResultUrls(rawContent)) {
       const url = normalizeSourceUrl(rawUrl);
       if (url) {

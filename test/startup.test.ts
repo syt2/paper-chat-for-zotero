@@ -147,6 +147,10 @@ describe("chat agent safeguards", function () {
 
     assert.equal(manager.getDescriptor("list_all_items")?.mode, "auto_allow");
     assert.equal(manager.getDescriptor("web_search")?.mode, "ask");
+    assert.equal(
+      manager.getDescriptor("search_scholarly_sources")?.mode,
+      "ask",
+    );
     assert.equal(manager.getDescriptor("create_note")?.mode, "auto_allow");
     assert.equal(manager.getDescriptor("save_memory")?.mode, "auto_allow");
     assert.equal(manager.getDescriptor("get_full_text")?.mode, "ask");

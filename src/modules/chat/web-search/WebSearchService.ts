@@ -3,6 +3,7 @@ import { getPref } from "../../../utils/prefs";
 import {
   WEB_SEARCH_INTENTS,
   WEB_SEARCH_SOURCES,
+  type ScholarlySearchArgs,
   type WebSearchArgs,
   type WebSearchIntent,
   type WebSearchSource,
@@ -18,6 +19,7 @@ import {
   normalizeWebSearchProviderId,
 } from "./WebSearchRegistry";
 import { truncate } from "./WebSearchUtils";
+import { formatToolError } from "../tool-errors/ToolErrorFormatter";
 
 const WEB_SEARCH_SOURCE_SET = new Set<string>(WEB_SEARCH_SOURCES);
 const WEB_SEARCH_INTENT_SET = new Set<string>(WEB_SEARCH_INTENTS);
@@ -57,11 +59,15 @@ function normalizeYear(year?: number): number | undefined {
   return normalized >= 1900 && normalized <= 2100 ? normalized : undefined;
 }
 
-function normalizeRequest(args: WebSearchArgs): WebSearchRequest {
+function normalizeRequest(
+  args: WebSearchArgs | ScholarlySearchArgs,
+): WebSearchRequest {
   const maxResults = Math.min(Math.max(args.max_results ?? 5, 1), 8);
-  const domainFilter = args.domain_filter
-    ?.map((domain) => domain.trim())
-    .filter((domain) => domain.length > 0);
+  const rawDomainFilter =
+    "domain_filter" in args ? args.domain_filter : undefined;
+  const domainFilter = rawDomainFilter
+    ?.map((domain: string) => domain.trim())
+    .filter((domain: string) => domain.length > 0);
 
   return {
     query: args.query.trim(),
@@ -70,13 +76,38 @@ function normalizeRequest(args: WebSearchArgs): WebSearchRequest {
     maxResults,
     domainFilter:
       domainFilter && domainFilter.length > 0 ? domainFilter : undefined,
-    includeContent: args.include_content ?? false,
+    includeContent:
+      "include_content" in args ? (args.include_content ?? false) : false,
     yearFrom: normalizeYear(args.year_from),
     yearTo: normalizeYear(args.year_to),
     openAccessOnly: args.open_access_only ?? false,
     seedTitle: args.seed_title?.trim() || undefined,
     seedDoi: args.seed_doi?.trim() || undefined,
     seedPaperId: args.seed_paper_id?.trim() || undefined,
+  };
+}
+
+function buildScholarlyProviderOrder(request: WebSearchRequest): {
+  providerIds: WebSearchSource[];
+  reason: string;
+} {
+  if (request.source !== "auto") {
+    return {
+      providerIds: [request.source],
+      reason: `explicit source=${request.source}`,
+    };
+  }
+
+  if (request.intent === "discover") {
+    return {
+      providerIds: ["openalex", "google_scholar"],
+      reason: "intent=discover prefers structured scholarly discovery",
+    };
+  }
+
+  return {
+    providerIds: ["google_scholar", "openalex"],
+    reason: `intent=${request.intent} uses scholarly-only fallback routing`,
   };
 }
 
@@ -184,9 +215,10 @@ function formatResults(
   query: string,
   request: WebSearchRequest,
   response: WebSearchResponse,
+  resultKind: "web" | "scholarly" = "web",
 ): string {
   if (response.results.length === 0) {
-    return `No web results found for "${query}" using ${response.provider}.`;
+    return `No ${resultKind} results found for "${query}" using ${response.provider}.`;
   }
 
   const sourceUrls = Array.from(
@@ -203,7 +235,7 @@ function formatResults(
     ...sourceUrls.map((url) => `- ${JSON.stringify(url)}`),
     "End web source URLs",
     "",
-    `Web search results for "${query}" via ${response.provider} (${response.results.length} found):`,
+    `${resultKind === "scholarly" ? "Scholarly" : "Web"} search results for "${query}" via ${response.provider} (${response.results.length} found):`,
     "",
     `Requested source: ${request.source}; intent: ${request.intent}.`,
   ];
@@ -236,17 +268,29 @@ async function runProvider(
 }
 
 export async function executeWebSearch(args: WebSearchArgs): Promise<string> {
+  return executeSearch(args, "web");
+}
+
+export async function executeScholarlySearch(
+  args: ScholarlySearchArgs,
+): Promise<string> {
+  return executeSearch(args, "scholarly");
+}
+
+async function executeSearch(
+  args: WebSearchArgs | ScholarlySearchArgs,
+  resultKind: "web" | "scholarly",
+): Promise<string> {
   const query = args.query.trim();
   if (!query) {
     return "Error: search query cannot be empty.";
   }
 
   const request = normalizeRequest(args);
-  const configuredProvider = getConfiguredProvider();
-  const { providerIds, reason } = buildProviderOrder(
-    request,
-    configuredProvider,
-  );
+  const { providerIds, reason } =
+    resultKind === "scholarly"
+      ? buildScholarlyProviderOrder(request)
+      : buildProviderOrder(request, getConfiguredProvider());
   const attemptedProviders: string[] = [];
   const attemptMessages: string[] = [];
 
@@ -260,15 +304,20 @@ export async function executeWebSearch(args: WebSearchArgs): Promise<string> {
         continue;
       }
 
-      return formatResults(query, request, {
-        ...response,
-        routeSummary: describeRoute(
-          request.source,
-          providerId,
-          reason,
-          attemptedProviders,
-        ),
-      });
+      return formatResults(
+        query,
+        request,
+        {
+          ...response,
+          routeSummary: describeRoute(
+            request.source,
+            providerId,
+            reason,
+            attemptedProviders,
+          ),
+        },
+        resultKind,
+      );
     } catch (error) {
       attemptMessages.push(
         `${providerId}: ${truncate(getErrorMessage(error), 220)}`,
@@ -281,13 +330,25 @@ export async function executeWebSearch(args: WebSearchArgs): Promise<string> {
       (message) => !/:\s*no results$/i.test(message),
     );
     if (allFailed) {
-      return `Error: Web search failed: ${attemptMessages.join("; ")}`;
+      return `Error: ${resultKind === "scholarly" ? "Scholarly" : "Web"} search failed: ${attemptMessages.join("; ")}`;
+    }
+    if (resultKind === "scholarly") {
+      return formatToolError({
+        summary: `No scholarly results found for "${query}".`,
+        category: "not_found",
+        retryable: false,
+        cause: `Google Scholar and OpenAlex returned no results. Tried: ${attemptMessages.join("; ")}.`,
+        suggestedFix:
+          "Try a broader scholarly query or verify the paper title, author, DOI, and year filters.",
+        saferAlternative:
+          "Use web_search only if ordinary web evidence is acceptable; do not downgrade when the user requires scholarly-only sources.",
+      });
     }
     return [
-      `No web results found for "${query}".`,
-      `Tried: ${attemptMessages.join("; ")}`,
+      `No ${resultKind} results found for "${query}".`,
+      `Tried: ${attemptMessages.join("; ")}.`,
     ].join(" ");
   }
 
-  return `Error: Web search failed: no providers were available for "${query}".`;
+  return `Error: ${resultKind === "scholarly" ? "Scholarly" : "Web"} search failed: no providers were available for "${query}".`;
 }

@@ -66,6 +66,7 @@ export class PaperChatProvider implements AIProvider {
 
   private refreshDelegates(): {
     delegate: OpenAICompatibleProvider | OpenAIResponsesProvider;
+    capabilities: { responses: boolean; hostedWebSearch: boolean };
   } {
     const delegateConfig = this.createDelegateConfig();
     const capabilities = getPaperChatApiCapabilities(
@@ -86,7 +87,20 @@ export class PaperChatProvider implements AIProvider {
       delegate: capabilities.responses
         ? this._responsesDelegate
         : this._delegate,
+      capabilities,
     };
+  }
+
+  private filterToolsForCapabilities(
+    tools: ToolDefinition[] | undefined,
+    capabilities: { hostedWebSearch: boolean },
+  ): ToolDefinition[] | undefined {
+    if (capabilities.hostedWebSearch) {
+      return tools;
+    }
+    return tools?.filter(
+      (tool) => tool.function.name !== "search_scholarly_sources",
+    );
   }
 
   private getConfiguredModels(): string[] {
@@ -179,6 +193,14 @@ export class PaperChatProvider implements AIProvider {
     return true;
   }
 
+  supportsHostedWebSearch(): boolean {
+    const delegateConfig = this.createDelegateConfig();
+    return getPaperChatApiCapabilities(
+      delegateConfig.defaultModel,
+      getModelRoutingMeta(),
+    ).hostedWebSearch;
+  }
+
   async streamChatCompletion(
     messages: ChatMessage[],
     callbacks: StreamCallbacks,
@@ -222,8 +244,13 @@ export class PaperChatProvider implements AIProvider {
     signal?: AbortSignal,
     options?: ToolCallingOptions,
   ): Promise<{ content: string; toolCalls?: ToolCall[] }> {
-    const { delegate } = this.refreshDelegates();
-    return delegate.chatCompletionWithTools(messages, tools, signal, options);
+    const { delegate, capabilities } = this.refreshDelegates();
+    return delegate.chatCompletionWithTools(
+      messages,
+      this.filterToolsForCapabilities(tools, capabilities),
+      signal,
+      options,
+    );
   }
 
   /**
@@ -237,10 +264,10 @@ export class PaperChatProvider implements AIProvider {
     signal?: AbortSignal,
     options?: ToolCallingOptions,
   ): Promise<void> {
-    const { delegate } = this.refreshDelegates();
+    const { delegate, capabilities } = this.refreshDelegates();
     return delegate.streamChatCompletionWithTools(
       messages,
-      tools,
+      this.filterToolsForCapabilities(tools, capabilities) || [],
       callbacks,
       signal,
       options,

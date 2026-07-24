@@ -686,6 +686,7 @@ function normalizeDecision(
 function getRiskLevel(toolName: string): ToolPermissionDescriptor["riskLevel"] {
   switch (toolName) {
     case "web_search":
+    case "search_scholarly_sources":
       return "network";
     case "create_note":
     case "batch_update_tags":

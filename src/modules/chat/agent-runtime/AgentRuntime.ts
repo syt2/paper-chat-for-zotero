@@ -5,6 +5,7 @@ import type {
   ChatMessageStreamingState,
   ChatSession,
   ExecutionPlan,
+  HostedWebSearchCall,
   StreamToolCallingCallbacks,
   UserInputRequest,
 } from "../../../types/chat";
@@ -42,9 +43,12 @@ import {
   normalizeAgentMaxPlanningIterations,
 } from "./IterationLimitConfig";
 import {
+  createToolBudgetState,
   getToolBudgetLimits,
+  isSearchToolName,
   type ToolBudgetLimits,
 } from "../tool-budget/ToolBudgetPolicy";
+import { getToolRuntimeMetadata } from "../tool-scheduler/ToolMetadataRegistry";
 import { createRecoveryGuidanceSystemMessage } from "../tool-recovery/ToolRecoveryPolicy";
 import {
   formatToolError,
@@ -293,6 +297,8 @@ export class AgentRuntime {
           iteration,
           tools,
           maxIterations,
+          sendingSession,
+          budgetLimits,
         );
         this.refreshSystemPrompt(
           currentMessages,
@@ -334,6 +340,11 @@ export class AgentRuntime {
           result.toolCalls?.length || 0,
           "stopReason:",
           result.stopReason,
+        );
+
+        this.upsertHostedWebSearchResults(
+          sendingSession,
+          result.hostedWebSearches || [],
         );
 
         if (
@@ -468,6 +479,8 @@ export class AgentRuntime {
           iteration,
           tools,
           maxIterations,
+          sendingSession,
+          budgetLimits,
         );
         this.refreshSystemPrompt(
           currentMessages,
@@ -490,7 +503,9 @@ export class AgentRuntime {
             currentMessages,
             iterationControl.toolsForRound,
             abortSignal,
-            { toolChoice: iterationControl.toolChoice },
+            {
+              toolChoice: iterationControl.toolChoice,
+            },
           ),
         );
 
@@ -501,6 +516,11 @@ export class AgentRuntime {
           result.content ? result.content.substring(0, 100) : "(no content)",
           "toolCalls:",
           result.toolCalls?.length || 0,
+        );
+
+        this.upsertHostedWebSearchResults(
+          sendingSession,
+          result.hostedWebSearches || [],
         );
 
         if (
@@ -640,6 +660,7 @@ export class AgentRuntime {
     content: string;
     reasoning?: string;
     toolCalls?: ToolCall[];
+    hostedWebSearches?: HostedWebSearchCall[];
     suppressedToolCall?: boolean;
     stopReason: string;
   }> {
@@ -653,6 +674,7 @@ export class AgentRuntime {
         content: string;
         reasoning?: string;
         toolCalls?: ToolCall[];
+        hostedWebSearches?: HostedWebSearchCall[];
         suppressedToolCall?: boolean;
         stopReason: string;
       }>((resolve, reject) => {
@@ -757,6 +779,14 @@ export class AgentRuntime {
         };
 
         const rejectAttempt = (error: Error) => {
+          this.upsertHostedWebSearchResults(
+            sendingSession,
+            [...hostedWebSearches.entries()].map(([id, search]) => ({
+              id,
+              ...search,
+              status: "error",
+            })),
+          );
           const failedAttempt = {
             content: roundContent,
             reasoning: roundReasoning,
@@ -868,6 +898,26 @@ export class AgentRuntime {
           },
           onComplete: (result) => {
             stopReason = result.stopReason;
+            for (const search of result.hostedWebSearches || []) {
+              const current = hostedWebSearches.get(search.id);
+              hostedWebSearches.set(search.id, {
+                index: search.index,
+                status:
+                  current?.status === "error" || search.status === "error"
+                    ? "error"
+                    : current?.status === "completed" ||
+                        search.status === "completed"
+                      ? "completed"
+                      : "searching",
+                actionType: search.actionType || current?.actionType,
+                queries: search.queries?.length
+                  ? search.queries
+                  : current?.queries,
+                sources: search.sources?.length
+                  ? search.sources
+                  : current?.sources,
+              });
+            }
             const streamedToolCalls: ToolCall[] = [];
             for (const [, tc] of pendingToolCalls) {
               streamedToolCalls.push({
@@ -887,6 +937,13 @@ export class AgentRuntime {
               content: result.content,
               reasoning: result.reasoning || roundReasoning || undefined,
               toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+              hostedWebSearches:
+                hostedWebSearches.size > 0
+                  ? [...hostedWebSearches.entries()].map(([id, search]) => ({
+                      id,
+                      ...search,
+                    }))
+                  : undefined,
               suppressedToolCall: result.suppressedToolCall,
               stopReason,
             });
@@ -1971,6 +2028,77 @@ export class AgentRuntime {
     session.toolExecutionState!.updatedAt = Date.now();
   }
 
+  private upsertHostedWebSearchResults(
+    session: ChatSession,
+    searches: HostedWebSearchCall[],
+  ): void {
+    if (searches.length === 0) {
+      return;
+    }
+    if (!session.toolExecutionState) {
+      this.initializeToolExecutionState(session);
+    }
+    const sessionResults = session.toolExecutionState!.results;
+    for (const search of searches) {
+      const toolCallId = `hosted-web-search:${search.id}`;
+      const query = (search.queries || []).join(" | ");
+      const sourceUrls = [
+        ...new Set((search.sources || []).map((source) => source.url)),
+      ];
+      const contentLines = [
+        "Web source URLs:",
+        ...sourceUrls.map((url) => `- ${JSON.stringify(url)}`),
+        "End web source URLs",
+        "",
+        search.status === "error"
+          ? "Hosted web search failed."
+          : "Hosted web search completed.",
+      ];
+      const toolCall: ToolCall = {
+        id: toolCallId,
+        type: "function",
+        function: {
+          name: "web_search",
+          arguments: JSON.stringify(query ? { query } : {}),
+        },
+      };
+      const nextResult: ToolExecutionResult = {
+        toolCall,
+        args: query ? { query } : undefined,
+        metadata: getToolRuntimeMetadata("web_search") || undefined,
+        references: sourceUrls.map((url) => ({ type: "web", url })),
+        status: search.status === "error" ? "failed" : "completed",
+        content:
+          search.status === "error"
+            ? formatToolError({
+                summary: "Hosted web search failed.",
+                category: "execution_failed",
+                retryable: true,
+                cause: "The model provider reported a hosted web-search error.",
+                suggestedFix:
+                  "Use already gathered evidence or try a materially narrower query if another search is still justified.",
+                saferAlternative:
+                  "Use Zotero library evidence or local scholarly search when the request is academic.",
+              })
+            : contentLines.join("\n"),
+        error:
+          search.status === "error"
+            ? "The model provider reported a hosted web-search error."
+            : undefined,
+      };
+      const existingIndex = sessionResults.findIndex(
+        (result) => result.toolCall.id === toolCallId,
+      );
+      if (existingIndex >= 0) {
+        sessionResults[existingIndex] = nextResult;
+      } else {
+        sessionResults.push(nextResult);
+      }
+    }
+    session.toolExecutionState!.planId = session.executionPlan?.id;
+    session.toolExecutionState!.updatedAt = Date.now();
+  }
+
   private touchToolExecutionState(session: ChatSession): void {
     if (!session.toolExecutionState) {
       this.initializeToolExecutionState(session);
@@ -2087,15 +2215,28 @@ export class AgentRuntime {
     iteration: number,
     tools: ToolDefinition[],
     maxIterations: number,
+    session: ChatSession,
+    budgetLimits: ToolBudgetLimits,
   ): IterationControlState {
     const remainingIterations = maxIterations - iteration + 1;
     const forceFinalAnswer = remainingIterations === 1;
+    const searchBudget = createToolBudgetState(
+      session.toolExecutionState?.results || [],
+    );
+    const remainingSearchCalls = Math.max(
+      0,
+      budgetLimits.maxWebSearchCallsPerTurn - searchBudget.webSearchCalls,
+    );
+    const toolsForRound =
+      remainingSearchCalls === 0
+        ? tools.filter((tool) => !isSearchToolName(tool.function.name))
+        : tools;
     return {
       currentIteration: iteration,
       remainingIterations,
       maxIterations,
       forceFinalAnswer,
-      toolsForRound: tools,
+      toolsForRound: forceFinalAnswer ? [] : toolsForRound,
       toolChoice: forceFinalAnswer ? "none" : "auto",
     };
   }

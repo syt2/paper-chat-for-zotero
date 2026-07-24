@@ -1,12 +1,23 @@
-import type { ToolCall, ToolExecutionResult } from "../../../types/tool";
+import type {
+  PaperToolName,
+  ToolCall,
+  ToolExecutionResult,
+} from "../../../types/tool";
 import { preflightToolArguments } from "../tool-arguments/ToolArgumentPreflight";
-import { formatToolError, parseToolError } from "../tool-errors/ToolErrorFormatter";
+import {
+  formatToolError,
+  parseToolError,
+} from "../tool-errors/ToolErrorFormatter";
 import { getToolRuntimeMetadata } from "../tool-scheduler/ToolMetadataRegistry";
 import { normalizeAgentMaxPlanningIterations } from "../agent-runtime/IterationLimitConfig";
 
 const CURRENT_PAPER_TARGET = "__current_paper__";
 const MAX_FULL_TEXT_CEILING = 3;
 const MAX_WEB_SEARCH_CEILING = 8;
+const SEARCH_TOOL_NAMES = new Set<PaperToolName>([
+  "web_search",
+  "search_scholarly_sources",
+]);
 const NARROW_PAPER_TOOLS = new Set([
   "get_paper_section",
   "search_paper_content",
@@ -30,6 +41,12 @@ export interface ToolBudgetLimits {
   maxWebSearchCallsPerTurn: number;
 }
 
+export function isSearchToolName(
+  toolName: string,
+): toolName is "web_search" | "search_scholarly_sources" {
+  return SEARCH_TOOL_NAMES.has(toolName as PaperToolName);
+}
+
 export function createToolBudgetState(
   previousResults: ToolExecutionResult[],
 ): ToolBudgetState {
@@ -50,7 +67,7 @@ export function createToolBudgetState(
       state.getFullTextCalls += 1;
       continue;
     }
-    if (toolName === "web_search") {
+    if (isSearchToolName(toolName)) {
       state.webSearchCalls += 1;
       const query = normalizeWebSearchQuery(result.args?.query);
       if (query) {
@@ -66,12 +83,14 @@ export function createToolBudgetState(
   return state;
 }
 
-export function getToolBudgetLimits(
-  maxIterations: number,
-): ToolBudgetLimits {
-  const normalizedIterations = normalizeAgentMaxPlanningIterations(maxIterations);
+export function getToolBudgetLimits(maxIterations: number): ToolBudgetLimits {
+  const normalizedIterations =
+    normalizeAgentMaxPlanningIterations(maxIterations);
   return {
-    maxFullTextCallsPerTurn: Math.min(normalizedIterations, MAX_FULL_TEXT_CEILING),
+    maxFullTextCallsPerTurn: Math.min(
+      normalizedIterations,
+      MAX_FULL_TEXT_CEILING,
+    ),
     maxWebSearchCallsPerTurn: Math.min(
       MAX_WEB_SEARCH_CEILING,
       Math.max(1, Math.floor(normalizedIterations / 3)),
@@ -99,8 +118,7 @@ export function applyToolBudgetPolicy(
     if (state.getFullTextCalls >= limits.maxFullTextCallsPerTurn) {
       return createBudgetBlockedResult(toolCall, args, {
         summary: "Blocked get_full_text because the turn budget is exhausted.",
-        cause:
-          `High-cost tool limit reached: get_full_text may only run ${limits.maxFullTextCallsPerTurn} times per user turn.`,
+        cause: `High-cost tool limit reached: get_full_text may only run ${limits.maxFullTextCallsPerTurn} times per user turn.`,
         suggestedFix:
           "Use the full-text result already gathered in this turn, or wait for a new user turn before requesting full text again.",
         saferAlternative:
@@ -139,17 +157,17 @@ export function applyToolBudgetPolicy(
     return null;
   }
 
-  if (toolName === "web_search") {
+  if (isSearchToolName(toolName)) {
     const query = normalizeWebSearchQuery(args?.query);
     if (query && hasObviouslyRepeatedWebSearch(query, state.webSearchQueries)) {
       return createBudgetBlockedResult(toolCall, args, {
-        summary: "Blocked web_search because this turn already used a similar query.",
+        summary: `Blocked ${toolName} because this turn already used a similar search query.`,
         cause:
-          "A similar web_search query already used this turn would likely return redundant results.",
+          "A similar external-search query already used this turn would likely return redundant results.",
         suggestedFix:
           "Use the search results already gathered, or materially narrow the question before searching again.",
         saferAlternative:
-          "Use Zotero library tools or synthesize from current-turn evidence instead of repeating web search.",
+          "Use Zotero library tools or synthesize from current-turn evidence instead of repeating external search.",
         data: {
           tool: toolName,
           query,
@@ -159,13 +177,12 @@ export function applyToolBudgetPolicy(
     }
     if (state.webSearchCalls >= limits.maxWebSearchCallsPerTurn) {
       return createBudgetBlockedResult(toolCall, args, {
-        summary: "Blocked web_search because the turn budget is exhausted.",
-        cause:
-          `High-cost tool limit reached: web_search may only run ${limits.maxWebSearchCallsPerTurn} times per user turn.`,
+        summary: `Blocked ${toolName} because the turn search budget is exhausted.`,
+        cause: `High-cost tool limit reached: external search may only run ${limits.maxWebSearchCallsPerTurn} times per user turn across hosted web and local scholarly search.`,
         suggestedFix:
-          "Use the web results already gathered in this turn, or wait for a new user turn before searching again.",
+          "Use the search results already gathered in this turn, or wait for a new user turn before searching again.",
         saferAlternative:
-          "Prefer Zotero library tools or narrower local evidence before adding another web search.",
+          "Prefer Zotero library tools or narrower local evidence before adding another external search.",
         data: {
           tool: toolName,
           query,
@@ -324,7 +341,9 @@ function hasObviouslyRepeatedWebSearch(
   query: string,
   previousQueries: string[],
 ): boolean {
-  return previousQueries.some((previous) => isObviouslyRepeatedQuery(query, previous));
+  return previousQueries.some((previous) =>
+    isObviouslyRepeatedQuery(query, previous),
+  );
 }
 
 function isObviouslyRepeatedQuery(query: string, previous: string): boolean {
@@ -347,7 +366,10 @@ function isObviouslyRepeatedQuery(query: string, previous: string): boolean {
     previousTokens.has(token),
   ).length;
   const overlapRatio =
-    intersectionSize / Math.max(1, Math.min(queryTokens.size, previousTokens.size));
+    intersectionSize /
+    Math.max(1, Math.min(queryTokens.size, previousTokens.size));
 
-  return overlapRatio >= 0.75 && Math.min(queryTokens.size, previousTokens.size) >= 3;
+  return (
+    overlapRatio >= 0.75 && Math.min(queryTokens.size, previousTokens.size) >= 3
+  );
 }

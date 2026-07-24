@@ -54,6 +54,42 @@ describe("tool argument preflight", function () {
     });
   });
 
+  it("repairs scholarly-search aliases and rejects general-web sources", async function () {
+    const { preflightToolArguments } =
+      await import("../src/modules/chat/tool-arguments/ToolArgumentPreflight.ts");
+    const { validateAndRepairToolArguments } =
+      await import("../src/modules/chat/tool-arguments/ToolArgumentValidation.ts");
+
+    const normalized = preflightToolArguments("search_scholarly_sources", {
+      query: "transformer scaling",
+      maxResults: "3",
+      provider: "OpenAlex",
+      searchIntent: "Related",
+      yearFrom: "2020",
+      openAccessOnly: "true",
+    });
+    const valid = validateAndRepairToolArguments(
+      "search_scholarly_sources",
+      normalized,
+    );
+    const invalid = validateAndRepairToolArguments("search_scholarly_sources", {
+      query: "transformer scaling",
+      source: "duckduckgo",
+    });
+
+    assert.equal(valid.ok, true);
+    assert.deepEqual(valid.args, {
+      query: "transformer scaling",
+      max_results: 3,
+      source: "openalex",
+      intent: "related",
+      year_from: 2020,
+      open_access_only: true,
+    });
+    assert.equal(invalid.ok, false);
+    assert.include(invalid.issues.join("\n"), "source: expected one of");
+  });
+
   it("fills create_note content and add_item identifier from common aliases", async function () {
     const { preflightToolArguments } =
       await import("../src/modules/chat/tool-arguments/ToolArgumentPreflight.ts");
@@ -189,12 +225,10 @@ describe("tool argument preflight", function () {
   });
 
   it("does not materialize missing optional schema fields during validation", async function () {
-    const { preflightToolArguments } = await import(
-      "../src/modules/chat/tool-arguments/ToolArgumentPreflight.ts"
-    );
-    const { validateAndRepairToolArguments } = await import(
-      "../src/modules/chat/tool-arguments/ToolArgumentValidation.ts"
-    );
+    const { preflightToolArguments } =
+      await import("../src/modules/chat/tool-arguments/ToolArgumentPreflight.ts");
+    const { validateAndRepairToolArguments } =
+      await import("../src/modules/chat/tool-arguments/ToolArgumentValidation.ts");
 
     const preflighted = preflightToolArguments("web_search", {
       query: "attention is all you need",
@@ -315,10 +349,10 @@ describe("tool argument preflight", function () {
   it("surfaces validator crashes as internal validation failures instead of JSON parse errors", async function () {
     const { ToolScheduler } =
       await import("../src/modules/chat/tool-scheduler/ToolScheduler.ts");
-    const { getPdfToolManager } = await import("../src/modules/chat/pdf-tools/index.ts");
-    const { resetToolArgumentValidationCache } = await import(
-      "../src/modules/chat/tool-arguments/ToolArgumentValidation.ts"
-    );
+    const { getPdfToolManager } =
+      await import("../src/modules/chat/pdf-tools/index.ts");
+    const { resetToolArgumentValidationCache } =
+      await import("../src/modules/chat/tool-arguments/ToolArgumentValidation.ts");
     const manager = getPdfToolManager();
     const originalGetToolDefinitions = manager.getToolDefinitions.bind(manager);
     resetToolArgumentValidationCache();
