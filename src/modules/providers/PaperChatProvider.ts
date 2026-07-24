@@ -18,6 +18,10 @@ import type {
 import type { ToolDefinition, ToolCall } from "../../types/tool";
 import { getAuthManager } from "../auth";
 import { OpenAICompatibleProvider } from "./OpenAICompatibleProvider";
+import {
+  bindPaperChatSessionProtocol,
+  OpenAIResponsesProvider,
+} from "./OpenAIResponsesProvider";
 import { BUILTIN_PROVIDERS } from "./ProviderManager";
 import { getPref } from "../../utils/prefs";
 import {
@@ -30,14 +34,59 @@ import {
 } from "../preferences/ModelsFetcher";
 import { isEmbeddingModel } from "../embedding/providers/PaperChatEmbedding";
 import { resolveSelectedTierModel } from "./paperchat-tier-routing";
+import { getPaperChatApiCapabilities } from "./paperchat-routing-metadata";
 
 export class PaperChatProvider implements AIProvider {
   private _config: PaperChatProviderConfig;
   private _delegate: OpenAICompatibleProvider;
+  private _responsesDelegate: OpenAIResponsesProvider;
 
   constructor(config: PaperChatProviderConfig) {
     this._config = config;
-    this._delegate = new OpenAICompatibleProvider(this.createDelegateConfig());
+    const delegateConfig = this.createDelegateConfig();
+    this._delegate = new OpenAICompatibleProvider(delegateConfig);
+    this._responsesDelegate = new OpenAIResponsesProvider(
+      delegateConfig,
+      this.createResponsesRuntimeOptions(delegateConfig.defaultModel),
+    );
+  }
+
+  private createResponsesRuntimeOptions(modelId: string): {
+    sessionId?: string;
+    hostedWebSearch: boolean;
+  } {
+    return {
+      sessionId: this._config.requestSessionId,
+      hostedWebSearch: getPaperChatApiCapabilities(
+        modelId,
+        getModelRoutingMeta(),
+      ).hostedWebSearch,
+    };
+  }
+
+  private refreshDelegates(): {
+    delegate: OpenAICompatibleProvider | OpenAIResponsesProvider;
+  } {
+    const delegateConfig = this.createDelegateConfig();
+    const capabilities = getPaperChatApiCapabilities(
+      delegateConfig.defaultModel,
+      getModelRoutingMeta(),
+    );
+    this._delegate.updateConfig(delegateConfig);
+    this._responsesDelegate.updateConfig(delegateConfig);
+    this._responsesDelegate.setRuntimeOptions(
+      this.createResponsesRuntimeOptions(delegateConfig.defaultModel),
+    );
+    bindPaperChatSessionProtocol(
+      this._config.requestSessionId,
+      delegateConfig.defaultModel,
+      capabilities.responses ? "responses" : "chat_completions",
+    );
+    return {
+      delegate: capabilities.responses
+        ? this._responsesDelegate
+        : this._delegate,
+    };
   }
 
   private getConfiguredModels(): string[] {
@@ -123,7 +172,7 @@ export class PaperChatProvider implements AIProvider {
 
   updateConfig(config: Partial<PaperChatProviderConfig>): void {
     this._config = { ...this._config, ...config };
-    this._delegate.updateConfig(this.createDelegateConfig());
+    this.refreshDelegates();
   }
 
   supportsPdfUpload(): boolean {
@@ -136,9 +185,9 @@ export class PaperChatProvider implements AIProvider {
     pdfAttachment?: PdfAttachment,
     signal?: AbortSignal,
   ): Promise<void> {
-    // Refresh config before each call (API key may have changed)
-    this._delegate.updateConfig(this.createDelegateConfig());
-    return this._delegate.streamChatCompletion(
+    // Refresh config before each call (API key or model metadata may have changed)
+    const { delegate } = this.refreshDelegates();
+    return delegate.streamChatCompletion(
       messages,
       callbacks,
       pdfAttachment,
@@ -150,8 +199,8 @@ export class PaperChatProvider implements AIProvider {
     messages: ChatMessage[],
     signal?: AbortSignal,
   ): Promise<string> {
-    this._delegate.updateConfig(this.createDelegateConfig());
-    return this._delegate.chatCompletion(messages, signal);
+    const { delegate } = this.refreshDelegates();
+    return delegate.chatCompletion(messages, signal);
   }
 
   async testConnection(): Promise<boolean> {
@@ -173,13 +222,8 @@ export class PaperChatProvider implements AIProvider {
     signal?: AbortSignal,
     options?: ToolCallingOptions,
   ): Promise<{ content: string; toolCalls?: ToolCall[] }> {
-    this._delegate.updateConfig(this.createDelegateConfig());
-    return this._delegate.chatCompletionWithTools(
-      messages,
-      tools,
-      signal,
-      options,
-    );
+    const { delegate } = this.refreshDelegates();
+    return delegate.chatCompletionWithTools(messages, tools, signal, options);
   }
 
   /**
@@ -193,8 +237,8 @@ export class PaperChatProvider implements AIProvider {
     signal?: AbortSignal,
     options?: ToolCallingOptions,
   ): Promise<void> {
-    this._delegate.updateConfig(this.createDelegateConfig());
-    return this._delegate.streamChatCompletionWithTools(
+    const { delegate } = this.refreshDelegates();
+    return delegate.streamChatCompletionWithTools(
       messages,
       tools,
       callbacks,

@@ -9,6 +9,10 @@ export interface PaperChatModelRoutingMeta {
   priority?: number;
   contextWindow?: number;
   maxOutput?: number;
+  apiCapabilities?: {
+    responses?: boolean;
+    hostedWebSearch?: boolean;
+  };
 }
 
 export type PaperChatModelRoutingMetaMap = Record<
@@ -57,6 +61,7 @@ export function parseModelRoutingConfig(
       priority?: unknown;
       contextWindow?: unknown;
       maxOutput?: unknown;
+      apiCapabilities?: unknown;
     };
     const tier =
       typeof metaRecord.tier === "string"
@@ -93,18 +98,46 @@ export function parseModelRoutingConfig(
     ) {
       meta.maxOutput = metaRecord.maxOutput;
     }
+    if (
+      metaRecord.apiCapabilities &&
+      typeof metaRecord.apiCapabilities === "object" &&
+      !Array.isArray(metaRecord.apiCapabilities)
+    ) {
+      const capabilities = metaRecord.apiCapabilities as Record<
+        string,
+        unknown
+      >;
+      if (capabilities.responses === true) {
+        meta.apiCapabilities = {
+          responses: true,
+          hostedWebSearch: capabilities.hostedWebSearch === true,
+        };
+      }
+    }
 
     if (
       meta.tierCode !== undefined ||
       meta.priority !== undefined ||
       meta.contextWindow !== undefined ||
-      meta.maxOutput !== undefined
+      meta.maxOutput !== undefined ||
+      meta.apiCapabilities !== undefined
     ) {
       routingMeta[modelName] = meta;
     }
   }
 
   return routingMeta;
+}
+
+export function getPaperChatApiCapabilities(
+  model: string,
+  routingMeta: PaperChatModelRoutingMetaMap,
+): { responses: boolean; hostedWebSearch: boolean } {
+  const capabilities = routingMeta[model]?.apiCapabilities;
+  return {
+    responses: capabilities?.responses === true,
+    hostedWebSearch: capabilities?.hostedWebSearch === true,
+  };
 }
 
 export function getRoutingPriorityWeight(

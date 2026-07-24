@@ -2112,6 +2112,7 @@ export class ChatManager {
         provider = new PaperChatProvider({
           ...provider.config,
           resolvedModelOverride: resolvedModelId,
+          requestSessionId: sendingSession.id,
         });
       }
 

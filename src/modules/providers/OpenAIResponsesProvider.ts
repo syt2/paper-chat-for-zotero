@@ -1,0 +1,1120 @@
+import type {
+  ChatMessage,
+  StreamCallbacks,
+  StreamToolCallingCallbacks,
+} from "../../types/chat";
+import type {
+  ApiKeyProviderConfig,
+  PdfAttachment,
+  ToolCallingOptions,
+} from "../../types/provider";
+import type { ToolCall, ToolDefinition } from "../../types/tool";
+import { sanitizeOpenAIToolCallMessages } from "./openai-tool-call-messages";
+import { HttpResponseError } from "./HttpResponseError";
+import { OpenAICompatibleProvider } from "./OpenAICompatibleProvider";
+import {
+  logPromptCacheUsage,
+  stablePromptCacheStringify,
+} from "./prompt-cache-diagnostics";
+
+type ResponsesInputItem = Record<string, unknown>;
+type ResponsesOutputItem = Record<string, unknown>;
+
+interface ResponsesApiResponse {
+  id?: string;
+  status?: string;
+  store?: boolean;
+  output?: ResponsesOutputItem[];
+  usage?: unknown;
+  error?: { message?: string } | null;
+  incomplete_details?: { reason?: string } | null;
+}
+
+interface LocalMessageDescriptor {
+  id: string;
+  fingerprint: string;
+}
+
+interface PreviousOutputDescriptor {
+  text: string;
+  toolCallIds: string[];
+}
+
+interface ResponsesConversationState {
+  previousResponseId?: string;
+  localMessages: LocalMessageDescriptor[];
+  lastOutput: PreviousOutputDescriptor;
+  statelessTranscript?: ResponsesInputItem[];
+}
+
+interface ResponsesRequestPlan {
+  mode: "full" | "previous_response" | "stateless";
+  localMessages: ChatMessage[];
+  localDescriptors: LocalMessageDescriptor[];
+  fullInput: ResponsesInputItem[];
+  requestInput: ResponsesInputItem[];
+  previousResponseId?: string;
+}
+
+interface ResponsesRequestResult {
+  response: Response;
+  plan: ResponsesRequestPlan;
+  forceStateless: boolean;
+}
+
+export interface OpenAIResponsesRuntimeOptions {
+  sessionId?: string;
+  hostedWebSearch?: boolean;
+}
+
+export interface ResponsesStreamHandlers {
+  onTextDelta?: (text: string) => void;
+  onReasoningDelta?: (text: string) => void;
+  onToolCallStart?: (toolCall: {
+    index: number;
+    id: string;
+    name: string;
+  }) => void;
+  onToolCallDelta?: (index: number, argumentsDelta: string) => void;
+}
+
+const conversationStates = new Map<string, ResponsesConversationState>();
+const activeSessionProtocols = new Map<
+  string,
+  { modelId: string; protocol: "chat_completions" | "responses" }
+>();
+
+function conversationKey(sessionId: string, modelId: string): string {
+  return `${sessionId}\u0000${modelId}`;
+}
+
+function clearSessionConversationStates(sessionId: string): void {
+  const prefix = `${sessionId}\u0000`;
+  for (const key of conversationStates.keys()) {
+    if (key.startsWith(prefix)) {
+      conversationStates.delete(key);
+    }
+  }
+}
+
+/**
+ * A Responses chain is valid only while one PaperChat session stays on the
+ * same model and protocol. Local ChatMessage history remains the durable
+ * source of truth when this binding changes.
+ */
+export function bindPaperChatSessionProtocol(
+  sessionId: string | undefined,
+  modelId: string,
+  protocol: "chat_completions" | "responses",
+): void {
+  if (!sessionId) {
+    return;
+  }
+  const previous = activeSessionProtocols.get(sessionId);
+  if (
+    previous &&
+    (previous.modelId !== modelId || previous.protocol !== protocol)
+  ) {
+    clearSessionConversationStates(sessionId);
+  }
+  activeSessionProtocols.set(sessionId, { modelId, protocol });
+}
+
+export function resetOpenAIResponsesStateForTests(): void {
+  conversationStates.clear();
+  activeSessionProtocols.clear();
+}
+
+function hashText(value: string): string {
+  let first = 0x811c9dc5;
+  let second = 0x9e3779b9;
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    first ^= code;
+    first = Math.imul(first, 0x01000193);
+    second ^= code + index;
+    second = Math.imul(second, 0x85ebca6b);
+  }
+  return `${(first >>> 0).toString(16).padStart(8, "0")}${(second >>> 0)
+    .toString(16)
+    .padStart(8, "0")}`;
+}
+
+export function createResponsesPromptCacheKey(
+  sessionId: string,
+  modelId: string,
+): string {
+  return `paperchat_${hashText(sessionId)}_${hashText(modelId)}`;
+}
+
+function fingerprintMessage(message: ChatMessage): string {
+  return hashText(
+    stablePromptCacheStringify({
+      id: message.id,
+      role: message.role,
+      content: message.content,
+      reasoning: message.reasoning,
+      images: message.images,
+      tool_calls: message.tool_calls,
+      tool_call_id: message.tool_call_id,
+    }),
+  );
+}
+
+function describeMessages(messages: ChatMessage[]): LocalMessageDescriptor[] {
+  return messages.map((message) => ({
+    id: message.id,
+    fingerprint: fingerprintMessage(message),
+  }));
+}
+
+function isPreviousOutputMessage(
+  message: ChatMessage,
+  output: PreviousOutputDescriptor,
+): boolean {
+  if (message.role !== "assistant") {
+    return false;
+  }
+  if (output.toolCallIds.length > 0 && message.tool_calls?.length) {
+    const messageIds = new Set(message.tool_calls.map((call) => call.id));
+    return output.toolCallIds.every((id) => messageIds.has(id));
+  }
+  if (!output.text) {
+    return false;
+  }
+  return (
+    message.content === output.text || message.content.endsWith(output.text)
+  );
+}
+
+function findIncrementalMessages(
+  messages: ChatMessage[],
+  state: ResponsesConversationState,
+): { compatible: boolean; messages: ChatMessage[] } {
+  const currentById = new Map<string, ChatMessage>();
+  for (const message of messages) {
+    if (currentById.has(message.id)) {
+      return { compatible: false, messages: [] };
+    }
+    currentById.set(message.id, message);
+  }
+
+  const previousById = new Map(
+    state.localMessages.map((message) => [message.id, message]),
+  );
+  for (const previous of state.localMessages) {
+    const current = currentById.get(previous.id);
+    if (!current) {
+      return { compatible: false, messages: [] };
+    }
+    if (
+      previous.fingerprint !== fingerprintMessage(current) &&
+      current.id !== "runtime-context"
+    ) {
+      return { compatible: false, messages: [] };
+    }
+  }
+
+  const incremental = messages.filter((message) => {
+    const previous = previousById.get(message.id);
+    return !previous || previous.fingerprint !== fingerprintMessage(message);
+  });
+
+  for (let index = incremental.length - 1; index >= 0; index--) {
+    if (isPreviousOutputMessage(incremental[index], state.lastOutput)) {
+      incremental.splice(index, 1);
+      return { compatible: true, messages: incremental };
+    }
+  }
+
+  // The visible assistant message may be sanitized or decorated after the API
+  // response (for example, tool cards or trusted citation cleanup). In a new
+  // user turn it is still the immediately preceding model output and already
+  // belongs to the Responses chain, so do not replay it a second time.
+  const lastNewUserIndex = incremental.findLastIndex(
+    (message) => message.role === "user",
+  );
+  if (lastNewUserIndex > 0) {
+    for (let index = lastNewUserIndex - 1; index >= 0; index--) {
+      if (incremental[index].role === "assistant") {
+        incremental.splice(index, 1);
+        break;
+      }
+    }
+  }
+  return { compatible: true, messages: incremental };
+}
+
+function toInputContent(
+  message: ChatMessage,
+  pdfAttachment: PdfAttachment | undefined,
+): unknown {
+  const hasImages = !!message.images?.length;
+  if (!hasImages && !pdfAttachment) {
+    return message.content;
+  }
+
+  const content: ResponsesInputItem[] = [];
+  if (message.content) {
+    content.push({ type: "input_text", text: message.content });
+  }
+  if (pdfAttachment) {
+    content.push({
+      type: "input_file",
+      filename: pdfAttachment.name,
+      file_data: `data:${pdfAttachment.mimeType};base64,${pdfAttachment.data}`,
+    });
+  }
+  for (const image of message.images || []) {
+    content.push({
+      type: "input_image",
+      image_url:
+        image.type === "base64"
+          ? `data:${image.mimeType};base64,${image.data}`
+          : image.data,
+      detail: "auto",
+    });
+  }
+  return content;
+}
+
+function convertMessagesToResponsesInput(
+  messages: ChatMessage[],
+  pdfAttachment?: PdfAttachment,
+): ResponsesInputItem[] {
+  const firstUserIndex = messages.findIndex(
+    (message) => message.role === "user",
+  );
+  const input: ResponsesInputItem[] = [];
+
+  messages.forEach((message, index) => {
+    if (message.role === "tool") {
+      if (message.tool_call_id) {
+        input.push({
+          type: "function_call_output",
+          call_id: message.tool_call_id,
+          output: message.content,
+        });
+      }
+      return;
+    }
+
+    if (message.role === "error") {
+      return;
+    }
+
+    if (message.content || message.images?.length) {
+      input.push({
+        role: message.role,
+        content: toInputContent(
+          message,
+          index === firstUserIndex ? pdfAttachment : undefined,
+        ),
+      });
+    }
+
+    if (message.role === "assistant" && message.tool_calls?.length) {
+      for (const toolCall of message.tool_calls) {
+        input.push({
+          type: "function_call",
+          call_id: toolCall.id,
+          name: toolCall.function.name,
+          arguments: toolCall.function.arguments,
+        });
+      }
+    }
+  });
+
+  return input;
+}
+
+function convertTools(
+  tools: ToolDefinition[] | undefined,
+  hostedWebSearch: boolean,
+): ResponsesInputItem[] {
+  const converted: ResponsesInputItem[] = [];
+  let addedHostedWebSearch = false;
+  for (const tool of tools || []) {
+    if (hostedWebSearch && tool.function.name === "web_search") {
+      if (!addedHostedWebSearch) {
+        converted.push({ type: "web_search" });
+        addedHostedWebSearch = true;
+      }
+      continue;
+    }
+    converted.push({
+      type: "function",
+      name: tool.function.name,
+      description: tool.function.description,
+      parameters: tool.function.parameters,
+    });
+  }
+  return converted;
+}
+
+function extractToolCalls(response: ResponsesApiResponse): ToolCall[] {
+  const calls: ToolCall[] = [];
+  for (const item of response.output || []) {
+    if (item.type !== "function_call") {
+      continue;
+    }
+    const id =
+      typeof item.call_id === "string"
+        ? item.call_id
+        : typeof item.id === "string"
+          ? item.id
+          : "";
+    const name = typeof item.name === "string" ? item.name : "";
+    if (!id || !name) {
+      continue;
+    }
+    calls.push({
+      id,
+      type: "function",
+      function: {
+        name,
+        arguments: typeof item.arguments === "string" ? item.arguments : "{}",
+      },
+    });
+  }
+  return calls;
+}
+
+function collectUrlCitations(response: ResponsesApiResponse): Array<{
+  title: string;
+  url: string;
+}> {
+  const citations: Array<{ title: string; url: string }> = [];
+  const seen = new Set<string>();
+  for (const item of response.output || []) {
+    if (item.type !== "message" || !Array.isArray(item.content)) {
+      continue;
+    }
+    for (const part of item.content as ResponsesInputItem[]) {
+      if (!Array.isArray(part.annotations)) {
+        continue;
+      }
+      for (const rawAnnotation of part.annotations) {
+        if (!rawAnnotation || typeof rawAnnotation !== "object") {
+          continue;
+        }
+        const annotation = rawAnnotation as Record<string, unknown>;
+        if (
+          annotation.type !== "url_citation" ||
+          typeof annotation.url !== "string" ||
+          seen.has(annotation.url)
+        ) {
+          continue;
+        }
+        seen.add(annotation.url);
+        citations.push({
+          url: annotation.url,
+          title:
+            typeof annotation.title === "string" && annotation.title.trim()
+              ? annotation.title.trim()
+              : annotation.url,
+        });
+      }
+    }
+  }
+  return citations;
+}
+
+function escapeMarkdownLabel(value: string): string {
+  return value.replace(/([[\]\\])/g, "\\$1");
+}
+
+function linkifyUrlCitations(text: string, annotations: unknown): string {
+  if (!Array.isArray(annotations)) {
+    return text;
+  }
+  const ranges = annotations
+    .flatMap((rawAnnotation) => {
+      if (!rawAnnotation || typeof rawAnnotation !== "object") {
+        return [];
+      }
+      const annotation = rawAnnotation as Record<string, unknown>;
+      if (
+        annotation.type !== "url_citation" ||
+        typeof annotation.url !== "string" ||
+        typeof annotation.start_index !== "number" ||
+        typeof annotation.end_index !== "number" ||
+        !Number.isInteger(annotation.start_index) ||
+        !Number.isInteger(annotation.end_index) ||
+        annotation.start_index < 0 ||
+        annotation.end_index <= annotation.start_index ||
+        annotation.end_index > text.length
+      ) {
+        return [];
+      }
+      return [
+        {
+          start: annotation.start_index,
+          end: annotation.end_index,
+          url: annotation.url,
+        },
+      ];
+    })
+    .sort((left, right) => right.start - left.start);
+
+  let linked = text;
+  let earliestAppliedStart = text.length;
+  for (const range of ranges) {
+    if (range.end > earliestAppliedStart) {
+      continue;
+    }
+    const label = text.slice(range.start, range.end);
+    linked = `${linked.slice(0, range.start)}[${escapeMarkdownLabel(label)}](${range.url})${linked.slice(range.end)}`;
+    earliestAppliedStart = range.start;
+  }
+  return linked;
+}
+
+export function extractResponsesText(response: ResponsesApiResponse): string {
+  const textParts: string[] = [];
+  for (const item of response.output || []) {
+    if (item.type !== "message" || !Array.isArray(item.content)) {
+      continue;
+    }
+    for (const part of item.content as ResponsesInputItem[]) {
+      if (part.type === "output_text" && typeof part.text === "string") {
+        textParts.push(linkifyUrlCitations(part.text, part.annotations));
+      }
+    }
+  }
+  const text = textParts.join("");
+  const citations = collectUrlCitations(response);
+  if (citations.length === 0) {
+    return text;
+  }
+  const sources = citations
+    .map(
+      (citation, index) =>
+        `${index + 1}. [${escapeMarkdownLabel(citation.title)}](${citation.url})`,
+    )
+    .join("\n");
+  return `${text}\n\nSources:\n${sources}`;
+}
+
+function responseError(response: ResponsesApiResponse): Error | null {
+  if (response.status !== "failed" && !response.error) {
+    return null;
+  }
+  return new Error(response.error?.message || "Responses API request failed");
+}
+
+function parseSseDataLine(line: string): string | null {
+  if (!line.startsWith("data:")) {
+    return null;
+  }
+  return line.slice(5).trimStart();
+}
+
+/** Parse OpenAI Responses SSE events into the provider's existing callbacks. */
+export async function parseResponsesSSEStream(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  handlers: ResponsesStreamHandlers,
+): Promise<ResponsesApiResponse> {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let completedResponse: ResponsesApiResponse | undefined;
+  let createdResponse: ResponsesApiResponse | undefined;
+  let accumulatedText = "";
+  let accumulatedReasoning = "";
+  const toolCalls = new Map<
+    number,
+    { id: string; name: string; arguments: string; started: boolean }
+  >();
+
+  const emitToolStart = (
+    index: number,
+    item: Record<string, unknown>,
+  ): void => {
+    const id =
+      typeof item.call_id === "string"
+        ? item.call_id
+        : typeof item.id === "string"
+          ? item.id
+          : "";
+    const name = typeof item.name === "string" ? item.name : "";
+    if (!id || !name) {
+      return;
+    }
+    const current = toolCalls.get(index) || {
+      id,
+      name,
+      arguments: "",
+      started: false,
+    };
+    current.id = id;
+    current.name = name;
+    toolCalls.set(index, current);
+    if (!current.started) {
+      current.started = true;
+      handlers.onToolCallStart?.({ index, id, name });
+    }
+  };
+
+  const handleEvent = (event: Record<string, unknown>): void => {
+    const type = typeof event.type === "string" ? event.type : "";
+    if (
+      type === "response.output_text.delta" &&
+      typeof event.delta === "string"
+    ) {
+      accumulatedText += event.delta;
+      handlers.onTextDelta?.(event.delta);
+      return;
+    }
+    if (
+      type === "response.reasoning_summary_text.delta" &&
+      typeof event.delta === "string"
+    ) {
+      accumulatedReasoning += event.delta;
+      handlers.onReasoningDelta?.(event.delta);
+      return;
+    }
+    if (type === "response.output_item.added") {
+      const item = event.item;
+      if (
+        item &&
+        typeof item === "object" &&
+        (item as Record<string, unknown>).type === "function_call"
+      ) {
+        emitToolStart(
+          typeof event.output_index === "number" ? event.output_index : 0,
+          item as Record<string, unknown>,
+        );
+      }
+      return;
+    }
+    if (
+      type === "response.function_call_arguments.delta" &&
+      typeof event.delta === "string"
+    ) {
+      const index =
+        typeof event.output_index === "number" ? event.output_index : 0;
+      const current = toolCalls.get(index);
+      if (current) {
+        current.arguments += event.delta;
+      }
+      handlers.onToolCallDelta?.(index, event.delta);
+      return;
+    }
+    if (type === "response.output_item.done") {
+      const item = event.item;
+      if (
+        item &&
+        typeof item === "object" &&
+        (item as Record<string, unknown>).type === "function_call"
+      ) {
+        const index =
+          typeof event.output_index === "number" ? event.output_index : 0;
+        const record = item as Record<string, unknown>;
+        emitToolStart(index, record);
+        const current = toolCalls.get(index);
+        const completeArguments =
+          typeof record.arguments === "string" ? record.arguments : "";
+        if (current && completeArguments.startsWith(current.arguments)) {
+          const remaining = completeArguments.slice(current.arguments.length);
+          if (remaining) {
+            current.arguments += remaining;
+            handlers.onToolCallDelta?.(index, remaining);
+          }
+        }
+      }
+      return;
+    }
+    if (type === "response.created") {
+      createdResponse = (event.response || {}) as ResponsesApiResponse;
+      return;
+    }
+    if (
+      type === "response.completed" ||
+      type === "response.incomplete" ||
+      type === "response.done"
+    ) {
+      completedResponse = {
+        ...createdResponse,
+        ...((event.response || {}) as ResponsesApiResponse),
+      };
+      return;
+    }
+    if (type === "response.failed") {
+      const failed = (event.response || {}) as ResponsesApiResponse;
+      throw responseError(failed) || new Error("Responses API request failed");
+    }
+    if (type === "error") {
+      const error = event.error as { message?: string } | undefined;
+      throw new Error(error?.message || "Responses API streaming error");
+    }
+  };
+
+  while (true) {
+    const result = await reader.read();
+    if (result.done) {
+      buffer += decoder.decode();
+      break;
+    }
+    buffer += decoder.decode(result.value, { stream: true });
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      const data = parseSseDataLine(line);
+      if (!data || data === "[DONE]") {
+        continue;
+      }
+      handleEvent(JSON.parse(data) as Record<string, unknown>);
+    }
+  }
+
+  const trailingData = parseSseDataLine(buffer.trim());
+  if (trailingData && trailingData !== "[DONE]") {
+    handleEvent(JSON.parse(trailingData) as Record<string, unknown>);
+  }
+  if (!completedResponse) {
+    throw new Error("Responses API stream ended before response.completed");
+  }
+  if (!completedResponse.output?.length) {
+    const synthesized: ResponsesOutputItem[] = [];
+    if (accumulatedReasoning) {
+      synthesized.push({
+        type: "reasoning",
+        summary: [{ type: "summary_text", text: accumulatedReasoning }],
+      });
+    }
+    for (const [index, toolCall] of [...toolCalls.entries()].sort(
+      ([left], [right]) => left - right,
+    )) {
+      synthesized.push({
+        type: "function_call",
+        id: `fc_stream_${index}`,
+        call_id: toolCall.id,
+        name: toolCall.name,
+        arguments: toolCall.arguments,
+      });
+    }
+    if (accumulatedText) {
+      synthesized.push({
+        type: "message",
+        role: "assistant",
+        content: [
+          { type: "output_text", text: accumulatedText, annotations: [] },
+        ],
+      });
+    }
+    completedResponse.output = synthesized;
+  }
+  return completedResponse;
+}
+
+function isInvalidPreviousResponseError(error: unknown): boolean {
+  if (!(error instanceof HttpResponseError)) {
+    return false;
+  }
+  if (error.status !== 400 && error.status !== 404) {
+    return false;
+  }
+  return /previous[_ ]response|previous_response_id|response.+(?:not found|expired|invalid)/i.test(
+    error.responseBody,
+  );
+}
+
+function supportsTemperature(modelId: string): boolean {
+  return !/^(?:o\d|gpt-5)(?:[-.]|$)/i.test(modelId);
+}
+
+export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
+  private runtimeOptions: OpenAIResponsesRuntimeOptions;
+
+  constructor(
+    config: ApiKeyProviderConfig,
+    runtimeOptions: OpenAIResponsesRuntimeOptions = {},
+  ) {
+    super(config);
+    this.runtimeOptions = { ...runtimeOptions };
+  }
+
+  setRuntimeOptions(options: OpenAIResponsesRuntimeOptions): void {
+    this.runtimeOptions = { ...options };
+  }
+
+  private getConversationState(): ResponsesConversationState | undefined {
+    const sessionId = this.runtimeOptions.sessionId;
+    return sessionId
+      ? conversationStates.get(
+          conversationKey(sessionId, this._config.defaultModel),
+        )
+      : undefined;
+  }
+
+  private setConversationState(state: ResponsesConversationState): void {
+    const sessionId = this.runtimeOptions.sessionId;
+    if (!sessionId) {
+      return;
+    }
+    conversationStates.set(
+      conversationKey(sessionId, this._config.defaultModel),
+      state,
+    );
+  }
+
+  private clearConversationState(): void {
+    const sessionId = this.runtimeOptions.sessionId;
+    if (!sessionId) {
+      return;
+    }
+    conversationStates.delete(
+      conversationKey(sessionId, this._config.defaultModel),
+    );
+  }
+
+  private prepareLocalMessages(messages: ChatMessage[]): ChatMessage[] {
+    const filtered = sanitizeOpenAIToolCallMessages(
+      this.filterMessages(messages),
+    );
+    if (!this._config.systemPrompt) {
+      return filtered;
+    }
+    return [
+      {
+        id: "paperchat-provider-system-prompt",
+        role: "system",
+        content: this._config.systemPrompt,
+        timestamp: 0,
+      },
+      ...filtered,
+    ];
+  }
+
+  private buildRequestPlan(
+    messages: ChatMessage[],
+    pdfAttachment: PdfAttachment | undefined,
+    forceFull: boolean,
+  ): ResponsesRequestPlan {
+    const localMessages = this.prepareLocalMessages(messages);
+    const localDescriptors = describeMessages(localMessages);
+    const fullInput = convertMessagesToResponsesInput(
+      localMessages,
+      pdfAttachment,
+    );
+    let state = forceFull ? undefined : this.getConversationState();
+    let incrementalMessages: ChatMessage[] = [];
+
+    if (state) {
+      const incremental = findIncrementalMessages(localMessages, state);
+      if (!incremental.compatible) {
+        this.clearConversationState();
+        state = undefined;
+      } else {
+        incrementalMessages = incremental.messages;
+      }
+    }
+
+    if (state?.statelessTranscript) {
+      const delta = convertMessagesToResponsesInput(
+        incrementalMessages,
+        pdfAttachment,
+      );
+      return {
+        mode: "stateless",
+        localMessages,
+        localDescriptors,
+        fullInput,
+        requestInput: [...state.statelessTranscript, ...delta],
+      };
+    }
+    if (state?.previousResponseId) {
+      return {
+        mode: "previous_response",
+        localMessages,
+        localDescriptors,
+        fullInput,
+        requestInput: convertMessagesToResponsesInput(
+          incrementalMessages,
+          pdfAttachment,
+        ),
+        previousResponseId: state.previousResponseId,
+      };
+    }
+    return {
+      mode: "full",
+      localMessages,
+      localDescriptors,
+      fullInput,
+      requestInput: fullInput,
+    };
+  }
+
+  private buildRequestBody(
+    plan: ResponsesRequestPlan,
+    tools: ToolDefinition[] | undefined,
+    stream: boolean,
+    options?: ToolCallingOptions,
+  ): Record<string, unknown> {
+    const convertedTools = convertTools(
+      tools,
+      this.runtimeOptions.hostedWebSearch === true,
+    );
+    const hasHostedWebSearch = convertedTools.some(
+      (tool) => tool.type === "web_search",
+    );
+    const body: Record<string, unknown> = {
+      model: this._config.defaultModel,
+      input: plan.requestInput,
+      stream,
+    };
+    if (plan.previousResponseId) {
+      body.previous_response_id = plan.previousResponseId;
+    }
+    if (convertedTools.length > 0) {
+      body.tools = convertedTools;
+      body.tool_choice = options?.toolChoice || "auto";
+    }
+    if (this._config.maxTokens && this._config.maxTokens > 0) {
+      body.max_output_tokens = this._config.maxTokens;
+    }
+    if (supportsTemperature(this._config.defaultModel)) {
+      body.temperature = this._config.temperature ?? 0.7;
+    }
+    if (this.runtimeOptions.sessionId) {
+      body.prompt_cache_key = createResponsesPromptCacheKey(
+        this.runtimeOptions.sessionId,
+        this._config.defaultModel,
+      );
+    }
+    if (hasHostedWebSearch) {
+      body.include = ["web_search_call.action.sources"];
+    }
+    return body;
+  }
+
+  private async request(
+    messages: ChatMessage[],
+    tools: ToolDefinition[] | undefined,
+    stream: boolean,
+    signal: AbortSignal | undefined,
+    options?: ToolCallingOptions,
+    pdfAttachment?: PdfAttachment,
+  ): Promise<ResponsesRequestResult> {
+    let plan = this.buildRequestPlan(messages, pdfAttachment, false);
+    let body = this.buildRequestBody(plan, tools, stream, options);
+    let forceStateless = false;
+    const send = () =>
+      fetch(`${this._config.baseUrl}/responses`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this._config.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: stablePromptCacheStringify(body),
+        signal,
+      });
+
+    let response = await send();
+    try {
+      await this.validateResponse(response);
+    } catch (error) {
+      if (!plan.previousResponseId || !isInvalidPreviousResponseError(error)) {
+        throw error;
+      }
+      this.clearConversationState();
+      forceStateless = true;
+      plan = this.buildRequestPlan(messages, pdfAttachment, true);
+      body = this.buildRequestBody(plan, tools, stream, options);
+      response = await send();
+      await this.validateResponse(response);
+    }
+    return { response, plan, forceStateless };
+  }
+
+  private commitResponseState(
+    plan: ResponsesRequestPlan,
+    response: ResponsesApiResponse,
+    forceStateless = false,
+  ): void {
+    if (!response.id) {
+      this.clearConversationState();
+      return;
+    }
+    const toolCalls = extractToolCalls(response);
+    const nextState: ResponsesConversationState = {
+      localMessages: plan.localDescriptors,
+      lastOutput: {
+        text: extractResponsesText(response),
+        toolCallIds: toolCalls.map((call) => call.id),
+      },
+    };
+    if (response.store === false || forceStateless) {
+      const transcriptBase =
+        plan.mode === "stateless" ? plan.requestInput : plan.fullInput;
+      nextState.statelessTranscript = [
+        ...transcriptBase,
+        ...(response.output || []),
+      ];
+    } else {
+      nextState.previousResponseId = response.id;
+    }
+    this.setConversationState(nextState);
+  }
+
+  private logResponsesUsage(requestKind: string, usage: unknown): void {
+    logPromptCacheUsage({
+      providerId: this._config.id,
+      model: this._config.defaultModel,
+      requestKind,
+      usage,
+    });
+  }
+
+  async streamChatCompletion(
+    messages: ChatMessage[],
+    callbacks: StreamCallbacks,
+    pdfAttachment?: PdfAttachment,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (!this.isReady()) {
+      callbacks.onError(new Error("Provider is not configured"));
+      return;
+    }
+    try {
+      const { response, plan, forceStateless } = await this.request(
+        messages,
+        undefined,
+        true,
+        signal,
+        undefined,
+        pdfAttachment,
+      );
+      const completed = await parseResponsesSSEStream(
+        this.getResponseReader(response),
+        {
+          onTextDelta: callbacks.onChunk,
+          onReasoningDelta: callbacks.onReasoningChunk,
+        },
+      );
+      const error = responseError(completed);
+      if (error) {
+        throw error;
+      }
+      this.commitResponseState(plan, completed, forceStateless);
+      this.logResponsesUsage("responses-stream", completed.usage);
+      callbacks.onComplete(extractResponsesText(completed));
+    } catch (error) {
+      callbacks.onError(this.wrapError(error));
+    }
+  }
+
+  async chatCompletion(
+    messages: ChatMessage[],
+    signal?: AbortSignal,
+  ): Promise<string> {
+    if (!this.isReady()) {
+      throw new Error("Provider is not configured");
+    }
+    const { response, plan, forceStateless } = await this.request(
+      messages,
+      undefined,
+      false,
+      signal,
+    );
+    const completed = (await response.json()) as ResponsesApiResponse;
+    const error = responseError(completed);
+    if (error) {
+      throw error;
+    }
+    this.commitResponseState(plan, completed, forceStateless);
+    this.logResponsesUsage("responses", completed.usage);
+    return extractResponsesText(completed);
+  }
+
+  async chatCompletionWithTools(
+    messages: ChatMessage[],
+    tools?: ToolDefinition[],
+    signal?: AbortSignal,
+    options?: ToolCallingOptions,
+  ): Promise<{
+    content: string;
+    reasoning?: string;
+    toolCalls?: ToolCall[];
+    suppressedToolCall?: boolean;
+  }> {
+    if (!this.isReady()) {
+      throw new Error("Provider is not configured");
+    }
+    const { response, plan, forceStateless } = await this.request(
+      messages,
+      tools,
+      false,
+      signal,
+      options,
+    );
+    const completed = (await response.json()) as ResponsesApiResponse;
+    const error = responseError(completed);
+    if (error) {
+      throw error;
+    }
+    this.commitResponseState(plan, completed, forceStateless);
+    this.logResponsesUsage("responses-tools", completed.usage);
+    const toolCalls = extractToolCalls(completed);
+    const allowToolCalls = options?.toolChoice !== "none";
+    return {
+      content: extractResponsesText(completed),
+      toolCalls: allowToolCalls && toolCalls.length > 0 ? toolCalls : undefined,
+      suppressedToolCall: !allowToolCalls && toolCalls.length > 0,
+    };
+  }
+
+  async streamChatCompletionWithTools(
+    messages: ChatMessage[],
+    tools: ToolDefinition[],
+    callbacks: StreamToolCallingCallbacks,
+    signal?: AbortSignal,
+    options?: ToolCallingOptions,
+  ): Promise<void> {
+    if (!this.isReady()) {
+      callbacks.onError(new Error("Provider is not configured"));
+      return;
+    }
+    try {
+      const { response, plan, forceStateless } = await this.request(
+        messages,
+        tools,
+        true,
+        signal,
+        options,
+      );
+      const completed = await parseResponsesSSEStream(
+        this.getResponseReader(response),
+        {
+          onTextDelta: callbacks.onTextDelta,
+          onReasoningDelta: callbacks.onReasoningDelta,
+          onToolCallStart: callbacks.onToolCallStart,
+          onToolCallDelta: callbacks.onToolCallDelta,
+        },
+      );
+      const error = responseError(completed);
+      if (error) {
+        throw error;
+      }
+      this.commitResponseState(plan, completed, forceStateless);
+      this.logResponsesUsage("responses-tools-stream", completed.usage);
+      const toolCalls = extractToolCalls(completed);
+      const allowToolCalls = options?.toolChoice !== "none";
+      callbacks.onComplete({
+        content: extractResponsesText(completed),
+        toolCalls:
+          allowToolCalls && toolCalls.length > 0 ? toolCalls : undefined,
+        suppressedToolCall: !allowToolCalls && toolCalls.length > 0,
+        stopReason:
+          allowToolCalls && toolCalls.length > 0
+            ? "tool_calls"
+            : completed.status === "incomplete" &&
+                completed.incomplete_details?.reason === "max_output_tokens"
+              ? "max_tokens"
+              : "end_turn",
+      });
+    } catch (error) {
+      callbacks.onError(this.wrapError(error));
+    }
+  }
+}

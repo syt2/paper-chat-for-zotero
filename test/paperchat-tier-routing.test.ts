@@ -185,10 +185,20 @@ describe("paperchat tier routing", function () {
           priority: 4,
           contextWindow: 198000,
           maxOutput: 64000,
+          apiCapabilities: {
+            responses: true,
+            hostedWebSearch: true,
+          },
         },
         m2: {
           tier: "ultra",
           priority: "3",
+        },
+        m3: {
+          tier: "lite",
+          apiCapabilities: {
+            hostedWebSearch: true,
+          },
         },
       },
     });
@@ -199,10 +209,17 @@ describe("paperchat tier routing", function () {
         priority: 4,
         contextWindow: 198000,
         maxOutput: 64000,
+        apiCapabilities: {
+          responses: true,
+          hostedWebSearch: true,
+        },
       },
       m2: {
         tierCode: 4,
         priority: 3,
+      },
+      m3: {
+        tierCode: 1,
       },
     });
   });

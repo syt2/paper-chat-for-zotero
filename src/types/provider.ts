@@ -74,6 +74,8 @@ export interface PaperChatProviderConfig extends BaseProviderConfig {
   maxTokens?: number;
   temperature?: number;
   systemPrompt?: string;
+  /** Runtime-only session binding used for Responses conversation state. */
+  requestSessionId?: string;
 }
 
 /**

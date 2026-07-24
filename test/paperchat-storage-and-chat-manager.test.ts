@@ -1786,6 +1786,117 @@ describe("paperchat storage and chat manager", function () {
     assert.equal(delegateConfig.defaultModel, "m3");
   });
 
+  it("routes only declared models through Responses and resets state across protocol switches", async function () {
+    prefStore.set(`${PREFS_PREFIX}.apiKey`, "test-key");
+    prefStore.set(`${PREFS_PREFIX}.userId`, 1);
+    prefStore.set(`${PREFS_PREFIX}.username`, "tester");
+    prefStore.set(
+      `${PREFS_PREFIX}.paperchatRoutingConfigCache`,
+      JSON.stringify({
+        responseModel: {
+          tierCode: 2,
+          apiCapabilities: {
+            responses: true,
+            hostedWebSearch: false,
+          },
+        },
+        chatModel: { tierCode: 2 },
+      }),
+    );
+    loadCachedRatios();
+    destroyAuthManager();
+
+    const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      requests.push({ url, body });
+      if (url.endsWith("/responses")) {
+        return new Response(
+          JSON.stringify({
+            id: `resp_${requests.length}`,
+            status: "completed",
+            store: true,
+            output: [
+              {
+                type: "message",
+                role: "assistant",
+                content: [
+                  {
+                    type: "output_text",
+                    text: "response answer",
+                    annotations: [],
+                  },
+                ],
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: "chat answer" } }] }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+
+    try {
+      const provider = new PaperChatProvider({
+        id: "paperchat",
+        name: "PaperChat",
+        type: "paperchat",
+        enabled: true,
+        isBuiltin: true,
+        order: 0,
+        resolvedModelOverride: "responseModel",
+        requestSessionId: "session-protocol-switch",
+        availableModels: ["responseModel", "chatModel"],
+      });
+
+      await provider.chatCompletion([
+        { id: "u1", role: "user", content: "first", timestamp: 1 },
+      ]);
+      provider.updateConfig({ resolvedModelOverride: "chatModel" });
+      await provider.chatCompletion([
+        { id: "u1", role: "user", content: "first", timestamp: 1 },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "response answer",
+          timestamp: 2,
+        },
+        { id: "u2", role: "user", content: "second", timestamp: 3 },
+      ]);
+      provider.updateConfig({ resolvedModelOverride: "responseModel" });
+      await provider.chatCompletion([
+        { id: "u1", role: "user", content: "first", timestamp: 1 },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "response answer",
+          timestamp: 2,
+        },
+        { id: "u2", role: "user", content: "second", timestamp: 3 },
+        {
+          id: "a2",
+          role: "assistant",
+          content: "chat answer",
+          timestamp: 4,
+        },
+        { id: "u3", role: "user", content: "third", timestamp: 5 },
+      ]);
+
+      assert.match(requests[0].url, /\/responses$/);
+      assert.match(requests[1].url, /\/chat\/completions$/);
+      assert.match(requests[2].url, /\/responses$/);
+      assert.notProperty(requests[2].body, "previous_response_id");
+      assert.lengthOf(requests[2].body.input as unknown[], 5);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("treats switching to the already selected tier as a no-op", async function () {
     prefStore.set(
       `${PREFS_PREFIX}.paperchatTierState`,
