@@ -78,6 +78,11 @@ export interface ResponsesStreamHandlers {
     name: string;
   }) => void;
   onToolCallDelta?: (index: number, argumentsDelta: string) => void;
+  onHostedWebSearchStatus?: (event: {
+    index: number;
+    id: string;
+    status: "searching" | "completed";
+  }) => void;
 }
 
 const conversationStates = new Map<string, ResponsesConversationState>();
@@ -677,6 +682,25 @@ export async function parseResponsesSSEStream(
   const handleEvent = (event: Record<string, unknown>): void => {
     const type = typeof event.type === "string" ? event.type : "";
     if (
+      type === "response.web_search_call.in_progress" ||
+      type === "response.web_search_call.searching" ||
+      type === "response.web_search_call.completed"
+    ) {
+      const id = typeof event.item_id === "string" ? event.item_id : "";
+      if (id) {
+        handlers.onHostedWebSearchStatus?.({
+          index:
+            typeof event.output_index === "number" ? event.output_index : 0,
+          id,
+          status:
+            type === "response.web_search_call.completed"
+              ? "completed"
+              : "searching",
+        });
+      }
+      return;
+    }
+    if (
       type === "response.output_text.delta" &&
       typeof event.delta === "string"
     ) {
@@ -1241,6 +1265,7 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
           onReasoningDelta: callbacks.onReasoningDelta,
           onToolCallStart: callbacks.onToolCallStart,
           onToolCallDelta: callbacks.onToolCallDelta,
+          onHostedWebSearchStatus: callbacks.onHostedWebSearchStatus,
         },
       );
       const error = responseError(completed);

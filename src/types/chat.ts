@@ -462,6 +462,13 @@ export interface StreamToolCallingCallbacks {
   /** Tool call 参数增量 */
   onToolCallDelta: (index: number, argumentsDelta: string) => void;
 
+  /** Provider-hosted Web Search 状态（仅用于流式 UI，不是本地工具调用） */
+  onHostedWebSearchStatus?: (event: {
+    index: number;
+    id: string;
+    status: "searching" | "completed";
+  }) => void;
+
   /** 所有内容完成 */
   onComplete: (result: StreamToolCallingResult) => void;
 

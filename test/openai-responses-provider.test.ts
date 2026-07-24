@@ -865,6 +865,48 @@ describe("OpenAIResponsesProvider", function () {
     );
   });
 
+  it("emits hosted Web Search lifecycle events without creating function calls", async function () {
+    const statuses: unknown[] = [];
+    const functionStarts: unknown[] = [];
+    const completed = completedResponse("resp_web_search", "Search result");
+    const events = [
+      {
+        type: "response.web_search_call.in_progress",
+        output_index: 0,
+        item_id: "ws_123",
+        sequence_number: 1,
+      },
+      {
+        type: "response.web_search_call.searching",
+        output_index: 0,
+        item_id: "ws_123",
+        sequence_number: 2,
+      },
+      {
+        type: "response.web_search_call.completed",
+        output_index: 0,
+        item_id: "ws_123",
+        sequence_number: 3,
+      },
+      { type: "response.completed", response: completed },
+    ];
+    const sse = events.map(
+      (event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+    );
+
+    await parseResponsesSSEStream(readerFromSSE(sse), {
+      onToolCallStart: (toolCall) => functionStarts.push(toolCall),
+      onHostedWebSearchStatus: (event) => statuses.push(event),
+    });
+
+    assert.deepEqual(statuses, [
+      { index: 0, id: "ws_123", status: "searching" },
+      { index: 0, id: "ws_123", status: "searching" },
+      { index: 0, id: "ws_123", status: "completed" },
+    ]);
+    assert.deepEqual(functionStarts, []);
+  });
+
   it("clears state when a streaming upstream ignores tool_choice none", async function () {
     const requestBodies: Array<Record<string, any>> = [];
     let call = 0;

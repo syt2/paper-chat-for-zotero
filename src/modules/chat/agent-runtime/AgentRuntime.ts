@@ -647,6 +647,10 @@ export class AgentRuntime {
           number,
           { id: string; name: string; arguments: string }
         >();
+        const hostedWebSearches = new Map<
+          string,
+          { index: number; status: "searching" | "completed" }
+        >();
         let roundContent = "";
         let roundReasoning = "";
         let stopReason = "end_turn";
@@ -669,11 +673,26 @@ export class AgentRuntime {
             .join("");
         };
 
+        const buildHostedWebSearchDisplay = (): string =>
+          [...hostedWebSearches.entries()]
+            .sort(([, left], [, right]) => left.index - right.index)
+            .map(([, search]) =>
+              this.callbacks.formatToolCallCard(
+                "web_search",
+                "",
+                search.status === "completed" ? "completed" : "calling",
+              ),
+            )
+            .join("");
+
         const getPersistedStreamingContent = (): string =>
           displayBeforeThisRound + roundContent;
 
         const getUiStreamingContent = (): string =>
-          getPersistedStreamingContent() + buildDraftToolCallDisplay();
+          displayBeforeThisRound +
+          buildHostedWebSearchDisplay() +
+          roundContent +
+          buildDraftToolCallDisplay();
 
         const updateAssistantStreamingContent = (): string | undefined => {
           if (!this.callbacks.isSessionTracked(sendingSession, sessionRunId)) {
@@ -779,6 +798,10 @@ export class AgentRuntime {
               tc.arguments += argumentsDelta;
               updateAssistantStreamingContent();
             }
+          },
+          onHostedWebSearchStatus: ({ index, id, status }) => {
+            hostedWebSearches.set(id, { index, status });
+            updateAssistantStreamingContent();
           },
           onComplete: (result) => {
             stopReason = result.stopReason;

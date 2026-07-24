@@ -624,6 +624,110 @@ describe("agent runtime plan semantics", function () {
     }
   });
 
+  it("renders hosted Web Search as transient UI without executing or persisting a tool", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    const session = createSession();
+    const assistantMessage: ChatMessage = {
+      id: "assistant-hosted-web-search",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+    };
+    session.messages.push(assistantMessage);
+    const streamingUpdates: string[] = [];
+    let toolExecutions = 0;
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        saveSession: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => true,
+        isSessionTracked: () => true,
+        onStreamingUpdate: (content: string) => {
+          streamingUpdates.push(content);
+        },
+        formatToolCallCard: (name: string, _args: string, status: string) =>
+          `<tool name="${name}" status="${status}" />`,
+        generateId: () => "generated-hosted-web-search",
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async () => {
+          toolExecutions += 1;
+          return [];
+        },
+      },
+    ) as any;
+    runtime.getMaxIterations = () => 2;
+    const provider = {
+      config: {
+        id: "paperchat",
+        type: "paperchat",
+        defaultModel: "test-model",
+      },
+      chatCompletionWithTools: async () => ({ content: "unused" }),
+      streamChatCompletionWithTools: async (
+        _messages: ChatMessage[],
+        _tools: unknown[],
+        callbacks: any,
+      ) => {
+        callbacks.onHostedWebSearchStatus({
+          index: 0,
+          id: "ws_123",
+          status: "searching",
+        });
+        callbacks.onHostedWebSearchStatus({
+          index: 0,
+          id: "ws_123",
+          status: "completed",
+        });
+        callbacks.onTextDelta("Answer from web");
+        callbacks.onComplete({
+          content: "Answer from web",
+          stopReason: "end_turn",
+        });
+      },
+    };
+
+    try {
+      await runtime.executeStreamingToolLoop({
+        provider,
+        currentMessages: session.messages,
+        assistantMessage,
+        pdfWasAttached: false,
+        summaryTriggered: false,
+        tools: [],
+        sendingSession: session,
+      });
+
+      assert.include(
+        streamingUpdates,
+        '<tool name="web_search" status="calling" />',
+      );
+      assert.include(
+        streamingUpdates,
+        '<tool name="web_search" status="completed" />',
+      );
+      assert.include(
+        streamingUpdates,
+        '<tool name="web_search" status="completed" />Answer from web',
+      );
+      assert.equal(toolExecutions, 0);
+      assert.equal(assistantMessage.content, "Answer from web");
+      assert.isUndefined(assistantMessage.tool_calls);
+      assert.notInclude(assistantMessage.content, "web_search");
+      assert.isFalse(session.messages.some((message) => message.apiOnly));
+      assert.deepEqual(session.toolExecutionState?.results, []);
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
+  });
+
   it("does not replay a completed tool when later streaming retries are exhausted", async function () {
     const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
     (globalThis as { ztoolkit?: unknown }).ztoolkit = {
