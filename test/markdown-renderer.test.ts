@@ -717,6 +717,81 @@ ${completedToolCall}
 
     assert.equal(stripIncompleteTrailingToolCall(content), "\n");
   });
+
+  it("keeps an expanded streaming tool detail open across re-renders", async function () {
+    const originalAddon = (globalThis as { addon?: unknown }).addon;
+    const originalZotero = (globalThis as { Zotero?: unknown }).Zotero;
+    (globalThis as { addon?: unknown }).addon = {
+      data: {
+        locale: {
+          current: {
+            formatMessagesSync: () => [{ value: "Show earlier calls" }],
+          },
+        },
+      },
+    };
+    (globalThis as { Zotero?: unknown }).Zotero = {
+      getMainWindow: () => null,
+    };
+    const { resetToolCallGroupExpandState } =
+      await import("../src/modules/ui/chat-panel/ToolCallGroupExpandState.ts");
+    resetToolCallGroupExpandState();
+
+    const doc = new FakeDocument();
+    const root = new FakeElement(doc, "div");
+    const content = `
+<tool-call status="calling" expand-key="hosted-web-search:ws_123">
+<tool-name>web_search</tool-name>
+<tool-status>Calling...</tool-status>
+<tool-result>query: Zotero AI tools</tool-result>
+</tool-call>`;
+
+    try {
+      renderMarkdownToElement(
+        root as unknown as HTMLElement,
+        content,
+        "assistant-web-search",
+      );
+      const firstCard = root.children[0];
+      const firstHeader = firstCard.children[0];
+      const firstDetails = firstCard.children[1];
+      assert.equal(firstDetails.style.display, "none");
+
+      firstHeader.dispatch("click");
+      assert.equal(firstDetails.style.display, "block");
+
+      renderMarkdownToElement(
+        root as unknown as HTMLElement,
+        content,
+        "assistant-web-search",
+      );
+      const rerenderedDetails = root.children[0].children[1];
+      assert.equal(rerenderedDetails.style.display, "block");
+
+      const secondSearch = content.replace(/ws_123/g, "ws_456");
+      renderMarkdownToElement(
+        root as unknown as HTMLElement,
+        `${content}${secondSearch}`,
+        "assistant-web-search",
+      );
+      const earlierGroup = root.children[0];
+      const earlierCardDetails =
+        earlierGroup.children[1].children[0].children[1];
+      assert.isTrue(earlierGroup.attributes.has("open"));
+      assert.equal(earlierCardDetails.style.display, "block");
+
+      renderMarkdownToElement(
+        root as unknown as HTMLElement,
+        content.replace("ws_123", "ws_456"),
+        "assistant-web-search",
+      );
+      const differentCardDetails = root.children[0].children[1];
+      assert.equal(differentCardDetails.style.display, "none");
+    } finally {
+      (globalThis as { addon?: unknown }).addon = originalAddon;
+      (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
+    }
+  });
 });
 
 describe("markdown message copy", function () {

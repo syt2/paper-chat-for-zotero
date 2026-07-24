@@ -877,6 +877,19 @@ describe("OpenAIResponsesProvider", function () {
         sequence_number: 1,
       },
       {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: {
+          type: "web_search_call",
+          id: "ws_123",
+          status: "in_progress",
+          action: {
+            type: "search",
+            query: "Zotero AI tools",
+          },
+        },
+      },
+      {
         type: "response.web_search_call.searching",
         output_index: 0,
         item_id: "ws_123",
@@ -887,6 +900,40 @@ describe("OpenAIResponsesProvider", function () {
         output_index: 0,
         item_id: "ws_123",
         sequence_number: 3,
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          type: "web_search_call",
+          id: "ws_123",
+          status: "completed",
+          action: {
+            type: "search",
+            queries: ["Zotero AI tools", "PaperChat Zotero"],
+            sources: [
+              {
+                type: "url",
+                title: "PaperChat",
+                url: "https://example.test/paperchat",
+              },
+              "https://example.test/zotero-ai",
+            ],
+          },
+        },
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 1,
+        item: {
+          type: "web_search_call",
+          id: "ws_failed",
+          status: "failed",
+          action: {
+            type: "search",
+            query: "failed query",
+          },
+        },
       },
       { type: "response.completed", response: completed },
     ];
@@ -901,8 +948,38 @@ describe("OpenAIResponsesProvider", function () {
 
     assert.deepEqual(statuses, [
       { index: 0, id: "ws_123", status: "searching" },
+      {
+        index: 0,
+        id: "ws_123",
+        status: "searching",
+        actionType: "search",
+        queries: ["Zotero AI tools"],
+        sources: [],
+      },
       { index: 0, id: "ws_123", status: "searching" },
       { index: 0, id: "ws_123", status: "completed" },
+      {
+        index: 0,
+        id: "ws_123",
+        status: "completed",
+        actionType: "search",
+        queries: ["Zotero AI tools", "PaperChat Zotero"],
+        sources: [
+          {
+            title: "PaperChat",
+            url: "https://example.test/paperchat",
+          },
+          { url: "https://example.test/zotero-ai" },
+        ],
+      },
+      {
+        index: 1,
+        id: "ws_failed",
+        status: "error",
+        actionType: "search",
+        queries: ["failed query"],
+        sources: [],
+      },
     ]);
     assert.deepEqual(functionStarts, []);
   });

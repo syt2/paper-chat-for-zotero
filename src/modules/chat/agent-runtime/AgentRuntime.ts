@@ -87,6 +87,11 @@ interface AgentRuntimeCallbacks {
     args: string,
     status: "calling" | "completed" | "error",
     resultPreview?: string,
+    options?: {
+      expandStateId?: string;
+      resultPreviewMaxLength?: number;
+      showResultWhileCalling?: boolean;
+    },
   ) => string;
   generateId: () => string;
 }
@@ -99,6 +104,14 @@ interface RuntimeToolScheduler {
     requests: ToolSchedulerRequest[],
     hooks?: ToolSchedulerExecutionHooks,
   ): Promise<ToolExecutionResult[]>;
+}
+
+interface HostedWebSearchDisplayState {
+  index: number;
+  status: "searching" | "completed" | "error";
+  actionType?: string;
+  queries?: string[];
+  sources?: Array<{ title?: string; url: string }>;
 }
 
 type ProviderRequestExecutor = <T>(operation: () => Promise<T>) => Promise<T>;
@@ -649,7 +662,7 @@ export class AgentRuntime {
         >();
         const hostedWebSearches = new Map<
           string,
-          { index: number; status: "searching" | "completed" }
+          HostedWebSearchDisplayState
         >();
         let roundContent = "";
         let roundReasoning = "";
@@ -673,14 +686,45 @@ export class AgentRuntime {
             .join("");
         };
 
+        const buildHostedWebSearchDetails = (
+          search: HostedWebSearchDisplayState,
+        ): string => {
+          const lines: string[] = [];
+          if (search.queries?.length) {
+            lines.push(`query: ${search.queries.join(" | ")}`);
+          }
+          if (search.actionType) {
+            lines.push(`action: ${search.actionType}`);
+          }
+          if (search.sources?.length) {
+            lines.push("sources:");
+            for (const source of search.sources) {
+              lines.push(
+                `- ${source.title ? `${source.title} — ` : ""}${source.url}`,
+              );
+            }
+          }
+          return lines.join("\n");
+        };
+
         const buildHostedWebSearchDisplay = (): string =>
           [...hostedWebSearches.entries()]
             .sort(([, left], [, right]) => left.index - right.index)
-            .map(([, search]) =>
+            .map(([id, search]) =>
               this.callbacks.formatToolCallCard(
                 "web_search",
                 "",
-                search.status === "completed" ? "completed" : "calling",
+                search.status === "completed"
+                  ? "completed"
+                  : search.status === "error"
+                    ? "error"
+                    : "calling",
+                buildHostedWebSearchDetails(search) || undefined,
+                {
+                  expandStateId: `hosted-web-search:${id}`,
+                  resultPreviewMaxLength: 1000,
+                  showResultWhileCalling: true,
+                },
               ),
             )
             .join("");
@@ -799,8 +843,27 @@ export class AgentRuntime {
               updateAssistantStreamingContent();
             }
           },
-          onHostedWebSearchStatus: ({ index, id, status }) => {
-            hostedWebSearches.set(id, { index, status });
+          onHostedWebSearchStatus: ({
+            index,
+            id,
+            status,
+            actionType,
+            queries,
+            sources,
+          }) => {
+            const current = hostedWebSearches.get(id);
+            hostedWebSearches.set(id, {
+              index,
+              status:
+                current?.status === "error" || status === "error"
+                  ? "error"
+                  : current?.status === "completed"
+                    ? "completed"
+                    : status,
+              actionType: actionType || current?.actionType,
+              queries: queries?.length ? queries : current?.queries,
+              sources: sources?.length ? sources : current?.sources,
+            });
             updateAssistantStreamingContent();
           },
           onComplete: (result) => {

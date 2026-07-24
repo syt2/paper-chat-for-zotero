@@ -12,6 +12,7 @@ import { isDarkMode } from "./ChatPanelTheme";
 import type { EvidenceRecord } from "../../../types/evidence";
 import { normalizeEvidenceRecords } from "../../chat/evidence";
 import {
+  getToolCallCardExpandKey,
   getToolCallGroupExpandKey,
   isToolCallGroupExpanded,
   setToolCallGroupExpanded,
@@ -217,6 +218,7 @@ type ToolCallCardStatus = "calling" | "completed" | "error";
 
 interface ToolCallCardData {
   status: ToolCallCardStatus;
+  expandKey?: string;
   toolName: string;
   toolArgs?: string;
   statusText: string;
@@ -490,7 +492,7 @@ export function stripIncompleteTrailingToolCall(content: string): string {
 function parseToolCallFragments(content: string): ToolCallFragment[] {
   const stableContent = stripIncompleteTrailingToolCall(content);
   const toolCallRegex =
-    /<tool-call status="(calling|completed|error)">\s*<tool-name>([^<]*)<\/tool-name>\s*(?:<tool-args>([^<]*)<\/tool-args>\s*)?<tool-status>([^<]*)<\/tool-status>\s*(?:<tool-result>([^<]*)<\/tool-result>\s*)?<\/tool-call>/g;
+    /<tool-call status="(calling|completed|error)"(?: expand-key="([^"]*)")?>\s*<tool-name>([^<]*)<\/tool-name>\s*(?:<tool-args>([^<]*)<\/tool-args>\s*)?<tool-status>([^<]*)<\/tool-status>\s*(?:<tool-result>([^<]*)<\/tool-result>\s*)?<\/tool-call>/g;
 
   const fragments: ToolCallFragment[] = [];
   let lastIndex = 0;
@@ -507,12 +509,14 @@ function parseToolCallFragments(content: string): ToolCallFragment[] {
       }
     }
 
-    const [, status, toolName, toolArgs, statusText, toolResult] = match;
+    const [, status, expandKey, toolName, toolArgs, statusText, toolResult] =
+      match;
 
     fragments.push({
       kind: "tool",
       entry: {
         status: status as ToolCallCardStatus,
+        expandKey,
         toolName,
         toolArgs,
         statusText,
@@ -543,6 +547,7 @@ function parseToolCallFragments(content: string): ToolCallFragment[] {
 function buildToolCallCardElement(
   doc: Document,
   entry: ToolCallCardData,
+  expandStateKey: string | null = null,
 ): HTMLElement {
   const dark = isDarkMode();
   const colors = dark ? toolCallStyles.dark : toolCallStyles.light;
@@ -550,7 +555,8 @@ function buildToolCallCardElement(
   const isError = status === "error";
   const hasDetails = Boolean(toolArgs || toolResult);
   const isCompleted = status === "completed";
-  const canToggle = hasDetails && (isCompleted || isError);
+  const canToggle =
+    hasDetails && (isCompleted || isError || Boolean(toolResult));
   const summaryText = isError
     ? summarizeToolCardText(unescapeXml(toolResult || statusText || ""))
     : "";
@@ -666,14 +672,18 @@ function buildToolCallCardElement(
   }
 
   if (canToggle && chevron && detailsContainer) {
-    let isExpanded = false;
+    let isExpanded = isToolCallGroupExpanded(expandStateKey);
     const details = detailsContainer;
     const chev = chevron;
+
+    details.style.display = isExpanded ? "block" : "none";
+    chev.style.transform = isExpanded ? "rotate(90deg)" : "rotate(0deg)";
 
     header.addEventListener("click", () => {
       isExpanded = !isExpanded;
       details.style.display = isExpanded ? "block" : "none";
       chev.style.transform = isExpanded ? "rotate(90deg)" : "rotate(0deg)";
+      setToolCallGroupExpanded(expandStateKey, isExpanded);
     });
 
     header.addEventListener("mouseenter", () => {
@@ -696,8 +706,8 @@ function buildToolCallCardElement(
 /**
  * Render a run of consecutive tool-call entries. Single entries render as a
  * plain card. Two or more: the latest entry stays visible, earlier ones fold
- * into a native `<details>`. Expand state is keyed by `${messageId}#${groupIndex}`
- * so it survives streaming re-renders.
+ * into a native `<details>`. Group state uses message/group indexes; cards
+ * with an explicit expand key use their stable identity across re-renders.
  */
 function renderToolCallGroup(
   doc: Document,
@@ -706,15 +716,30 @@ function renderToolCallGroup(
   messageId: string | undefined,
   groupIndex: number,
 ): void {
+  const getEntryExpandStateKey = (entry: ToolCallCardData): string | null =>
+    getToolCallCardExpandKey(
+      messageId,
+      entry.expandKey ? unescapeXml(entry.expandKey) : undefined,
+    );
+
   if (entries.length === 1) {
-    parent.appendChild(buildToolCallCardElement(doc, entries[0]));
+    parent.appendChild(
+      buildToolCallCardElement(
+        doc,
+        entries[0],
+        getEntryExpandStateKey(entries[0]),
+      ),
+    );
     return;
   }
 
   const earlier = entries.slice(0, -1);
   const latest = entries[entries.length - 1];
   const stateKey = getToolCallGroupExpandKey(messageId, groupIndex);
-  const isOpen = isToolCallGroupExpanded(stateKey);
+  const earlierExpandStateKeys = earlier.map(getEntryExpandStateKey);
+  const isOpen =
+    isToolCallGroupExpanded(stateKey) ||
+    earlierExpandStateKeys.some((key) => isToolCallGroupExpanded(key));
 
   const dark = isDarkMode();
   const colors = dark ? toolCallStyles.dark : toolCallStyles.light;
@@ -739,18 +764,27 @@ function renderToolCallGroup(
   const earlierBody = doc.createElementNS(HTML_NS, "div") as HTMLElement;
   earlierBody.style.paddingLeft = "4px";
   for (const entry of earlier) {
-    earlierBody.appendChild(buildToolCallCardElement(doc, entry));
+    earlierBody.appendChild(
+      buildToolCallCardElement(doc, entry, getEntryExpandStateKey(entry)),
+    );
   }
   details.appendChild(earlierBody);
 
   if (stateKey !== null) {
     details.addEventListener("toggle", () => {
       setToolCallGroupExpanded(stateKey, details.open);
+      if (!details.open) {
+        for (const key of earlierExpandStateKeys) {
+          setToolCallGroupExpanded(key, false);
+        }
+      }
     });
   }
 
   parent.appendChild(details);
-  parent.appendChild(buildToolCallCardElement(doc, latest));
+  parent.appendChild(
+    buildToolCallCardElement(doc, latest, getEntryExpandStateKey(latest)),
+  );
 }
 
 function renderMarkdownFragment(

@@ -81,7 +81,13 @@ export interface ResponsesStreamHandlers {
   onHostedWebSearchStatus?: (event: {
     index: number;
     id: string;
-    status: "searching" | "completed";
+    status: "searching" | "completed" | "error";
+    actionType?: string;
+    queries?: string[];
+    sources?: Array<{
+      title?: string;
+      url: string;
+    }>;
   }) => void;
 }
 
@@ -633,6 +639,63 @@ function parseSseDataLine(line: string): string | null {
   return line.slice(5).trimStart();
 }
 
+function extractHostedWebSearchDetails(item: Record<string, unknown>): {
+  actionType?: string;
+  queries?: string[];
+  sources?: Array<{ title?: string; url: string }>;
+} {
+  const action = item.action;
+  if (!action || typeof action !== "object") {
+    return {};
+  }
+  const record = action as Record<string, unknown>;
+  const queries: string[] = [];
+  if (typeof record.query === "string" && record.query.trim()) {
+    queries.push(record.query.trim());
+  }
+  if (Array.isArray(record.queries)) {
+    for (const query of record.queries) {
+      if (typeof query === "string" && query.trim()) {
+        queries.push(query.trim());
+      }
+    }
+  }
+
+  const sources: Array<{ title?: string; url: string }> = [];
+  if (Array.isArray(record.sources)) {
+    for (const source of record.sources) {
+      if (typeof source === "string" && source.trim()) {
+        sources.push({ url: source.trim() });
+        continue;
+      }
+      if (!source || typeof source !== "object") {
+        continue;
+      }
+      const sourceRecord = source as Record<string, unknown>;
+      if (typeof sourceRecord.url !== "string" || !sourceRecord.url.trim()) {
+        continue;
+      }
+      sources.push({
+        url: sourceRecord.url.trim(),
+        title:
+          typeof sourceRecord.title === "string" && sourceRecord.title.trim()
+            ? sourceRecord.title.trim()
+            : undefined,
+      });
+    }
+  }
+
+  return {
+    actionType: typeof record.type === "string" ? record.type : undefined,
+    queries: [...new Set(queries)],
+    sources: sources.filter(
+      (source, index) =>
+        sources.findIndex((candidate) => candidate.url === source.url) ===
+        index,
+    ),
+  };
+}
+
 /** Parse OpenAI Responses SSE events into the provider's existing callbacks. */
 export async function parseResponsesSSEStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
@@ -744,6 +807,33 @@ export async function parseResponsesSSEStream(
           item as Record<string, unknown>,
         );
       }
+      if (
+        item &&
+        typeof item === "object" &&
+        (item as Record<string, unknown>).type === "web_search_call"
+      ) {
+        const record = item as Record<string, unknown>;
+        const id =
+          typeof record.id === "string"
+            ? record.id
+            : typeof event.item_id === "string"
+              ? event.item_id
+              : "";
+        if (id) {
+          handlers.onHostedWebSearchStatus?.({
+            index:
+              typeof event.output_index === "number" ? event.output_index : 0,
+            id,
+            status:
+              record.status === "completed"
+                ? "completed"
+                : record.status === "failed"
+                  ? "error"
+                  : "searching",
+            ...extractHostedWebSearchDetails(record),
+          });
+        }
+      }
       return;
     }
     if (
@@ -779,6 +869,28 @@ export async function parseResponsesSSEStream(
             current.arguments += remaining;
             handlers.onToolCallDelta?.(index, remaining);
           }
+        }
+      }
+      if (
+        item &&
+        typeof item === "object" &&
+        (item as Record<string, unknown>).type === "web_search_call"
+      ) {
+        const record = item as Record<string, unknown>;
+        const id =
+          typeof record.id === "string"
+            ? record.id
+            : typeof event.item_id === "string"
+              ? event.item_id
+              : "";
+        if (id) {
+          handlers.onHostedWebSearchStatus?.({
+            index:
+              typeof event.output_index === "number" ? event.output_index : 0,
+            id,
+            status: record.status === "completed" ? "completed" : "error",
+            ...extractHostedWebSearchDetails(record),
+          });
         }
       }
       return;

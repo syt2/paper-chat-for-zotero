@@ -651,8 +651,18 @@ describe("agent runtime plan semantics", function () {
         onStreamingUpdate: (content: string) => {
           streamingUpdates.push(content);
         },
-        formatToolCallCard: (name: string, _args: string, status: string) =>
-          `<tool name="${name}" status="${status}" />`,
+        formatToolCallCard: (
+          name: string,
+          _args: string,
+          status: string,
+          resultPreview?: string,
+          options?: {
+            expandStateId?: string;
+            resultPreviewMaxLength?: number;
+            showResultWhileCalling?: boolean;
+          },
+        ) =>
+          `<tool name="${name}" status="${status}" details="${resultPreview || ""}" expand-key="${options?.expandStateId || ""}" show-while-calling="${String(options?.showResultWhileCalling)}" />`,
         generateId: () => "generated-hosted-web-search",
       } as any,
       {
@@ -676,6 +686,19 @@ describe("agent runtime plan semantics", function () {
         _tools: unknown[],
         callbacks: any,
       ) => {
+        callbacks.onHostedWebSearchStatus({
+          index: 0,
+          id: "ws_123",
+          status: "searching",
+          actionType: "search",
+          queries: ["Zotero AI tools"],
+          sources: [
+            {
+              title: "PaperChat",
+              url: "https://example.test/paperchat",
+            },
+          ],
+        });
         callbacks.onHostedWebSearchStatus({
           index: 0,
           id: "ws_123",
@@ -707,15 +730,15 @@ describe("agent runtime plan semantics", function () {
 
       assert.include(
         streamingUpdates,
-        '<tool name="web_search" status="calling" />',
+        '<tool name="web_search" status="calling" details="query: Zotero AI tools\naction: search\nsources:\n- PaperChat — https://example.test/paperchat" expand-key="hosted-web-search:ws_123" show-while-calling="true" />',
       );
       assert.include(
         streamingUpdates,
-        '<tool name="web_search" status="completed" />',
+        '<tool name="web_search" status="completed" details="query: Zotero AI tools\naction: search\nsources:\n- PaperChat — https://example.test/paperchat" expand-key="hosted-web-search:ws_123" show-while-calling="true" />',
       );
       assert.include(
         streamingUpdates,
-        '<tool name="web_search" status="completed" />Answer from web',
+        '<tool name="web_search" status="completed" details="query: Zotero AI tools\naction: search\nsources:\n- PaperChat — https://example.test/paperchat" expand-key="hosted-web-search:ws_123" show-while-calling="true" />Answer from web',
       );
       assert.equal(toolExecutions, 0);
       assert.equal(assistantMessage.content, "Answer from web");

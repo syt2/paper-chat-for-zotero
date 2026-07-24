@@ -2,18 +2,16 @@ import { assert } from "chai";
 
 describe("ToolCallGroupExpandState", function () {
   it("returns null when messageId is missing", async function () {
-    const { getToolCallGroupExpandKey } = await import(
-      "../src/modules/ui/chat-panel/ToolCallGroupExpandState.ts"
-    );
+    const { getToolCallGroupExpandKey } =
+      await import("../src/modules/ui/chat-panel/ToolCallGroupExpandState.ts");
 
     assert.isNull(getToolCallGroupExpandKey(undefined, 0));
     assert.isNull(getToolCallGroupExpandKey("", 0));
   });
 
   it("builds a stable key from messageId and groupIndex", async function () {
-    const { getToolCallGroupExpandKey } = await import(
-      "../src/modules/ui/chat-panel/ToolCallGroupExpandState.ts"
-    );
+    const { getToolCallCardExpandKey, getToolCallGroupExpandKey } =
+      await import("../src/modules/ui/chat-panel/ToolCallGroupExpandState.ts");
 
     assert.equal(getToolCallGroupExpandKey("msg-42", 0), "msg-42#0");
     assert.equal(getToolCallGroupExpandKey("msg-42", 3), "msg-42#3");
@@ -21,6 +19,11 @@ describe("ToolCallGroupExpandState", function () {
       getToolCallGroupExpandKey("msg-42", 0),
       getToolCallGroupExpandKey("msg-42", 1),
     );
+    assert.equal(
+      getToolCallCardExpandKey("msg-42", "hosted-web-search:ws_123"),
+      "msg-42#card#hosted-web-search:ws_123",
+    );
+    assert.isNull(getToolCallCardExpandKey("msg-42", undefined));
   });
 
   it("treats unknown or null keys as collapsed", async function () {
@@ -37,9 +40,8 @@ describe("ToolCallGroupExpandState", function () {
       isToolCallGroupExpanded,
       setToolCallGroupExpanded,
       resetToolCallGroupExpandState,
-    } = await import(
-      "../src/modules/ui/chat-panel/ToolCallGroupExpandState.ts"
-    );
+    } =
+      await import("../src/modules/ui/chat-panel/ToolCallGroupExpandState.ts");
     resetToolCallGroupExpandState();
 
     setToolCallGroupExpanded("msg-1#0", true);
@@ -54,9 +56,8 @@ describe("ToolCallGroupExpandState", function () {
       getToolCallGroupExpandStateSize,
       setToolCallGroupExpanded,
       resetToolCallGroupExpandState,
-    } = await import(
-      "../src/modules/ui/chat-panel/ToolCallGroupExpandState.ts"
-    );
+    } =
+      await import("../src/modules/ui/chat-panel/ToolCallGroupExpandState.ts");
     resetToolCallGroupExpandState();
 
     setToolCallGroupExpanded(null, true);
@@ -70,9 +71,8 @@ describe("ToolCallGroupExpandState", function () {
       getToolCallGroupExpandStateSize,
       setToolCallGroupExpanded,
       resetToolCallGroupExpandState,
-    } = await import(
-      "../src/modules/ui/chat-panel/ToolCallGroupExpandState.ts"
-    );
+    } =
+      await import("../src/modules/ui/chat-panel/ToolCallGroupExpandState.ts");
     resetToolCallGroupExpandState();
 
     // Collapsing a key that was never expanded never adds an entry.
@@ -98,9 +98,8 @@ describe("ToolCallGroupExpandState", function () {
       getToolCallGroupExpandStateSize,
       setToolCallGroupExpanded,
       resetToolCallGroupExpandState,
-    } = await import(
-      "../src/modules/ui/chat-panel/ToolCallGroupExpandState.ts"
-    );
+    } =
+      await import("../src/modules/ui/chat-panel/ToolCallGroupExpandState.ts");
 
     setToolCallGroupExpanded("msg-a#0", true);
     setToolCallGroupExpanded("msg-b#0", true);

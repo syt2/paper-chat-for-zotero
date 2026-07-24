@@ -314,8 +314,14 @@ export class ChatManager {
         onMessageComplete: () => this.onMessageComplete?.(),
         onExecutionPlanUpdate: (plan) => this.onExecutionPlanUpdate?.(plan),
         onRuntimeEvent: (event) => this.onRuntimeEvent?.(event),
-        formatToolCallCard: (toolName, args, status, resultPreview) =>
-          this.formatToolCallCard(toolName, args, status, resultPreview),
+        formatToolCallCard: (toolName, args, status, resultPreview, options) =>
+          this.formatToolCallCard(
+            toolName,
+            args,
+            status,
+            resultPreview,
+            options,
+          ),
         generateId: () => this.generateId(),
       },
       getToolScheduler(),
@@ -3062,6 +3068,11 @@ export class ChatManager {
     args: string,
     status: "calling" | "completed" | "error",
     resultPreview?: string,
+    options?: {
+      expandStateId?: string;
+      resultPreviewMaxLength?: number;
+      showResultWhileCalling?: boolean;
+    },
   ): string {
     const statusIcon =
       status === "calling" ? "⏳" : status === "completed" ? "✓" : "✗";
@@ -3089,22 +3100,31 @@ export class ChatManager {
     // 转义所有用户输入，防止 XSS/XML 注入
     const escapedToolName = this.escapeXml(toolName);
     const escapedArgs = this.escapeXml(argsDisplay);
+    const escapedExpandStateId = options?.expandStateId
+      ? this.escapeXml(options.expandStateId)
+      : "";
+    const resultPreviewMaxLength = options?.resultPreviewMaxLength ?? 100;
     const escapedResult = resultPreview
       ? this.escapeXml(
-          resultPreview.length > 100
-            ? resultPreview.substring(0, 97) + "..."
+          resultPreview.length > resultPreviewMaxLength
+            ? resultPreview.substring(0, resultPreviewMaxLength - 3) + "..."
             : resultPreview,
         )
       : "";
 
     // 使用特殊标记格式，便于 MessageRenderer 识别和渲染
-    let card = `\n<tool-call status="${status}">\n`;
+    let card = `\n<tool-call status="${status}"${
+      escapedExpandStateId ? ` expand-key="${escapedExpandStateId}"` : ""
+    }>\n`;
     card += `<tool-name>${statusIcon} ${escapedToolName}</tool-name>\n`;
     if (escapedArgs) {
       card += `<tool-args>${escapedArgs}</tool-args>\n`;
     }
     card += `<tool-status>${statusText}</tool-status>\n`;
-    if (escapedResult && status !== "calling") {
+    if (
+      escapedResult &&
+      (status !== "calling" || options?.showResultWhileCalling)
+    ) {
       card += `<tool-result>${escapedResult}</tool-result>\n`;
     }
     card += `</tool-call>\n`;

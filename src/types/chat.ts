@@ -466,7 +466,13 @@ export interface StreamToolCallingCallbacks {
   onHostedWebSearchStatus?: (event: {
     index: number;
     id: string;
-    status: "searching" | "completed";
+    status: "searching" | "completed" | "error";
+    actionType?: string;
+    queries?: string[];
+    sources?: Array<{
+      title?: string;
+      url: string;
+    }>;
   }) => void;
 
   /** 所有内容完成 */
