@@ -185,7 +185,7 @@ describe("OpenAIResponsesProvider", function () {
       requestBody.prompt_cache_key,
       createResponsesPromptCacheKey("session-1", "gpt-5.4"),
     );
-    assert.deepInclude(requestBody.tools, { type: "web_search" });
+    assert.deepInclude(requestBody.tools, { type: "web_search_preview" });
     assert.deepInclude(requestBody.tools, {
       type: "function",
       name: "search_pdf",

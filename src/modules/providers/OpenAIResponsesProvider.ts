@@ -429,7 +429,7 @@ function convertTools(
   for (const tool of tools || []) {
     if (hostedWebSearch && tool.function.name === "web_search") {
       if (!addedHostedWebSearch) {
-        converted.push({ type: "web_search" });
+        converted.push({ type: "web_search_preview" });
         addedHostedWebSearch = true;
       }
       continue;
@@ -1136,7 +1136,7 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
       this.runtimeOptions.hostedWebSearch === true,
     );
     const hasHostedWebSearch = convertedTools.some(
-      (tool) => tool.type === "web_search",
+      (tool) => tool.type === "web_search_preview",
     );
     const body: Record<string, unknown> = {
       model: this._config.defaultModel,
