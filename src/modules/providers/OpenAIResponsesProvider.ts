@@ -33,6 +33,8 @@ interface ResponsesApiResponse {
 interface LocalMessageDescriptor {
   id: string;
   fingerprint: string;
+  semanticFingerprint: string;
+  allowIdChange: boolean;
 }
 
 interface PreviousOutputDescriptor {
@@ -161,11 +163,37 @@ function fingerprintMessage(message: ChatMessage): string {
   );
 }
 
+function semanticFingerprintMessage(message: ChatMessage): string {
+  return hashText(
+    stablePromptCacheStringify({
+      role: message.role,
+      content: message.content,
+      reasoning: message.reasoning,
+      images: message.images,
+      tool_calls: message.tool_calls,
+      tool_call_id: message.tool_call_id,
+    }),
+  );
+}
+
 function describeMessages(messages: ChatMessage[]): LocalMessageDescriptor[] {
   return messages.map((message) => ({
     id: message.id,
     fingerprint: fingerprintMessage(message),
+    semanticFingerprint: semanticFingerprintMessage(message),
+    allowIdChange:
+      message.role === "tool" ||
+      (message.role === "assistant" && !!message.tool_calls?.length),
   }));
+}
+
+function isOptionalHistoryDescriptor(
+  descriptor: LocalMessageDescriptor,
+): boolean {
+  return (
+    descriptor.id === "cache-checkpoint-history" ||
+    descriptor.id === "runtime-context-history"
+  );
 }
 
 function isPreviousOutputMessage(
@@ -191,40 +219,93 @@ function findIncrementalMessages(
   messages: ChatMessage[],
   state: ResponsesConversationState,
 ): { compatible: boolean; messages: ChatMessage[] } {
-  const currentById = new Map<string, ChatMessage>();
-  for (const message of messages) {
-    if (currentById.has(message.id)) {
-      return { compatible: false, messages: [] };
-    }
-    currentById.set(message.id, message);
-  }
-
-  const previousById = new Map(
-    state.localMessages.map((message) => [message.id, message]),
-  );
+  const matchedIndexes = new Set<number>();
+  const updatedRuntimeIndexes = new Set<number>();
+  let currentIndex = 0;
   for (const previous of state.localMessages) {
-    const current = currentById.get(previous.id);
-    if (!current) {
-      return { compatible: false, messages: [] };
+    let matched = false;
+    let searchIndex = currentIndex;
+    while (searchIndex < messages.length) {
+      const current = messages[searchIndex];
+      const currentFingerprint = fingerprintMessage(current);
+      if (previous.id === current.id) {
+        if (previous.fingerprint === currentFingerprint) {
+          matchedIndexes.add(searchIndex);
+          currentIndex = searchIndex + 1;
+          matched = true;
+          break;
+        }
+        // AgentRuntime may refresh this synthetic message in place between
+        // requests. Send the updated instruction as new input while keeping
+        // the existing Responses chain intact.
+        if (current.id === "runtime-context") {
+          matchedIndexes.add(searchIndex);
+          updatedRuntimeIndexes.add(searchIndex);
+          currentIndex = searchIndex + 1;
+          matched = true;
+          break;
+        }
+        if (isOptionalHistoryDescriptor(previous)) {
+          searchIndex++;
+          continue;
+        }
+        return { compatible: false, messages: [] };
+      }
+
+      const renamedToHistory =
+        (previous.id === "cache-checkpoint" ||
+          previous.id === "runtime-context") &&
+        current.id === `${previous.id}-history`;
+      if (renamedToHistory) {
+        if (
+          previous.fingerprint !==
+          fingerprintMessage({ ...current, id: previous.id })
+        ) {
+          if (isOptionalHistoryDescriptor(previous)) {
+            searchIndex++;
+            continue;
+          }
+          return { compatible: false, messages: [] };
+        }
+        matchedIndexes.add(searchIndex);
+        currentIndex = searchIndex + 1;
+        matched = true;
+        break;
+      }
+      if (
+        previous.allowIdChange &&
+        previous.semanticFingerprint === semanticFingerprintMessage(current)
+      ) {
+        matchedIndexes.add(searchIndex);
+        currentIndex = searchIndex + 1;
+        matched = true;
+        break;
+      }
+      searchIndex++;
     }
-    if (
-      previous.fingerprint !== fingerprintMessage(current) &&
-      current.id !== "runtime-context"
-    ) {
+    if (!matched && !isOptionalHistoryDescriptor(previous)) {
       return { compatible: false, messages: [] };
     }
   }
 
-  const incremental = messages.filter((message) => {
-    const previous = previousById.get(message.id);
-    return !previous || previous.fingerprint !== fingerprintMessage(message);
-  });
+  const incremental = messages.filter(
+    (_message, index) =>
+      !matchedIndexes.has(index) || updatedRuntimeIndexes.has(index),
+  );
 
   for (let index = incremental.length - 1; index >= 0; index--) {
     if (isPreviousOutputMessage(incremental[index], state.lastOutput)) {
       incremental.splice(index, 1);
       return { compatible: true, messages: incremental };
     }
+  }
+
+  // A Responses function_call must be followed by its matching local tool
+  // output. prepareLocalMessages has already removed incomplete tool blocks,
+  // so a missing assistant call here means the turn was cancelled or lost and
+  // this response chain can no longer be continued safely.
+  if (state.lastOutput.toolCallIds.length > 0) {
+    return { compatible: false, messages: [] };
   }
 
   // The visible assistant message may be sanitized or decorated after the API
@@ -479,6 +560,8 @@ export function extractResponsesText(response: ResponsesApiResponse): string {
     for (const part of item.content as ResponsesInputItem[]) {
       if (part.type === "output_text" && typeof part.text === "string") {
         textParts.push(linkifyUrlCitations(part.text, part.annotations));
+      } else if (part.type === "refusal" && typeof part.refusal === "string") {
+        textParts.push(part.refusal);
       }
     }
   }
@@ -497,10 +580,45 @@ export function extractResponsesText(response: ResponsesApiResponse): string {
 }
 
 function responseError(response: ResponsesApiResponse): Error | null {
-  if (response.status !== "failed" && !response.error) {
+  if (response.status === "failed" || response.error) {
+    return new Error(response.error?.message || "Responses API request failed");
+  }
+  if (
+    response.status &&
+    response.status !== "completed" &&
+    response.status !== "incomplete"
+  ) {
+    return new Error(
+      `Responses API returned unexpected status: ${response.status}`,
+    );
+  }
+
+  const functionCalls = (response.output || []).filter(
+    (item) => item.type === "function_call",
+  );
+  const unfinishedFunctionCall = functionCalls.find(
+    (item) => typeof item.status === "string" && item.status !== "completed",
+  );
+  if (unfinishedFunctionCall) {
+    return new Error("Responses API returned an unfinished function call");
+  }
+
+  if (response.status !== "incomplete") {
     return null;
   }
-  return new Error(response.error?.message || "Responses API request failed");
+  const reason = response.incomplete_details?.reason;
+  if (
+    reason === "max_output_tokens" &&
+    functionCalls.length === 0 &&
+    extractResponsesText(response).trim()
+  ) {
+    return null;
+  }
+  return new Error(
+    reason
+      ? `Responses API response incomplete: ${reason}`
+      : "Responses API response incomplete",
+  );
 }
 
 function parseSseDataLine(line: string): string | null {
@@ -520,6 +638,7 @@ export async function parseResponsesSSEStream(
   let completedResponse: ResponsesApiResponse | undefined;
   let createdResponse: ResponsesApiResponse | undefined;
   let accumulatedText = "";
+  let accumulatedRefusal = "";
   let accumulatedReasoning = "";
   const toolCalls = new Map<
     number,
@@ -563,6 +682,22 @@ export async function parseResponsesSSEStream(
     ) {
       accumulatedText += event.delta;
       handlers.onTextDelta?.(event.delta);
+      return;
+    }
+    if (type === "response.refusal.delta" && typeof event.delta === "string") {
+      accumulatedRefusal += event.delta;
+      handlers.onTextDelta?.(event.delta);
+      return;
+    }
+    if (type === "response.refusal.done" && typeof event.refusal === "string") {
+      const completeRefusal = event.refusal;
+      if (completeRefusal.startsWith(accumulatedRefusal)) {
+        const remaining = completeRefusal.slice(accumulatedRefusal.length);
+        if (remaining) {
+          handlers.onTextDelta?.(remaining);
+        }
+      }
+      accumulatedRefusal = completeRefusal;
       return;
     }
     if (
@@ -693,13 +828,22 @@ export async function parseResponsesSSEStream(
         arguments: toolCall.arguments,
       });
     }
-    if (accumulatedText) {
+    if (accumulatedText || accumulatedRefusal) {
+      const content: ResponsesInputItem[] = [];
+      if (accumulatedText) {
+        content.push({
+          type: "output_text",
+          text: accumulatedText,
+          annotations: [],
+        });
+      }
+      if (accumulatedRefusal) {
+        content.push({ type: "refusal", refusal: accumulatedRefusal });
+      }
       synthesized.push({
         type: "message",
         role: "assistant",
-        content: [
-          { type: "output_text", text: accumulatedText, annotations: [] },
-        ],
+        content,
       });
     }
     completedResponse.output = synthesized;
@@ -944,7 +1088,10 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
         toolCallIds: toolCalls.map((call) => call.id),
       },
     };
-    if (response.store === false || forceStateless) {
+    if (
+      response.store === false ||
+      (forceStateless && response.store !== true)
+    ) {
       const transcriptBase =
         plan.mode === "stateless" ? plan.requestInput : plan.fullInput;
       nextState.statelessTranscript = [
@@ -1053,10 +1200,14 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     if (error) {
       throw error;
     }
-    this.commitResponseState(plan, completed, forceStateless);
-    this.logResponsesUsage("responses-tools", completed.usage);
     const toolCalls = extractToolCalls(completed);
     const allowToolCalls = options?.toolChoice !== "none";
+    if (!allowToolCalls && toolCalls.length > 0) {
+      this.clearConversationState();
+    } else {
+      this.commitResponseState(plan, completed, forceStateless);
+    }
+    this.logResponsesUsage("responses-tools", completed.usage);
     return {
       content: extractResponsesText(completed),
       toolCalls: allowToolCalls && toolCalls.length > 0 ? toolCalls : undefined,
@@ -1096,10 +1247,14 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
       if (error) {
         throw error;
       }
-      this.commitResponseState(plan, completed, forceStateless);
-      this.logResponsesUsage("responses-tools-stream", completed.usage);
       const toolCalls = extractToolCalls(completed);
       const allowToolCalls = options?.toolChoice !== "none";
+      if (!allowToolCalls && toolCalls.length > 0) {
+        this.clearConversationState();
+      } else {
+        this.commitResponseState(plan, completed, forceStateless);
+      }
+      this.logResponsesUsage("responses-tools-stream", completed.usage);
       callbacks.onComplete({
         content: extractResponsesText(completed),
         toolCalls:

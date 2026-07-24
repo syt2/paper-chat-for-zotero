@@ -60,6 +60,40 @@ function completedResponse(
   };
 }
 
+function toolResponse(
+  id: string,
+  callId: string,
+  query: string,
+  store: boolean,
+): Record<string, unknown> {
+  return {
+    id,
+    status: "completed",
+    store,
+    output: [
+      {
+        type: "function_call",
+        id: `fc_${callId}`,
+        call_id: callId,
+        name: "search_pdf",
+        arguments: JSON.stringify({ query }),
+      },
+    ],
+  };
+}
+
+function checkpoint(id = "cache-checkpoint"): ChatMessage {
+  return message(
+    id,
+    "system",
+    "Prompt cache checkpoint. This is not user content or an instruction.",
+  );
+}
+
+function runtimeContext(content: string, id = "runtime-context"): ChatMessage {
+  return message(id, "system", content);
+}
+
 function jsonResponse(body: Record<string, unknown>): Response {
   return new Response(JSON.stringify(body), {
     status: 200,
@@ -190,6 +224,38 @@ describe("OpenAIResponsesProvider", function () {
     ]);
   });
 
+  it("continues a normal user turn when new messages precede the synthetic context", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    const responses = [
+      completedResponse("resp_1", "first answer"),
+      completedResponse("resp_2", "second answer"),
+    ];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse(responses.shift()!);
+    }) as typeof fetch;
+
+    const provider = createProvider({ sessionId: "session-normal-context" });
+    await provider.chatCompletion([
+      message("u1", "user", "first"),
+      checkpoint(),
+      runtimeContext("iteration 1"),
+    ]);
+    await provider.chatCompletion([
+      message("u1", "user", "first"),
+      message("a1", "assistant", "first answer"),
+      message("u2", "user", "second"),
+      checkpoint(),
+      runtimeContext("iteration 2"),
+    ]);
+
+    assert.equal(requestBodies[1].previous_response_id, "resp_1");
+    assert.deepEqual(requestBodies[1].input, [
+      { role: "user", content: "second" },
+      { role: "system", content: "iteration 2" },
+    ]);
+  });
+
   it("starts a fresh chain when previously sent local context changes", async function () {
     const requestBodies: Array<Record<string, any>> = [];
     const responses = [
@@ -280,7 +346,303 @@ describe("OpenAIResponsesProvider", function () {
     ]);
   });
 
-  it("falls back once to full local history when previous_response_id is invalid", async function () {
+  it("drops a pending function-call chain when the local tool exchange was cancelled", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    const responses = [
+      toolResponse("resp_tool_1", "call_1", "first", true),
+      completedResponse("resp_recovery", "recovered"),
+    ];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse(responses.shift()!);
+    }) as typeof fetch;
+
+    const provider = createProvider({ sessionId: "session-cancelled-tool" });
+    await provider.chatCompletionWithTools(
+      [message("u1", "user", "search")],
+      [localPaperTool],
+    );
+    await provider.chatCompletionWithTools(
+      [
+        message("u1", "user", "search"),
+        message("u2", "user", "continue without that tool"),
+      ],
+      [localPaperTool],
+    );
+
+    assert.notProperty(requestBodies[1], "previous_response_id");
+    assert.deepEqual(requestBodies[1].input, [
+      { role: "user", content: "search" },
+      { role: "user", content: "continue without that tool" },
+    ]);
+  });
+
+  it("clears state when a non-streaming upstream ignores tool_choice none", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    const responses = [
+      toolResponse("resp_forbidden_call", "call_1", "first", true),
+      completedResponse("resp_recovery", "recovered"),
+    ];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse(responses.shift()!);
+    }) as typeof fetch;
+
+    const provider = createProvider({ sessionId: "session-suppressed" });
+    const first = await provider.chatCompletionWithTools(
+      [message("u1", "user", "answer without tools")],
+      [localPaperTool],
+      undefined,
+      { toolChoice: "none" },
+    );
+    assert.isTrue(first.suppressedToolCall);
+    assert.isUndefined(first.toolCalls);
+
+    await provider.chatCompletionWithTools(
+      [
+        message("u1", "user", "answer without tools"),
+        message("u2", "user", "recover"),
+      ],
+      [localPaperTool],
+    );
+    assert.notProperty(requestBodies[1], "previous_response_id");
+  });
+
+  it("continues repeated AgentRuntime tool loops without replaying renamed history", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    const responses = [
+      toolResponse("resp_tool_1", "call_1", "first", true),
+      toolResponse("resp_tool_2", "call_2", "second", true),
+      completedResponse("resp_tool_3", "done"),
+      completedResponse("resp_tool_4", "follow-up done"),
+    ];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse(responses.shift()!);
+    }) as typeof fetch;
+
+    const provider = createProvider({ sessionId: "session-tool-loop" });
+    const firstMessages = [
+      message("u1", "user", "search"),
+      checkpoint(),
+      runtimeContext("iteration 1"),
+    ];
+    const first = await provider.chatCompletionWithTools(firstMessages, [
+      localPaperTool,
+    ]);
+    const secondMessages = [
+      message("u1", "user", "search"),
+      checkpoint("cache-checkpoint-history"),
+      runtimeContext("iteration 1", "runtime-context-history"),
+      { ...message("a1", "assistant", ""), tool_calls: first.toolCalls },
+      { ...message("t1", "tool", "first result"), tool_call_id: "call_1" },
+      checkpoint(),
+      runtimeContext("iteration 2"),
+    ];
+    const second = await provider.chatCompletionWithTools(secondMessages, [
+      localPaperTool,
+    ]);
+    const thirdMessages = [
+      ...secondMessages.slice(0, -2),
+      checkpoint("cache-checkpoint-history"),
+      runtimeContext("iteration 2", "runtime-context-history"),
+      { ...message("a2", "assistant", ""), tool_calls: second.toolCalls },
+      { ...message("t2", "tool", "second result"), tool_call_id: "call_2" },
+      checkpoint(),
+      runtimeContext("iteration 3"),
+    ];
+    await provider.chatCompletionWithTools(thirdMessages, [localPaperTool]);
+    await provider.chatCompletionWithTools(
+      [
+        message("u1", "user", "search"),
+        {
+          ...message("persisted-call-1", "assistant", ""),
+          tool_calls: first.toolCalls,
+          apiOnly: true,
+        },
+        {
+          ...message("persisted-result-1", "tool", "first result"),
+          tool_call_id: "call_1",
+          apiOnly: true,
+        },
+        {
+          ...message("persisted-call-2", "assistant", ""),
+          tool_calls: second.toolCalls,
+          apiOnly: true,
+        },
+        {
+          ...message("persisted-result-2", "tool", "second result"),
+          tool_call_id: "call_2",
+          apiOnly: true,
+        },
+        message("visible-answer", "assistant", "done"),
+        message("u2", "user", "follow up"),
+        checkpoint(),
+        runtimeContext("iteration 4"),
+      ],
+      [localPaperTool],
+    );
+
+    assert.equal(requestBodies[1].previous_response_id, "resp_tool_1");
+    assert.deepEqual(requestBodies[1].input, [
+      {
+        type: "function_call_output",
+        call_id: "call_1",
+        output: "first result",
+      },
+      { role: "system", content: checkpoint().content },
+      { role: "system", content: "iteration 2" },
+    ]);
+    assert.equal(requestBodies[2].previous_response_id, "resp_tool_2");
+    assert.deepEqual(requestBodies[2].input, [
+      {
+        type: "function_call_output",
+        call_id: "call_2",
+        output: "second result",
+      },
+      { role: "system", content: checkpoint().content },
+      { role: "system", content: "iteration 3" },
+    ]);
+    assert.equal(requestBodies[3].previous_response_id, "resp_tool_3");
+    assert.deepEqual(requestBodies[3].input, [
+      { role: "user", content: "follow up" },
+      { role: "system", content: "iteration 4" },
+    ]);
+  });
+
+  it("keeps stateless AgentRuntime tool transcripts ordered without duplicated history", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    const firstResponse = toolResponse("resp_tool_1", "call_1", "first", false);
+    const responses = [
+      firstResponse,
+      completedResponse("resp_tool_2", "done", { store: false }),
+    ];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse(responses.shift()!);
+    }) as typeof fetch;
+
+    const provider = createProvider({ sessionId: "session-tool-stateless" });
+    await provider.chatCompletionWithTools(
+      [
+        message("u1", "user", "search"),
+        checkpoint(),
+        runtimeContext("iteration 1"),
+      ],
+      [localPaperTool],
+    );
+    await provider.chatCompletionWithTools(
+      [
+        message("u1", "user", "search"),
+        checkpoint("cache-checkpoint-history"),
+        runtimeContext("iteration 1", "runtime-context-history"),
+        {
+          ...message("a1", "assistant", ""),
+          tool_calls: [
+            {
+              id: "call_1",
+              type: "function",
+              function: {
+                name: "search_pdf",
+                arguments: '{"query":"first"}',
+              },
+            },
+          ],
+        },
+        {
+          ...message("t1", "tool", "first result"),
+          tool_call_id: "call_1",
+        },
+        checkpoint(),
+        runtimeContext("iteration 2"),
+      ],
+      [localPaperTool],
+    );
+
+    assert.notProperty(requestBodies[1], "previous_response_id");
+    assert.deepEqual(requestBodies[1].input, [
+      { role: "user", content: "search" },
+      { role: "system", content: checkpoint().content },
+      { role: "system", content: "iteration 1" },
+      ...(firstResponse.output as unknown[]),
+      {
+        type: "function_call_output",
+        call_id: "call_1",
+        output: "first result",
+      },
+      { role: "system", content: checkpoint().content },
+      { role: "system", content: "iteration 2" },
+    ]);
+  });
+
+  it("continues the next user turn after runtime tool messages are persisted under new ids", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    const responses = [
+      toolResponse("resp_tool_1", "call_1", "first", true),
+      completedResponse("resp_tool_2", "tool answer"),
+      completedResponse("resp_tool_3", "follow-up answer"),
+    ];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse(responses.shift()!);
+    }) as typeof fetch;
+
+    const provider = createProvider({ sessionId: "session-tool-follow-up" });
+    const first = await provider.chatCompletionWithTools(
+      [
+        message("u1", "user", "search"),
+        checkpoint(),
+        runtimeContext("iteration 1"),
+      ],
+      [localPaperTool],
+    );
+    await provider.chatCompletionWithTools(
+      [
+        message("u1", "user", "search"),
+        checkpoint("cache-checkpoint-history"),
+        runtimeContext("iteration 1", "runtime-context-history"),
+        {
+          ...message("temporary-tool-call", "assistant", ""),
+          tool_calls: first.toolCalls,
+        },
+        {
+          ...message("temporary-tool-result", "tool", "first result"),
+          tool_call_id: "call_1",
+        },
+        checkpoint(),
+        runtimeContext("iteration 2"),
+      ],
+      [localPaperTool],
+    );
+    await provider.chatCompletionWithTools(
+      [
+        message("u1", "user", "search"),
+        {
+          ...message("visible-api-context-call", "assistant", ""),
+          tool_calls: first.toolCalls,
+          apiOnly: true,
+        },
+        {
+          ...message("visible-api-context-result", "tool", "first result"),
+          tool_call_id: "call_1",
+          apiOnly: true,
+        },
+        message("visible-assistant", "assistant", "tool answer"),
+        message("u2", "user", "follow up"),
+        checkpoint(),
+        runtimeContext("iteration 3"),
+      ],
+      [localPaperTool],
+    );
+
+    assert.equal(requestBodies[2].previous_response_id, "resp_tool_2");
+    assert.deepEqual(requestBodies[2].input, [
+      { role: "user", content: "follow up" },
+      { role: "system", content: "iteration 3" },
+    ]);
+  });
+
+  it("falls back once and continues from the new stored response id", async function () {
     const requestBodies: Array<Record<string, any>> = [];
     let call = 0;
     globalThis.fetch = (async (_input, init) => {
@@ -325,6 +687,54 @@ describe("OpenAIResponsesProvider", function () {
       { role: "assistant", content: "first answer" },
       { role: "user", content: "second" },
     ]);
+    assert.equal(requestBodies[3].previous_response_id, "resp_2");
+    assert.deepEqual(requestBodies[3].input, [
+      { role: "user", content: "third" },
+    ]);
+  });
+
+  it("stays stateless when invalid-id recovery does not confirm storage", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    let call = 0;
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      call++;
+      if (call === 1) {
+        return jsonResponse(completedResponse("resp_1", "first answer"));
+      }
+      if (call === 2) {
+        return new Response(
+          JSON.stringify({
+            error: { message: "Previous response with id resp_1 expired" },
+          }),
+          { status: 404 },
+        );
+      }
+      if (call === 3) {
+        return jsonResponse(
+          completedResponse("resp_2", "second answer", {
+            store: undefined,
+          }),
+        );
+      }
+      return jsonResponse(completedResponse("resp_3", "third answer"));
+    }) as typeof fetch;
+
+    const provider = createProvider({ sessionId: "session-invalid-stateless" });
+    await provider.chatCompletion([message("u1", "user", "first")]);
+    await provider.chatCompletion([
+      message("u1", "user", "first"),
+      message("a1", "assistant", "first answer"),
+      message("u2", "user", "second"),
+    ]);
+    await provider.chatCompletion([
+      message("u1", "user", "first"),
+      message("a1", "assistant", "first answer"),
+      message("u2", "user", "second"),
+      message("a2", "assistant", "second answer"),
+      message("u3", "user", "third"),
+    ]);
+
     assert.notProperty(requestBodies[3], "previous_response_id");
     assert.deepInclude(requestBodies[3].input, {
       type: "message",
@@ -453,6 +863,262 @@ describe("OpenAIResponsesProvider", function () {
       extractResponsesText(response),
       "A [sourced](https://example.test/source) answer\n\nSources:\n1. [Example source](https://example.test/source)",
     );
+  });
+
+  it("clears state when a streaming upstream ignores tool_choice none", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    let call = 0;
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      call++;
+      if (call === 1) {
+        const terminal = toolResponse(
+          "resp_forbidden_stream_call",
+          "call_1",
+          "first",
+          true,
+        );
+        const event = {
+          type: "response.completed",
+          response: terminal,
+        };
+        return new Response(
+          `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+          { status: 200, headers: { "Content-Type": "text/event-stream" } },
+        );
+      }
+      return jsonResponse(completedResponse("resp_recovery", "recovered"));
+    }) as typeof fetch;
+
+    const provider = createProvider({
+      sessionId: "session-suppressed-stream",
+    });
+    let streamedResult: { suppressedToolCall?: boolean } | undefined;
+    let streamedError: Error | undefined;
+    await provider.streamChatCompletionWithTools(
+      [message("u1", "user", "answer without tools")],
+      [localPaperTool],
+      {
+        onTextDelta: () => undefined,
+        onToolCallStart: () => undefined,
+        onToolCallDelta: () => undefined,
+        onComplete: (result) => {
+          streamedResult = result;
+        },
+        onError: (error) => {
+          streamedError = error;
+        },
+      },
+      undefined,
+      { toolChoice: "none" },
+    );
+    assert.isUndefined(streamedError);
+    assert.isTrue(streamedResult?.suppressedToolCall);
+
+    await provider.chatCompletionWithTools(
+      [
+        message("u1", "user", "answer without tools"),
+        message("u2", "user", "recover"),
+      ],
+      [localPaperTool],
+    );
+    assert.notProperty(requestBodies[1], "previous_response_id");
+  });
+
+  it("extracts non-streaming refusal content", function () {
+    assert.equal(
+      extractResponsesText({
+        id: "resp_refusal",
+        status: "completed",
+        output: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "refusal", refusal: "I cannot help with that." }],
+          },
+        ],
+      }),
+      "I cannot help with that.",
+    );
+  });
+
+  it("streams refusal deltas and preserves the terminal refusal", async function () {
+    const deltas: string[] = [];
+    const terminal = {
+      id: "resp_refusal",
+      status: "completed",
+      output: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "refusal", refusal: "I cannot help." }],
+        },
+      ],
+    };
+    const response = await parseResponsesSSEStream(
+      readerFromSSE(
+        [
+          { type: "response.refusal.delta", delta: "I cannot " },
+          { type: "response.refusal.delta", delta: "help." },
+          { type: "response.refusal.done", refusal: "I cannot help." },
+          { type: "response.completed", response: terminal },
+        ].map(
+          (event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+        ),
+      ),
+      { onTextDelta: (delta) => deltas.push(delta) },
+    );
+
+    assert.deepEqual(deltas, ["I cannot ", "help."]);
+    assert.equal(extractResponsesText(response), "I cannot help.");
+  });
+
+  it("reconstructs refusal output when the terminal stream omits output", async function () {
+    const response = await parseResponsesSSEStream(
+      readerFromSSE(
+        [
+          {
+            type: "response.created",
+            response: { id: "resp_refusal", store: false },
+          },
+          { type: "response.refusal.done", refusal: "Request refused." },
+          {
+            type: "response.completed",
+            response: { status: "completed" },
+          },
+        ].map(
+          (event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+        ),
+      ),
+      {},
+    );
+
+    assert.equal(response.id, "resp_refusal");
+    assert.equal(response.store, false);
+    assert.equal(extractResponsesText(response), "Request refused.");
+  });
+
+  it("returns visible max-token partial text when no function call is present", async function () {
+    globalThis.fetch = (async () =>
+      jsonResponse({
+        id: "resp_incomplete",
+        status: "incomplete",
+        store: true,
+        incomplete_details: { reason: "max_output_tokens" },
+        output: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [
+              { type: "output_text", text: "partial answer", annotations: [] },
+            ],
+          },
+        ],
+      })) as typeof fetch;
+
+    const result = await createProvider({
+      sessionId: "session-partial",
+    }).chatCompletionWithTools(
+      [message("u1", "user", "answer")],
+      [localPaperTool],
+    );
+
+    assert.equal(result.content, "partial answer");
+    assert.isUndefined(result.toolCalls);
+  });
+
+  it("rejects an incomplete function call and does not commit its response id", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    const responses = [
+      {
+        id: "resp_incomplete",
+        status: "incomplete",
+        store: true,
+        incomplete_details: { reason: "max_output_tokens" },
+        output: [
+          {
+            type: "function_call",
+            call_id: "call_truncated",
+            name: "search_pdf",
+            arguments: '{"query":"truncated',
+          },
+        ],
+      },
+      completedResponse("resp_recovery", "recovered"),
+    ];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse(responses.shift()!);
+    }) as typeof fetch;
+
+    const provider = createProvider({ sessionId: "session-incomplete-call" });
+    let rejected: unknown;
+    try {
+      await provider.chatCompletionWithTools(
+        [message("u1", "user", "search")],
+        [localPaperTool],
+      );
+    } catch (error) {
+      rejected = error;
+    }
+    assert.instanceOf(rejected, Error);
+    assert.match((rejected as Error).message, /incomplete/i);
+
+    await provider.chatCompletionWithTools(
+      [message("u2", "user", "recover")],
+      [localPaperTool],
+    );
+    assert.notProperty(requestBodies[1], "previous_response_id");
+  });
+
+  it("rejects empty incomplete responses, unfinished calls, and nonterminal statuses", async function () {
+    const responses = [
+      {
+        id: "resp_empty",
+        status: "incomplete",
+        incomplete_details: { reason: "max_output_tokens" },
+        output: [],
+      },
+      {
+        id: "resp_unfinished_call",
+        status: "completed",
+        output: [
+          {
+            type: "function_call",
+            status: "in_progress",
+            call_id: "call_1",
+            name: "search_pdf",
+            arguments: "{}",
+          },
+        ],
+      },
+      {
+        id: "resp_cancelled",
+        status: "cancelled",
+        output: [],
+      },
+    ];
+    globalThis.fetch = (async () =>
+      jsonResponse(responses.shift()!)) as typeof fetch;
+    const provider = createProvider();
+
+    for (const expected of [
+      /incomplete/i,
+      /unfinished function call/i,
+      /unexpected status: cancelled/i,
+    ]) {
+      let rejected: unknown;
+      try {
+        await provider.chatCompletionWithTools(
+          [message("u1", "user", "search")],
+          [localPaperTool],
+        );
+      } catch (error) {
+        rejected = error;
+      }
+      assert.instanceOf(rejected, Error);
+      assert.match((rejected as Error).message, expected);
+    }
   });
 
   it("accepts response.incomplete and reconstructs omitted terminal output from deltas", async function () {
