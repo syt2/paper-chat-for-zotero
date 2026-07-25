@@ -118,13 +118,28 @@ describe("note summary destinations", function () {
     assert.deepEqual(JSON.parse(attached!.function.arguments), {
       content: "Summary",
       itemKey: "ITEM0001",
+      format: "plain",
     });
 
     const standalone = rewriteCreateNoteTarget(original, null);
     assert.isNotNull(standalone);
     assert.deepEqual(JSON.parse(standalone!.function.arguments), {
       content: "Summary",
+      format: "plain",
     });
+  });
+
+  it("forces model-generated summaries through the plain-text note path", function () {
+    const rewritten = rewriteCreateNoteTarget(
+      createNoteCall({
+        content: '<img src="https://example.invalid/pixel">',
+        format: "html",
+      }),
+      null,
+    );
+
+    assert.isNotNull(rewritten);
+    assert.equal(JSON.parse(rewritten!.function.arguments).format, "plain");
   });
 
   it("bounds application-generated destination choices without overflowing validation", function () {

@@ -141,6 +141,9 @@ export function rewriteCreateNoteTarget(
   if (itemKey) {
     args.itemKey = itemKey;
   }
+  // Summary content is model-generated. Keep the application-initiated path
+  // on the escaping executor branch instead of accepting arbitrary note HTML.
+  args.format = "plain";
   return {
     ...toolCall,
     function: {

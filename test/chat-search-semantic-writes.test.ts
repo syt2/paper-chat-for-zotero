@@ -481,6 +481,16 @@ describe("chat search semantic writes", function () {
       role: "user",
       selectedText: "Selected Text",
       content: "[Question]: Hello ＷＯＲＬＤ",
+      quotedMessages: [
+        {
+          sessionId: "session-1",
+          messageId: "assistant-quoted",
+          role: "assistant",
+          preview: "Quoted answer",
+          contentSnapshot: "Quoted answer snapshot",
+          timestamp: 9,
+        },
+      ],
       sourceItemKeys: ["item0001", "invalid"],
       timestamp: 10,
     });
@@ -488,9 +498,19 @@ describe("chat search semantic writes", function () {
     const stored = fake.messages.get("user-1");
     assert.equal(
       stored?.search_text,
-      `selected text${FIELD_BOUNDARY_TOKEN}hello world`,
+      `quoted answer${FIELD_BOUNDARY_TOKEN}selected text${FIELD_BOUNDARY_TOKEN}hello world`,
     );
     assert.equal(stored?.search_index_version, CURRENT_SEARCH_VERSION);
+    assert.deepEqual(JSON.parse(stored?.quoted_messages || "[]"), [
+      {
+        sessionId: "session-1",
+        messageId: "assistant-quoted",
+        role: "assistant",
+        preview: "Quoted answer",
+        contentSnapshot: "Quoted answer snapshot",
+        timestamp: 9,
+      },
+    ]);
     assert.equal(stored?.source_item_keys, '["ITEM0001"]');
     assert.equal(fake.state?.search_revision, 5);
 
