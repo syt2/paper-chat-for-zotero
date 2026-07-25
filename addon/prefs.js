@@ -38,7 +38,7 @@ pref("guideStatus", 0);
 pref("contextMaxRecentPairs", 10);
 pref("contextEnableSummary", true);
 pref("contextAutoCompactBufferTokens", 13000);
-pref("contextAutoCompactWindowTokens", 100000);
+pref("contextAutoCompactWindowTokens", 250000);
 
 // AI Tools Settings
 pref("toolPermissionDefaultModes", ""); // 各工具默认权限模式映射（JSON）

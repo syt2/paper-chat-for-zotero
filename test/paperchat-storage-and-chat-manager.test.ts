@@ -8,6 +8,7 @@ import { filterSearchToolsForScope } from "../src/modules/chat/agent-runtime/Sea
 import {
   destroyContextManager,
   getContextManager,
+  normalizeContextAutoCompactWindowTokens,
 } from "../src/modules/chat/ContextManager.ts";
 import { SessionStorageService } from "../src/modules/chat/SessionStorageService.ts";
 import {
@@ -1414,6 +1415,10 @@ describe("paperchat storage and chat manager", function () {
     );
   });
 
+  it("defaults the context window to 250K tokens", function () {
+    assert.equal(normalizeContextAutoCompactWindowTokens(undefined), 250000);
+  });
+
   it("triggers summary from the context-window token budget", function () {
     prefStore.set(`${PREFS_PREFIX}.contextEnableSummary`, true);
     prefStore.set(`${PREFS_PREFIX}.contextAutoCompactWindowTokens`, 40000);
@@ -1499,7 +1504,45 @@ describe("paperchat storage and chat manager", function () {
     assert.isTrue(contextManager.filterMessages(session).summaryTriggered);
   });
 
-  it("caps the auto compact window to PaperChat routing context windows", function () {
+  it("uses smaller PaperChat routing context windows below 250K", function () {
+    prefStore.set(`${PREFS_PREFIX}.contextEnableSummary`, true);
+    prefStore.set(`${PREFS_PREFIX}.contextAutoCompactWindowTokens`, 250000);
+    prefStore.set(
+      `${PREFS_PREFIX}.paperchatRoutingConfigCache`,
+      JSON.stringify({
+        "standard-context-model": {
+          contextWindow: 128000,
+          maxOutput: 8000,
+        },
+      }),
+    );
+    loadCachedRatios();
+
+    const contextManager = getContextManager();
+    const session: ChatSession = {
+      id: "session-context-standard-threshold",
+      createdAt: 1,
+      updatedAt: 10,
+      lastActiveItemKey: null,
+      resolvedModelId: "standard-context-model",
+      messages: [
+        {
+          id: "user-under-model-window",
+          role: "user",
+          content: "x".repeat(400000),
+          timestamp: 1,
+        },
+      ],
+    };
+
+    assert.isFalse(contextManager.filterMessages(session).summaryTriggered);
+
+    session.messages[0].content = "x".repeat(430000);
+
+    assert.isTrue(contextManager.filterMessages(session).summaryTriggered);
+  });
+
+  it("uses very small PaperChat routing context windows", function () {
     prefStore.set(`${PREFS_PREFIX}.contextEnableSummary`, true);
     prefStore.set(`${PREFS_PREFIX}.contextAutoCompactWindowTokens`, 200000);
     prefStore.set(

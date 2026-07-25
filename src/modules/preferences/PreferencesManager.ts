@@ -66,6 +66,7 @@ const CONTEXT_AUTO_COMPACT_SLIDER_POSITIONS: ReadonlyArray<{
   { position: 42, tokens: 150000 },
   { position: 48, tokens: 180000 },
   { position: 50, tokens: 200000 },
+  { position: 56, tokens: 250000 },
   { position: 62, tokens: 300000 },
   { position: 70, tokens: 400000 },
   { position: 78, tokens: 500000 },
