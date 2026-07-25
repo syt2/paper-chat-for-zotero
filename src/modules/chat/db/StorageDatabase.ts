@@ -11,7 +11,7 @@ import { getErrorMessage } from "../../../utils/common";
 
 const DB_DIR = "paper-chat";
 const DB_FILE = "storage";
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 11;
 
 /** Build absolute DB path so Zotero.DBConnection doesn't parse subdirectory names */
 function getDBPath(): string {
@@ -240,6 +240,7 @@ export class StorageDatabase {
         reasoning TEXT,
         images TEXT,
         files TEXT,
+        quoted_messages TEXT,
         timestamp INTEGER NOT NULL,
         pdf_context INTEGER,
         selected_text TEXT,
@@ -436,7 +437,9 @@ export class StorageDatabase {
         (column: any) => String(column.name),
       ),
     );
-    return messageColumns.has("evidence");
+    return (
+      messageColumns.has("evidence") && messageColumns.has("quoted_messages")
+    );
   }
 
   private async initSchemaVersion(db: ZoteroDBConnection): Promise<void> {
@@ -506,6 +509,10 @@ export class StorageDatabase {
         await this.upgradeToV10(db);
         currentVersion = 10;
       }
+      if (currentVersion < 11) {
+        await this.upgradeToV11(db);
+        currentVersion = 11;
+      }
       if (
         currentVersion === SCHEMA_VERSION &&
         !(await this.hasCurrentSchemaColumns(db))
@@ -514,6 +521,7 @@ export class StorageDatabase {
           await this.upgradeToV9(db);
         }
         await this.upgradeToV10(db);
+        await this.upgradeToV11(db);
       }
     }
   }
@@ -558,6 +566,7 @@ export class StorageDatabase {
           content TEXT NOT NULL DEFAULT '',
           images TEXT,
           files TEXT,
+          quoted_messages TEXT,
           timestamp INTEGER NOT NULL,
           pdf_context INTEGER,
           selected_text TEXT,
@@ -598,8 +607,8 @@ export class StorageDatabase {
           if (!msg.id || !msg.role) continue;
 
           await db.queryAsync(
-            `INSERT INTO messages (id, session_id, seq, role, content, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, is_system_notice)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO messages (id, session_id, seq, role, content, images, files, quoted_messages, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, is_system_notice)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               msg.id,
               row.id,
@@ -608,6 +617,7 @@ export class StorageDatabase {
               msg.content || "",
               msg.images ? JSON.stringify(msg.images) : null,
               msg.files ? JSON.stringify(msg.files) : null,
+              msg.quotedMessages ? JSON.stringify(msg.quotedMessages) : null,
               msg.timestamp || Date.now(),
               msg.pdfContext ? 1 : null,
               msg.selectedText || null,
@@ -1190,6 +1200,43 @@ export class StorageDatabase {
     }
   }
 
+  /** Upgrade schema v10 -> v11: persist quoted assistant reply references. */
+  private async upgradeToV11(db: ZoteroDBConnection): Promise<void> {
+    ztoolkit.log("[StorageDatabase] Upgrading schema v10 -> v11...");
+
+    await db.queryAsync("BEGIN TRANSACTION");
+    try {
+      const messageColumns = new Set(
+        ((await db.queryAsync("PRAGMA table_info(messages)")) || []).map(
+          (column: any) => String(column.name),
+        ),
+      );
+      if (!messageColumns.has("quoted_messages")) {
+        await db.queryAsync(
+          "ALTER TABLE messages ADD COLUMN quoted_messages TEXT",
+        );
+      }
+      await this.ensureSearchInvalidationTriggers(db);
+      await db.queryAsync(
+        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
+        [11, Date.now()],
+      );
+      await db.queryAsync("COMMIT");
+      ztoolkit.log("[StorageDatabase] Schema upgraded to v11");
+    } catch (error) {
+      try {
+        await db.queryAsync("ROLLBACK");
+      } catch {
+        /* ignore */
+      }
+      ztoolkit.log(
+        "[StorageDatabase] Failed to upgrade to v11:",
+        getErrorMessage(error),
+      );
+      throw error;
+    }
+  }
+
   /**
    * Keep projections safe if an older plugin build edits a v9 database without
    * knowing about the search columns. Current semantic writes first reserve a
@@ -1199,10 +1246,24 @@ export class StorageDatabase {
   private async ensureSearchInvalidationTriggers(
     db: ZoteroDBConnection,
   ): Promise<void> {
+    const messageColumns = new Set(
+      ((await db.queryAsync("PRAGMA table_info(messages)")) || []).map(
+        (column: any) => String(column.name),
+      ),
+    );
+    const quotedMessagesUpdateColumn = messageColumns.has("quoted_messages")
+      ? ", quoted_messages"
+      : "";
+    const quotedMessagesChangeCheck = messageColumns.has("quoted_messages")
+      ? "OR NEW.quoted_messages IS NOT OLD.quoted_messages"
+      : "";
+    await db.queryAsync(
+      "DROP TRIGGER IF EXISTS trg_messages_search_projection_stale",
+    );
     await db.queryAsync(`
       CREATE TRIGGER IF NOT EXISTS trg_messages_search_projection_stale
       AFTER UPDATE OF role, content, selected_text, tool_calls, tool_call_id,
-        streaming_state, api_only, is_system_notice ON messages
+        streaming_state, api_only, is_system_notice${quotedMessagesUpdateColumn} ON messages
       WHEN NEW.search_index_version = OLD.search_index_version
         AND NEW.search_text = OLD.search_text
         AND (
@@ -1214,6 +1275,7 @@ export class StorageDatabase {
           OR NEW.streaming_state IS NOT OLD.streaming_state
           OR NEW.api_only IS NOT OLD.api_only
           OR NEW.is_system_notice IS NOT OLD.is_system_notice
+          ${quotedMessagesChangeCheck}
         )
       BEGIN
         UPDATE messages

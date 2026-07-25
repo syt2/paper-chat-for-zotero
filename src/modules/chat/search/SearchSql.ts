@@ -185,7 +185,7 @@ export function buildLowerVersionMessagePageSql(
   return {
     sql: `SELECT id, session_id, seq, role, content, timestamp,
       selected_text, tool_calls, tool_call_id, streaming_state,
-      api_only, is_system_notice,
+      api_only, is_system_notice, quoted_messages,
       search_index_version
     FROM messages
     WHERE search_index_version < ?
@@ -245,7 +245,7 @@ export function buildAllSourceMessagePageSql(
   return {
     sql: `SELECT id, session_id, seq, role, content, timestamp,
       selected_text, tool_calls, tool_call_id, streaming_state,
-      api_only, is_system_notice, search_index_version
+      api_only, is_system_notice, quoted_messages, search_index_version
     FROM messages
     ${cursorPredicate}
     ORDER BY search_index_version ASC, id COLLATE BINARY ASC
@@ -283,7 +283,7 @@ function buildSourceSessionMessagePageSql(
   return {
     sql: `SELECT id, session_id, seq, role, content, timestamp,
       selected_text, tool_calls, tool_call_id, streaming_state,
-      api_only, is_system_notice, search_index_version
+      api_only, is_system_notice, quoted_messages, search_index_version
     FROM messages
     WHERE session_id = ?
       ${versionPredicate}

@@ -17,6 +17,16 @@ export interface FileAttachment {
   type: string;
 }
 
+/** A stable reference and bounded fallback snapshot for a quoted AI reply. */
+export interface QuotedMessageRef {
+  sessionId: string;
+  messageId: string;
+  role: "assistant";
+  preview: string;
+  contentSnapshot: string;
+  timestamp: number;
+}
+
 import type {
   ToolApprovalRequest,
   ToolCall,
@@ -42,6 +52,7 @@ export interface ChatMessage {
   reasoning?: string; // Reasoning/thinking chain (e.g. DeepSeek-Reasoner)
   images?: ImageAttachment[];
   files?: FileAttachment[];
+  quotedMessages?: QuotedMessageRef[];
   timestamp: number;
   pdfContext?: boolean; // 是否包含PDF上下文
   selectedText?: string; // 选中的PDF文本
@@ -491,6 +502,7 @@ export interface SendMessageOptions {
   images?: ImageAttachment[];
   files?: FileAttachment[];
   selectedText?: string;
+  quotedMessages?: QuotedMessageRef[];
 }
 
 // 聊天管理器事件

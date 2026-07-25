@@ -37,12 +37,37 @@ function isItemContextTransition(message: ChatMessage): boolean {
   );
 }
 
-function cloneMessage(message: ChatMessage, id: string): ChatMessage {
+interface ForkSessionIds {
+  sourceSessionId: string;
+  targetSessionId: string;
+}
+
+function cloneMessage(
+  message: ChatMessage,
+  id: string,
+  messageIdMap: ReadonlyMap<string, string>,
+  sessionIds?: ForkSessionIds,
+): ChatMessage {
   return {
     ...message,
     id,
     images: message.images?.map((image) => ({ ...image })),
     files: message.files?.map((file) => ({ ...file })),
+    quotedMessages: message.quotedMessages?.map((quote) => {
+      const mappedMessageId = messageIdMap.get(quote.messageId);
+      if (
+        !sessionIds ||
+        quote.sessionId !== sessionIds.sourceSessionId ||
+        !mappedMessageId
+      ) {
+        return { ...quote };
+      }
+      return {
+        ...quote,
+        sessionId: sessionIds.targetSessionId,
+        messageId: mappedMessageId,
+      };
+    }),
     tool_calls: message.tool_calls?.map((toolCall) => ({
       ...toolCall,
       function: { ...toolCall.function },
@@ -60,12 +85,22 @@ export function cloneHistoryThroughAssistantMessage(
   messages: ChatMessage[],
   assistantMessageId: string,
   createMessageId: () => string,
+  sessionIds?: ForkSessionIds,
 ): ChatMessage[] {
   const forkIndex = findForkIndex(messages, assistantMessageId);
+  const sourceMessages = messages.slice(0, forkIndex + 1);
+  const messageIdMap = new Map(
+    sourceMessages.map((message) => [message.id, createMessageId()]),
+  );
 
-  return messages
-    .slice(0, forkIndex + 1)
-    .map((message) => cloneMessage(message, createMessageId()));
+  return sourceMessages.map((message) =>
+    cloneMessage(
+      message,
+      messageIdMap.get(message.id)!,
+      messageIdMap,
+      sessionIds,
+    ),
+  );
 }
 
 /**

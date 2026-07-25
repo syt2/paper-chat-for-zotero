@@ -2,7 +2,12 @@
  * Chat Panel Types - Shared interfaces for chat panel modules
  */
 
-import type { ChatManager, ChatMessage, ExecutionPlan } from "../../chat";
+import type {
+  ChatManager,
+  ChatMessage,
+  ExecutionPlan,
+  QuotedMessageRef,
+} from "../../chat";
 import type { AuthManager } from "../../auth";
 import type { PaperChatTier } from "../../providers/paperchat-tier-routing";
 
@@ -61,6 +66,7 @@ export interface AttachmentState {
   pendingImages: import("../../../types/chat").ImageAttachment[];
   pendingFiles: import("../../../types/chat").FileAttachment[];
   pendingSelectedText: string | null;
+  pendingQuotedMessages: QuotedMessageRef[];
 }
 
 // Context passed to event handlers

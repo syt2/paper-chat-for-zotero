@@ -2,6 +2,7 @@ import { assert } from "chai";
 import type { ChatSession } from "../src/types/chat";
 import { getStorageDatabase } from "../src/modules/chat/db/StorageDatabase";
 import { checkAndMigrateToV3 } from "../src/modules/chat/migration/migrateToSQLite";
+import { CURRENT_SEARCH_VERSION } from "../src/modules/chat/search/SearchProjection";
 
 interface RecordedQuery {
   sql: string;
@@ -163,11 +164,11 @@ describe("JSON to SQLite search migration", function () {
     assert.deepEqual(messageReset?.params, ["session-1"]);
     assert.equal(messageQueries.length, 3);
     assert.equal(messageQueries[0].params?.[16], "nfkc ffi\u001fwhy now?");
-    assert.equal(messageQueries[0].params?.[17], 1);
+    assert.equal(messageQueries[0].params?.[17], CURRENT_SEARCH_VERSION);
     assert.equal(messageQueries[1].params?.[16], "visible answer");
-    assert.equal(messageQueries[1].params?.[17], 1);
+    assert.equal(messageQueries[1].params?.[17], CURRENT_SEARCH_VERSION);
     assert.equal(messageQueries[2].params?.[16], "");
-    assert.equal(messageQueries[2].params?.[17], 1);
+    assert.equal(messageQueries[2].params?.[17], CURRENT_SEARCH_VERSION);
 
     const metaQuery = queries.find((query) =>
       query.sql.includes("INSERT OR REPLACE INTO session_meta"),
@@ -176,7 +177,7 @@ describe("JSON to SQLite search migration", function () {
     assert.equal(metaQuery?.params?.[4], "Visible **Answer**");
     assert.equal(metaQuery?.params?.[5], 12);
     assert.equal(metaQuery?.params?.[10], "title café");
-    assert.equal(metaQuery?.params?.[11], 1);
+    assert.equal(metaQuery?.params?.[11], CURRENT_SEARCH_VERSION);
 
     const stateInsert = queries.find((query) =>
       query.sql.includes("INSERT OR IGNORE INTO chat_search_state"),
@@ -184,7 +185,7 @@ describe("JSON to SQLite search migration", function () {
     const stateUpdate = queries.find((query) =>
       query.sql.includes("UPDATE chat_search_state"),
     );
-    assert.equal(stateInsert?.params?.[0], 1);
+    assert.equal(stateInsert?.params?.[0], CURRENT_SEARCH_VERSION);
     assert.include(stateUpdate?.sql || "", "search_revision + 1");
     assert.notMatch(
       stateUpdate?.sql || "",

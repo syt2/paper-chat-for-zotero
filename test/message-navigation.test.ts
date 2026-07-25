@@ -14,6 +14,7 @@ import {
   hasConversationMessages,
   shouldResetSummaryButtonBusyState,
 } from "../src/modules/ui/chat-panel/NoteSummaryActions.ts";
+import { updateAttachmentsPreviewDisplay } from "../src/modules/ui/chat-panel/ChatPanelEvents.ts";
 
 interface RectInit {
   top: number;
@@ -140,6 +141,19 @@ class FakeDocument {
 
   querySelector(_selector: string): FakeElement | null {
     return null;
+  }
+}
+
+class AttachmentPreviewContainer extends FakeElement {
+  constructor(
+    doc: FakeDocument,
+    private readonly preview: FakeElement,
+  ) {
+    super(doc, "div");
+  }
+
+  override querySelector(selector: string): FakeElement | null {
+    return selector === "#chat-attachments-preview" ? this.preview : null;
   }
 }
 
@@ -518,6 +532,186 @@ describe("chat message exact navigation", function () {
     await Promise.resolve();
     await Promise.resolve();
     assert.isNull(summaryButton.getAttribute("aria-busy"));
+  });
+
+  it("offers quoting for completed assistant replies", function () {
+    const doc = new FakeDocument();
+    const history = new FakeElement(doc, "div");
+    history.scrollHeight = 100;
+    history.clientHeight = 100;
+    let quotedMessageId: string | null = null;
+
+    renderMessages(
+      asElement(history),
+      null,
+      [
+        message("assistant-to-quote", {
+          role: "assistant",
+          content: "A completed answer",
+        }),
+      ],
+      darkTheme,
+      undefined,
+      undefined,
+      undefined,
+      {
+        onQuoteReply: (messageId) => {
+          quotedMessageId = messageId;
+        },
+      },
+    );
+
+    const actions = history.children[0].children[1];
+    assert.lengthOf(actions.children, 2);
+    const quoteButton = actions.children[1];
+    assert.equal(
+      quoteButton.getAttribute("class"),
+      "message-action-btn quote-reply-btn",
+    );
+    assert.equal(
+      quoteButton.getAttribute("aria-label"),
+      "paperchat-chat-quote-reply",
+    );
+    assert.equal(
+      quoteButton.children[0].getAttribute("src"),
+      "chrome://paperchat/content/icons/quote.svg",
+    );
+
+    quoteButton.listeners.get("click")?.[0]?.({
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+    });
+    assert.equal(quotedMessageId, "assistant-to-quote");
+  });
+
+  it("renders sent quote indicators in order and navigates by exact message ID", function () {
+    const doc = new FakeDocument();
+    const navigated: string[] = [];
+    const userMessage = message("user-with-quotes", {
+      quotedMessages: [
+        {
+          sessionId: "session-1",
+          messageId: "assistant-1",
+          role: "assistant",
+          preview: "First answer",
+          contentSnapshot: "First answer",
+          timestamp: 1,
+        },
+        {
+          sessionId: "session-1",
+          messageId: "assistant-2",
+          role: "assistant",
+          preview: "Second answer",
+          contentSnapshot: "Second answer",
+          timestamp: 2,
+        },
+      ],
+    });
+
+    const wrapper = createMessageElement(
+      doc as unknown as Document,
+      userMessage,
+      darkTheme,
+      false,
+      false,
+      undefined,
+      undefined,
+      {
+        onNavigateToQuotedMessage: (quote) => {
+          navigated.push(quote.messageId);
+        },
+      },
+    );
+
+    const quotedReplies = wrapper.children[0].children[0];
+    assert.equal(quotedReplies.getAttribute("class"), "message-quoted-replies");
+    assert.deepEqual(
+      quotedReplies.children.map((row) =>
+        row.getAttribute("data-quoted-message-id"),
+      ),
+      ["assistant-1", "assistant-2"],
+    );
+    quotedReplies.children[1].listeners.get("click")?.[0]?.({
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+    });
+    assert.deepEqual(navigated, ["assistant-2"]);
+  });
+
+  it("renders pending quotes as removable tags and images as thumbnails", function () {
+    const doc = new FakeDocument();
+    const preview = new FakeElement(doc, "div");
+    const container = new AttachmentPreviewContainer(doc, preview);
+    const removedQuotes: number[] = [];
+    const removedImages: number[] = [];
+    const navigated: string[] = [];
+
+    updateAttachmentsPreviewDisplay(
+      asElement(container),
+      {
+        pendingQuotedMessages: [
+          {
+            sessionId: "session-1",
+            messageId: "assistant-1",
+            role: "assistant",
+            preview: "Quoted answer",
+            contentSnapshot: "Quoted answer",
+            timestamp: 1,
+          },
+        ],
+        pendingImages: [
+          {
+            type: "base64",
+            data: "YWJj",
+            mimeType: "image/png",
+            name: "figure.png",
+          },
+        ],
+        pendingFiles: [],
+        pendingSelectedText: null,
+      },
+      {
+        onRemoveQuote: (index) => removedQuotes.push(index),
+        onRemoveImage: (index) => removedImages.push(index),
+        onNavigateQuote: (quote) => navigated.push(quote.messageId),
+      },
+    );
+
+    assert.equal(preview.style.display, "flex");
+    assert.lengthOf(preview.children, 2);
+    const quoteTag = preview.children[0];
+    assert.equal(quoteTag.getAttribute("class"), "pending-quoted-message");
+    assert.equal(
+      quoteTag.getAttribute("data-quoted-message-id"),
+      "assistant-1",
+    );
+    quoteTag.listeners.get("click")?.[0]?.({});
+    quoteTag.listeners.get("keydown")?.[0]?.({
+      key: "Enter",
+      target: quoteTag.children[1],
+      currentTarget: quoteTag,
+      preventDefault: () => assert.fail("nested keydown was prevented"),
+    });
+    quoteTag.children[1].listeners.get("click")?.[0]?.({
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+    });
+    assert.deepEqual(navigated, ["assistant-1"]);
+    assert.deepEqual(removedQuotes, [0]);
+
+    const imageTag = preview.children[1];
+    assert.equal(imageTag.getAttribute("class"), "pending-image-attachment");
+    assert.equal(imageTag.children[0].tagName, "img");
+    assert.equal(imageTag.children[0].style.width, "32px");
+    assert.equal(
+      imageTag.children[0].getAttribute("src"),
+      "data:image/png;base64,YWJj",
+    );
+    imageTag.children[2].listeners.get("click")?.[0]?.({
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+    });
+    assert.deepEqual(removedImages, [0]);
   });
 
   it("summarizes only usable conversation messages", function () {

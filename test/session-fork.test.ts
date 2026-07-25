@@ -176,6 +176,55 @@ describe("chat session fork", function () {
     );
   });
 
+  it("remaps quoted replies included in forked history", function () {
+    const messages: ChatMessage[] = [
+      {
+        id: "assistant-source",
+        role: "assistant",
+        content: "Source answer",
+        timestamp: 1,
+      },
+      {
+        id: "user-with-quote",
+        role: "user",
+        content: "Follow up",
+        quotedMessages: [
+          {
+            sessionId: "source-session",
+            messageId: "assistant-source",
+            role: "assistant",
+            preview: "Source answer",
+            contentSnapshot: "Source answer",
+            timestamp: 1,
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        id: "assistant-fork-point",
+        role: "assistant",
+        content: "Follow-up answer",
+        timestamp: 3,
+      },
+    ];
+    let nextId = 0;
+
+    const forked = cloneHistoryThroughAssistantMessage(
+      messages,
+      "assistant-fork-point",
+      () => `fork-${++nextId}`,
+      {
+        sourceSessionId: "source-session",
+        targetSessionId: "fork-session",
+      },
+    );
+
+    assert.equal(forked[1].quotedMessages?.[0].sessionId, "fork-session");
+    assert.equal(forked[1].quotedMessages?.[0].messageId, forked[0].id);
+    assert.notStrictEqual(forked[1].quotedMessages, messages[1].quotedMessages);
+    assert.equal(messages[1].quotedMessages?.[0].messageId, "assistant-source");
+  });
+
   it("does not carry paper context that was selected after the fork point", function () {
     const messages: ChatMessage[] = [
       {

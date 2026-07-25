@@ -14,7 +14,10 @@ export {
 } from "./pdf-tools";
 export { checkAndMigrate } from "./migration/migrateV1Sessions";
 export { checkAndMigrateToV3 } from "./migration/migrateToSQLite";
-export { getToolPermissionManager, ToolPermissionManager } from "./tool-permissions";
+export {
+  getToolPermissionManager,
+  ToolPermissionManager,
+} from "./tool-permissions";
 export { getTaskManager, TaskManager } from "./task-manager";
 export { getToolScheduler, ToolScheduler } from "./tool-scheduler";
 export {
@@ -41,6 +44,7 @@ export type {
   ChatSession,
   ImageAttachment,
   FileAttachment,
+  QuotedMessageRef,
   SendMessageOptions,
   StreamCallbacks,
   ExecutionPlan,

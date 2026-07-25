@@ -1128,8 +1128,8 @@ export function createChatContainer(
   chatViewport.appendChild(executionApprovalPanel);
   chatViewport.appendChild(scrollBottomBtn);
   root.appendChild(chatViewport);
-  root.appendChild(toolbar);
   root.appendChild(attachmentsPreview);
+  root.appendChild(toolbar);
   root.appendChild(inputArea);
   root.appendChild(historyDropdown);
   root.appendChild(mentionPopup);

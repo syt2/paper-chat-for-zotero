@@ -10,6 +10,7 @@ import type {
   ExecutionPlan,
   ImageAttachment,
   FileAttachment,
+  QuotedMessageRef,
   ToolApprovalState,
 } from "../../../types/chat";
 import type {
@@ -38,6 +39,7 @@ import {
   getStreamingReasoningSelector,
   renderMessages as renderMessageElementsBase,
   scrollChatHistoryToBottom,
+  scrollToAndHighlightMessage,
   shouldAutoScrollChatHistory,
   updateChatHistoryScrollBottomButton,
   updateExecutionPlanView,
@@ -57,6 +59,11 @@ import {
   canSummarizeAssistantReply,
   hasConversationMessages,
 } from "./NoteSummaryActions";
+import {
+  appendPendingQuotedMessage,
+  canQuoteAssistantReply,
+  createQuotedMessageRef,
+} from "../../chat/quoted-messages";
 import { navigateToPdfQuote } from "./PdfQuoteNavigator";
 import { normalizeNoteSourceKey } from "./NoteSourceNavigator";
 import { openSourceTarget, type SourceTarget } from "./SourceNavigator";
@@ -126,6 +133,7 @@ const streamingTextRenderStates = new WeakMap<
   HTMLElement,
   StreamingTextRenderState
 >();
+const quotedMessageNavigationGenerations = new WeakMap<HTMLElement, number>();
 
 function cancelPendingStreamingTextRender(container: HTMLElement): void {
   const state = streamingTextRenderStates.get(container);
@@ -484,6 +492,8 @@ interface ChatMessageRenderCallbacks {
   onRerollError?: (error: Error) => void;
   onFork?: (assistantMessageId: string) => void | Promise<void>;
   onForkError?: (error: Error) => void;
+  onQuoteReply?: (assistantMessageId: string) => void;
+  onNavigateToQuotedMessage?: (quote: QuotedMessageRef) => void | Promise<void>;
   onSummarizeReply?: (assistantMessageId: string) => void | Promise<void>;
   onSummarizeReplyError?: (error: Error) => void;
   onMarkdownError?: (message: string) => void;
@@ -514,6 +524,8 @@ function renderMessageElementsWithMarkdownActions(
       onRetryError: callbacks.onRetryError,
       onFork: callbacks.onFork,
       onForkError: callbacks.onForkError,
+      onQuoteReply: callbacks.onQuoteReply,
+      onNavigateToQuotedMessage: callbacks.onNavigateToQuotedMessage,
       onSummarizeReply: callbacks.onSummarizeReply,
       onSummarizeReplyError: callbacks.onSummarizeReplyError,
       onRenderComplete: callbacks.onRenderComplete,
@@ -915,6 +927,7 @@ function removeStaleSidebarContainers(doc: Document): void {
 let pendingImages: ImageAttachment[] = [];
 let pendingFiles: FileAttachment[] = [];
 let pendingSelectedText: string | null = null;
+let pendingQuotedMessages: QuotedMessageRef[] = [];
 
 /**
  * Get current panel mode
@@ -1299,6 +1312,7 @@ async function initializeChatContentCommon(
     context.renderExecutionPlan(session.executionPlan);
   }
   updateModelSelectorDisplay(container);
+  context.updateAttachmentsPreview();
 
   focusInput(container);
 }
@@ -1618,6 +1632,10 @@ async function refreshChatForContainer(container: HTMLElement): Promise<void> {
       {
         onFork: (assistantMessageId) =>
           continueInNewChatFromMessage(refreshContext, assistantMessageId),
+        onQuoteReply: (assistantMessageId) =>
+          addAssistantReplyQuote(refreshContext, assistantMessageId),
+        onNavigateToQuotedMessage: (quote) =>
+          navigateToQuotedMessage(refreshContext, quote),
         onSummarizeReply: supportsToolCalling
           ? (assistantMessageId) =>
               summarizeReplyToNote(refreshContext, assistantMessageId)
@@ -2507,11 +2525,125 @@ export function unregisterToolbarButton(): void {
 /**
  * Create context for event handlers
  */
+function clearPendingQuotedMessages(context: ChatPanelContext): void {
+  if (pendingQuotedMessages.length === 0) return;
+  pendingQuotedMessages = [];
+  context.updateAttachmentsPreview();
+}
+
+async function navigateToQuotedMessage(
+  context: ChatPanelContext,
+  quote: QuotedMessageRef,
+): Promise<void> {
+  const navigationGeneration =
+    (quotedMessageNavigationGenerations.get(context.container) || 0) + 1;
+  quotedMessageNavigationGenerations.set(
+    context.container,
+    navigationGeneration,
+  );
+  const isLatestNavigation = () =>
+    quotedMessageNavigationGenerations.get(context.container) ===
+    navigationGeneration;
+  const manager = context.chatManager;
+  const currentSession = manager.getActiveSession();
+  const chatHistory = context.container.querySelector(
+    "#chat-history",
+  ) as HTMLElement | null;
+  const targetInCurrentSession = currentSession?.messages.some(
+    (message) => message.id === quote.messageId,
+  );
+
+  if (targetInCurrentSession && chatHistory) {
+    if (scrollToAndHighlightMessage(chatHistory, quote.messageId)) return;
+    context.renderMessages(currentSession!.messages, () => {
+      if (!isLatestNavigation()) return;
+      if (manager.getActiveSession()?.id !== currentSession!.id) return;
+      if (!scrollToAndHighlightMessage(chatHistory, quote.messageId)) {
+        context.appendError(getString("chat-quoted-reply-unavailable"));
+      }
+    });
+    return;
+  }
+
+  if (currentSession?.id === quote.sessionId) {
+    context.appendError(getString("chat-quoted-reply-unavailable"));
+    return;
+  }
+
+  const sourceSession = await manager.switchSession(quote.sessionId);
+  if (!isLatestNavigation()) return;
+  if (!sourceSession) {
+    if (manager.getActiveSession()?.id === currentSession?.id) {
+      context.appendError(getString("chat-quoted-reply-unavailable"));
+    }
+    return;
+  }
+  if (manager.getActiveSession()?.id !== quote.sessionId) return;
+
+  clearPendingQuotedMessages(context);
+  const item = getItemByLibraryKey(sourceSession.lastActiveItemKey);
+  context.setCurrentItem(item);
+  await context.updatePdfCheckboxVisibility(item);
+  if (!isLatestNavigation()) return;
+  if (manager.getActiveSession()?.id !== sourceSession.id) return;
+  context.renderMessages(sourceSession.messages, () => {
+    if (!isLatestNavigation()) return;
+    if (manager.getActiveSession()?.id !== sourceSession.id) return;
+    const sourceHistory = context.container.querySelector(
+      "#chat-history",
+    ) as HTMLElement | null;
+    if (
+      !sourceHistory ||
+      !scrollToAndHighlightMessage(sourceHistory, quote.messageId)
+    ) {
+      context.appendError(getString("chat-quoted-reply-unavailable"));
+    }
+  });
+  context.renderExecutionPlan(sourceSession.executionPlan);
+  updateModelSelectorDisplay(context.container);
+  syncSendButtonState(
+    context.container.querySelector(
+      "#chat-send-button",
+    ) as HTMLButtonElement | null,
+    manager,
+  );
+}
+
+function addAssistantReplyQuote(
+  context: ChatPanelContext,
+  assistantMessageId: string,
+): void {
+  const session = context.chatManager.getActiveSession();
+  const message = session?.messages.find(
+    (candidate) => candidate.id === assistantMessageId,
+  );
+  if (!session || !message || !canQuoteAssistantReply(message)) {
+    context.appendError(getString("chat-quoted-reply-unavailable"));
+    return;
+  }
+
+  const visibleContent = formatMarkdownForMessageCopy(message.content, {
+    evidenceRecords: message.evidence,
+  });
+  if (!canQuoteAssistantReply(message, visibleContent)) {
+    context.appendError(getString("chat-quoted-reply-unavailable"));
+    return;
+  }
+
+  pendingQuotedMessages = appendPendingQuotedMessage(
+    pendingQuotedMessages,
+    createQuotedMessageRef(session.id, message, visibleContent),
+  );
+  syncPendingAttachmentsPreviews(context.container);
+  focusInput(context.container);
+}
+
 function cloneAttachmentState(state: AttachmentState): AttachmentState {
   return {
     pendingImages: [...state.pendingImages],
     pendingFiles: [...state.pendingFiles],
     pendingSelectedText: state.pendingSelectedText,
+    pendingQuotedMessages: [...state.pendingQuotedMessages],
   };
 }
 
@@ -2522,6 +2654,7 @@ function renderPendingAttachmentsPreview(container: HTMLElement): void {
       pendingImages,
       pendingFiles,
       pendingSelectedText,
+      pendingQuotedMessages,
     },
     {
       onRemoveImage: (index) => {
@@ -2529,10 +2662,29 @@ function renderPendingAttachmentsPreview(container: HTMLElement): void {
         pendingImages = pendingImages.filter(
           (_image, imageIndex) => imageIndex !== index,
         );
-        renderPendingAttachmentsPreview(container);
+        syncPendingAttachmentsPreviews(container);
       },
+      onRemoveQuote: (index) => {
+        if (index < 0 || index >= pendingQuotedMessages.length) return;
+        pendingQuotedMessages = pendingQuotedMessages.filter(
+          (_quote, quoteIndex) => quoteIndex !== index,
+        );
+        syncPendingAttachmentsPreviews(container);
+      },
+      onNavigateQuote: (quote) =>
+        navigateToQuotedMessage(createContext(container), quote),
     },
   );
+}
+
+function syncPendingAttachmentsPreviews(extraContainer?: HTMLElement): void {
+  const containers = new Set<HTMLElement>();
+  if (chatContainer) containers.add(chatContainer);
+  if (floatingContainer) containers.add(floatingContainer);
+  if (extraContainer) containers.add(extraContainer);
+  for (const container of containers) {
+    if (container.isConnected) renderPendingAttachmentsPreview(container);
+  }
 }
 
 async function continueInNewChatFromMessage(
@@ -2597,21 +2749,24 @@ function createContext(container: HTMLElement): ChatPanelContext {
         pendingImages,
         pendingFiles,
         pendingSelectedText,
+        pendingQuotedMessages,
       }),
     setAttachmentState: (state) => {
       const nextState = cloneAttachmentState(state);
       pendingImages = nextState.pendingImages;
       pendingFiles = nextState.pendingFiles;
       pendingSelectedText = nextState.pendingSelectedText;
+      pendingQuotedMessages = nextState.pendingQuotedMessages;
     },
     clearAttachments: () => {
       pendingImages = [];
       pendingFiles = [];
       pendingSelectedText = null;
+      pendingQuotedMessages = [];
     },
     updateAttachmentsPreview: () => {
       if (container) {
-        renderPendingAttachmentsPreview(container);
+        syncPendingAttachmentsPreviews(container);
       }
     },
     updateUserBar: () => {
@@ -2673,6 +2828,10 @@ function createContext(container: HTMLElement): ChatPanelContext {
               },
               onFork: (assistantMessageId) =>
                 continueInNewChatFromMessage(context, assistantMessageId),
+              onQuoteReply: (assistantMessageId) =>
+                addAssistantReplyQuote(context, assistantMessageId),
+              onNavigateToQuotedMessage: (quote) =>
+                navigateToQuotedMessage(context, quote),
               onSummarizeReply: supportsToolCalling
                 ? (assistantMessageId) =>
                     summarizeReplyToNote(context, assistantMessageId)
@@ -2833,6 +2992,7 @@ export async function unregisterAll(): Promise<void> {
   pendingImages = [];
   pendingFiles = [];
   pendingSelectedText = null;
+  pendingQuotedMessages = [];
   moduleCurrentItem = null;
 }
 
@@ -2841,7 +3001,5 @@ export async function unregisterAll(): Promise<void> {
  */
 export function addSelectedTextAttachment(text: string): void {
   pendingSelectedText = text;
-  if (chatContainer) {
-    renderPendingAttachmentsPreview(chatContainer);
-  }
+  syncPendingAttachmentsPreviews(chatContainer || undefined);
 }

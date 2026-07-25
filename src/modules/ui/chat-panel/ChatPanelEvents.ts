@@ -58,7 +58,11 @@ import {
   hasConversationMessages,
   shouldResetSummaryButtonBusyState,
 } from "./NoteSummaryActions";
-import type { ChatMessage } from "../../chat";
+import type {
+  ChatMessage,
+  ImageAttachment,
+  QuotedMessageRef,
+} from "../../chat";
 
 // Import getActiveReaderItem from the manager module to avoid circular dependency
 // This is set by ChatPanelManager during initialization
@@ -158,11 +162,17 @@ export function updateConversationNoteSummaryButton(
 
 interface AttachmentPreviewActions {
   onRemoveImage?: (index: number) => void;
+  onRemoveQuote?: (index: number) => void;
+  onNavigateQuote?: (quote: QuotedMessageRef) => void | Promise<void>;
 }
 
-type AttachmentPreviewTag =
-  | { text: string; type: "selection" | "file" }
-  | { text: string; type: "image"; index: number };
+function clearPendingQuotedMessages(context: ChatPanelContext): void {
+  const state = context.getAttachmentState();
+  if (state.pendingQuotedMessages.length === 0) return;
+  state.pendingQuotedMessages = [];
+  context.setAttachmentState(state);
+  context.updateAttachmentsPreview();
+}
 
 function trackChatModelSwitched(props: Record<string, string | boolean>): void {
   getAnalyticsService().track(ANALYTICS_EVENTS.chatModelSwitched, props);
@@ -751,6 +761,8 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
         return;
       }
 
+      clearPendingQuotedMessages(context);
+
       syncSendButtonState(sendButton, chatManager);
       const itemKey = loadedSession.lastActiveItemKey;
       if (itemKey) {
@@ -1222,7 +1234,12 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
       // onDelete callback
       async (session: SessionInfo) => {
         ztoolkit.log("Deleting session:", session.id);
+        const deletingActiveSession =
+          chatManager.getActiveSession()?.id === session.id;
         await chatManager.deleteSession(session.id);
+        if (deletingActiveSession) {
+          clearPendingQuotedMessages(context);
+        }
 
         const activeSession = chatManager.getActiveSession();
         const itemKey = activeSession?.lastActiveItemKey;
@@ -1475,77 +1492,167 @@ export function updateAttachmentsPreviewDisplay(
 
   attachmentsPreview.textContent = "";
   const doc = container.ownerDocument!;
+  const theme = getCurrentTheme();
 
-  const tags: AttachmentPreviewTag[] = [
-    ...(attachmentState.pendingSelectedText
-      ? [{ text: "\uD83D\uDCDD Selection", type: "selection" as const }]
-      : []),
-    ...attachmentState.pendingImages.map((img, index) => ({
-      text: `\uD83D\uDDBC\uFE0F ${img.name || "image"}`,
-      type: "image" as const,
-      index,
-    })),
-    ...attachmentState.pendingFiles.map((file) => ({
-      text: `\uD83D\uDCCE ${file.name}`,
-      type: "file" as const,
-    })),
-  ];
-
-  for (const tag of tags) {
-    const span = createElement(doc, "span", {
+  const createTag = (): HTMLElement =>
+    createElement(doc, "span", {
       display: "inline-flex",
       alignItems: "center",
-      gap: "4px",
-      background: chatColors.attachmentBg,
-      border: `1px solid ${chatColors.attachmentBorder}`,
-      borderRadius: "12px",
-      padding: "4px 12px",
+      gap: "6px",
+      minWidth: "0",
+      maxWidth: "100%",
+      background: theme.inputBg,
+      border: `1px solid ${theme.borderColor}`,
+      borderRadius: "6px",
+      padding: "4px 8px",
       fontSize: "11px",
-      color: chatColors.attachmentText,
+      color: theme.textSecondary,
     });
 
-    const label = createElement(doc, "span", {});
-    label.textContent = tag.text;
-    span.appendChild(label);
+  const createLabel = (text: string): HTMLElement => {
+    const label = createElement(doc, "span", {
+      minWidth: "0",
+      overflow: "hidden",
+      whiteSpace: "nowrap",
+      textOverflow: "ellipsis",
+    });
+    label.textContent = text;
+    return label;
+  };
 
-    if (tag.type === "image" && actions.onRemoveImage) {
-      const removeBtn = createElement(
-        doc,
-        "button",
-        {
-          background: "transparent",
-          border: "none",
-          padding: "0 2px",
-          cursor: "pointer",
-          fontSize: "12px",
-          color: chatColors.attachmentText,
-          opacity: "0.7",
-          lineHeight: "1",
-        },
-        {
-          type: "button",
-          "aria-label": `Remove ${tag.text}`,
-        },
+  const createRemoveButton = (
+    label: string,
+    onRemove: () => void,
+  ): HTMLElement => {
+    const removeBtn = createElement(
+      doc,
+      "button",
+      {
+        flex: "0 0 auto",
+        width: "18px",
+        height: "18px",
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "transparent",
+        border: "none",
+        padding: "0",
+        cursor: "pointer",
+        fontSize: "12px",
+        color: theme.textSecondary,
+        opacity: "0.7",
+        lineHeight: "1",
+      },
+      { type: "button", "aria-label": label },
+    );
+    removeBtn.textContent = "x";
+    removeBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onRemove();
+    });
+    removeBtn.addEventListener("mouseenter", () => {
+      removeBtn.style.opacity = "1";
+    });
+    removeBtn.addEventListener("mouseleave", () => {
+      removeBtn.style.opacity = "0.7";
+    });
+    return removeBtn;
+  };
+
+  attachmentState.pendingQuotedMessages.forEach((quote, index) => {
+    const tag = createTag();
+    tag.setAttribute("class", "pending-quoted-message");
+    tag.setAttribute("data-quoted-message-id", quote.messageId);
+    tag.setAttribute("title", quote.preview);
+    tag.appendChild(
+      createLabel(`${getString("chat-quoted-reply")}: ${quote.preview}`),
+    );
+    if (actions.onRemoveQuote) {
+      tag.appendChild(
+        createRemoveButton(getString("chat-remove-quoted-reply"), () =>
+          actions.onRemoveQuote?.(index),
+        ),
       );
-      removeBtn.textContent = "x";
-      removeBtn.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        actions.onRemoveImage?.(tag.index);
-      });
-      removeBtn.addEventListener("mouseenter", () => {
-        removeBtn.style.opacity = "1";
-      });
-      removeBtn.addEventListener("mouseleave", () => {
-        removeBtn.style.opacity = "0.7";
-      });
-      span.appendChild(removeBtn);
     }
+    if (actions.onNavigateQuote) {
+      tag.setAttribute("role", "button");
+      tag.setAttribute("tabindex", "0");
+      tag.style.cursor = "pointer";
+      const navigate = () => {
+        void Promise.resolve(actions.onNavigateQuote?.(quote)).catch(
+          (error: unknown) => {
+            ztoolkit.log("[ChatPanel] Quote navigation failed:", error);
+          },
+        );
+      };
+      tag.addEventListener("click", navigate);
+      tag.addEventListener("keydown", (event: KeyboardEvent) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        navigate();
+      });
+    }
+    attachmentsPreview.appendChild(tag);
+  });
 
-    attachmentsPreview.appendChild(span);
+  if (attachmentState.pendingSelectedText) {
+    const tag = createTag();
+    tag.appendChild(createLabel("Selection"));
+    attachmentsPreview.appendChild(tag);
   }
 
-  attachmentsPreview.style.display = tags.length > 0 ? "flex" : "none";
+  const getImageSrc = (image: ImageAttachment): string =>
+    image.type === "base64"
+      ? `data:${image.mimeType};base64,${image.data}`
+      : image.data;
+
+  attachmentState.pendingImages.forEach((image, index) => {
+    const tag = createTag();
+    tag.setAttribute("class", "pending-image-attachment");
+    tag.appendChild(
+      createElement(
+        doc,
+        "img",
+        {
+          flex: "0 0 auto",
+          width: "32px",
+          height: "32px",
+          borderRadius: "4px",
+          objectFit: "cover",
+          background: theme.buttonBg,
+        },
+        {
+          src: getImageSrc(image),
+          alt: image.name || "Attached image",
+          title: image.name || "Attached image",
+        },
+      ),
+    );
+    tag.appendChild(createLabel(image.name || "image"));
+    if (actions.onRemoveImage) {
+      tag.appendChild(
+        createRemoveButton(`Remove ${image.name || "image"}`, () =>
+          actions.onRemoveImage?.(index),
+        ),
+      );
+    }
+    attachmentsPreview.appendChild(tag);
+  });
+
+  for (const file of attachmentState.pendingFiles) {
+    const tag = createTag();
+    tag.appendChild(createLabel(file.name));
+    attachmentsPreview.appendChild(tag);
+  }
+
+  const attachmentCount =
+    attachmentState.pendingQuotedMessages.length +
+    attachmentState.pendingImages.length +
+    attachmentState.pendingFiles.length +
+    (attachmentState.pendingSelectedText ? 1 : 0);
+  attachmentsPreview.style.display = attachmentCount > 0 ? "flex" : "none";
 }
 
 /**
@@ -1762,6 +1869,7 @@ async function sendMessage(
         pendingImages: [...attachmentState.pendingImages],
         pendingFiles: [...attachmentState.pendingFiles],
         pendingSelectedText: attachmentState.pendingSelectedText,
+        pendingQuotedMessages: [...attachmentState.pendingQuotedMessages],
       },
     };
     // Auto-detect PDF: attach if we have an active reader item with PDF
@@ -1787,6 +1895,10 @@ async function sendMessage(
           ? attachmentState.pendingFiles
           : undefined,
       selectedText: attachmentState.pendingSelectedText || undefined,
+      quotedMessages:
+        attachmentState.pendingQuotedMessages.length > 0
+          ? attachmentState.pendingQuotedMessages
+          : undefined,
     };
 
     // Determine target item: use active reader if attaching PDF, otherwise use chat context
@@ -1807,11 +1919,13 @@ async function sendMessage(
     const didAcceptMessage = await chatManager.sendMessage(content, {
       item: targetItem,
       attachPdf: shouldAttachPdf,
+      targetSession: session || undefined,
+      requireTargetSessionActive: !!session,
       ...attachmentOptions,
     });
 
     if (!didAcceptMessage) {
-      if (draftState) {
+      if (draftState && chatManager.getActiveSession() === session) {
         if (messageInput) {
           messageInput.value = draftState.content;
           resizeMessageInput(messageInput, chatHistory);
@@ -1827,7 +1941,7 @@ async function sendMessage(
     // Composer was already cleared before the async send began.
   } catch (error) {
     ztoolkit.log("Error in sendMessage:", error);
-    if (draftState) {
+    if (draftState && chatManager.getActiveSession() === session) {
       if (messageInput) {
         messageInput.value = draftState.content;
         resizeMessageInput(messageInput, chatHistory);

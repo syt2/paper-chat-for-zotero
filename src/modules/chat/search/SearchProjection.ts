@@ -1,13 +1,14 @@
 import MarkdownIt from "markdown-it";
 import { graphemeSegments } from "unicode-segmenter/grapheme";
 import type { ChatMessage } from "../../../types/chat";
+import { normalizeQuotedMessageRefs } from "../quoted-messages";
 import type { SearchHighlightRange } from "./SearchTypes";
 
 /**
  * Increment this whenever visible extraction or normalization semantics change.
  * Rows processed by an older projector remain in the backfill work set.
  */
-export const CURRENT_SEARCH_VERSION = 1;
+export const CURRENT_SEARCH_VERSION = 2;
 
 /** Reserved inside stored documents so a phrase cannot cross field boundaries. */
 export const FIELD_BOUNDARY_TOKEN = "\u001f";
@@ -963,6 +964,20 @@ function extractVisibleQuestion(content: string): string {
   ).trim();
 }
 
+function getVisibleUserSearchFields(
+  message: ChatMessage,
+): Array<{ kind: "text" | "sourceText"; text: string }> {
+  const fields: Array<{ kind: "text" | "sourceText"; text: string }> = [];
+  for (const quote of normalizeQuotedMessageRefs(message.quotedMessages)) {
+    fields.push({ kind: "sourceText", text: quote.preview });
+  }
+  const selectedText = message.selectedText?.trim() || "";
+  if (selectedText) fields.push({ kind: "sourceText", text: selectedText });
+  const question = extractVisibleQuestion(message.content);
+  if (question) fields.push({ kind: "text", text: question });
+  return fields;
+}
+
 function isCompletedAssistantAnswer(message: ChatMessage): boolean {
   const content = message.content.trim();
   return (
@@ -983,19 +998,10 @@ export function buildVisibleSearchSegments(
 
   if (message.role === "user") {
     if (message.streamingState !== undefined) return [];
-    const selectedText = message.selectedText?.trim() || "";
-    const question = extractVisibleQuestion(message.content);
     const segments: VisibleSearchSegment[] = [];
-    if (selectedText) {
-      segments.push({
-        kind: "sourceText",
-        text: selectedText,
-        separator: "none",
-      });
-    }
-    if (selectedText && question) segments.push({ kind: "fieldBoundary" });
-    if (question) {
-      segments.push({ kind: "text", text: question, separator: "none" });
+    for (const field of getVisibleUserSearchFields(message)) {
+      if (segments.length > 0) segments.push({ kind: "fieldBoundary" });
+      segments.push({ ...field, separator: "none" });
     }
     return segments;
   }
@@ -1012,15 +1018,14 @@ export function projectMessageSearchNormalizedText(
   if (message.apiOnly || message.isSystemNotice) return "";
   if (message.role === "user") {
     if (message.streamingState !== undefined) return "";
-    const selectedText = message.selectedText?.trim() || "";
-    const question = extractVisibleQuestion(message.content);
     const state: NormalizedTextState = {
       text: "",
       pendingWhitespace: false,
     };
-    if (selectedText) appendSearchText(state, selectedText);
-    if (selectedText && question) appendSearchFieldBoundary(state);
-    if (question) appendSearchText(state, question);
+    for (const field of getVisibleUserSearchFields(message)) {
+      if (state.text) appendSearchFieldBoundary(state);
+      appendSearchText(state, field.text);
+    }
     return state.text;
   }
   return isCompletedAssistantAnswer(message)
@@ -1057,10 +1062,8 @@ export function getMessageSearchFastDecision(
     return "project";
   }
 
-  const selectedText = message.selectedText?.trim() || "";
-  const question = extractVisibleQuestion(message.content);
-  if (!isAscii(selectedText) || !isAscii(question)) return "project";
-  const fields = selectedText ? [selectedText, question] : [question];
+  const fields = getVisibleUserSearchFields(message).map((field) => field.text);
+  if (fields.some((field) => !isAscii(field))) return "project";
   if (
     fields.some((field) =>
       asciiCaseInsensitiveIncludes(field, query.exactPhrase),

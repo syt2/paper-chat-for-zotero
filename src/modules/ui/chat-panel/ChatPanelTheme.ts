@@ -394,6 +394,37 @@ export function applyThemeToContainer(container: HTMLElement): void {
     el.style.borderColor = "transparent";
     el.style.color = theme.textPrimary;
   });
+
+  container
+    .querySelectorAll(".message-quoted-replies")
+    .forEach((quotes: Element) => {
+      (quotes as HTMLElement).style.borderBottomColor = theme.borderColor;
+    });
+  container
+    .querySelectorAll(".message-quoted-reply")
+    .forEach((quote: Element) => {
+      (quote as HTMLElement).style.borderLeftColor = theme.textMuted;
+    });
+  container
+    .querySelectorAll(".pending-quoted-message, .pending-image-attachment")
+    .forEach((tag: Element) => {
+      const el = tag as HTMLElement;
+      el.style.background = theme.inputBg;
+      el.style.borderColor = theme.borderColor;
+      el.style.color = theme.textSecondary;
+    });
+  container
+    .querySelectorAll(
+      ".pending-quoted-message button, .pending-image-attachment button",
+    )
+    .forEach((button: Element) => {
+      (button as HTMLElement).style.color = theme.textSecondary;
+    });
+  container
+    .querySelectorAll(".pending-image-attachment img")
+    .forEach((image: Element) => {
+      (image as HTMLElement).style.background = theme.buttonBg;
+    });
 }
 
 /**

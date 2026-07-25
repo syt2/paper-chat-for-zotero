@@ -34,6 +34,7 @@ export interface MessageProjectionSource {
   id: string;
   role: string;
   content: string;
+  quotedMessages?: string | null;
   selectedText?: string | null;
   toolCalls?: string | null;
   toolCallId?: string | null;
@@ -49,6 +50,7 @@ export function createMessageProjectionSignature(
     source.id,
     source.role,
     source.content,
+    source.quotedMessages ?? null,
     source.selectedText ?? null,
     source.toolCalls ?? null,
     source.toolCallId ?? null,

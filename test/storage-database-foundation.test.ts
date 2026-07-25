@@ -218,6 +218,7 @@ describe("StorageDatabase foundation", function () {
           return [
             { name: "reasoning" },
             { name: "evidence" },
+            { name: "quoted_messages" },
             { name: "search_text" },
             { name: "search_index_version" },
           ];
@@ -347,6 +348,7 @@ describe("StorageDatabase foundation", function () {
           return [
             { name: "id" },
             { name: "evidence" },
+            { name: "quoted_messages" },
             { name: "search_text" },
             { name: "search_index_version" },
           ];
@@ -359,7 +361,7 @@ describe("StorageDatabase foundation", function () {
           ];
         }
         if (normalized === "SELECT version FROM schema_version WHERE id = 1") {
-          return [{ version: 10 }];
+          return [{ version: 11 }];
         }
         return [];
       },
@@ -422,6 +424,66 @@ describe("StorageDatabase foundation", function () {
     assert.strictEqual(recorded.at(-1)?.sql, "COMMIT");
   });
 
+  it("adds quoted messages when upgrading schema v10 to v11", async function () {
+    const recorded: Array<{ sql: string; params?: unknown[] }> = [];
+    let quotedMessagesAdded = false;
+    const fakeDb = {
+      async queryAsync(sql: string, params?: unknown[]) {
+        const normalized = normalizeSql(sql);
+        recorded.push({ sql: normalized, params });
+        if (
+          normalized === "ALTER TABLE messages ADD COLUMN quoted_messages TEXT"
+        ) {
+          quotedMessagesAdded = true;
+        }
+        if (normalized === "SELECT version FROM schema_version WHERE id = 1") {
+          return [{ version: 10 }];
+        }
+        if (normalized === "PRAGMA table_info(messages)") {
+          return [
+            { name: "reasoning" },
+            { name: "evidence" },
+            { name: "search_text" },
+            { name: "search_index_version" },
+            ...(quotedMessagesAdded ? [{ name: "quoted_messages" }] : []),
+          ];
+        }
+        if (normalized === "PRAGMA table_info(session_meta)") {
+          return [{ name: "search_title" }, { name: "search_index_version" }];
+        }
+        return [];
+      },
+    };
+
+    await (new StorageDatabase() as any).initSchemaVersion(fakeDb);
+
+    assert.include(
+      recorded.map((entry) => entry.sql),
+      "ALTER TABLE messages ADD COLUMN quoted_messages TEXT",
+    );
+    assert.isTrue(
+      recorded.some(
+        (entry) =>
+          entry.sql.startsWith(
+            "CREATE TRIGGER IF NOT EXISTS trg_messages_search_projection_stale",
+          ) && entry.sql.includes("quoted_messages"),
+      ),
+    );
+    assert.isTrue(
+      recorded.some(
+        (entry) =>
+          entry.sql ===
+            "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1" &&
+          entry.params?.[0] === 11 &&
+          typeof entry.params?.[1] === "number",
+      ),
+    );
+    assert.include(
+      recorded.map((entry) => entry.sql),
+      "COMMIT",
+    );
+  });
+
   it("does not install v9 triggers against a V2.6.1 table shape", async function () {
     const recorded: string[] = [];
     const fakeDb = {
@@ -468,7 +530,7 @@ describe("StorageDatabase foundation", function () {
         const normalized = normalizeSql(sql);
         recorded.push(normalized);
         if (normalized === "SELECT version FROM schema_version WHERE id = 1") {
-          return [{ version: 10 }];
+          return [{ version: 11 }];
         }
         if (normalized === "PRAGMA table_info(messages)") {
           return [{ name: "id" }, { name: "reasoning" }];

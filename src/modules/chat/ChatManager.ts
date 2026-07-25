@@ -100,6 +100,10 @@ import {
 } from "./note-source-provenance";
 import { sanitizeEvidenceReferences } from "./evidence";
 import {
+  applyQuotedMessagesToModelRequest,
+  normalizeQuotedMessageRefs,
+} from "./quoted-messages";
+import {
   AgentRuntime,
   removeApiOnlyModelContextMessagesForTurn,
   retainCompletedApiOnlyModelContextMessagesForTurn,
@@ -1011,13 +1015,15 @@ export class ChatManager {
     const contextManager = getContextManager();
     const { messages: filteredMessages } =
       contextManager.filterMessages(session);
-    const messagesForApi = filteredMessages.filter(
-      (message) =>
-        !(
-          message.role === "assistant" &&
-          message.streamingState === "in_progress" &&
-          !message.content
-        ),
+    const messagesForApi = applyQuotedMessagesToModelRequest(
+      filteredMessages.filter(
+        (message) =>
+          !(
+            message.role === "assistant" &&
+            message.streamingState === "in_progress" &&
+            !message.content
+          ),
+      ),
     );
 
     const withProviderSystemPrompt = (
@@ -1194,10 +1200,15 @@ export class ChatManager {
 
     return this.enqueueSessionNavigation(async () => {
       const previousSession = this.currentSession;
+      const forkedSessionId = generateTimestampId();
       const forkedMessages = cloneHistoryThroughAssistantMessage(
         sourceSession.messages,
         assistantMessageId,
         () => this.generateId(),
+        {
+          sourceSessionId: sourceSession.id,
+          targetSessionId: forkedSessionId,
+        },
       );
       const lastActiveItemKey = resolveForkItemKey(
         sourceSession.messages,
@@ -1205,7 +1216,6 @@ export class ChatManager {
         sourceSession.lastActiveItemKey,
       );
       const forkArtifactIds = collectForkArtifactIds(forkedMessages);
-      const forkedSessionId = generateTimestampId();
       let forkedSession: ChatSession | null = null;
       try {
         await getSessionArtifactStore().copyArtifactsForFork(
@@ -2283,12 +2293,14 @@ export class ChatManager {
       const wasDraftSession = !reusedUserMessage
         ? this.isDraftSession(sendingSession)
         : false;
+      const quotedMessages = normalizeQuotedMessageRefs(options.quotedMessages);
       const userMessage: ChatMessage = reusedUserMessage || {
         id: this.generateId(),
         role: "user",
         content: finalContent,
         images: options.images,
         files: options.files,
+        quotedMessages: quotedMessages.length > 0 ? quotedMessages : undefined,
         timestamp: Date.now(),
         pdfContext: pdfWasAttached,
         selectedText: options.selectedText,
@@ -2398,8 +2410,10 @@ export class ChatManager {
         contextManager.filterMessages(requestContextSession);
 
       // 从过滤后的消息中排除最后一条 (assistant 占位)
-      const messagesForApi = filteredMessages.filter(
-        (m: ChatMessage) => m.id !== assistantMessage.id,
+      const messagesForApi = applyQuotedMessagesToModelRequest(
+        filteredMessages.filter(
+          (m: ChatMessage) => m.id !== assistantMessage.id,
+        ),
       );
 
       ztoolkit.log(

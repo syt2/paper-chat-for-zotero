@@ -440,6 +440,48 @@ Before tool.<tool-call status="completed"><tool-result>HIDDEN</tool-result></too
       );
     });
 
+    it("indexes visible quoted previews in selection order", function () {
+      const quotedUser = message("user", "What changed?", {
+        quotedMessages: [
+          {
+            sessionId: "session-1",
+            messageId: "assistant-1",
+            role: "assistant",
+            preview: "First quoted answer",
+            contentSnapshot: "First quoted answer with hidden tail",
+            timestamp: 1,
+          },
+          {
+            sessionId: "session-1",
+            messageId: "assistant-2",
+            role: "assistant",
+            preview: "Second quoted answer",
+            contentSnapshot: "Second quoted answer with hidden tail",
+            timestamp: 2,
+          },
+        ],
+      });
+
+      const document = projectMessage(quotedUser);
+
+      assert.equal(
+        document.displayText,
+        "First quoted answer\n\nSecond quoted answer\n\nWhat changed?",
+      );
+      assert.equal(
+        document.normalizedText,
+        `first quoted answer${FIELD_BOUNDARY_TOKEN}second quoted answer${FIELD_BOUNDARY_TOKEN}what changed?`,
+      );
+      assert.notInclude(document.normalizedText, "hidden tail");
+      assert.equal(
+        getMessageSearchFastDecision(quotedUser, {
+          exactPhrase: "second quoted",
+          terms: ["second", "quoted"],
+        }),
+        "exactMatch",
+      );
+    });
+
     it("extracts visible assistant Markdown/source text and hides transport details", function () {
       const assistant = message(
         "assistant",

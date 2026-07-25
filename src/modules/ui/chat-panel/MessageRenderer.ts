@@ -8,6 +8,7 @@ import type {
   ExecutionPlan,
   ExecutionPlanStep,
   ImageAttachment,
+  QuotedMessageRef,
   ToolApprovalState,
 } from "../../chat";
 import type { UserInputRequestState } from "../../../types/chat";
@@ -26,6 +27,7 @@ import {
 import { isMaxIterationsNoticeContent } from "../../chat/agent-runtime/messages";
 import { selectChatMessagePresentations } from "../../chat/message-presentation";
 import { canSummarizeAssistantReply } from "./NoteSummaryActions";
+import { canQuoteAssistantReply } from "../../chat/quoted-messages";
 
 export function getStreamingContentSelector(messageId: string): string {
   return `[data-streaming-content-for="${messageId}"]`;
@@ -48,7 +50,13 @@ const STREAMING_TYPING_INDICATOR_ATTR = "data-streaming-typing-indicator";
 const MESSAGE_ACTION_ICON_SIZE = "15px";
 const MESSAGE_HIGHLIGHT_DURATION_MS = 1050;
 const MESSAGE_HIGHLIGHT_OVERLAY_CLASS = "paperchat-message-highlight-overlay";
-type MessageActionIconName = "change" | "copy" | "fork" | "refresh" | "write";
+type MessageActionIconName =
+  | "change"
+  | "copy"
+  | "fork"
+  | "quote"
+  | "refresh"
+  | "write";
 const userInputCountdownTimers = new WeakMap<
   HTMLElement,
   ReturnType<typeof setInterval>
@@ -425,6 +433,8 @@ export interface MessageRenderOptions {
   onRetryError?: (error: Error) => void;
   onFork?: (assistantMessageId: string) => void | Promise<void>;
   onForkError?: (error: Error) => void;
+  onQuoteReply?: (assistantMessageId: string) => void;
+  onNavigateToQuotedMessage?: (quote: QuotedMessageRef) => void | Promise<void>;
   onSummarizeReply?: (assistantMessageId: string) => void | Promise<void>;
   onSummarizeReplyError?: (error: Error) => void;
   onRenderComplete?: () => void;
@@ -674,6 +684,73 @@ function createTypingIndicator(doc: Document, theme: ThemeColors): HTMLElement {
   return loader;
 }
 
+function createQuotedMessagesElement(
+  doc: Document,
+  theme: ThemeColors,
+  quotes: readonly QuotedMessageRef[],
+  onNavigate?: (quote: QuotedMessageRef) => void | Promise<void>,
+): HTMLElement {
+  const container = createElement(doc, "div", {
+    display: "flex",
+    flexDirection: "column",
+    gap: "4px",
+    marginBottom: "8px",
+    paddingBottom: "8px",
+    borderBottom: `1px solid ${theme.borderColor}`,
+  });
+  container.setAttribute("class", "message-quoted-replies");
+
+  for (const quote of quotes) {
+    const row = createElement(
+      doc,
+      "button",
+      {
+        display: "block",
+        width: "100%",
+        minWidth: "0",
+        overflow: "hidden",
+        padding: "3px 7px",
+        border: "none",
+        borderLeft: `2px solid ${theme.textMuted}`,
+        borderRadius: "0",
+        background: "transparent",
+        color: "inherit",
+        fontSize: "11px",
+        lineHeight: "16px",
+        textAlign: "left",
+        whiteSpace: "nowrap",
+        textOverflow: "ellipsis",
+        cursor: onNavigate ? "pointer" : "default",
+        opacity: "0.82",
+      },
+      {
+        type: "button",
+        class: "message-quoted-reply",
+        title: quote.preview,
+        "data-quoted-message-id": quote.messageId,
+      },
+    );
+    row.textContent = `${getString("chat-quoted-reply")}: ${quote.preview}`;
+    if (onNavigate) {
+      row.addEventListener("click", (event) => {
+        event.stopPropagation();
+        event.preventDefault();
+        void Promise.resolve(onNavigate(quote)).catch((error: unknown) => {
+          ztoolkit.log(
+            "[MessageRenderer] Quoted reply navigation failed:",
+            error,
+          );
+        });
+      });
+    } else {
+      row.setAttribute("disabled", "true");
+    }
+    container.appendChild(row);
+  }
+
+  return container;
+}
+
 export function ensureStreamingTypingIndicator(
   content: HTMLElement,
   theme: ThemeColors,
@@ -865,6 +942,17 @@ export function createMessageElement(
     }
   }
 
+  if (msg.role === "user" && msg.quotedMessages?.length) {
+    bubble.appendChild(
+      createQuotedMessagesElement(
+        doc,
+        theme,
+        msg.quotedMessages,
+        renderOptions.onNavigateToQuotedMessage,
+      ),
+    );
+  }
+
   bubble.appendChild(content);
 
   if (msg.role === "user" && msg.images?.some(isRenderableImageAttachment)) {
@@ -895,6 +983,7 @@ export function createMessageElement(
     onRerollError,
     renderOptions.onFork,
     renderOptions.onForkError,
+    renderOptions.onQuoteReply,
     renderOptions.onSummarizeReply,
     renderOptions.onSummarizeReplyError,
   );
@@ -1100,6 +1189,24 @@ function createForkButton(
   return btn;
 }
 
+function createQuoteReplyButton(
+  doc: Document,
+  theme: ThemeColors,
+  assistantMessageId: string,
+  onQuoteReply: (assistantMessageId: string) => void,
+): HTMLElement {
+  const label = getString("chat-quote-reply");
+  const btn = createMessageActionButton(doc, theme, label);
+  btn.setAttribute("class", "message-action-btn quote-reply-btn");
+  setIconButtonImage(btn, "quote", "");
+  btn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    event.preventDefault();
+    onQuoteReply(assistantMessageId);
+  });
+  return btn;
+}
+
 function createSummarizeReplyButton(
   doc: Document,
   theme: ThemeColors,
@@ -1181,6 +1288,7 @@ function createMessageActions(
   onRerollError?: (error: Error) => void,
   onFork?: (assistantMessageId: string) => void | Promise<void>,
   onForkError?: (error: Error) => void,
+  onQuoteReply?: (assistantMessageId: string) => void,
   onSummarizeReply?: (assistantMessageId: string) => void | Promise<void>,
   onSummarizeReplyError?: (error: Error) => void,
 ): HTMLElement | null {
@@ -1210,8 +1318,20 @@ function createMessageActions(
           evidenceRecords: msg.evidence,
         })
       : rawContent;
+  const quotedContent =
+    msg.role === "assistant"
+      ? formatMarkdownForMessageCopy(msg.content, {
+          evidenceRecords: msg.evidence,
+        })
+      : "";
 
   actions.appendChild(createCopyButton(doc, theme, copyContent));
+
+  if (canQuoteAssistantReply(msg, quotedContent) && onQuoteReply) {
+    actions.appendChild(
+      createQuoteReplyButton(doc, theme, msg.id, onQuoteReply),
+    );
+  }
 
   if (canSummarizeAssistantReply(msg) && onSummarizeReply) {
     actions.appendChild(

@@ -21,6 +21,10 @@ import type {
 import type { EvidenceRecord } from "../../types/evidence";
 import { filterValidMessages, generateShortId } from "../../utils/common";
 import { normalizeEvidenceRecords } from "./evidence";
+import {
+  normalizeQuotedMessageRefs,
+  serializeQuotedMessageRefs,
+} from "./quoted-messages";
 import { stripPendingAndIncompleteToolCallContent } from "./interrupted-message";
 import { getStorageDatabase } from "./db/StorageDatabase";
 import {
@@ -144,6 +148,7 @@ export interface MessageStorageRow {
   reasoning?: string | null;
   images?: string | null;
   files?: string | null;
+  quoted_messages?: string | null;
   timestamp: number;
   pdf_context?: number | null;
   selected_text?: string | null;
@@ -323,6 +328,25 @@ function parseStoredJsonArray<T extends unknown[]>(
   }
 }
 
+// JSON escaping can expand each bounded string character to six characters
+// (for example, a control character becomes `\\u0000`). Keep the raw guard
+// above the worst-case size of three normalized references.
+const MAX_STORED_QUOTED_MESSAGES_JSON_CHARACTERS = 128_000;
+
+function parseStoredQuotedMessageRefs(
+  value: string | null | undefined,
+): NonNullable<ChatMessage["quotedMessages"]> | undefined {
+  if (!value || value.length > MAX_STORED_QUOTED_MESSAGES_JSON_CHARACTERS) {
+    return undefined;
+  }
+  try {
+    const quotes = normalizeQuotedMessageRefs(JSON.parse(value));
+    return quotes.length > 0 ? quotes : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function parseStoredEvidenceRecords(
   value: string | null | undefined,
 ): EvidenceRecord[] | undefined {
@@ -358,6 +382,7 @@ function toMessageProjectionSource(
     id: row.id,
     role: row.role,
     content: row.content || "",
+    quotedMessages: row.quoted_messages ?? null,
     selectedText: row.selected_text ?? null,
     toolCalls: row.tool_calls ?? null,
     toolCallId: row.tool_call_id ?? null,
@@ -495,6 +520,10 @@ export function mapMessageRowToChatMessage(
     readOptionalMessageColumn(row, "files"),
   );
   if (files) message.files = files;
+  const quotedMessages = parseStoredQuotedMessageRefs(
+    readOptionalMessageColumn(row, "quoted_messages"),
+  );
+  if (quotedMessages) message.quotedMessages = quotedMessages;
   if (readOptionalMessageColumn(row, "pdf_context")) {
     message.pdfContext = true;
   }
@@ -1262,7 +1291,7 @@ export class SessionStorageService {
         (await db.queryAsync(
           `SELECT id, session_id, seq, role, content, timestamp,
              selected_text, tool_calls, tool_call_id, streaming_state,
-             api_only, is_system_notice, search_index_version
+             api_only, is_system_notice, quoted_messages, search_index_version
            FROM messages
            WHERE id IN (${placeholders})`,
           [...chunk],
@@ -1727,7 +1756,7 @@ export class SessionStorageService {
           const currentRows =
             (await db.queryAsync(
               `SELECT id, role, content, selected_text, tool_calls, tool_call_id,
-                 streaming_state, api_only, is_system_notice,
+                 streaming_state, api_only, is_system_notice, quoted_messages,
                  search_index_version
                FROM messages
                WHERE id IN (${placeholders})`,
@@ -2003,8 +2032,8 @@ export class SessionStorageService {
 
         await db.queryAsync(
           `INSERT INTO messages
-           (id, session_id, seq, role, content, reasoning, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, streaming_state, api_only, is_system_notice, search_text, search_index_version)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, session_id, seq, role, content, reasoning, images, files, quoted_messages, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, streaming_state, api_only, is_system_notice, search_text, search_index_version)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             message.id,
             sessionId,
@@ -2014,6 +2043,7 @@ export class SessionStorageService {
             message.reasoning || null,
             message.images ? JSON.stringify(message.images) : null,
             message.files ? JSON.stringify(message.files) : null,
+            serializeQuotedMessageRefs(message.quotedMessages),
             messageTimestamp,
             message.pdfContext ? 1 : null,
             message.selectedText || null,
@@ -2608,8 +2638,8 @@ export class SessionStorageService {
             } = messagesForStorage[seq];
             await db.queryAsync(
               `INSERT INTO messages
-               (id, session_id, seq, role, content, reasoning, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, streaming_state, api_only, is_system_notice, search_text, search_index_version)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               (id, session_id, seq, role, content, reasoning, images, files, quoted_messages, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, streaming_state, api_only, is_system_notice, search_text, search_index_version)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               [
                 msg.id,
                 session.id,
@@ -2619,6 +2649,7 @@ export class SessionStorageService {
                 msg.reasoning || null,
                 msg.images ? JSON.stringify(msg.images) : null,
                 msg.files ? JSON.stringify(msg.files) : null,
+                serializeQuotedMessageRefs(msg.quotedMessages),
                 timestamp,
                 msg.pdfContext ? 1 : null,
                 msg.selectedText || null,

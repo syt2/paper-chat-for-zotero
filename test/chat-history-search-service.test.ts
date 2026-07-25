@@ -164,6 +164,7 @@ class SearchServiceFakeDatabase {
         reasoning TEXT,
         images TEXT,
         files TEXT,
+        quoted_messages TEXT,
         timestamp INTEGER NOT NULL,
         pdf_context INTEGER,
         selected_text TEXT,
