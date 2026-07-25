@@ -14,6 +14,7 @@ import { normalizeAgentMaxPlanningIterations } from "../agent-runtime/IterationL
 const CURRENT_PAPER_TARGET = "__current_paper__";
 const MAX_FULL_TEXT_CEILING = 3;
 const MAX_WEB_SEARCH_CEILING = 8;
+export const HOSTED_WEB_SEARCH_RESULT_ID_PREFIX = "hosted-web-search:";
 const SEARCH_TOOL_NAMES = new Set<PaperToolName>([
   "web_search",
   "search_scholarly_sources",
@@ -33,6 +34,10 @@ export interface ToolBudgetState {
   getFullTextCalls: number;
   webSearchCalls: number;
   webSearchQueries: string[];
+  webSearchQueriesByTool: Record<
+    "web_search" | "search_scholarly_sources",
+    string[]
+  >;
   narrowPaperTargets: Set<string>;
 }
 
@@ -47,6 +52,19 @@ export function isSearchToolName(
   return SEARCH_TOOL_NAMES.has(toolName as PaperToolName);
 }
 
+export function isHostedWebSearchResult(result: ToolExecutionResult): boolean {
+  return (
+    result.toolCall.function.name === "web_search" &&
+    result.toolCall.id.startsWith(HOSTED_WEB_SEARCH_RESULT_ID_PREFIX)
+  );
+}
+
+export function countHostedWebSearchResults(
+  results: ToolExecutionResult[],
+): number {
+  return results.filter(isHostedWebSearchResult).length;
+}
+
 export function createToolBudgetState(
   previousResults: ToolExecutionResult[],
 ): ToolBudgetState {
@@ -54,10 +72,19 @@ export function createToolBudgetState(
     getFullTextCalls: 0,
     webSearchCalls: 0,
     webSearchQueries: [],
+    webSearchQueriesByTool: {
+      web_search: [],
+      search_scholarly_sources: [],
+    },
     narrowPaperTargets: new Set<string>(),
   };
 
   for (const result of previousResults) {
+    // Provider-hosted search is executed remotely and is not part of the
+    // local Scholar/OpenAlex/Bing/DuckDuckGo request budget.
+    if (isHostedWebSearchResult(result)) {
+      continue;
+    }
     if (!shouldCountResultTowardBudget(result)) {
       continue;
     }
@@ -72,6 +99,7 @@ export function createToolBudgetState(
       const query = normalizeWebSearchQuery(result.args?.query);
       if (query) {
         state.webSearchQueries.push(query);
+        state.webSearchQueriesByTool[toolName].push(query);
       }
       continue;
     }
@@ -159,7 +187,8 @@ export function applyToolBudgetPolicy(
 
   if (isSearchToolName(toolName)) {
     const query = normalizeWebSearchQuery(args?.query);
-    if (query && hasObviouslyRepeatedWebSearch(query, state.webSearchQueries)) {
+    const previousQueriesForTool = state.webSearchQueriesByTool[toolName];
+    if (query && hasObviouslyRepeatedWebSearch(query, previousQueriesForTool)) {
       return createBudgetBlockedResult(toolCall, args, {
         summary: `Blocked ${toolName} because this turn already used a similar search query.`,
         cause:
@@ -171,16 +200,16 @@ export function applyToolBudgetPolicy(
         data: {
           tool: toolName,
           query,
-          previousQueries: [...state.webSearchQueries],
+          previousQueries: [...previousQueriesForTool],
         },
       });
     }
     if (state.webSearchCalls >= limits.maxWebSearchCallsPerTurn) {
       return createBudgetBlockedResult(toolCall, args, {
         summary: `Blocked ${toolName} because the turn search budget is exhausted.`,
-        cause: `High-cost tool limit reached: external search may only run ${limits.maxWebSearchCallsPerTurn} times per user turn across hosted web and local scholarly search.`,
+        cause: `Local external-search limit reached: local web and scholarly search may only run ${limits.maxWebSearchCallsPerTurn} times per user turn. Vendor-hosted web_search does not use this budget.`,
         suggestedFix:
-          "Use the search results already gathered in this turn, or wait for a new user turn before searching again.",
+          "Use the local search results already gathered in this turn. If vendor-hosted web_search is currently exposed and ordinary web evidence is allowed, it may still be used; otherwise wait for a new user turn before searching locally again.",
         saferAlternative:
           "Prefer Zotero library tools or narrower local evidence before adding another external search.",
         data: {
@@ -195,6 +224,7 @@ export function applyToolBudgetPolicy(
     state.webSearchCalls += 1;
     if (query) {
       state.webSearchQueries.push(query);
+      state.webSearchQueriesByTool[toolName].push(query);
     }
     return null;
   }

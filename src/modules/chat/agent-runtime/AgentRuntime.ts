@@ -45,7 +45,7 @@ import {
 import {
   createToolBudgetState,
   getToolBudgetLimits,
-  isSearchToolName,
+  HOSTED_WEB_SEARCH_RESULT_ID_PREFIX,
   type ToolBudgetLimits,
 } from "../tool-budget/ToolBudgetPolicy";
 import { getToolRuntimeMetadata } from "../tool-scheduler/ToolMetadataRegistry";
@@ -75,6 +75,17 @@ import {
   sanitizeEvidenceReferences,
 } from "../evidence";
 import { getMaxIterationsMessage } from "./messages";
+import {
+  SEARCH_SCOPE_TOOL_NAME,
+  advanceSearchScopeAfterResults,
+  createUnavailableSearchToolResult,
+  executeSearchScopeSelection,
+  findCompletedSearchScope,
+  hasScholarlyThenWebSearchScope,
+  isSearchScopeControlledToolName,
+  type SearchScopeGateConfig,
+  type SelectedSearchScope,
+} from "./SearchScopeGate";
 
 interface AgentRuntimeCallbacks {
   isSessionActive: (session: ChatSession) => boolean;
@@ -118,7 +129,10 @@ interface HostedWebSearchDisplayState {
   sources?: Array<{ title?: string; url: string }>;
 }
 
-type ProviderRequestExecutor = <T>(operation: () => Promise<T>) => Promise<T>;
+type ProviderRequestExecutor = <T>(
+  operation: () => Promise<T>,
+  onProviderRerouted?: () => void,
+) => Promise<T>;
 
 interface RuntimeExecutionOptions {
   provider: ToolCallingProvider;
@@ -134,6 +148,7 @@ interface RuntimeExecutionOptions {
   abortSignal?: AbortSignal;
   executeProviderRequest?: ProviderRequestExecutor;
   preserveToolExecutionState?: boolean;
+  searchScopeGate?: SearchScopeGateConfig;
   refreshSystemPrompt?: (
     currentMessages: ChatMessage[],
     session: ChatSession,
@@ -175,6 +190,8 @@ interface ToolIterationParams {
   budgetLimits: ToolBudgetLimits;
   reuseCompletedResults: boolean;
   currentItemKey?: string | null;
+  allowedToolNames: Set<string>;
+  selectedSearchScope?: SelectedSearchScope;
 }
 
 // Hard stop for a single assistant turn. Keeps malformed tool loops bounded
@@ -187,6 +204,10 @@ type RuntimeToolIterationEntry =
   | ToolExecutionBatchEntry
   | {
       kind: "user_input";
+      toolCall: ToolCall;
+    }
+  | {
+      kind: "search_scope";
       toolCall: ToolCall;
     };
 
@@ -274,11 +295,13 @@ export class AgentRuntime {
       abortSignal,
       executeProviderRequest = (operation) => operation(),
       preserveToolExecutionState = false,
+      searchScopeGate,
       refreshSystemPrompt,
     } = options;
     const logPrefix = "Streaming Tool Calling";
-    const maxIterations = this.getMaxIterations();
-    const budgetLimits = getToolBudgetLimits(maxIterations);
+    const configuredMaxIterations = this.getMaxIterations();
+    let maxIterations = configuredMaxIterations;
+    let budgetLimits = getToolBudgetLimits(configuredMaxIterations);
     let iteration = 0;
     let accumulatedDisplay = "";
     await this.startTurn(
@@ -289,6 +312,23 @@ export class AgentRuntime {
       true,
       preserveToolExecutionState,
     );
+    let selectedSearchScope = searchScopeGate
+      ? findCompletedSearchScope(
+          sendingSession.toolExecutionState?.results || [],
+        )
+      : undefined;
+    if (
+      searchScopeGate &&
+      hasScholarlyThenWebSearchScope(
+        sendingSession.toolExecutionState?.results || [],
+      )
+    ) {
+      maxIterations = Math.max(maxIterations, 6);
+      budgetLimits = getToolBudgetLimits(maxIterations);
+    }
+    if (selectedSearchScope) {
+      searchScopeGate?.onScopeSelected(selectedSearchScope);
+    }
 
     try {
       while (iteration < maxIterations) {
@@ -299,6 +339,7 @@ export class AgentRuntime {
           maxIterations,
           sendingSession,
           budgetLimits,
+          provider.supportsHostedWebSearch?.() === true,
         );
         this.refreshSystemPrompt(
           currentMessages,
@@ -317,6 +358,16 @@ export class AgentRuntime {
         }
 
         const displayBeforeThisRound = accumulatedDisplay;
+        const refreshRoundToolsAfterProviderChange = () =>
+          this.refreshIterationToolsForProvider(
+            iterationControl,
+            iteration,
+            tools,
+            maxIterations,
+            sendingSession,
+            budgetLimits,
+            provider.supportsHostedWebSearch?.() === true,
+          );
         const result = await this.runStreamingRound(
           provider,
           currentMessages,
@@ -329,6 +380,7 @@ export class AgentRuntime {
           iteration,
           iterationControl.toolChoice,
           executeProviderRequest,
+          refreshRoundToolsAfterProviderChange,
         );
 
         this.ensureSessionTracked(sendingSession, sessionRunId);
@@ -346,13 +398,16 @@ export class AgentRuntime {
           sendingSession,
           result.hostedWebSearches || [],
         );
+        const hostedWebSearchDisplay = this.formatHostedWebSearchDisplay(
+          result.hostedWebSearches || [],
+        );
 
         if (
           !iterationControl.forceFinalAnswer &&
           result.toolCalls &&
           result.toolCalls.length > 0
         ) {
-          accumulatedDisplay = await this.runToolIteration({
+          const toolIteration = await this.runToolIteration({
             sendingSession,
             sessionRunId,
             currentMessages,
@@ -362,13 +417,36 @@ export class AgentRuntime {
             toolCalls: result.toolCalls,
             roundContent: result.content || "",
             roundReasoning: result.reasoning,
-            accumulatedDisplay,
+            accumulatedDisplay: accumulatedDisplay + hostedWebSearchDisplay,
             iteration,
             logPrefix,
             budgetLimits,
             reuseCompletedResults: preserveToolExecutionState,
             currentItemKey,
+            allowedToolNames: new Set(
+              iterationControl.toolsForRound.map((tool) => tool.function.name),
+            ),
+            selectedSearchScope,
           });
+          accumulatedDisplay = toolIteration.accumulatedDisplay;
+          if (
+            toolIteration.selectedSearchScope &&
+            toolIteration.selectedSearchScope !== selectedSearchScope
+          ) {
+            const nextSearchScope = toolIteration.selectedSearchScope;
+            if (!selectedSearchScope) {
+              maxIterations += 1;
+            }
+            if (nextSearchScope === "scholarly_then_web") {
+              maxIterations = Math.max(maxIterations, iteration + 3, 6);
+              budgetLimits = getToolBudgetLimits(maxIterations);
+            } else if (selectedSearchScope === "scholarly_then_web") {
+              maxIterations = Math.max(maxIterations, iteration + 2, 6);
+              budgetLimits = getToolBudgetLimits(maxIterations);
+            }
+            selectedSearchScope = nextSearchScope;
+            searchScopeGate?.onScopeSelected(selectedSearchScope);
+          }
           continue;
         }
 
@@ -401,7 +479,10 @@ export class AgentRuntime {
           assistantMessage,
           pdfWasAttached,
           summaryTriggered,
-          accumulatedDisplay: accumulatedDisplay + (result.content || ""),
+          accumulatedDisplay:
+            accumulatedDisplay +
+            hostedWebSearchDisplay +
+            (result.content || ""),
           iteration,
         });
         return;
@@ -456,11 +537,13 @@ export class AgentRuntime {
       abortSignal,
       executeProviderRequest = (operation) => operation(),
       preserveToolExecutionState = false,
+      searchScopeGate,
       refreshSystemPrompt,
     } = options;
     const logPrefix = "Tool Calling";
-    const maxIterations = this.getMaxIterations();
-    const budgetLimits = getToolBudgetLimits(maxIterations);
+    const configuredMaxIterations = this.getMaxIterations();
+    let maxIterations = configuredMaxIterations;
+    let budgetLimits = getToolBudgetLimits(configuredMaxIterations);
     let iteration = 0;
     let accumulatedDisplay = "";
     await this.startTurn(
@@ -471,6 +554,23 @@ export class AgentRuntime {
       false,
       preserveToolExecutionState,
     );
+    let selectedSearchScope = searchScopeGate
+      ? findCompletedSearchScope(
+          sendingSession.toolExecutionState?.results || [],
+        )
+      : undefined;
+    if (
+      searchScopeGate &&
+      hasScholarlyThenWebSearchScope(
+        sendingSession.toolExecutionState?.results || [],
+      )
+    ) {
+      maxIterations = Math.max(maxIterations, 6);
+      budgetLimits = getToolBudgetLimits(maxIterations);
+    }
+    if (selectedSearchScope) {
+      searchScopeGate?.onScopeSelected(selectedSearchScope);
+    }
 
     try {
       while (iteration < maxIterations) {
@@ -481,6 +581,7 @@ export class AgentRuntime {
           maxIterations,
           sendingSession,
           budgetLimits,
+          provider.supportsHostedWebSearch?.() === true,
         );
         this.refreshSystemPrompt(
           currentMessages,
@@ -498,15 +599,26 @@ export class AgentRuntime {
           );
         }
 
-        const result = await executeProviderRequest(() =>
-          provider.chatCompletionWithTools(
-            currentMessages,
-            iterationControl.toolsForRound,
-            abortSignal,
-            {
-              toolChoice: iterationControl.toolChoice,
-            },
-          ),
+        const result = await executeProviderRequest(
+          () =>
+            provider.chatCompletionWithTools(
+              currentMessages,
+              iterationControl.toolsForRound,
+              abortSignal,
+              {
+                toolChoice: iterationControl.toolChoice,
+              },
+            ),
+          () =>
+            this.refreshIterationToolsForProvider(
+              iterationControl,
+              iteration,
+              tools,
+              maxIterations,
+              sendingSession,
+              budgetLimits,
+              provider.supportsHostedWebSearch?.() === true,
+            ),
         );
 
         this.ensureSessionTracked(sendingSession, sessionRunId);
@@ -522,13 +634,16 @@ export class AgentRuntime {
           sendingSession,
           result.hostedWebSearches || [],
         );
+        const hostedWebSearchDisplay = this.formatHostedWebSearchDisplay(
+          result.hostedWebSearches || [],
+        );
 
         if (
           !iterationControl.forceFinalAnswer &&
           result.toolCalls &&
           result.toolCalls.length > 0
         ) {
-          accumulatedDisplay = await this.runToolIteration({
+          const toolIteration = await this.runToolIteration({
             sendingSession,
             sessionRunId,
             currentMessages,
@@ -538,13 +653,36 @@ export class AgentRuntime {
             toolCalls: result.toolCalls,
             roundContent: result.content || "",
             roundReasoning: result.reasoning,
-            accumulatedDisplay,
+            accumulatedDisplay: accumulatedDisplay + hostedWebSearchDisplay,
             iteration,
             logPrefix,
             budgetLimits,
             reuseCompletedResults: preserveToolExecutionState,
             currentItemKey,
+            allowedToolNames: new Set(
+              iterationControl.toolsForRound.map((tool) => tool.function.name),
+            ),
+            selectedSearchScope,
           });
+          accumulatedDisplay = toolIteration.accumulatedDisplay;
+          if (
+            toolIteration.selectedSearchScope &&
+            toolIteration.selectedSearchScope !== selectedSearchScope
+          ) {
+            const nextSearchScope = toolIteration.selectedSearchScope;
+            if (!selectedSearchScope) {
+              maxIterations += 1;
+            }
+            if (nextSearchScope === "scholarly_then_web") {
+              maxIterations = Math.max(maxIterations, iteration + 3, 6);
+              budgetLimits = getToolBudgetLimits(maxIterations);
+            } else if (selectedSearchScope === "scholarly_then_web") {
+              maxIterations = Math.max(maxIterations, iteration + 2, 6);
+              budgetLimits = getToolBudgetLimits(maxIterations);
+            }
+            selectedSearchScope = nextSearchScope;
+            searchScopeGate?.onScopeSelected(selectedSearchScope);
+          }
           continue;
         }
 
@@ -577,7 +715,10 @@ export class AgentRuntime {
           assistantMessage,
           pdfWasAttached,
           summaryTriggered,
-          accumulatedDisplay: accumulatedDisplay + (result.content || ""),
+          accumulatedDisplay:
+            accumulatedDisplay +
+            hostedWebSearchDisplay +
+            (result.content || ""),
           iteration,
         });
         return;
@@ -656,6 +797,7 @@ export class AgentRuntime {
     iteration: number,
     toolChoice: "auto" | "none",
     executeProviderRequest: ProviderRequestExecutor,
+    onProviderRerouted: () => void,
   ): Promise<{
     content: string;
     reasoning?: string;
@@ -708,48 +850,13 @@ export class AgentRuntime {
             .join("");
         };
 
-        const buildHostedWebSearchDetails = (
-          search: HostedWebSearchDisplayState,
-        ): string => {
-          const lines: string[] = [];
-          if (search.queries?.length) {
-            lines.push(`query: ${search.queries.join(" | ")}`);
-          }
-          if (search.actionType) {
-            lines.push(`action: ${search.actionType}`);
-          }
-          if (search.sources?.length) {
-            lines.push("sources:");
-            for (const source of search.sources) {
-              lines.push(
-                `- ${source.title ? `${source.title} — ` : ""}${source.url}`,
-              );
-            }
-          }
-          return lines.join("\n");
-        };
-
         const buildHostedWebSearchDisplay = (): string =>
-          [...hostedWebSearches.entries()]
-            .sort(([, left], [, right]) => left.index - right.index)
-            .map(([id, search]) =>
-              this.callbacks.formatToolCallCard(
-                "web_search",
-                "",
-                search.status === "completed"
-                  ? "completed"
-                  : search.status === "error"
-                    ? "error"
-                    : "calling",
-                buildHostedWebSearchDetails(search) || undefined,
-                {
-                  expandStateId: `hosted-web-search:${id}`,
-                  resultPreviewMaxLength: 1000,
-                  showResultWhileCalling: true,
-                },
-              ),
-            )
-            .join("");
+          this.formatHostedWebSearchDisplay(
+            [...hostedWebSearches.entries()].map(([id, search]) => ({
+              id,
+              ...search,
+            })),
+          );
 
         const getPersistedStreamingContent = (): string =>
           displayBeforeThisRound + roundContent;
@@ -779,16 +886,22 @@ export class AgentRuntime {
         };
 
         const rejectAttempt = (error: Error) => {
+          if (!this.callbacks.isSessionTracked(sendingSession, sessionRunId)) {
+            reject(error);
+            return;
+          }
+          for (const [id, search] of hostedWebSearches) {
+            hostedWebSearches.set(id, { ...search, status: "error" });
+          }
           this.upsertHostedWebSearchResults(
             sendingSession,
             [...hostedWebSearches.entries()].map(([id, search]) => ({
               id,
               ...search,
-              status: "error",
             })),
           );
           const failedAttempt = {
-            content: roundContent,
+            content: buildHostedWebSearchDisplay() + roundContent,
             reasoning: roundReasoning,
           };
           if (
@@ -967,10 +1080,13 @@ export class AgentRuntime {
       });
 
     try {
-      return await executeProviderRequest(runAttempt);
+      return await executeProviderRequest(runAttempt, onProviderRerouted);
     } catch (error) {
       const bestFailedAttempt = failedAttemptState.best;
-      if (bestFailedAttempt) {
+      if (
+        bestFailedAttempt &&
+        this.callbacks.isSessionTracked(sendingSession, sessionRunId)
+      ) {
         assistantMessage.content =
           displayBeforeThisRound + bestFailedAttempt.content;
         assistantMessage.reasoning =
@@ -988,7 +1104,10 @@ export class AgentRuntime {
    * calls to run). Returns the updated accumulated display so the caller can
    * feed it into the next iteration.
    */
-  private async runToolIteration(params: ToolIterationParams): Promise<string> {
+  private async runToolIteration(params: ToolIterationParams): Promise<{
+    accumulatedDisplay: string;
+    selectedSearchScope?: SelectedSearchScope;
+  }> {
     const {
       sendingSession,
       sessionRunId,
@@ -1004,6 +1123,8 @@ export class AgentRuntime {
       budgetLimits,
       reuseCompletedResults,
       currentItemKey,
+      allowedToolNames,
+      selectedSearchScope,
     } = params;
     const contextStrategy = getToolContextStrategy(provider);
 
@@ -1025,6 +1146,7 @@ export class AgentRuntime {
       paperStructure,
       reuseCompletedResults,
       currentItemKey,
+      allowedToolNames,
     );
 
     // Reused exchanges already live in the previous turn's retained apiOnly
@@ -1055,6 +1177,7 @@ export class AgentRuntime {
     }
 
     let accumulatedDisplay = params.accumulatedDisplay;
+    let resolvedSearchScope = selectedSearchScope;
     if (roundContent) {
       accumulatedDisplay += roundContent;
     }
@@ -1074,9 +1197,12 @@ export class AgentRuntime {
       let callingDisplay = accumulatedDisplay;
       const pendingDisplayToolCalls = new Map<string, ToolCall>();
 
-      if (entry.kind === "execute") {
-        for (const request of entry.requests) {
-          const toolCall = request.toolCall;
+      if (entry.kind === "execute" || entry.kind === "search_scope") {
+        const calls =
+          entry.kind === "execute"
+            ? entry.requests.map((request) => request.toolCall)
+            : [entry.toolCall];
+        for (const toolCall of calls) {
           const toolName = toolCall.function.name;
           const toolArgs = toolCall.function.arguments;
           ztoolkit.log(`[${logPrefix}] Executing: ${toolName}`, toolArgs);
@@ -1103,6 +1229,7 @@ export class AgentRuntime {
           assistantMessage,
           "in_progress",
         );
+        this.ensureSessionTracked(sendingSession, sessionRunId);
         await this.sessionStorage.updateSessionMeta(sendingSession);
         this.emitPlanUpdate(sendingSession, sessionRunId);
         if (this.callbacks.isSessionActive(sendingSession)) {
@@ -1122,6 +1249,7 @@ export class AgentRuntime {
           assistantMessage,
           "in_progress",
         );
+        this.ensureSessionTracked(sendingSession, sessionRunId);
         await this.sessionStorage.updateSessionMeta(sendingSession);
         this.emitPlanUpdate(sendingSession, sessionRunId);
         if (this.callbacks.isSessionActive(sendingSession)) {
@@ -1131,6 +1259,8 @@ export class AgentRuntime {
           );
         }
       }
+
+      this.ensureSessionTracked(sendingSession, sessionRunId);
 
       const batchResults =
         entry.kind === "execute"
@@ -1152,7 +1282,22 @@ export class AgentRuntime {
                   iteration,
                 ),
               ]
-            : entry.results;
+            : entry.kind === "search_scope"
+              ? (() => {
+                  const selection = executeSearchScopeSelection(
+                    entry.toolCall,
+                    resolvedSearchScope,
+                  );
+                  if (selection.selectedScope) {
+                    resolvedSearchScope = selection.selectedScope;
+                  }
+                  return [selection.result];
+                })()
+              : entry.results;
+      resolvedSearchScope = advanceSearchScopeAfterResults(
+        resolvedSearchScope,
+        batchResults,
+      );
       if (entry.kind !== "reused") {
         this.appendToolExecutionResults(sendingSession, batchResults);
         await this.sessionStorage.updateSessionMeta(sendingSession);
@@ -1318,7 +1463,10 @@ export class AgentRuntime {
       );
     }
 
-    return accumulatedDisplay;
+    return {
+      accumulatedDisplay,
+      selectedSearchScope: resolvedSearchScope,
+    };
   }
 
   private createToolExecutionEntries(
@@ -1352,6 +1500,7 @@ export class AgentRuntime {
     paperStructure?: PaperStructure | PaperStructureExtended | null,
     reuseCompletedResults: boolean = false,
     currentItemKey?: string | null,
+    allowedToolNames: Set<string> = new Set(),
   ): RuntimeToolIterationEntry[] {
     const entries: RuntimeToolIterationEntry[] = [];
     let runnableSegment: ToolCall[] = [];
@@ -1376,6 +1525,22 @@ export class AgentRuntime {
     };
 
     for (const toolCall of toolCalls) {
+      if (
+        isSearchScopeControlledToolName(toolCall.function.name) &&
+        !allowedToolNames.has(toolCall.function.name)
+      ) {
+        flushRunnableSegment();
+        entries.push({
+          kind: "synthetic",
+          results: [createUnavailableSearchToolResult(toolCall)],
+        });
+        continue;
+      }
+      if (toolCall.function.name === SEARCH_SCOPE_TOOL_NAME) {
+        flushRunnableSegment();
+        entries.push({ kind: "search_scope", toolCall });
+        continue;
+      }
       if (toolCall.function.name === "request_user_input") {
         flushRunnableSegment();
         const completedResult = reuseCompletedResults
@@ -2028,6 +2193,46 @@ export class AgentRuntime {
     session.toolExecutionState!.updatedAt = Date.now();
   }
 
+  private formatHostedWebSearchDisplay(
+    searches: HostedWebSearchCall[],
+  ): string {
+    return [...searches]
+      .sort((left, right) => left.index - right.index)
+      .map((search) => {
+        const details: string[] = [];
+        if (search.queries?.length) {
+          details.push(`query: ${search.queries.join(" | ")}`);
+        }
+        if (search.actionType) {
+          details.push(`action: ${search.actionType}`);
+        }
+        if (search.sources?.length) {
+          details.push("sources:");
+          for (const source of search.sources) {
+            details.push(
+              `- ${source.title ? `${source.title} — ` : ""}${source.url}`,
+            );
+          }
+        }
+        return this.callbacks.formatToolCallCard(
+          "web_search",
+          "",
+          search.status === "completed"
+            ? "completed"
+            : search.status === "error"
+              ? "error"
+              : "calling",
+          details.join("\n") || undefined,
+          {
+            expandStateId: `${HOSTED_WEB_SEARCH_RESULT_ID_PREFIX}${search.id}`,
+            resultPreviewMaxLength: 1000,
+            showResultWhileCalling: true,
+          },
+        );
+      })
+      .join("");
+  }
+
   private upsertHostedWebSearchResults(
     session: ChatSession,
     searches: HostedWebSearchCall[],
@@ -2040,7 +2245,7 @@ export class AgentRuntime {
     }
     const sessionResults = session.toolExecutionState!.results;
     for (const search of searches) {
-      const toolCallId = `hosted-web-search:${search.id}`;
+      const toolCallId = `${HOSTED_WEB_SEARCH_RESULT_ID_PREFIX}${search.id}`;
       const query = (search.queries || []).join(" | ");
       const sourceUrls = [
         ...new Set((search.sources || []).map((source) => source.url)),
@@ -2217,6 +2422,7 @@ export class AgentRuntime {
     maxIterations: number,
     session: ChatSession,
     budgetLimits: ToolBudgetLimits,
+    supportsHostedWebSearch: boolean,
   ): IterationControlState {
     const remainingIterations = maxIterations - iteration + 1;
     const forceFinalAnswer = remainingIterations === 1;
@@ -2229,7 +2435,14 @@ export class AgentRuntime {
     );
     const toolsForRound =
       remainingSearchCalls === 0
-        ? tools.filter((tool) => !isSearchToolName(tool.function.name))
+        ? tools.filter((tool) => {
+            if (tool.function.name === "search_scholarly_sources") {
+              return false;
+            }
+            return !(
+              tool.function.name === "web_search" && !supportsHostedWebSearch
+            );
+          })
         : tools;
     return {
       currentIteration: iteration,
@@ -2239,6 +2452,30 @@ export class AgentRuntime {
       toolsForRound: forceFinalAnswer ? [] : toolsForRound,
       toolChoice: forceFinalAnswer ? "none" : "auto",
     };
+  }
+
+  private refreshIterationToolsForProvider(
+    iterationControl: IterationControlState,
+    iteration: number,
+    tools: ToolDefinition[],
+    maxIterations: number,
+    session: ChatSession,
+    budgetLimits: ToolBudgetLimits,
+    supportsHostedWebSearch: boolean,
+  ): void {
+    const refreshed = this.createIterationControl(
+      iteration,
+      tools,
+      maxIterations,
+      session,
+      budgetLimits,
+      supportsHostedWebSearch,
+    );
+    iterationControl.toolsForRound.splice(
+      0,
+      iterationControl.toolsForRound.length,
+      ...refreshed.toolsForRound,
+    );
   }
 
   private getMaxIterations(): number {
@@ -2679,10 +2916,7 @@ function stripAssistantToolCallCards(messages: ChatMessage[]): void {
       continue;
     }
     const stripped = message.content
-      .replace(
-        /\n?<tool-call status="(calling|completed|error)">[\s\S]*?<\/tool-call>\n?/g,
-        "\n",
-      )
+      .replace(/\n?<tool-call\b[^>]*>[\s\S]*?<\/tool-call>\n?/g, "\n")
       .replace(/\n{3,}/g, "\n\n")
       .trim();
     message.content =

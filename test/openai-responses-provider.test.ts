@@ -220,7 +220,7 @@ describe("OpenAIResponsesProvider", function () {
     });
   });
 
-  it("does not expose split scholarly search when hosted search is disabled", async function () {
+  it("preserves caller-provided local search tools when hosted search is disabled", async function () {
     let requestBody: Record<string, any> = {};
     globalThis.fetch = (async (_input, init) => {
       requestBody = JSON.parse(String(init?.body));
@@ -241,7 +241,7 @@ describe("OpenAIResponsesProvider", function () {
         (tool: any) => tool.type === "function" && tool.name === "web_search",
       ),
     );
-    assert.isFalse(
+    assert.isTrue(
       requestBody.tools.some(
         (tool: any) =>
           tool.type === "function" && tool.name === "search_scholarly_sources",
@@ -323,6 +323,141 @@ describe("OpenAIResponsesProvider", function () {
     ]);
   });
 
+  it("isolates two Responses model chains and invalidates A after B answers", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    const responses = [
+      completedResponse("resp_a_1", "answer A1"),
+      completedResponse("resp_a_2", "answer A2"),
+      completedResponse("resp_b_1", "answer B1"),
+      completedResponse("resp_a_3", "answer A3"),
+    ];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse(responses.shift()!);
+    }) as typeof fetch;
+
+    const provider = createProvider({ sessionId: "session-two-responses" });
+    await provider.chatCompletion([message("u1", "user", "first")]);
+
+    provider.updateConfig({ defaultModel: "gpt-model-b" });
+    provider.updateConfig({ defaultModel: "gpt-5.4" });
+    await provider.chatCompletion([
+      message("u1", "user", "first"),
+      message("a1", "assistant", "answer A1"),
+      message("u2", "user", "second on A"),
+    ]);
+
+    provider.updateConfig({ defaultModel: "gpt-model-b" });
+    await provider.chatCompletion([
+      message("u1", "user", "first"),
+      message("a1", "assistant", "answer A1"),
+      message("u2", "user", "second on A"),
+      message("a2", "assistant", "answer A2"),
+      message("u3", "user", "first on B"),
+    ]);
+
+    provider.updateConfig({ defaultModel: "gpt-5.4" });
+    await provider.chatCompletion([
+      message("u1", "user", "first"),
+      message("a1", "assistant", "answer A1"),
+      message("u2", "user", "second on A"),
+      message("a2", "assistant", "answer A2"),
+      message("u3", "user", "first on B"),
+      message("b1", "assistant", "answer B1"),
+      message("u4", "user", "back on A"),
+    ]);
+
+    assert.equal(requestBodies[1].previous_response_id, "resp_a_1");
+    assert.deepEqual(requestBodies[1].input, [
+      { role: "user", content: "second on A" },
+    ]);
+    assert.notProperty(requestBodies[2], "previous_response_id");
+    assert.notProperty(requestBodies[3], "previous_response_id");
+    assert.deepInclude(requestBodies[3].input, {
+      role: "assistant",
+      content: "answer B1",
+    });
+    assert.deepEqual(requestBodies[3].input.at(-1), {
+      role: "user",
+      content: "back on A",
+    });
+  });
+
+  it("isolates store-false transcripts across Responses model switches", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    const rawAOutput = [
+      {
+        id: "reasoning-a1",
+        type: "reasoning",
+        encrypted_content: "encrypted-a1",
+      },
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "answer A1", annotations: [] }],
+      },
+    ];
+    const responses = [
+      completedResponse("resp_a_1", "answer A1", {
+        store: false,
+        output: rawAOutput,
+      }),
+      completedResponse("resp_a_2", "answer A2", { store: false }),
+      completedResponse("resp_b_1", "answer B1", { store: false }),
+      completedResponse("resp_a_3", "answer A3", { store: false }),
+    ];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse(responses.shift()!);
+    }) as typeof fetch;
+
+    const provider = createProvider({ sessionId: "session-two-stateless" });
+    await provider.chatCompletion([message("u1", "user", "first")]);
+
+    provider.updateConfig({ defaultModel: "gpt-model-b" });
+    provider.updateConfig({ defaultModel: "gpt-5.4" });
+    await provider.chatCompletion([
+      message("u1", "user", "first"),
+      message("a1", "assistant", "answer A1"),
+      message("u2", "user", "second on A"),
+    ]);
+
+    provider.updateConfig({ defaultModel: "gpt-model-b" });
+    await provider.chatCompletion([
+      message("u1", "user", "first"),
+      message("a1", "assistant", "answer A1"),
+      message("u2", "user", "second on A"),
+      message("a2", "assistant", "answer A2"),
+      message("u3", "user", "first on B"),
+    ]);
+
+    provider.updateConfig({ defaultModel: "gpt-5.4" });
+    await provider.chatCompletion([
+      message("u1", "user", "first"),
+      message("a1", "assistant", "answer A1"),
+      message("u2", "user", "second on A"),
+      message("a2", "assistant", "answer A2"),
+      message("u3", "user", "first on B"),
+      message("b1", "assistant", "answer B1"),
+      message("u4", "user", "back on A"),
+    ]);
+
+    assert.notProperty(requestBodies[1], "previous_response_id");
+    assert.deepInclude(requestBodies[1].input, rawAOutput[0]);
+    assert.notProperty(requestBodies[2], "previous_response_id");
+    assert.notProperty(requestBodies[3], "previous_response_id");
+    assert.isFalse(
+      requestBodies[3].input.some(
+        (item: Record<string, unknown>) =>
+          item.encrypted_content === "encrypted-a1",
+      ),
+    );
+    assert.deepInclude(requestBodies[3].input, {
+      role: "assistant",
+      content: "answer B1",
+    });
+  });
+
   it("continues a normal user turn when new messages precede the synthetic context", async function () {
     const requestBodies: Array<Record<string, any>> = [];
     const responses = [
@@ -352,6 +487,173 @@ describe("OpenAIResponsesProvider", function () {
     assert.deepEqual(requestBodies[1].input, [
       { role: "user", content: "second" },
       { role: "system", content: "iteration 2" },
+    ]);
+  });
+
+  it("reuses a chain when the sole previous output has hosted tool-card markup", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse(
+        completedResponse(`resp_${requestBodies.length}`, "first answer"),
+      );
+    }) as typeof fetch;
+
+    const provider = createProvider({ sessionId: "session-decorated-output" });
+    await provider.chatCompletion([message("u1", "user", "first")]);
+    await provider.chatCompletion([
+      message("u1", "user", "first"),
+      message(
+        "a1",
+        "assistant",
+        [
+          '<tool-call status="completed" expand-key="hosted-web-search:ws_1">',
+          "<tool-name>web_search</tool-name>",
+          "</tool-call>",
+          "first answer",
+        ].join("\n"),
+      ),
+      message("u2", "user", "second"),
+    ]);
+
+    assert.equal(requestBodies[1].previous_response_id, "resp_1");
+    assert.deepEqual(requestBodies[1].input, [
+      { role: "user", content: "second" },
+    ]);
+  });
+
+  it("does not mistake another model's sole assistant output for decoration", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse(
+        completedResponse(`resp_${requestBodies.length}`, "answer"),
+      );
+    }) as typeof fetch;
+
+    const provider = createProvider({
+      sessionId: "session-other-model-output",
+    });
+    await provider.chatCompletion([message("u1", "user", "first")]);
+    await provider.chatCompletion([
+      message("u1", "user", "first"),
+      message("u-b", "user", "question answered by model B"),
+      message("a-b", "assistant", "model B answer"),
+      message("u-a", "user", "continue with model A"),
+    ]);
+
+    assert.notProperty(requestBodies[1], "previous_response_id");
+    assert.deepEqual(requestBodies[1].input, [
+      { role: "user", content: "first" },
+      { role: "user", content: "question answered by model B" },
+      { role: "assistant", content: "model B answer" },
+      { role: "user", content: "continue with model A" },
+    ]);
+  });
+
+  it("does not reuse a stale chain when another model replaces its answer", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse(
+        completedResponse(`resp_${requestBodies.length}`, "answer from A"),
+      );
+    }) as typeof fetch;
+
+    const provider = createProvider({
+      sessionId: "session-replaced-model-output",
+    });
+    await provider.chatCompletion([message("u1", "user", "first")]);
+    await provider.chatCompletion([
+      message("u1", "user", "first"),
+      message("a-b", "assistant", "replacement answer from B"),
+      message("u2", "user", "continue with A"),
+    ]);
+
+    assert.notProperty(requestBodies[1], "previous_response_id");
+    assert.deepEqual(requestBodies[1].input, [
+      { role: "user", content: "first" },
+      { role: "assistant", content: "replacement answer from B" },
+      { role: "user", content: "continue with A" },
+    ]);
+  });
+
+  it("does not treat another model's containing answer as local decoration", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse(
+        completedResponse(`resp_${requestBodies.length}`, "base answer"),
+      );
+    }) as typeof fetch;
+
+    const provider = createProvider({
+      sessionId: "session-containing-model-output",
+    });
+    await provider.chatCompletion([message("u1", "user", "first")]);
+    await provider.chatCompletion([
+      message("u1", "user", "first"),
+      message("a-b", "assistant", "prefix base answer extra"),
+      message("u2", "user", "continue with A"),
+    ]);
+
+    assert.notProperty(requestBodies[1], "previous_response_id");
+    assert.deepEqual(requestBodies[1].input, [
+      { role: "user", content: "first" },
+      { role: "assistant", content: "prefix base answer extra" },
+      { role: "user", content: "continue with A" },
+    ]);
+  });
+
+  it("preserves Markdown structure when matching a previous model output", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    const responses = [
+      completedResponse("resp_a", "- alpha\n- beta"),
+      completedResponse("resp_recovery", "recovered"),
+    ];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse(responses.shift()!);
+    }) as typeof fetch;
+
+    const provider = createProvider({ sessionId: "session-markdown-identity" });
+    await provider.chatCompletion([message("u1", "user", "first")]);
+    await provider.chatCompletion([
+      message("u1", "user", "first"),
+      message("a-b", "assistant", "- alpha - beta"),
+      message("u2", "user", "continue with A"),
+    ]);
+
+    assert.notProperty(requestBodies[1], "previous_response_id");
+    assert.deepEqual(requestBodies[1].input, [
+      { role: "user", content: "first" },
+      { role: "assistant", content: "- alpha - beta" },
+      { role: "user", content: "continue with A" },
+    ]);
+  });
+
+  it("does not resume a stored answer that is missing from local history", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse(
+        completedResponse(`resp_${requestBodies.length}`, "stored answer"),
+      );
+    }) as typeof fetch;
+
+    const provider = createProvider({
+      sessionId: "session-missing-local-output",
+    });
+    await provider.chatCompletion([message("u1", "user", "first")]);
+    await provider.chatCompletion([
+      message("u1", "user", "first"),
+      message("u2", "user", "continue after local deletion"),
+    ]);
+
+    assert.notProperty(requestBodies[1], "previous_response_id");
+    assert.deepEqual(requestBodies[1].input, [
+      { role: "user", content: "first" },
+      { role: "user", content: "continue after local deletion" },
     ]);
   });
 
@@ -445,6 +747,185 @@ describe("OpenAIResponsesProvider", function () {
     ]);
   });
 
+  it("keeps the Responses chain when search scope only updates runtime context", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      if (requestBodies.length === 1) {
+        return jsonResponse({
+          id: "resp_scope_1",
+          status: "completed",
+          store: true,
+          output: [
+            {
+              type: "function_call",
+              id: "fc_scope_1",
+              call_id: "scope_1",
+              name: "select_search_scope",
+              arguments: JSON.stringify({
+                scope: "web_allowed",
+                reason: "The user permits web fallback.",
+              }),
+            },
+          ],
+        });
+      }
+      return jsonResponse(completedResponse("resp_scope_2", "continued"));
+    }) as typeof fetch;
+
+    const scopeTool: ToolDefinition = {
+      type: "function",
+      function: {
+        name: "select_search_scope",
+        description: "Select search scope",
+        parameters: { type: "object", properties: {} },
+      },
+    };
+    const provider = createProvider({
+      sessionId: "session-search-scope",
+      hostedWebSearch: true,
+    });
+    const paperContext = message(
+      "paper-context",
+      "system",
+      "Stable paper and search permission instructions.",
+    );
+    const user = message("u1", "user", "Search, then use web fallback.");
+    const first = await provider.chatCompletionWithTools(
+      [paperContext, user, runtimeContext("scope pending")],
+      [scopeTool],
+    );
+
+    await provider.chatCompletionWithTools(
+      [
+        paperContext,
+        user,
+        {
+          ...message("a-scope", "assistant", ""),
+          tool_calls: first.toolCalls,
+        },
+        {
+          ...message("t-scope", "tool", "scope selected"),
+          tool_call_id: "scope_1",
+        },
+        runtimeContext("scope web_allowed; do not select again"),
+      ],
+      [localScholarlySearchTool, localWebSearchTool],
+    );
+
+    assert.equal(requestBodies[1].previous_response_id, "resp_scope_1");
+    assert.deepEqual(requestBodies[1].input, [
+      {
+        type: "function_call_output",
+        call_id: "scope_1",
+        output: "scope selected",
+      },
+      {
+        role: "system",
+        content: "scope web_allowed; do not select again",
+      },
+    ]);
+    assert.notDeepInclude(requestBodies[1].input, {
+      role: "system",
+      content: paperContext.content,
+    });
+  });
+
+  it("keeps a store-false scope exchange ordered without previous_response_id", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      if (requestBodies.length === 1) {
+        return jsonResponse({
+          id: "resp_scope_1",
+          status: "completed",
+          store: false,
+          output: [
+            {
+              type: "function_call",
+              id: "fc_scope_1",
+              call_id: "scope_1",
+              name: "select_search_scope",
+              arguments: JSON.stringify({
+                scope: "web_allowed",
+                reason: "The user permits web fallback.",
+              }),
+            },
+          ],
+        });
+      }
+      return jsonResponse(
+        completedResponse("resp_scope_2", "continued", { store: false }),
+      );
+    }) as typeof fetch;
+
+    const scopeTool: ToolDefinition = {
+      type: "function",
+      function: {
+        name: "select_search_scope",
+        description: "Select search scope",
+        parameters: { type: "object", properties: {} },
+      },
+    };
+    const provider = createProvider({
+      sessionId: "session-search-scope-stateless",
+      hostedWebSearch: true,
+    });
+    const paperContext = message(
+      "paper-context",
+      "system",
+      "Stable gated paper context.",
+    );
+    const user = message("u1", "user", "Search, then use web fallback.");
+    const first = await provider.chatCompletionWithTools(
+      [paperContext, user, runtimeContext("scope pending")],
+      [scopeTool],
+    );
+
+    await provider.chatCompletionWithTools(
+      [
+        paperContext,
+        user,
+        {
+          ...message("a-scope", "assistant", ""),
+          tool_calls: first.toolCalls,
+        },
+        {
+          ...message("t-scope", "tool", "scope selected"),
+          tool_call_id: "scope_1",
+        },
+        runtimeContext("scope web_allowed; do not select again"),
+      ],
+      [localScholarlySearchTool, localWebSearchTool],
+    );
+
+    assert.notProperty(requestBodies[1], "previous_response_id");
+    assert.deepEqual(requestBodies[1].input, [
+      { role: "system", content: paperContext.content },
+      { role: "user", content: user.content },
+      { role: "system", content: "scope pending" },
+      {
+        type: "function_call",
+        id: "fc_scope_1",
+        call_id: "scope_1",
+        name: "select_search_scope",
+        arguments: JSON.stringify({
+          scope: "web_allowed",
+          reason: "The user permits web fallback.",
+        }),
+      },
+      {
+        type: "function_call_output",
+        call_id: "scope_1",
+        output: "scope selected",
+      },
+      {
+        role: "system",
+        content: "scope web_allowed; do not select again",
+      },
+    ]);
+  });
+
   it("drops a pending function-call chain when the local tool exchange was cancelled", async function () {
     const requestBodies: Array<Record<string, any>> = [];
     const responses = [
@@ -472,6 +953,63 @@ describe("OpenAIResponsesProvider", function () {
     assert.notProperty(requestBodies[1], "previous_response_id");
     assert.deepEqual(requestBodies[1].input, [
       { role: "user", content: "search" },
+      { role: "user", content: "continue without that tool" },
+    ]);
+  });
+
+  it("does not resume a cancelled function call from its visible text prefix", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    const responses = [
+      {
+        id: "resp_prefixed_tool",
+        status: "completed",
+        store: true,
+        output: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [
+              {
+                type: "output_text",
+                text: "I will search.",
+                annotations: [],
+              },
+            ],
+          },
+          {
+            type: "function_call",
+            id: "fc_call_1",
+            call_id: "call_1",
+            name: "search_pdf",
+            arguments: JSON.stringify({ query: "first" }),
+          },
+        ],
+      },
+      completedResponse("resp_recovery", "recovered"),
+    ];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse(responses.shift()!);
+    }) as typeof fetch;
+
+    const provider = createProvider({ sessionId: "session-prefixed-tool" });
+    await provider.chatCompletionWithTools(
+      [message("u1", "user", "search")],
+      [localPaperTool],
+    );
+    await provider.chatCompletionWithTools(
+      [
+        message("u1", "user", "search"),
+        message("a1", "assistant", "I will search."),
+        message("u2", "user", "continue without that tool"),
+      ],
+      [localPaperTool],
+    );
+
+    assert.notProperty(requestBodies[1], "previous_response_id");
+    assert.deepEqual(requestBodies[1].input, [
+      { role: "user", content: "search" },
+      { role: "assistant", content: "I will search." },
       { role: "user", content: "continue without that tool" },
     ]);
   });

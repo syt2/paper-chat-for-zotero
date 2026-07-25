@@ -9,9 +9,17 @@ import {
   generatePaperContextPrompt,
 } from "../src/modules/chat/pdf-tools/promptGenerator.ts";
 import type { ChatMessage, ChatSession } from "../src/types/chat";
-import type { ToolCall, ToolExecutionResult } from "../src/types/tool";
+import type {
+  ToolCall,
+  ToolDefinition,
+  ToolExecutionResult,
+} from "../src/types/tool";
 import { createPdfPassageEvidenceRecord } from "../src/modules/chat/evidence/index.ts";
 import { AGENT_MAX_PLANNING_ITERATIONS_SETTINGS_HREF } from "../src/utils/internalLinks.ts";
+import {
+  createPendingSearchScopeTools,
+  filterSearchToolsForScope,
+} from "../src/modules/chat/agent-runtime/SearchScopeGate.ts";
 
 function createSession(): ChatSession {
   const messages: ChatMessage[] = [
@@ -33,6 +41,1172 @@ function createSession(): ChatSession {
 }
 
 describe("agent runtime plan semantics", function () {
+  it("allows a scholarly query to fall back once through the local web tool", async function () {
+    const { applyToolBudgetPolicy, createToolBudgetState } =
+      await import("../src/modules/chat/tool-budget/ToolBudgetPolicy.ts");
+    const query = "PaperChat nonexistent scholarly test 987654321";
+    const previousResults: ToolExecutionResult[] = [
+      {
+        toolCall: {
+          id: "scholarly-first",
+          type: "function",
+          function: {
+            name: "search_scholarly_sources",
+            arguments: JSON.stringify({ query }),
+          },
+        },
+        args: { query },
+        status: "failed",
+        content: [
+          "Error: No scholarly results found.",
+          "Category: not_found",
+          "Retryable: no",
+        ].join("\n"),
+      },
+    ];
+    const state = createToolBudgetState(previousResults);
+    const firstWebFallback: ToolCall = {
+      id: "web-fallback",
+      type: "function",
+      function: {
+        name: "web_search",
+        arguments: JSON.stringify({ query }),
+      },
+    };
+    const limits = {
+      maxFullTextCallsPerTurn: 1,
+      maxWebSearchCallsPerTurn: 2,
+    };
+
+    assert.isNull(applyToolBudgetPolicy(firstWebFallback, state, limits));
+
+    const repeatedWebFallback = applyToolBudgetPolicy(
+      { ...firstWebFallback, id: "web-fallback-repeat" },
+      state,
+      limits,
+    );
+    assert.equal(repeatedWebFallback?.status, "failed");
+    assert.include(repeatedWebFallback?.content || "", "budget_exhausted");
+  });
+
+  it("opens web fallback only after the model completes the required scholarly attempt", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    const session = createSession();
+    const assistantMessage: ChatMessage = {
+      id: "assistant-search-scope-gate",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+    };
+    session.messages.push(assistantMessage);
+    const allTools: ToolDefinition[] = [
+      {
+        type: "function",
+        function: {
+          name: "web_search",
+          description: "Hosted web search",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "search_scholarly_sources",
+          description: "Local scholarly search",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "search_items",
+          description: "Search Zotero",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+    ];
+    const tools = createPendingSearchScopeTools(allTools);
+    const receivedToolNames: string[][] = [];
+    const executedToolNames: string[] = [];
+    let providerCalls = 0;
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        saveSession: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => false,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "",
+        generateId: (() => {
+          let id = 0;
+          return () => `scope-generated-${++id}`;
+        })(),
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async (requests: any[]) => {
+          executedToolNames.push(
+            ...requests.map(
+              (request) => request.toolCall.function.name as string,
+            ),
+          );
+          return requests.map((request) => ({
+            toolCall: request.toolCall,
+            status: "failed",
+            content: [
+              "Error: No scholarly results found.",
+              "Category: not_found",
+              "Retryable: no",
+            ].join("\n"),
+          }));
+        },
+      },
+    ) as any;
+    runtime.getMaxIterations = () => 2;
+    const provider = {
+      config: { id: "paperchat", type: "paperchat", defaultModel: "gpt" },
+      chatCompletionWithTools: async (
+        _messages: ChatMessage[],
+        roundTools: ToolDefinition[],
+      ) => {
+        providerCalls++;
+        receivedToolNames.push(roundTools.map((tool) => tool.function.name));
+        if (providerCalls === 1) {
+          return {
+            content: "",
+            toolCalls: [
+              {
+                id: "scope-call",
+                type: "function" as const,
+                function: {
+                  name: "select_search_scope",
+                  arguments: JSON.stringify({
+                    scope: "scholarly_then_web",
+                    reason:
+                      "The user requested Scholar first and ordinary web as fallback.",
+                  }),
+                },
+              },
+            ],
+          };
+        }
+        if (providerCalls === 2) {
+          return {
+            content: "",
+            toolCalls: [
+              {
+                id: "scholarly-call",
+                type: "function" as const,
+                function: {
+                  name: "search_scholarly_sources",
+                  arguments: JSON.stringify({ query: "related DOI papers" }),
+                },
+              },
+            ],
+          };
+        }
+        return { content: "final answer" };
+      },
+    };
+
+    try {
+      await runtime.executeNonStreamingToolLoop({
+        provider,
+        currentMessages: session.messages,
+        assistantMessage,
+        pdfWasAttached: false,
+        summaryTriggered: false,
+        tools,
+        sendingSession: session,
+        searchScopeGate: {
+          onScopeSelected: (scope) => {
+            const nextTools = filterSearchToolsForScope({
+              tools: allTools,
+              supportsHostedWebSearch: true,
+              scope,
+            });
+            tools.splice(0, tools.length, ...nextTools);
+          },
+        },
+      });
+
+      assert.deepEqual(receivedToolNames[0], [
+        "search_items",
+        "select_search_scope",
+      ]);
+      assert.deepEqual(receivedToolNames[1], [
+        "search_scholarly_sources",
+        "search_items",
+      ]);
+      assert.deepEqual(receivedToolNames[2], [
+        "web_search",
+        "search_scholarly_sources",
+        "search_items",
+      ]);
+      assert.deepEqual(executedToolNames, ["search_scholarly_sources"]);
+      assert.equal(providerCalls, 3);
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
+  });
+
+  it("does not restore a scope result after cancellation during its calling checkpoint", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    let tracked = true;
+    let providerCalls = 0;
+    let scopeSelections = 0;
+    let sessionMetaUpdates = 0;
+    const session = createSession();
+    const assistantMessage: ChatMessage = {
+      id: "assistant-cancelled-search-scope",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+    };
+    session.messages.push(assistantMessage);
+    const tools = createPendingSearchScopeTools([
+      {
+        type: "function",
+        function: {
+          name: "web_search",
+          description: "Hosted web search",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "search_scholarly_sources",
+          description: "Local scholarly search",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+    ]);
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async () => {
+          tracked = false;
+          session.toolExecutionState = undefined;
+          session.executionPlan = undefined;
+          assistantMessage.content = "";
+        },
+        updateSessionMeta: async () => {
+          sessionMetaUpdates += 1;
+        },
+        saveSession: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => false,
+        isSessionTracked: () => tracked,
+        formatToolCallCard: () => "scope calling",
+        generateId: () => "cancelled-scope-generated",
+      } as any,
+      {
+        createExecutionBatches: () => [],
+        executeBatch: async () => [],
+      },
+    ) as any;
+    runtime.getMaxIterations = () => 3;
+
+    try {
+      await runtime.executeNonStreamingToolLoop({
+        provider: {
+          config: { id: "paperchat", type: "paperchat", defaultModel: "gpt" },
+          supportsHostedWebSearch: () => true,
+          chatCompletionWithTools: async () => {
+            providerCalls += 1;
+            return {
+              content: "",
+              toolCalls: [
+                {
+                  id: "cancelled-scope-call",
+                  type: "function" as const,
+                  function: {
+                    name: "select_search_scope",
+                    arguments: JSON.stringify({
+                      scope: "web_allowed",
+                      reason: "The user requested ordinary web search.",
+                    }),
+                  },
+                },
+              ],
+            };
+          },
+        },
+        currentMessages: session.messages,
+        assistantMessage,
+        pdfWasAttached: false,
+        summaryTriggered: false,
+        tools,
+        sendingSession: session,
+        searchScopeGate: {
+          onScopeSelected: () => {
+            scopeSelections += 1;
+          },
+        },
+      });
+
+      assert.equal(providerCalls, 1);
+      assert.equal(scopeSelections, 0);
+      assert.equal(sessionMetaUpdates, 1);
+      assert.isUndefined(session.toolExecutionState);
+      assert.equal(assistantMessage.content, "");
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
+  });
+
+  it("streams gate then scholarly search before exposing hosted web fallback", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    const session = createSession();
+    const assistantMessage: ChatMessage = {
+      id: "assistant-stream-search-scope-fallback",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+    };
+    session.messages.push(assistantMessage);
+    const allTools: ToolDefinition[] = [
+      {
+        type: "function",
+        function: {
+          name: "web_search",
+          description: "Hosted web search",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "search_scholarly_sources",
+          description: "Local scholarly search",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "search_items",
+          description: "Search Zotero",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+    ];
+    const tools = createPendingSearchScopeTools(allTools);
+    const receivedToolNames: string[][] = [];
+    const executedToolNames: string[] = [];
+    let providerCalls = 0;
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        saveSession: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => false,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "",
+        generateId: (() => {
+          let id = 0;
+          return () => `stream-search-scope-${++id}`;
+        })(),
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async (requests: any[]) => {
+          executedToolNames.push(
+            ...requests.map(
+              (request) => request.toolCall.function.name as string,
+            ),
+          );
+          return requests.map((request) => ({
+            toolCall: request.toolCall,
+            status: "failed",
+            content: [
+              "Error: No scholarly results found.",
+              "Category: not_found",
+              "Retryable: no",
+            ].join("\n"),
+          }));
+        },
+      },
+    ) as any;
+    runtime.getMaxIterations = () => 2;
+
+    try {
+      await runtime.executeStreamingToolLoop({
+        provider: {
+          config: {
+            id: "paperchat",
+            type: "paperchat",
+            defaultModel: "gpt",
+          },
+          chatCompletionWithTools: async () => ({ content: "unused" }),
+          streamChatCompletionWithTools: async (
+            _messages: ChatMessage[],
+            roundTools: ToolDefinition[],
+            callbacks: any,
+          ) => {
+            providerCalls += 1;
+            receivedToolNames.push(
+              roundTools.map((tool) => tool.function.name),
+            );
+            if (providerCalls === 1) {
+              const toolCall: ToolCall = {
+                id: "stream-fallback-scope-call",
+                type: "function",
+                function: {
+                  name: "select_search_scope",
+                  arguments: JSON.stringify({
+                    scope: "scholarly_then_web",
+                    reason:
+                      "The user requested scholarly search before web fallback.",
+                  }),
+                },
+              };
+              callbacks.onToolCallStart({
+                index: 0,
+                id: toolCall.id,
+                name: toolCall.function.name,
+              });
+              callbacks.onToolCallDelta(0, toolCall.function.arguments);
+              callbacks.onComplete({
+                content: "",
+                toolCalls: [toolCall],
+                stopReason: "tool_calls",
+              });
+              return;
+            }
+            if (providerCalls === 2) {
+              const toolCall: ToolCall = {
+                id: "stream-fallback-scholarly-call",
+                type: "function",
+                function: {
+                  name: "search_scholarly_sources",
+                  arguments: JSON.stringify({ query: "missing paper" }),
+                },
+              };
+              callbacks.onToolCallStart({
+                index: 0,
+                id: toolCall.id,
+                name: toolCall.function.name,
+              });
+              callbacks.onToolCallDelta(0, toolCall.function.arguments);
+              callbacks.onComplete({
+                content: "",
+                toolCalls: [toolCall],
+                stopReason: "tool_calls",
+              });
+              return;
+            }
+            callbacks.onHostedWebSearchStatus({
+              index: 0,
+              id: "stream-fallback-web-search",
+              status: "completed",
+              actionType: "search",
+              queries: ["missing paper"],
+              sources: [
+                {
+                  title: "Fallback result",
+                  url: "https://example.test/fallback",
+                },
+              ],
+            });
+            callbacks.onTextDelta("Answer from fallback web");
+            callbacks.onComplete({
+              content: "Answer from fallback web",
+              stopReason: "end_turn",
+            });
+          },
+        },
+        currentMessages: session.messages,
+        assistantMessage,
+        pdfWasAttached: false,
+        summaryTriggered: false,
+        tools,
+        sendingSession: session,
+        searchScopeGate: {
+          onScopeSelected: (scope) => {
+            const nextTools = filterSearchToolsForScope({
+              tools: allTools,
+              supportsHostedWebSearch: true,
+              scope,
+            });
+            tools.splice(0, tools.length, ...nextTools);
+          },
+        },
+      });
+
+      assert.deepEqual(receivedToolNames, [
+        ["search_items", "select_search_scope"],
+        ["search_scholarly_sources", "search_items"],
+        ["web_search", "search_scholarly_sources", "search_items"],
+      ]);
+      assert.deepEqual(executedToolNames, ["search_scholarly_sources"]);
+      assert.equal(providerCalls, 3);
+      assert.equal(assistantMessage.content, "Answer from fallback web");
+      assert.include(
+        session.toolExecutionState?.results.map(
+          (result) => result.toolCall.function.name,
+        ) || [],
+        "web_search",
+      );
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
+  });
+
+  it("keeps the unlocked web fallback across a provider retry without rerunning scholarly search", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    const session = createSession();
+    const assistantMessage: ChatMessage = {
+      id: "assistant-search-scope-retry",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+    };
+    session.messages.push(assistantMessage);
+    const allTools: ToolDefinition[] = [
+      {
+        type: "function",
+        function: {
+          name: "web_search",
+          description: "Hosted web search",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "search_scholarly_sources",
+          description: "Local scholarly search",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+    ];
+    const tools = createPendingSearchScopeTools(allTools);
+    const receivedToolNames: string[][] = [];
+    let providerCalls = 0;
+    let providerRetries = 0;
+    let selectedScopeCallbacks = 0;
+    let scholarlyExecutions = 0;
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        saveSession: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => false,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "",
+        generateId: (() => {
+          let id = 0;
+          return () => `scope-retry-${++id}`;
+        })(),
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async (requests: any[]) => {
+          scholarlyExecutions += requests.length;
+          return requests.map((request) => ({
+            toolCall: request.toolCall,
+            status: "completed",
+            content: "scholarly result",
+          }));
+        },
+      },
+    ) as any;
+    runtime.getMaxIterations = () => 2;
+
+    try {
+      await runtime.executeNonStreamingToolLoop({
+        provider: {
+          config: { id: "paperchat", type: "paperchat", defaultModel: "gpt" },
+          chatCompletionWithTools: async (
+            _messages: ChatMessage[],
+            roundTools: ToolDefinition[],
+          ) => {
+            providerCalls += 1;
+            receivedToolNames.push(
+              roundTools.map((tool) => tool.function.name),
+            );
+            if (providerCalls === 1) {
+              return {
+                content: "",
+                toolCalls: [
+                  {
+                    id: "scope-retry-call",
+                    type: "function" as const,
+                    function: {
+                      name: "select_search_scope",
+                      arguments: JSON.stringify({
+                        scope: "scholarly_then_web",
+                        reason:
+                          "The user requested scholarly search before web fallback.",
+                      }),
+                    },
+                  },
+                ],
+              };
+            }
+            if (providerCalls === 2) {
+              return {
+                content: "",
+                toolCalls: [
+                  {
+                    id: "scope-retry-scholarly-call",
+                    type: "function" as const,
+                    function: {
+                      name: "search_scholarly_sources",
+                      arguments: JSON.stringify({ query: "missing paper" }),
+                    },
+                  },
+                ],
+              };
+            }
+            if (providerCalls === 3) {
+              throw new Error("temporary upstream failure");
+            }
+            return { content: "final answer" };
+          },
+        },
+        currentMessages: session.messages,
+        assistantMessage,
+        pdfWasAttached: false,
+        summaryTriggered: false,
+        tools,
+        sendingSession: session,
+        executeProviderRequest: async (operation) => {
+          try {
+            return await operation();
+          } catch {
+            providerRetries += 1;
+            return operation();
+          }
+        },
+        searchScopeGate: {
+          onScopeSelected: (scope) => {
+            selectedScopeCallbacks += 1;
+            const nextTools = filterSearchToolsForScope({
+              tools: allTools,
+              supportsHostedWebSearch: true,
+              scope,
+            });
+            tools.splice(0, tools.length, ...nextTools);
+          },
+        },
+      });
+
+      assert.deepEqual(receivedToolNames, [
+        ["select_search_scope"],
+        ["search_scholarly_sources"],
+        ["web_search", "search_scholarly_sources"],
+        ["web_search", "search_scholarly_sources"],
+      ]);
+      assert.equal(providerRetries, 1);
+      assert.equal(selectedScopeCallbacks, 2);
+      assert.equal(scholarlyExecutions, 1);
+      assert.lengthOf(
+        session.toolExecutionState?.results.filter(
+          (result) =>
+            result.toolCall.function.name === "select_search_scope" &&
+            result.status === "completed",
+        ) || [],
+        1,
+      );
+      assert.lengthOf(
+        session.toolExecutionState?.results.filter(
+          (result) =>
+            result.toolCall.function.name === "search_scholarly_sources",
+        ) || [],
+        1,
+      );
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
+  });
+
+  it("refreshes exhausted-budget tools when rerouting across hosted-search capabilities", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    const allTools: ToolDefinition[] = [
+      {
+        type: "function",
+        function: {
+          name: "web_search",
+          description: "Web search",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "search_scholarly_sources",
+          description: "Scholarly search",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "search_items",
+          description: "Zotero search",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+    ];
+
+    const runTransition = async (initialHosted: boolean) => {
+      let hosted = initialHosted;
+      let providerCalls = 0;
+      const receivedToolNames: string[][] = [];
+      const session = createSession();
+      session.toolExecutionState = {
+        turnStartedAt: 1,
+        updatedAt: 2,
+        results: [
+          {
+            toolCall: {
+              id: `scope-${initialHosted}`,
+              type: "function",
+              function: {
+                name: "select_search_scope",
+                arguments: JSON.stringify({
+                  scope: "web_allowed",
+                  reason: "Ordinary web evidence is allowed.",
+                }),
+              },
+            },
+            args: {
+              scope: "web_allowed",
+              reason: "Ordinary web evidence is allowed.",
+            },
+            status: "completed",
+            content: "scope selected",
+          },
+          {
+            toolCall: {
+              id: `local-budget-${initialHosted}`,
+              type: "function",
+              function: {
+                name: "search_scholarly_sources",
+                arguments: JSON.stringify({ query: "local evidence" }),
+              },
+            },
+            args: { query: "local evidence" },
+            status: "completed",
+            content: "local result",
+          },
+        ],
+      };
+      const assistantMessage: ChatMessage = {
+        id: `assistant-capability-budget-${initialHosted}`,
+        role: "assistant",
+        content: "",
+        timestamp: 3,
+      };
+      session.messages.push(assistantMessage);
+      const tools = filterSearchToolsForScope({
+        tools: allTools,
+        supportsHostedWebSearch: hosted,
+        scope: "web_allowed",
+      });
+      const provider = {
+        config: { id: "paperchat", type: "paperchat", defaultModel: "gpt" },
+        supportsHostedWebSearch: () => hosted,
+        chatCompletionWithTools: async (
+          _messages: ChatMessage[],
+          roundTools: ToolDefinition[],
+        ) => {
+          providerCalls += 1;
+          receivedToolNames.push(roundTools.map((tool) => tool.function.name));
+          if (providerCalls === 1) {
+            throw new Error("reroute this model");
+          }
+          return { content: "final answer" };
+        },
+      };
+      const runtime = new AgentRuntime(
+        {
+          updateMessageContent: async () => undefined,
+          updateSessionMeta: async () => undefined,
+          saveSession: async () => undefined,
+        } as any,
+        {
+          isSessionActive: () => false,
+          isSessionTracked: () => true,
+          formatToolCallCard: () => "",
+          generateId: () => `capability-budget-${initialHosted}`,
+        } as any,
+        {
+          createExecutionBatches: () => [],
+          executeBatch: async () => [],
+        },
+      ) as any;
+      runtime.getMaxIterations = () => 3;
+
+      await runtime.executeNonStreamingToolLoop({
+        provider,
+        currentMessages: session.messages,
+        assistantMessage,
+        pdfWasAttached: false,
+        summaryTriggered: false,
+        tools,
+        sendingSession: session,
+        preserveToolExecutionState: true,
+        executeProviderRequest: async (operation, onProviderRerouted) => {
+          try {
+            return await operation();
+          } catch {
+            hosted = !hosted;
+            const reroutedTools = filterSearchToolsForScope({
+              tools: allTools,
+              supportsHostedWebSearch: hosted,
+              scope: "web_allowed",
+            });
+            tools.splice(0, tools.length, ...reroutedTools);
+            onProviderRerouted?.();
+            return operation();
+          }
+        },
+        searchScopeGate: {
+          onScopeSelected: (scope) => {
+            const scopedTools = filterSearchToolsForScope({
+              tools: allTools,
+              supportsHostedWebSearch: hosted,
+              scope,
+            });
+            tools.splice(0, tools.length, ...scopedTools);
+          },
+        },
+      });
+
+      return receivedToolNames;
+    };
+
+    try {
+      assert.deepEqual(await runTransition(false), [
+        ["search_items"],
+        ["web_search", "search_items"],
+      ]);
+      assert.deepEqual(await runTransition(true), [
+        ["web_search", "search_items"],
+        ["search_items"],
+      ]);
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
+  });
+
+  it("restores an unlocked scholarly-then-web fallback after a failed turn", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    const session = createSession();
+    session.toolExecutionState = {
+      turnStartedAt: 1,
+      updatedAt: 2,
+      results: [
+        {
+          toolCall: {
+            id: "restored-fallback-scope",
+            type: "function",
+            function: {
+              name: "select_search_scope",
+              arguments: JSON.stringify({
+                scope: "scholarly_then_web",
+                reason: "Scholar first, then ordinary web fallback.",
+              }),
+            },
+          },
+          args: {
+            scope: "scholarly_then_web",
+            reason: "Scholar first, then ordinary web fallback.",
+          },
+          status: "completed",
+          content: "scope selected",
+        },
+        {
+          toolCall: {
+            id: "restored-fallback-scholarly",
+            type: "function",
+            function: {
+              name: "search_scholarly_sources",
+              arguments: JSON.stringify({ query: "missing paper" }),
+            },
+          },
+          args: { query: "missing paper" },
+          status: "failed",
+          content: [
+            "Error: No scholarly results found.",
+            "Category: not_found",
+            "Retryable: no",
+          ].join("\n"),
+        },
+      ],
+    };
+    const assistantMessage: ChatMessage = {
+      id: "assistant-restored-web-fallback",
+      role: "assistant",
+      content: "",
+      timestamp: 3,
+    };
+    session.messages.push(assistantMessage);
+    const allTools: ToolDefinition[] = [
+      {
+        type: "function",
+        function: {
+          name: "web_search",
+          description: "Hosted web search",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "search_scholarly_sources",
+          description: "Local scholarly search",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+    ];
+    const tools = createPendingSearchScopeTools(allTools);
+    const receivedToolNames: string[][] = [];
+    const restoredScopes: string[] = [];
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        saveSession: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => false,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "",
+        generateId: () => "restored-fallback-generated",
+      } as any,
+      {
+        createExecutionBatches: () => [],
+        executeBatch: async () => {
+          throw new Error("The completed scholarly search must not rerun");
+        },
+      },
+    ) as any;
+    runtime.getMaxIterations = () => 2;
+
+    try {
+      await runtime.executeNonStreamingToolLoop({
+        provider: {
+          config: { id: "paperchat", type: "paperchat", defaultModel: "gpt" },
+          chatCompletionWithTools: async (
+            _messages: ChatMessage[],
+            roundTools: ToolDefinition[],
+          ) => {
+            receivedToolNames.push(
+              roundTools.map((tool) => tool.function.name),
+            );
+            return { content: "fallback answer" };
+          },
+        },
+        currentMessages: session.messages,
+        assistantMessage,
+        pdfWasAttached: false,
+        summaryTriggered: false,
+        tools,
+        sendingSession: session,
+        preserveToolExecutionState: true,
+        searchScopeGate: {
+          onScopeSelected: (scope) => {
+            restoredScopes.push(scope);
+            const nextTools = filterSearchToolsForScope({
+              tools: allTools,
+              supportsHostedWebSearch: true,
+              scope,
+            });
+            tools.splice(0, tools.length, ...nextTools);
+          },
+        },
+      });
+
+      assert.deepEqual(restoredScopes, ["web_allowed"]);
+      assert.deepEqual(receivedToolNames, [
+        ["web_search", "search_scholarly_sources"],
+      ]);
+      assert.lengthOf(session.toolExecutionState.results, 2);
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
+  });
+
+  it("blocks a hallucinated search tool that was not exposed in the round", function () {
+    const runtime = new AgentRuntime({} as any, {} as any, {
+      createExecutionBatches: () => [],
+      executeBatch: async () => [],
+    }) as any;
+    const toolCall: ToolCall = {
+      id: "hidden-web-search",
+      type: "function",
+      function: {
+        name: "web_search",
+        arguments: JSON.stringify({ query: "should not run" }),
+      },
+    };
+    const entries = runtime.createRuntimeToolIterationEntries(
+      createSession(),
+      { id: "assistant", role: "assistant", content: "", timestamp: 2 },
+      [toolCall],
+      { maxFullTextCallsPerTurn: 1, maxWebSearchCallsPerTurn: 2 },
+      undefined,
+      false,
+      null,
+      new Set(["search_scholarly_sources"]),
+    );
+
+    assert.equal(entries[0].kind, "synthetic");
+    assert.equal(entries[0].results[0].status, "denied");
+    assert.include(entries[0].results[0].content, "not available");
+  });
+
+  it("adds a planning iteration only when a pending search gate is selected", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+
+    try {
+      for (const restoredScope of [false, true]) {
+        const session = createSession();
+        if (restoredScope) {
+          session.toolExecutionState = {
+            turnStartedAt: 1,
+            updatedAt: 1,
+            results: [
+              {
+                toolCall: {
+                  id: "restored-scope",
+                  type: "function",
+                  function: {
+                    name: "select_search_scope",
+                    arguments: JSON.stringify({
+                      scope: "scholarly_only",
+                      reason: "restored",
+                    }),
+                  },
+                },
+                args: { scope: "scholarly_only", reason: "restored" },
+                status: "completed",
+                content: "scope restored",
+              },
+            ],
+          };
+        }
+        const assistantMessage: ChatMessage = {
+          id: `assistant-unused-search-gate-${restoredScope}`,
+          role: "assistant",
+          content: "",
+          timestamp: 2,
+        };
+        session.messages.push(assistantMessage);
+        let providerCalls = 0;
+        let executedCalls = 0;
+        let generatedId = 0;
+        const runtime = new AgentRuntime(
+          {
+            updateMessageContent: async () => undefined,
+            updateSessionMeta: async () => undefined,
+            saveSession: async () => undefined,
+          } as any,
+          {
+            isSessionActive: () => false,
+            isSessionTracked: () => true,
+            formatToolCallCard: () => "",
+            generateId: () => `unused-gate-${++generatedId}`,
+          } as any,
+          {
+            createExecutionBatches: (requests: any[]) => [requests],
+            executeBatch: async (requests: any[]) => {
+              executedCalls += requests.length;
+              return requests.map((request) => ({
+                toolCall: request.toolCall,
+                status: "completed",
+                content: "local result",
+              }));
+            },
+          },
+        ) as any;
+        runtime.getMaxIterations = () => 2;
+
+        await runtime.executeNonStreamingToolLoop({
+          provider: {
+            config: { id: "provider", type: "openai", defaultModel: "model" },
+            chatCompletionWithTools: async (
+              _messages: ChatMessage[],
+              _tools: ToolDefinition[],
+              _signal: AbortSignal | undefined,
+              options: { toolChoice?: string } | undefined,
+            ) => {
+              providerCalls += 1;
+              if (options?.toolChoice === "none") {
+                return { content: "final answer" };
+              }
+              return {
+                content: "",
+                toolCalls: [
+                  {
+                    id: `local-call-${providerCalls}`,
+                    type: "function" as const,
+                    function: { name: "search_items", arguments: "{}" },
+                  },
+                ],
+              };
+            },
+          },
+          currentMessages: session.messages,
+          assistantMessage,
+          pdfWasAttached: false,
+          summaryTriggered: false,
+          tools: [
+            {
+              type: "function",
+              function: {
+                name: "search_items",
+                description: "Search Zotero",
+                parameters: { type: "object", properties: {} },
+              },
+            },
+            ...createPendingSearchScopeTools([]),
+          ],
+          sendingSession: session,
+          preserveToolExecutionState: restoredScope,
+          searchScopeGate: { onScopeSelected: () => undefined },
+        });
+
+        assert.equal(providerCalls, 2);
+        assert.equal(executedCalls, 1);
+      }
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
+  });
+
   it("keeps completed pairs while removing pending calls and orphan results", function () {
     const visibleContent = [
       '<tool-call status="completed">',
@@ -624,7 +1798,7 @@ describe("agent runtime plan semantics", function () {
     }
   });
 
-  it("renders hosted Web Search without local execution and records one budget entry", async function () {
+  it("renders hosted Web Search without local execution and records one hosted result", async function () {
     const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
     (globalThis as { ztoolkit?: unknown }).ztoolkit = {
       log: () => undefined,
@@ -741,9 +1915,12 @@ describe("agent runtime plan semantics", function () {
         '<tool name="web_search" status="completed" details="query: Zotero AI tools\naction: search\nsources:\n- PaperChat — https://example.test/paperchat" expand-key="hosted-web-search:ws_123" show-while-calling="true" />Answer from web',
       );
       assert.equal(toolExecutions, 0);
-      assert.equal(assistantMessage.content, "Answer from web");
+      assert.equal(
+        assistantMessage.content,
+        '<tool name="web_search" status="completed" details="query: Zotero AI tools\naction: search\nsources:\n- PaperChat — https://example.test/paperchat" expand-key="hosted-web-search:ws_123" show-while-calling="true" />Answer from web',
+      );
       assert.isUndefined(assistantMessage.tool_calls);
-      assert.notInclude(assistantMessage.content, "web_search");
+      assert.include(assistantMessage.content, "web_search");
       assert.isFalse(session.messages.some((message) => message.apiOnly));
       assert.lengthOf(session.toolExecutionState?.results || [], 1);
       assert.equal(
@@ -764,6 +1941,149 @@ describe("agent runtime plan semantics", function () {
     } finally {
       (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
     }
+  });
+
+  it("persists hosted Web Search cards for non-streaming responses", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    const session = createSession();
+    const assistantMessage: ChatMessage = {
+      id: "assistant-hosted-web-search-non-streaming",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+    };
+    session.messages.push(assistantMessage);
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        saveSession: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => false,
+        isSessionTracked: () => true,
+        formatToolCallCard: (
+          name: string,
+          _args: string,
+          status: string,
+          details?: string,
+        ) =>
+          `<tool name="${name}" status="${status}" details="${details || ""}" />`,
+        generateId: () => "generated-hosted-web-search-non-streaming",
+      } as any,
+    ) as any;
+    runtime.getMaxIterations = () => 2;
+
+    await runtime.executeNonStreamingToolLoop({
+      provider: {
+        config: {
+          id: "paperchat",
+          type: "paperchat",
+          defaultModel: "test-model",
+        },
+        chatCompletionWithTools: async () => ({
+          content: "Answer from web",
+          hostedWebSearches: [
+            {
+              index: 0,
+              id: "ws_non_streaming",
+              status: "completed",
+              actionType: "search",
+              queries: ["no-source query"],
+              sources: [],
+            },
+          ],
+        }),
+      } as any,
+      currentMessages: session.messages,
+      assistantMessage,
+      pdfWasAttached: false,
+      summaryTriggered: false,
+      tools: [],
+      sendingSession: session,
+    });
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+
+    assert.equal(
+      assistantMessage.content,
+      '<tool name="web_search" status="completed" details="query: no-source query\naction: search" />Answer from web',
+    );
+  });
+
+  it("strips persisted hosted Web Search cards from replayed model context", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    const session = createSession();
+    session.messages.push(
+      {
+        id: "assistant-previous-hosted-search",
+        role: "assistant",
+        content:
+          '\n<tool-call status="completed" expand-key="hosted-web-search:ws_previous">\n<tool-name>✓ web_search</tool-name>\n<tool-result>query: previous search</tool-result>\n</tool-call>\nPrevious answer',
+        timestamp: 2,
+      },
+      {
+        id: "user-2",
+        role: "user",
+        content: "Follow up",
+        timestamp: 3,
+      },
+    );
+    const assistantMessage: ChatMessage = {
+      id: "assistant-replay-check",
+      role: "assistant",
+      content: "",
+      timestamp: 4,
+    };
+    session.messages.push(assistantMessage);
+    const currentMessages = session.messages.map((message) => ({ ...message }));
+    let replayedPreviousAnswer = "";
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        saveSession: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => false,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "",
+        generateId: () => "generated-replay-check",
+      } as any,
+    ) as any;
+    runtime.getMaxIterations = () => 2;
+
+    await runtime.executeNonStreamingToolLoop({
+      provider: {
+        config: {
+          id: "paperchat",
+          type: "paperchat",
+          defaultModel: "test-model",
+        },
+        chatCompletionWithTools: async (messages: ChatMessage[]) => {
+          replayedPreviousAnswer =
+            messages.find(
+              (message) => message.id === "assistant-previous-hosted-search",
+            )?.content || "";
+          return { content: "Follow-up answer" };
+        },
+      } as any,
+      currentMessages,
+      assistantMessage,
+      pdfWasAttached: false,
+      summaryTriggered: false,
+      tools: [],
+      sendingSession: session,
+    });
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+
+    assert.equal(replayedPreviousAnswer, "Previous answer");
+    assert.notInclude(replayedPreviousAnswer, "web_search");
   });
 
   it("records a hosted search that started before the stream failed", async function () {
@@ -788,7 +2108,8 @@ describe("agent runtime plan semantics", function () {
       {
         isSessionActive: () => false,
         isSessionTracked: () => true,
-        formatToolCallCard: () => "",
+        formatToolCallCard: (name: string, _args: string, status: string) =>
+          `<tool name="${name}" status="${status}" />`,
         generateId: () => "generated-hosted-search-error",
       } as any,
       {
@@ -845,12 +2166,93 @@ describe("agent runtime plan semantics", function () {
       assert.deepEqual(session.toolExecutionState?.results[0]?.args, {
         query: "paid hosted query",
       });
+      assert.include(
+        assistantMessage.content,
+        '<tool name="web_search" status="error" />',
+      );
     } finally {
       (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
     }
   });
 
-  it("counts hosted search against the shared budget and removes both search tools next round", async function () {
+  it("does not restore a hosted-search error card after the turn is cancelled", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    let tracked = true;
+    const session = createSession();
+    const assistantMessage: ChatMessage = {
+      id: "assistant-hosted-search-cancelled",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+    };
+    session.messages.push(assistantMessage);
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        saveSession: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => false,
+        isSessionTracked: () => tracked,
+        formatToolCallCard: (name: string, _args: string, status: string) =>
+          `<tool name="${name}" status="${status}" />`,
+        generateId: () => "generated-hosted-search-cancelled",
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async () => [],
+      },
+    ) as any;
+    runtime.getMaxIterations = () => 2;
+    const abortError = new Error("Aborted");
+    abortError.name = "AbortError";
+
+    try {
+      await runtime.executeStreamingToolLoop({
+        provider: {
+          config: {
+            id: "paperchat",
+            type: "paperchat",
+            defaultModel: "test-model",
+          },
+          chatCompletionWithTools: async () => ({ content: "unused" }),
+          streamChatCompletionWithTools: async (
+            _messages: ChatMessage[],
+            _tools: unknown[],
+            callbacks: any,
+          ) => {
+            callbacks.onHostedWebSearchStatus({
+              index: 0,
+              id: "ws_cancelled_stream",
+              status: "searching",
+              queries: ["cancelled hosted query"],
+            });
+            callbacks.onError(abortError);
+            tracked = false;
+            session.toolExecutionState = undefined;
+            assistantMessage.content = "";
+          },
+        } as any,
+        currentMessages: session.messages,
+        assistantMessage,
+        pdfWasAttached: false,
+        summaryTriggered: false,
+        tools: [],
+        sendingSession: session,
+      });
+
+      assert.equal(assistantMessage.content, "");
+      assert.isUndefined(session.toolExecutionState);
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
+  });
+
+  it("keeps hosted web_search available after the local search budget is exhausted", async function () {
     const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
     (globalThis as { ztoolkit?: unknown }).ztoolkit = {
       log: () => undefined,
@@ -880,9 +2282,14 @@ describe("agent runtime plan semantics", function () {
       } as any,
       {
         createExecutionBatches: (requests: any[]) => [requests],
-        executeBatch: async () => {
+        executeBatch: async (requests: any[]) => {
           localExecutions += 1;
-          return [];
+          return requests.map((request) => ({
+            toolCall: request.toolCall,
+            args: request.args,
+            status: "completed",
+            content: "Scholarly search completed.",
+          }));
         },
       },
     ) as any;
@@ -901,6 +2308,7 @@ describe("agent runtime plan semantics", function () {
         type: "paperchat",
         defaultModel: "test-model",
       },
+      supportsHostedWebSearch: () => true,
       chatCompletionWithTools: async () => ({ content: "unused" }),
       streamChatCompletionWithTools: async (
         _messages: ChatMessage[],
@@ -967,8 +2375,8 @@ describe("agent runtime plan semantics", function () {
         "web_search",
         "search_scholarly_sources",
       ]);
-      assert.deepEqual(receivedToolNames[1], []);
-      assert.equal(localExecutions, 0);
+      assert.deepEqual(receivedToolNames[1], ["web_search"]);
+      assert.equal(localExecutions, 1);
       assert.include(assistantMessage.content, "final answer");
       assert.equal(
         session.toolExecutionState?.results.filter(
@@ -976,15 +2384,79 @@ describe("agent runtime plan semantics", function () {
         ).length,
         1,
       );
-      assert.include(
+      assert.equal(
         session.toolExecutionState?.results.find(
           (result) => result.toolCall.id === "scholarly-after-hosted",
-        )?.content || "",
-        "Category: budget_exhausted",
+        )?.status,
+        "completed",
       );
     } finally {
       (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
     }
+  });
+
+  it("removes both local search tools for a non-hosted provider after local budget exhaustion", function () {
+    const runtime = new AgentRuntime({} as any, {} as any, {} as any) as any;
+    const session = createSession();
+    session.toolExecutionState = {
+      turnStartedAt: 1,
+      updatedAt: 1,
+      results: [
+        {
+          toolCall: {
+            id: "local-scholarly-budget",
+            type: "function",
+            function: {
+              name: "search_scholarly_sources",
+              arguments: JSON.stringify({ query: "local evidence" }),
+            },
+          },
+          args: { query: "local evidence" },
+          status: "completed",
+          content: "Local scholarly result.",
+        },
+      ],
+    };
+    const tools = [
+      {
+        type: "function" as const,
+        function: {
+          name: "web_search",
+          description: "Local web",
+          parameters: { type: "object" as const, properties: {} },
+        },
+      },
+      {
+        type: "function" as const,
+        function: {
+          name: "search_scholarly_sources",
+          description: "Local scholarly",
+          parameters: { type: "object" as const, properties: {} },
+        },
+      },
+      {
+        type: "function" as const,
+        function: {
+          name: "search_items",
+          description: "Zotero",
+          parameters: { type: "object" as const, properties: {} },
+        },
+      },
+    ];
+
+    const control = runtime.createIterationControl(
+      1,
+      tools,
+      3,
+      session,
+      { maxFullTextCallsPerTurn: 1, maxWebSearchCallsPerTurn: 1 },
+      false,
+    );
+
+    assert.deepEqual(
+      control.toolsForRound.map((tool: ToolDefinition) => tool.function.name),
+      ["search_items"],
+    );
   });
 
   it("does not replay a completed tool when later streaming retries are exhausted", async function () {
@@ -1857,11 +3329,21 @@ describe("agent runtime plan semantics", function () {
       false,
     );
     const runtimePrompt = generateAgentRuntimeContextPrompt(undefined, {
+      searchScope: "web_allowed",
+      searchToolMode: "split",
       runtimeLimits: {
         hardIterationLimit: 4,
         currentIteration: 2,
         remainingIterations: 3,
         forceFinalAnswer: false,
+      },
+      toolBudget: {
+        webSearchUsed: 1,
+        webSearchLimit: 2,
+        webSearchRemaining: 1,
+        getFullTextUsed: 0,
+        getFullTextLimit: 1,
+        getFullTextRemaining: 1,
       },
     });
 
@@ -1872,6 +3354,11 @@ describe("agent runtime plan semantics", function () {
     assert.notInclude(stablePrompt, "FINAL ANSWER REQUIREMENTS");
     assert.include(runtimePrompt, "Current iteration: 2/4");
     assert.include(runtimePrompt, "FINAL ANSWER REQUIREMENTS");
+    assert.include(runtimePrompt, "EXTERNAL SEARCH SCOPE");
+    assert.include(runtimePrompt, "Do not call select_search_scope again");
+    assert.include(runtimePrompt, "call web_search before answering");
+    assert.include(runtimePrompt, "local external-search budget");
+    assert.include(runtimePrompt, "vendor-hosted web_search is not counted");
   });
 
   it("routes hosted web and local scholarly search by evidence type", function () {
@@ -1882,7 +3369,7 @@ describe("agent runtime plan semantics", function () {
       false,
       undefined,
       undefined,
-      true,
+      "split",
     );
 
     assert.include(
@@ -1899,8 +3386,75 @@ describe("agent runtime plan semantics", function () {
     );
     assert.include(
       prompt,
+      "This turn's selected scope permits ordinary web evidence",
+    );
+    assert.include(
+      prompt,
+      "call web_search before answering; do not stop after reporting the scholarly-search failure",
+    );
+    assert.include(
+      prompt,
       "If the user requires Scholar, OpenAlex, or scholarly-only sources, do not downgrade",
     );
+  });
+
+  it("asks the model to select a per-turn search scope before searching", function () {
+    const prompt = generatePaperContextPrompt(
+      undefined,
+      undefined,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      "gated",
+    );
+
+    assert.include(prompt, "call select_search_scope");
+    assert.include(prompt, "do not claim that external search is unavailable");
+    assert.include(prompt, "permission boundary, not a search preference");
+    assert.include(prompt, "choose scholarly_then_web");
+    assert.include(prompt, "scholarly search is required first");
+    assert.include(prompt, "previous turn's scope does not apply");
+    assert.notInclude(prompt, "- web_search:");
+    assert.notInclude(prompt, "- search_scholarly_sources:");
+  });
+
+  it("removes hosted web search from scholarly-only prompt guidance", function () {
+    const prompt = generatePaperContextPrompt(
+      undefined,
+      undefined,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      "scholarly_only",
+    );
+
+    assert.include(
+      prompt,
+      "this is the only external-search tool available in this turn",
+    );
+    assert.include(
+      prompt,
+      "Hosted or ordinary web search is intentionally unavailable",
+    );
+    assert.notInclude(prompt, "use web_search directly");
+  });
+
+  it("does not advertise external search when the user prohibited it", function () {
+    const prompt = generatePaperContextPrompt(
+      undefined,
+      undefined,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      "none",
+    );
+
+    assert.include(prompt, "External search is unavailable in this turn");
+    assert.notInclude(prompt, "- web_search:");
+    assert.notInclude(prompt, "- search_scholarly_sources:");
   });
 
   it("persists only trusted evidence referenced by the final answer", async function () {

@@ -78,7 +78,7 @@ describe("agent trace eval harness", function () {
       "permission_denied",
     ]);
     assert.includeMembers(getToolCompletionPolicies(result), [
-      "web_search:denied:scheduler:permission_decision",
+      "web_search:denied:planner:permission_decision",
       "get_item_metadata:completed:executor:none",
     ]);
     assertAssistantContentMatches(result, "answer without web search");

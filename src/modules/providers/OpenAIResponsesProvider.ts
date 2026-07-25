@@ -40,6 +40,7 @@ interface LocalMessageDescriptor {
 
 interface PreviousOutputDescriptor {
   text: string;
+  visibleText: string;
   toolCallIds: string[];
 }
 
@@ -83,50 +84,13 @@ export interface ResponsesStreamHandlers {
 }
 
 const conversationStates = new Map<string, ResponsesConversationState>();
-const activeSessionProtocols = new Map<
-  string,
-  { modelId: string; protocol: "chat_completions" | "responses" }
->();
 
 function conversationKey(sessionId: string, modelId: string): string {
   return `${sessionId}\u0000${modelId}`;
 }
 
-function clearSessionConversationStates(sessionId: string): void {
-  const prefix = `${sessionId}\u0000`;
-  for (const key of conversationStates.keys()) {
-    if (key.startsWith(prefix)) {
-      conversationStates.delete(key);
-    }
-  }
-}
-
-/**
- * A Responses chain is valid only while one PaperChat session stays on the
- * same model and protocol. Local ChatMessage history remains the durable
- * source of truth when this binding changes.
- */
-export function bindPaperChatSessionProtocol(
-  sessionId: string | undefined,
-  modelId: string,
-  protocol: "chat_completions" | "responses",
-): void {
-  if (!sessionId) {
-    return;
-  }
-  const previous = activeSessionProtocols.get(sessionId);
-  if (
-    previous &&
-    (previous.modelId !== modelId || previous.protocol !== protocol)
-  ) {
-    clearSessionConversationStates(sessionId);
-  }
-  activeSessionProtocols.set(sessionId, { modelId, protocol });
-}
-
 export function resetOpenAIResponsesStateForTests(): void {
   conversationStates.clear();
-  activeSessionProtocols.clear();
 }
 
 function hashText(value: string): string {
@@ -205,15 +169,48 @@ function isPreviousOutputMessage(
   if (message.role !== "assistant") {
     return false;
   }
-  if (output.toolCallIds.length > 0 && message.tool_calls?.length) {
+  if (output.toolCallIds.length > 0) {
+    if (!message.tool_calls?.length) {
+      return false;
+    }
     const messageIds = new Set(message.tool_calls.map((call) => call.id));
-    return output.toolCallIds.every((id) => messageIds.has(id));
+    return (
+      messageIds.size === output.toolCallIds.length &&
+      output.toolCallIds.every((id) => messageIds.has(id))
+    );
   }
   if (!output.text) {
     return false;
   }
-  return (
-    message.content === output.text || message.content.endsWith(output.text)
+  return normalizeVisibleAssistantText(message.content) === output.visibleText;
+}
+
+function normalizeVisibleAssistantText(value: string): string {
+  return value
+    .split(/\n?<tool-call\b[^>]*>[\s\S]*?<\/tool-call>\n?/gi)
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function describeVisibleOutput(
+  localMessages: ChatMessage[],
+  responseText: string,
+): string {
+  const latestUserIndex = localMessages.findLastIndex(
+    (message) => message.role === "user",
+  );
+  const precedingRoundText = localMessages
+    .slice(latestUserIndex + 1)
+    .filter(
+      (message) =>
+        message.role === "assistant" &&
+        !!message.tool_calls?.length &&
+        !!message.content,
+    )
+    .map((message) => message.content);
+  return normalizeVisibleAssistantText(
+    [...precedingRoundText, responseText].join("\n"),
   );
 }
 
@@ -297,33 +294,35 @@ function findIncrementalMessages(
 
   for (let index = incremental.length - 1; index >= 0; index--) {
     if (isPreviousOutputMessage(incremental[index], state.lastOutput)) {
+      if (
+        incremental.slice(0, index).some((message) => message.role === "user")
+      ) {
+        continue;
+      }
       incremental.splice(index, 1);
+      if (incremental.some((message) => message.role === "assistant")) {
+        return { compatible: false, messages: [] };
+      }
       return { compatible: true, messages: incremental };
     }
   }
 
-  // A Responses function_call must be followed by its matching local tool
-  // output. prepareLocalMessages has already removed incomplete tool blocks,
-  // so a missing assistant call here means the turn was cancelled or lost and
-  // this response chain can no longer be continued safely.
-  if (state.lastOutput.toolCallIds.length > 0) {
+  // Every committed Responses output must still have a matching local
+  // assistant message. Otherwise a cancel/delete race could resume a chain
+  // containing an answer that is no longer visible in PaperChat. Tool calls
+  // additionally require their matching local output exchange.
+  if (
+    state.lastOutput.toolCallIds.length > 0 ||
+    state.lastOutput.visibleText.length > 0
+  ) {
     return { compatible: false, messages: [] };
   }
 
-  // The visible assistant message may be sanitized or decorated after the API
-  // response (for example, tool cards or trusted citation cleanup). In a new
-  // user turn it is still the immediately preceding model output and already
-  // belongs to the Responses chain, so do not replay it a second time.
-  const lastNewUserIndex = incremental.findLastIndex(
-    (message) => message.role === "user",
-  );
-  if (lastNewUserIndex > 0) {
-    for (let index = lastNewUserIndex - 1; index >= 0; index--) {
-      if (incremental[index].role === "assistant") {
-        incremental.splice(index, 1);
-        break;
-      }
-    }
+  // An unmatched assistant message may belong to a different model or a
+  // replacement/reroll. Only skip a visible assistant message when the loop
+  // above can positively identify it as this chain's previous output.
+  if (incremental.some((message) => message.role === "assistant")) {
+    return { compatible: false, messages: [] };
   }
   return { compatible: true, messages: incremental };
 }
@@ -418,9 +417,6 @@ function convertTools(
   const converted: ResponsesInputItem[] = [];
   let addedHostedWebSearch = false;
   for (const tool of tools || []) {
-    if (tool.function.name === "search_scholarly_sources" && !hostedWebSearch) {
-      continue;
-    }
     if (hostedWebSearch && tool.function.name === "web_search") {
       if (!addedHostedWebSearch) {
         converted.push({ type: "web_search_preview" });
@@ -1242,9 +1238,14 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
       localMessages: plan.localDescriptors,
       lastOutput: {
         text: extractResponsesText(response),
+        visibleText: "",
         toolCallIds: toolCalls.map((call) => call.id),
       },
     };
+    nextState.lastOutput.visibleText = describeVisibleOutput(
+      plan.localMessages,
+      nextState.lastOutput.text,
+    );
     if (
       response.store === false ||
       (forceStateless && response.store !== true)

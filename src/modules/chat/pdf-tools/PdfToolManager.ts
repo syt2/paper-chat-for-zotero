@@ -66,6 +66,7 @@ import {
   type NativeOutlineExtraction,
 } from "./nativeOutlineExtractor";
 import type { AgentPromptContext } from "./promptGenerator";
+import type { SearchToolPromptMode } from "../agent-runtime/SearchScopeGate";
 import { generatePaperContextPrompt as generatePaperContextPromptFn } from "./promptGenerator";
 import { createSearchToolDefinitions } from "./SearchToolDefinitions";
 import {
@@ -1680,7 +1681,7 @@ export class PdfToolManager {
     hasCurrentItem: boolean = true,
     memoryContext?: string,
     agentContext?: AgentPromptContext,
-    splitSearchTools: boolean = false,
+    searchToolMode: SearchToolPromptMode = "unified",
   ): string {
     return generatePaperContextPromptFn(
       currentPaperStructure,
@@ -1689,7 +1690,7 @@ export class PdfToolManager {
       hasCurrentItem,
       memoryContext,
       agentContext,
-      splitSearchTools,
+      searchToolMode,
     );
   }
 }

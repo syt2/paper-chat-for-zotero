@@ -179,9 +179,11 @@ function getDirectiveTemplate(
         immediateAction:
           toolName === "get_full_text"
             ? "Do not call get_full_text again in this turn. Use the evidence already collected or continue without full text."
-            : "Do not spend more web-search budget in this turn. Use the results already gathered or pivot to local tools.",
+            : "Do not retry local web or scholarly search in this turn. Use the results already gathered. If vendor-hosted web_search is exposed and ordinary web evidence is allowed, it may still be used because it is outside this local budget.",
         planningInstruction:
-          "For budget-exhausted tools, treat the runtime limit as final for this turn. Replan with narrower or cheaper tools instead of retrying.",
+          toolName === "get_full_text"
+            ? "For budget-exhausted tools, treat the runtime limit as final for this turn. Replan with narrower or cheaper tools instead of retrying."
+            : "Treat the local external-search limit as final for this turn. Do not retry a local search; use vendor-hosted web_search only when it is actually exposed and the selected scope permits ordinary web evidence.",
       };
     case "evidence_required":
       return {
@@ -262,7 +264,7 @@ function getDefaultAlternative(
     case "budget_exhausted":
       return toolName === "web_search" ||
         toolName === "search_scholarly_sources"
-        ? "Use Zotero library tools or the current-turn web results instead of another search."
+        ? "Use Zotero library tools or current-turn results. Vendor-hosted web_search remains an option only when it is exposed and ordinary web evidence is allowed."
         : "Use the evidence already gathered or synthesize without another full-text fetch.";
     case "evidence_required":
       return "Use narrower paper tools on the same target before another full-text fetch.";
@@ -326,7 +328,7 @@ function getRecommendedTools(
     case "budget_exhausted":
       return toolName === "web_search" ||
         toolName === "search_scholarly_sources"
-        ? ["search_items", "search_notes", "list_all_items"]
+        ? ["web_search", "search_items", "search_notes", "list_all_items"]
         : dedupeStrings([
             ...getReaderIndependentFallbacks(toolName),
             "get_paper_section",

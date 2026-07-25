@@ -106,6 +106,7 @@ import {
 } from "./agent-runtime/AgentRuntime";
 import { normalizeAgentMaxPlanningIterations } from "./agent-runtime/IterationLimitConfig";
 import {
+  countHostedWebSearchResults,
   createToolBudgetState,
   getToolBudgetLimits,
 } from "./tool-budget/ToolBudgetPolicy";
@@ -117,6 +118,15 @@ import type {
   SearchHistoryGroupsRequest,
   SearchHistorySessionMatchesRequest,
 } from "./search/SearchTypes";
+import {
+  createPendingSearchScopeTools,
+  filterSearchToolsForScope,
+  findCompletedSearchScope,
+  getSearchToolPromptMode,
+  type SearchScopeGateConfig,
+  type SearchToolPromptMode,
+  type SelectedSearchScope,
+} from "./agent-runtime/SearchScopeGate";
 // V1 migration now handled by migrateToSQLite.ts at startup
 
 const SUPPRESS_AUTOMATIC_RETRY = "paperChatSuppressAutomaticRetry";
@@ -404,16 +414,15 @@ export class ChatManager {
   private getToolDefinitionsForProvider(
     provider: AIProvider | null | undefined,
     hasCurrentItem: boolean,
+    searchScope?: SelectedSearchScope,
   ): ToolDefinition[] {
     const supportsHostedWebSearch =
       provider?.supportsHostedWebSearch?.() === true;
-    return getPdfToolManager()
-      .getToolDefinitions(hasCurrentItem)
-      .filter(
-        (tool) =>
-          supportsHostedWebSearch ||
-          tool.function.name !== "search_scholarly_sources",
-      )
+    return filterSearchToolsForScope({
+      tools: getPdfToolManager().getToolDefinitions(hasCurrentItem),
+      supportsHostedWebSearch,
+      scope: searchScope,
+    })
       .slice()
       .sort((left, right) =>
         left.function.name.localeCompare(right.function.name),
@@ -426,9 +435,9 @@ export class ChatManager {
     >;
     hasCurrentItem: boolean;
     item?: Zotero.Item;
-    splitSearchTools?: boolean;
+    searchToolMode?: SearchToolPromptMode;
   }): string {
-    const { paperStructure, hasCurrentItem, item, splitSearchTools } = params;
+    const { paperStructure, hasCurrentItem, item, searchToolMode } = params;
     const pdfToolManager = getPdfToolManager();
 
     return pdfToolManager.generatePaperContextPrompt(
@@ -438,7 +447,7 @@ export class ChatManager {
       hasCurrentItem,
       undefined,
       undefined,
-      splitSearchTools,
+      searchToolMode,
     );
   }
 
@@ -456,6 +465,8 @@ export class ChatManager {
   private buildToolCallingRuntimeSystemPrompt(params: {
     memoryContext?: string;
     selectedSkills?: SelectedPaperChatSkill[];
+    searchScope?: SelectedSearchScope;
+    searchToolMode?: SearchToolPromptMode;
     sendingSession: ChatSession;
     runtimeState?: {
       currentIteration?: number;
@@ -464,8 +475,14 @@ export class ChatManager {
       forceFinalAnswer: boolean;
     };
   }): string {
-    const { memoryContext, selectedSkills, sendingSession, runtimeState } =
-      params;
+    const {
+      memoryContext,
+      selectedSkills,
+      searchScope,
+      searchToolMode,
+      sendingSession,
+      runtimeState,
+    } = params;
     const allToolResults = sendingSession.toolExecutionState?.results || [];
     const recentToolResults = allToolResults.slice(-5);
     const hardIterationLimit =
@@ -480,6 +497,8 @@ export class ChatManager {
       executionPlan: sendingSession.executionPlan,
       recentToolResults,
       selectedSkills,
+      searchScope,
+      searchToolMode,
       runtimeLimits: {
         hardIterationLimit,
         currentIteration: runtimeState?.currentIteration,
@@ -1043,6 +1062,11 @@ export class ChatManager {
         provider,
         hasCurrentItem,
       );
+      const searchScopeGateEnabled =
+        provider?.supportsHostedWebSearch?.() === true;
+      if (searchScopeGateEnabled) {
+        toolDefinitions = createPendingSearchScopeTools(toolDefinitions);
+      }
       const paperStructure = hasCurrentItem
         ? await pdfToolManager.extractAndParsePaper(item.key)
         : undefined;
@@ -1061,8 +1085,9 @@ export class ChatManager {
         paperStructure,
         hasCurrentItem,
         item: hasCurrentItem ? item : undefined,
-        splitSearchTools: toolDefinitions.some(
-          (tool) => tool.function.name === "search_scholarly_sources",
+        searchToolMode: getSearchToolPromptMode(
+          toolDefinitions,
+          searchScopeGateEnabled,
         ),
       });
       runtimeContextPrompt = this.buildToolCallingRuntimeSystemPrompt({
@@ -2754,8 +2779,28 @@ export class ChatManager {
       this.ensureTrackedRun(sendingSession, sessionRunId);
     };
 
-    // 获取动态工具列表
-    const tools = this.getToolDefinitionsForProvider(_provider, hasCurrentItem);
+    let searchScopeGateEnabled = false;
+    let selectedSearchScope = preserveToolExecutionState
+      ? findCompletedSearchScope(
+          sendingSession.toolExecutionState?.results || [],
+        )
+      : undefined;
+    const buildToolsForCurrentSearchScope = (
+      provider: AIProvider | null | undefined,
+    ): ToolDefinition[] => {
+      searchScopeGateEnabled = provider?.supportsHostedWebSearch?.() === true;
+      const scopedTools = this.getToolDefinitionsForProvider(
+        provider,
+        hasCurrentItem,
+        selectedSearchScope,
+      );
+      return searchScopeGateEnabled && !selectedSearchScope
+        ? createPendingSearchScopeTools(scopedTools)
+        : scopedTools;
+    };
+    const tools = buildToolsForCurrentSearchScope(_provider);
+    const getStableSearchToolMode = (): SearchToolPromptMode =>
+      searchScopeGateEnabled ? "gated" : getSearchToolPromptMode(tools);
 
     // 实时提取论文结构
     const paperStructure = hasCurrentItem
@@ -2791,6 +2836,11 @@ export class ChatManager {
       this.buildToolCallingRuntimeSystemPrompt({
         memoryContext,
         selectedSkills,
+        searchScope: selectedSearchScope,
+        searchToolMode: getSearchToolPromptMode(
+          tools,
+          searchScopeGateEnabled && !selectedSearchScope,
+        ),
         sendingSession,
         runtimeState,
       });
@@ -2799,9 +2849,7 @@ export class ChatManager {
       paperStructure,
       hasCurrentItem,
       item: hasCurrentItem ? item : undefined,
-      splitSearchTools: tools.some(
-        (tool) => tool.function.name === "search_scholarly_sources",
-      ),
+      searchToolMode: getStableSearchToolMode(),
     });
     const runtimeContextPrompt = buildRuntimeSystemPrompt(
       messagesForApi,
@@ -2887,31 +2935,31 @@ export class ChatManager {
         ),
         forceFinalAnswer: false,
       };
-      const refreshSearchToolsForCurrentModel = () => {
-        const nextTools = this.getToolDefinitionsForProvider(
-          currentProvider,
-          hasCurrentItem,
-        );
+      const refreshSearchToolsForCurrentModel = (
+        refreshStablePrompt: boolean = true,
+      ) => {
+        const nextTools = buildToolsForCurrentSearchScope(currentProvider);
         tools.splice(0, tools.length, ...nextTools);
-        paperContextPrompt = this.buildToolCallingStableSystemPrompt({
-          paperStructure,
-          hasCurrentItem,
-          item: hasCurrentItem ? item : undefined,
-          splitSearchTools: tools.some(
-            (tool) => tool.function.name === "search_scholarly_sources",
-          ),
-        });
+        if (refreshStablePrompt) {
+          paperContextPrompt = this.buildToolCallingStableSystemPrompt({
+            paperStructure,
+            hasCurrentItem,
+            item: hasCurrentItem ? item : undefined,
+            searchToolMode: getStableSearchToolMode(),
+          });
+        }
       };
       const syncModelSpecificRequestContext = () => {
         const isDeepSeek = isDeepSeekToolPromptCacheTarget(
           currentProvider,
           failedPaperChatModelId || sendingSession.resolvedModelId,
         );
+        const useStableDeepSeekCatalog = isDeepSeek && !searchScopeGateEnabled;
         const paperContextMessage = attemptMessagesWithContext.find(
           (message) => message.id === "paper-context",
         );
         if (paperContextMessage) {
-          paperContextMessage.content = isDeepSeek
+          paperContextMessage.content = useStableDeepSeekCatalog
             ? `${paperContextPrompt}\n\n${buildStableToolCatalogForPromptCache(tools)}`
             : paperContextPrompt;
         }
@@ -2927,7 +2975,7 @@ export class ChatManager {
             attemptMessagesWithContext.splice(index, 1);
           }
         }
-        if (!isDeepSeek) {
+        if (!useStableDeepSeekCatalog) {
           attemptMessagesWithContext.push(
             {
               id: "cache-checkpoint",
@@ -2950,6 +2998,13 @@ export class ChatManager {
         }
       };
       syncModelSpecificRequestContext();
+      const searchScopeGate: SearchScopeGateConfig = {
+        onScopeSelected: (scope) => {
+          selectedSearchScope = scope;
+          refreshSearchToolsForCurrentModel();
+          syncModelSpecificRequestContext();
+        },
+      };
       const runtimePromptBuilder = (
         currentMessages: ChatMessage[],
         session: ChatSession,
@@ -2964,33 +3019,48 @@ export class ChatManager {
         return isDeepSeekToolPromptCacheTarget(
           currentProvider,
           failedPaperChatModelId || sendingSession.resolvedModelId,
-        )
+        ) && !searchScopeGateEnabled
           ? null
           : buildRuntimeSystemPrompt(currentMessages, session, runtimeState);
       };
 
       const executeProviderRequest = async <T>(
         operation: () => Promise<T>,
-      ): Promise<T> =>
-        providerManager.executeWithRetry(
+        onProviderRerouted?: () => void,
+      ): Promise<T> => {
+        const runOperationWithHostedSearchGuard = async (): Promise<T> => {
+          ensureSendingSessionTracked();
+          const hostedSearchesBeforeAttempt = countHostedWebSearchResults(
+            sendingSession.toolExecutionState?.results || [],
+          );
+          try {
+            return await operation();
+          } catch (error) {
+            const hostedSearchesAfterAttempt = countHostedWebSearchResults(
+              sendingSession.toolExecutionState?.results || [],
+            );
+            if (hostedSearchesAfterAttempt > hostedSearchesBeforeAttempt) {
+              const guardedError = (
+                error instanceof Error ? error : new Error(String(error))
+              ) as RetryGuardedError;
+              guardedError[SUPPRESS_AUTOMATIC_RETRY] = true;
+              throw guardedError;
+            }
+            throw error;
+          }
+        };
+
+        return providerManager.executeWithRetry(
           currentProvider,
           async () => {
-            ensureSendingSessionTracked();
-            const searchCallsBeforeAttempt = createToolBudgetState(
-              sendingSession.toolExecutionState?.results || [],
-            ).webSearchCalls;
             try {
-              return await operation();
+              return await runOperationWithHostedSearchGuard();
             } catch (error) {
-              const searchCallsAfterAttempt = createToolBudgetState(
-                sendingSession.toolExecutionState?.results || [],
-              ).webSearchCalls;
-              if (searchCallsAfterAttempt > searchCallsBeforeAttempt) {
-                const guardedError = (
-                  error instanceof Error ? error : new Error(String(error))
-                ) as RetryGuardedError;
-                guardedError[SUPPRESS_AUTOMATIC_RETRY] = true;
-                throw guardedError;
+              if (
+                error instanceof Error &&
+                (error as RetryGuardedError)[SUPPRESS_AUTOMATIC_RETRY] === true
+              ) {
+                throw error;
               }
               const reroute = await this.reroutePaperChatSessionForHardFailure({
                 session: sendingSession,
@@ -3009,11 +3079,13 @@ export class ChatManager {
               failedPaperChatModelId = reroute.nextModel;
               refreshSearchToolsForCurrentModel();
               syncModelSpecificRequestContext();
-              return operation();
+              onProviderRerouted?.();
+              return runOperationWithHostedSearchGuard();
             }
           },
           this.createProviderRetryOptions(abortSignal),
         );
+      };
 
       if (providerSupportsStreamingToolCalling(currentProvider)) {
         ztoolkit.log(
@@ -3032,6 +3104,7 @@ export class ChatManager {
           runtimePromptBuilder,
           executeProviderRequest,
           preserveToolExecutionState,
+          searchScopeGate,
           abortSignal,
         );
       } else {
@@ -3051,6 +3124,7 @@ export class ChatManager {
           runtimePromptBuilder,
           executeProviderRequest,
           preserveToolExecutionState,
+          searchScopeGate,
           abortSignal,
         );
       }
@@ -3232,8 +3306,12 @@ export class ChatManager {
           },
         ) => string | null)
       | undefined,
-    executeProviderRequest: <T>(operation: () => Promise<T>) => Promise<T>,
+    executeProviderRequest: <T>(
+      operation: () => Promise<T>,
+      onProviderRerouted?: () => void,
+    ) => Promise<T>,
     preserveToolExecutionState: boolean,
+    searchScopeGate?: SearchScopeGateConfig,
     abortSignal?: AbortSignal,
   ): Promise<void> {
     await this.agentRuntime.executeStreamingToolLoop({
@@ -3250,6 +3328,7 @@ export class ChatManager {
       abortSignal,
       executeProviderRequest,
       preserveToolExecutionState,
+      searchScopeGate,
       refreshSystemPrompt: buildSystemPrompt,
     });
     clearPaperChatRetryableState(sendingSession);
@@ -3284,8 +3363,12 @@ export class ChatManager {
           },
         ) => string | null)
       | undefined,
-    executeProviderRequest: <T>(operation: () => Promise<T>) => Promise<T>,
+    executeProviderRequest: <T>(
+      operation: () => Promise<T>,
+      onProviderRerouted?: () => void,
+    ) => Promise<T>,
     preserveToolExecutionState: boolean,
+    searchScopeGate?: SearchScopeGateConfig,
     abortSignal?: AbortSignal,
   ): Promise<void> {
     await this.agentRuntime.executeNonStreamingToolLoop({
@@ -3302,6 +3385,7 @@ export class ChatManager {
       abortSignal,
       executeProviderRequest,
       preserveToolExecutionState,
+      searchScopeGate,
       refreshSystemPrompt: buildSystemPrompt,
     });
     clearPaperChatRetryableState(sendingSession);

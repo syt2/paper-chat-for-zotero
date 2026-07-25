@@ -4,6 +4,7 @@ import {
   getAuthManager,
 } from "../src/modules/auth/index.ts";
 import { ChatManager } from "../src/modules/chat/ChatManager.ts";
+import { filterSearchToolsForScope } from "../src/modules/chat/agent-runtime/SearchScopeGate.ts";
 import {
   destroyContextManager,
   getContextManager,
@@ -1787,7 +1788,7 @@ describe("paperchat storage and chat manager", function () {
     assert.equal(delegateConfig.defaultModel, "m3");
   });
 
-  it("routes only declared models through Responses and resets state across protocol switches", async function () {
+  it("reuses an untouched model chain but resets it after another model answers", async function () {
     prefStore.set(`${PREFS_PREFIX}.apiKey`, "test-key");
     prefStore.set(`${PREFS_PREFIX}.userId`, 1);
     prefStore.set(`${PREFS_PREFIX}.username`, "tester");
@@ -1859,6 +1860,7 @@ describe("paperchat storage and chat manager", function () {
         { id: "u1", role: "user", content: "first", timestamp: 1 },
       ]);
       provider.updateConfig({ resolvedModelOverride: "chatModel" });
+      provider.updateConfig({ resolvedModelOverride: "responseModel" });
       await provider.chatCompletion([
         { id: "u1", role: "user", content: "first", timestamp: 1 },
         {
@@ -1868,6 +1870,24 @@ describe("paperchat storage and chat manager", function () {
           timestamp: 2,
         },
         { id: "u2", role: "user", content: "second", timestamp: 3 },
+      ]);
+      provider.updateConfig({ resolvedModelOverride: "chatModel" });
+      await provider.chatCompletion([
+        { id: "u1", role: "user", content: "first", timestamp: 1 },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "response answer",
+          timestamp: 2,
+        },
+        { id: "u2", role: "user", content: "second", timestamp: 3 },
+        {
+          id: "a2",
+          role: "assistant",
+          content: "response answer",
+          timestamp: 4,
+        },
+        { id: "u3", role: "user", content: "third", timestamp: 5 },
       ]);
       provider.updateConfig({ resolvedModelOverride: "responseModel" });
       await provider.chatCompletion([
@@ -1882,17 +1902,29 @@ describe("paperchat storage and chat manager", function () {
         {
           id: "a2",
           role: "assistant",
-          content: "chat answer",
+          content: "response answer",
           timestamp: 4,
         },
         { id: "u3", role: "user", content: "third", timestamp: 5 },
+        {
+          id: "a3",
+          role: "assistant",
+          content: "chat answer",
+          timestamp: 6,
+        },
+        { id: "u4", role: "user", content: "fourth", timestamp: 7 },
       ]);
 
       assert.match(requests[0].url, /\/responses$/);
-      assert.match(requests[1].url, /\/chat\/completions$/);
-      assert.match(requests[2].url, /\/responses$/);
-      assert.notProperty(requests[2].body, "previous_response_id");
-      assert.lengthOf(requests[2].body.input as unknown[], 5);
+      assert.match(requests[1].url, /\/responses$/);
+      assert.equal(requests[1].body.previous_response_id, "resp_1");
+      assert.deepEqual(requests[1].body.input, [
+        { role: "user", content: "second" },
+      ]);
+      assert.match(requests[2].url, /\/chat\/completions$/);
+      assert.match(requests[3].url, /\/responses$/);
+      assert.notProperty(requests[3].body, "previous_response_id");
+      assert.lengthOf(requests[3].body.input as unknown[], 7);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1913,6 +1945,13 @@ describe("paperchat storage and chat manager", function () {
           },
         },
         localOnly: { tierCode: 2 },
+        localResponses: {
+          tierCode: 2,
+          apiCapabilities: {
+            responses: true,
+            hostedWebSearch: false,
+          },
+        },
       }),
     );
     loadCachedRatios();
@@ -1944,6 +1983,9 @@ describe("paperchat storage and chat manager", function () {
         },
       },
     ];
+    const scholarlyOnlyTools = tools.filter(
+      (tool) => tool.function.name === "search_scholarly_sources",
+    );
     const requests: Array<{ url: string; body: Record<string, any> }> = [];
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input, init) => {
@@ -1985,7 +2027,7 @@ describe("paperchat storage and chat manager", function () {
         order: 0,
         resolvedModelOverride: "vendorCapable",
         requestSessionId: "session-split-search-tools",
-        availableModels: ["vendorCapable", "localOnly"],
+        availableModels: ["vendorCapable", "localOnly", "localResponses"],
       });
 
       assert.isTrue(provider.supportsHostedWebSearch());
@@ -1993,11 +2035,39 @@ describe("paperchat storage and chat manager", function () {
         [{ id: "u1", role: "user", content: "first", timestamp: 1 }],
         tools,
       );
+      await provider.chatCompletionWithTools(
+        [{ id: "u-scholar", role: "user", content: "second", timestamp: 2 }],
+        scholarlyOnlyTools,
+      );
       provider.updateConfig({ resolvedModelOverride: "localOnly" });
       assert.isFalse(provider.supportsHostedWebSearch());
       await provider.chatCompletionWithTools(
-        [{ id: "u2", role: "user", content: "second", timestamp: 2 }],
+        [{ id: "u2", role: "user", content: "second", timestamp: 3 }],
         tools,
+      );
+      await provider.chatCompletionWithTools(
+        [
+          {
+            id: "u-local-scholar",
+            role: "user",
+            content: "fourth",
+            timestamp: 4,
+          },
+        ],
+        scholarlyOnlyTools,
+      );
+      provider.updateConfig({ resolvedModelOverride: "localResponses" });
+      assert.isFalse(provider.supportsHostedWebSearch());
+      await provider.chatCompletionWithTools(
+        [
+          {
+            id: "u-local-responses-scholar",
+            role: "user",
+            content: "fifth",
+            timestamp: 5,
+          },
+        ],
+        scholarlyOnlyTools,
       );
 
       assert.match(requests[0].url, /\/responses$/);
@@ -2013,18 +2083,58 @@ describe("paperchat storage and chat manager", function () {
             tool.name === "search_scholarly_sources",
         ),
       );
-      assert.match(requests[1].url, /\/chat\/completions$/);
+      assert.match(requests[1].url, /\/responses$/);
+      assert.isFalse(
+        requests[1].body.tools.some(
+          (tool: any) => tool.type === "web_search_preview",
+        ),
+      );
       assert.isTrue(
         requests[1].body.tools.some(
+          (tool: any) =>
+            tool.type === "function" &&
+            tool.name === "search_scholarly_sources",
+        ),
+      );
+      assert.match(requests[2].url, /\/chat\/completions$/);
+      assert.isTrue(
+        requests[2].body.tools.some(
           (tool: any) =>
             tool.type === "function" && tool.function?.name === "web_search",
         ),
       );
       assert.isFalse(
-        requests[1].body.tools.some(
+        requests[2].body.tools.some(
           (tool: any) =>
             tool.type === "function" &&
             tool.function?.name === "search_scholarly_sources",
+        ),
+      );
+      assert.match(requests[3].url, /\/chat\/completions$/);
+      assert.isFalse(
+        requests[3].body.tools.some(
+          (tool: any) =>
+            tool.type === "function" && tool.function?.name === "web_search",
+        ),
+      );
+      assert.isTrue(
+        requests[3].body.tools.some(
+          (tool: any) =>
+            tool.type === "function" &&
+            tool.function?.name === "search_scholarly_sources",
+        ),
+      );
+      assert.match(requests[4].url, /\/responses$/);
+      assert.isFalse(
+        requests[4].body.tools.some(
+          (tool: any) => tool.type === "web_search_preview",
+        ),
+      );
+      assert.isTrue(
+        requests[4].body.tools.some(
+          (tool: any) =>
+            tool.type === "function" &&
+            tool.name === "search_scholarly_sources",
         ),
       );
     } finally {
@@ -4310,6 +4420,377 @@ describe("paperchat storage and chat manager", function () {
       contextManager.compactBeforeSendIfNeeded =
         originalCompactBeforeSendIfNeeded;
       contextManager.filterMessages = originalFilterMessages;
+    }
+  });
+
+  it("does not retry when a rerouted model starts hosted web search", async function () {
+    const providerManager = getProviderManager() as any;
+    const originalExecuteWithRetry = providerManager.executeWithRetry;
+    let retryWrapperAttempts = 0;
+    let providerOperations = 0;
+    let rerouteAttempts = 0;
+    const session: ChatSession = {
+      id: "session-hosted-search-retry-guard",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      resolvedModelId: "hosted-model",
+      messages: [],
+    };
+    const provider = {
+      config: {
+        id: "paperchat",
+        type: "paperchat",
+        resolvedModelOverride: "hosted-model",
+      },
+      getName: () => "PaperChat",
+      supportsHostedWebSearch: () => true,
+    };
+
+    providerManager.executeWithRetry = async (
+      _provider: unknown,
+      operation: () => Promise<unknown>,
+    ) => {
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        retryWrapperAttempts += 1;
+        try {
+          return await operation();
+        } catch (error) {
+          lastError = error;
+          if (
+            (error as { paperChatSuppressAutomaticRetry?: boolean })
+              .paperChatSuppressAutomaticRetry === true
+          ) {
+            throw error;
+          }
+        }
+      }
+      throw lastError;
+    };
+
+    try {
+      const manager = Object.create(ChatManager.prototype) as any;
+      manager.memoryManager = { buildPromptContext: async () => "" };
+      manager.selectWorkflowSkills = async () => [];
+      manager.ensureTrackedRun = () => undefined;
+      manager.getToolDefinitionsForProvider = () => [];
+      manager.buildToolCallingStableSystemPrompt = () => "stable";
+      manager.buildToolCallingRuntimeSystemPrompt = () => "runtime";
+      manager.reroutePaperChatSessionForHardFailure = async () => {
+        rerouteAttempts += 1;
+        return rerouteAttempts === 1
+          ? {
+              previousModel: "initial-model",
+              nextModel: "hosted-model",
+              tier: "paperchat-lite",
+            }
+          : null;
+      };
+      manager.agentRuntime = {
+        executeNonStreamingToolLoop: async (options: any) =>
+          options.executeProviderRequest(async () => {
+            providerOperations += 1;
+            if (providerOperations === 1) {
+              throw new Error("hard failure on initial model");
+            }
+            session.toolExecutionState = {
+              turnStartedAt: 1,
+              updatedAt: 2,
+              results: [
+                {
+                  toolCall: {
+                    id: "hosted-web-search:paid-attempt",
+                    type: "function",
+                    function: {
+                      name: "web_search",
+                      arguments: JSON.stringify({ query: "latest evidence" }),
+                    },
+                  },
+                  args: { query: "latest evidence" },
+                  status: "failed",
+                  content:
+                    "Error: Hosted web search failed.\nCategory: execution_failed",
+                },
+              ],
+            };
+            throw new Error("API Error: 504 - upstream timeout");
+          }),
+      };
+      manager.finalizeFailedAssistantMessage = async () => undefined;
+      manager.applyFailureStateSafely = async () => undefined;
+      manager.isSessionActive = () => false;
+      manager.generateId = () => "error-hosted-search";
+      manager.sessionStorage = {
+        insertMessage: async () => undefined,
+        updateSessionMeta: async () => undefined,
+      };
+
+      const result = await manager.sendMessageWithToolCalling(
+        provider,
+        [{ id: "user", role: "user", content: "search", timestamp: 1 }],
+        { id: "assistant", role: "assistant", content: "", timestamp: 2 },
+        false,
+        false,
+        false,
+        {} as Zotero.Item,
+        session,
+        1,
+        () => undefined,
+        false,
+      );
+
+      assert.isFalse(result);
+      assert.equal(providerOperations, 2);
+      assert.equal(retryWrapperAttempts, 1);
+      assert.equal(rerouteAttempts, 1);
+    } finally {
+      providerManager.executeWithRetry = originalExecuteWithRetry;
+    }
+  });
+
+  it("rebuilds the search-scope gate when a hard reroute changes hosted-search capability", async function () {
+    const providerManager = getProviderManager() as any;
+    const originalExecuteWithRetry = providerManager.executeWithRetry;
+    const allTools: ToolDefinition[] = [
+      {
+        type: "function",
+        function: {
+          name: "web_search",
+          description: "Web search",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "search_scholarly_sources",
+          description: "Scholarly search",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "search_items",
+          description: "Search Zotero",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+    ];
+
+    const runTransition = async (
+      initialHosted: boolean,
+      reroutedHosted: boolean,
+      restoredScope?: "web_allowed" | "scholarly_then_web",
+    ) => {
+      let hosted = initialHosted;
+      let requestCount = 0;
+      const requestTools: string[][] = [];
+      const promptModes: string[] = [];
+      let postSelectionTools: string[] | undefined;
+      let rerouteCallbacks = 0;
+      const provider = {
+        config: {
+          id: "paperchat",
+          type: "paperchat",
+          resolvedModelOverride: "initial-model",
+        },
+        getName: () => "PaperChat",
+        supportsHostedWebSearch: () => hosted,
+        updateConfig: (config: Record<string, unknown>) => {
+          Object.assign(provider.config, config);
+        },
+        chatCompletionWithTools: async (
+          _messages: ChatMessage[],
+          tools: ToolDefinition[],
+        ) => {
+          requestCount += 1;
+          requestTools.push(tools.map((tool) => tool.function.name));
+          if (requestCount === 1) {
+            throw new Error("hard model failure");
+          }
+          return { content: "ok" };
+        },
+      };
+      const session: ChatSession = {
+        id: `search-reroute-${initialHosted}-${reroutedHosted}`,
+        createdAt: 1,
+        updatedAt: 1,
+        lastActiveItemKey: null,
+        resolvedModelId: "initial-model",
+        messages: [],
+      };
+      if (restoredScope) {
+        session.toolExecutionState = {
+          turnStartedAt: 1,
+          updatedAt: 1,
+          results: [
+            {
+              toolCall: {
+                id: "restored-search-scope",
+                type: "function",
+                function: {
+                  name: "select_search_scope",
+                  arguments: JSON.stringify({
+                    scope: restoredScope,
+                    reason: "restored after a failed request",
+                  }),
+                },
+              },
+              args: {
+                scope: restoredScope,
+                reason: "restored after a failed request",
+              },
+              status: "completed",
+              content: "scope restored",
+            },
+          ],
+        };
+      }
+      const manager = Object.create(ChatManager.prototype) as any;
+      manager.memoryManager = {
+        buildPromptContext: async () => "",
+      };
+      manager.selectWorkflowSkills = async () => [];
+      manager.ensureTrackedRun = () => undefined;
+      manager.buildToolCallingStableSystemPrompt = (params: {
+        searchToolMode: string;
+      }) => {
+        promptModes.push(params.searchToolMode);
+        return params.searchToolMode;
+      };
+      manager.buildToolCallingRuntimeSystemPrompt = () => "runtime";
+      manager.getToolDefinitionsForProvider = (
+        currentProvider: typeof provider,
+        _hasCurrentItem: boolean,
+        scope: Parameters<typeof filterSearchToolsForScope>[0]["scope"],
+      ) =>
+        filterSearchToolsForScope({
+          tools: allTools,
+          supportsHostedWebSearch:
+            currentProvider.supportsHostedWebSearch() === true,
+          scope,
+        });
+      manager.reroutePaperChatSessionForHardFailure = async () => {
+        hosted = reroutedHosted;
+        provider.updateConfig({ resolvedModelOverride: "rerouted-model" });
+        session.resolvedModelId = "rerouted-model";
+        return {
+          previousModel: "initial-model",
+          nextModel: "rerouted-model",
+          tier: "paperchat-standard",
+        };
+      };
+      manager.agentRuntime = {
+        executeNonStreamingToolLoop: async (options: any) => {
+          await options.executeProviderRequest(
+            () => options.provider.chatCompletionWithTools([], options.tools),
+            () => {
+              rerouteCallbacks += 1;
+            },
+          );
+          if (reroutedHosted && !restoredScope) {
+            options.searchScopeGate.onScopeSelected("scholarly_only");
+            postSelectionTools = options.tools.map(
+              (tool: ToolDefinition) => tool.function.name,
+            );
+          } else if (
+            !reroutedHosted &&
+            restoredScope === "scholarly_then_web"
+          ) {
+            options.searchScopeGate.onScopeSelected("web_allowed");
+            postSelectionTools = options.tools.map(
+              (tool: ToolDefinition) => tool.function.name,
+            );
+          }
+        },
+      };
+      manager.sessionStorage = {
+        updateSessionMeta: async () => undefined,
+      };
+
+      await manager.sendMessageWithToolCalling(
+        provider,
+        [{ id: "user", role: "user", content: "search", timestamp: 1 }],
+        { id: "assistant", role: "assistant", content: "", timestamp: 2 },
+        false,
+        false,
+        false,
+        {} as Zotero.Item,
+        session,
+        1,
+        () => undefined,
+        !!restoredScope,
+      );
+
+      return {
+        requestTools,
+        promptModes,
+        postSelectionTools,
+        rerouteCallbacks,
+      };
+    };
+
+    providerManager.executeWithRetry = async (
+      _provider: unknown,
+      operation: () => Promise<unknown>,
+    ) => operation();
+
+    try {
+      const nonHostedToHosted = await runTransition(false, true);
+      assert.deepEqual(nonHostedToHosted.requestTools, [
+        ["web_search", "search_items"],
+        ["search_items", "select_search_scope"],
+      ]);
+      assert.deepEqual(nonHostedToHosted.promptModes, [
+        "unified",
+        "gated",
+        "gated",
+      ]);
+      assert.deepEqual(nonHostedToHosted.postSelectionTools, [
+        "search_scholarly_sources",
+        "search_items",
+      ]);
+      assert.equal(nonHostedToHosted.rerouteCallbacks, 1);
+
+      const hostedToNonHosted = await runTransition(true, false);
+      assert.deepEqual(hostedToNonHosted.requestTools, [
+        ["search_items", "select_search_scope"],
+        ["web_search", "search_items"],
+      ]);
+      assert.deepEqual(hostedToNonHosted.promptModes, ["gated", "unified"]);
+      assert.equal(hostedToNonHosted.rerouteCallbacks, 1);
+
+      const restoredHosted = await runTransition(true, true, "web_allowed");
+      assert.deepEqual(restoredHosted.promptModes, ["gated", "gated"]);
+      assert.deepEqual(restoredHosted.requestTools, [
+        ["web_search", "search_scholarly_sources", "search_items"],
+        ["web_search", "search_scholarly_sources", "search_items"],
+      ]);
+      assert.equal(restoredHosted.rerouteCallbacks, 1);
+
+      const restoredFallbackToLocal = await runTransition(
+        true,
+        false,
+        "scholarly_then_web",
+      );
+      assert.deepEqual(restoredFallbackToLocal.requestTools, [
+        ["search_scholarly_sources", "search_items"],
+        ["search_scholarly_sources", "search_items"],
+      ]);
+      assert.deepEqual(restoredFallbackToLocal.promptModes, [
+        "gated",
+        "scholarly_only",
+        "unified",
+      ]);
+      assert.deepEqual(restoredFallbackToLocal.postSelectionTools, [
+        "web_search",
+        "search_items",
+      ]);
+      assert.equal(restoredFallbackToLocal.rerouteCallbacks, 1);
+    } finally {
+      providerManager.executeWithRetry = originalExecuteWithRetry;
     }
   });
 

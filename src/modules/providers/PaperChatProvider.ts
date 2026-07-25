@@ -18,10 +18,7 @@ import type {
 import type { ToolDefinition, ToolCall } from "../../types/tool";
 import { getAuthManager } from "../auth";
 import { OpenAICompatibleProvider } from "./OpenAICompatibleProvider";
-import {
-  bindPaperChatSessionProtocol,
-  OpenAIResponsesProvider,
-} from "./OpenAIResponsesProvider";
+import { OpenAIResponsesProvider } from "./OpenAIResponsesProvider";
 import { BUILTIN_PROVIDERS } from "./ProviderManager";
 import { getPref } from "../../utils/prefs";
 import {
@@ -78,11 +75,6 @@ export class PaperChatProvider implements AIProvider {
     this._responsesDelegate.setRuntimeOptions(
       this.createResponsesRuntimeOptions(delegateConfig.defaultModel),
     );
-    bindPaperChatSessionProtocol(
-      this._config.requestSessionId,
-      delegateConfig.defaultModel,
-      capabilities.responses ? "responses" : "chat_completions",
-    );
     return {
       delegate: capabilities.responses
         ? this._responsesDelegate
@@ -95,12 +87,17 @@ export class PaperChatProvider implements AIProvider {
     tools: ToolDefinition[] | undefined,
     capabilities: { hostedWebSearch: boolean },
   ): ToolDefinition[] | undefined {
-    if (capabilities.hostedWebSearch) {
+    if (!tools || capabilities.hostedWebSearch) {
       return tools;
     }
-    return tools?.filter(
-      (tool) => tool.function.name !== "search_scholarly_sources",
+    const hasUnifiedWebSearch = tools.some(
+      (tool) => tool.function.name === "web_search",
     );
+    return hasUnifiedWebSearch
+      ? tools.filter(
+          (tool) => tool.function.name !== "search_scholarly_sources",
+        )
+      : tools;
   }
 
   private getConfiguredModels(): string[] {

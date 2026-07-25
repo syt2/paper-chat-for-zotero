@@ -219,7 +219,7 @@ describe("tool recovery policy", function () {
     assert.include(directive.recommendedTools, "web_search");
   });
 
-  it("does not bypass exhausted scholarly-search budget through web_search", async function () {
+  it("allows only an exposed hosted web_search after local search budget exhaustion", async function () {
     const { getRecoveryDirective } =
       await import("../src/modules/chat/tool-recovery/ToolRecoveryPolicy.ts");
 
@@ -240,10 +240,12 @@ describe("tool recovery policy", function () {
       ].join("\n"),
     } satisfies ToolExecutionResult);
 
-    assert.notInclude(directive.recommendedTools, "web_search");
+    assert.include(directive.recommendedTools, "web_search");
     assert.include(
       directive.immediateAction,
-      "Do not spend more web-search budget",
+      "Do not retry local web or scholarly search",
     );
+    assert.include(directive.immediateAction, "vendor-hosted web_search");
+    assert.include(directive.planningInstruction, "actually exposed");
   });
 });

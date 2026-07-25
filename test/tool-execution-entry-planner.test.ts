@@ -328,7 +328,7 @@ describe("tool execution entry planner", function () {
     }
   });
 
-  it("shares duplicate-query and call limits across hosted web and scholarly search", async function () {
+  it("does not count hosted web search against the local search-call limit", async function () {
     const { planToolExecutionEntries } =
       await import("../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts");
 
@@ -360,16 +360,64 @@ describe("tool execution entry planner", function () {
     });
 
     assert.lengthOf(entries, 1);
+    assert.equal(entries[0].kind, "execute");
+
+    const limitedEntries = planToolExecutionEntries({
+      sessionId: "session-1",
+      assistantMessage,
+      toolCalls: [
+        createSearchCall(
+          "tool-3",
+          "transformer interpretability review",
+          "search_scholarly_sources",
+        ),
+      ],
+      previousResults,
+      createExecutionBatches: (requests) => [requests],
+      budgetLimits: {
+        ...DEFAULT_TEST_BUDGET,
+        maxWebSearchCallsPerTurn: 1,
+      },
+    });
+
+    assert.lengthOf(limitedEntries, 1);
+    assert.equal(limitedEntries[0].kind, "execute");
+  });
+
+  it("shares the local search-call limit across scholarly and local web search", async function () {
+    const { planToolExecutionEntries } =
+      await import("../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts");
+
+    const previousResults: ToolExecutionResult[] = [
+      {
+        toolCall: createSearchCall(
+          "scholarly-1",
+          "transformer interpretability",
+          "search_scholarly_sources",
+        ),
+        args: { query: "transformer interpretability" },
+        status: "completed",
+        content: "Scholarly results.",
+      },
+    ];
+
+    const entries = planToolExecutionEntries({
+      sessionId: "session-1",
+      assistantMessage,
+      toolCalls: [createWebSearchCall("web-2", "current AI policy")],
+      previousResults,
+      createExecutionBatches: (requests) => [requests],
+      budgetLimits: {
+        ...DEFAULT_TEST_BUDGET,
+        maxWebSearchCallsPerTurn: 1,
+      },
+    });
+
+    assert.lengthOf(entries, 1);
     assert.equal(entries[0].kind, "synthetic");
     if (entries[0].kind === "synthetic") {
-      assert.include(
-        entries[0].results[0].content,
-        "Category: budget_exhausted",
-      );
-      assert.include(
-        entries[0].results[0].content,
-        "similar external-search query already used",
-      );
+      assert.include(entries[0].results[0].content, "budget_exhausted");
+      assert.include(entries[0].results[0].content, "Local external-search");
     }
   });
 
