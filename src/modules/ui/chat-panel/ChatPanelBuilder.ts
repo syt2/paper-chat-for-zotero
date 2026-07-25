@@ -550,7 +550,7 @@ export function createChatContainer(
   const summarizeConversationBtn = createElement(
     doc,
     "button",
-    { ...btnStyle, display: "none" },
+    { ...btnStyle, display: "none", marginLeft: "auto" },
     {
       id: "chat-summarize-conversation-note",
       title: getString("chat-summarize-conversation-note"),
@@ -570,7 +570,6 @@ export function createChatContainer(
   toolbarButtons.appendChild(newChatBtn);
   toolbarButtons.appendChild(uploadFileBtn);
   toolbarButtons.appendChild(historyBtn);
-  toolbarButtons.appendChild(summarizeConversationBtn);
   if (getPref("debugContextExportEnabled") === true) {
     // Internal debug-only export button. The pref defaults to false and is not exposed in settings.
     const debugContextBtn = createElement(doc, "button", btnStyle, {
@@ -590,6 +589,7 @@ export function createChatContainer(
   }
 
   toolbar.appendChild(toolbarButtons);
+  toolbar.appendChild(summarizeConversationBtn);
 
   // Attachments Preview
   const attachmentsPreview = createElement(
