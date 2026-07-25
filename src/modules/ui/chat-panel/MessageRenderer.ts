@@ -25,6 +25,7 @@ import {
 } from "./MarkdownRenderer";
 import { isMaxIterationsNoticeContent } from "../../chat/agent-runtime/messages";
 import { selectChatMessagePresentations } from "../../chat/message-presentation";
+import { canSummarizeAssistantReply } from "./NoteSummaryActions";
 
 export function getStreamingContentSelector(messageId: string): string {
   return `[data-streaming-content-for="${messageId}"]`;
@@ -47,7 +48,7 @@ const STREAMING_TYPING_INDICATOR_ATTR = "data-streaming-typing-indicator";
 const MESSAGE_ACTION_ICON_SIZE = "15px";
 const MESSAGE_HIGHLIGHT_DURATION_MS = 1050;
 const MESSAGE_HIGHLIGHT_OVERLAY_CLASS = "paperchat-message-highlight-overlay";
-type MessageActionIconName = "change" | "copy" | "fork" | "refresh";
+type MessageActionIconName = "change" | "copy" | "fork" | "refresh" | "write";
 const userInputCountdownTimers = new WeakMap<
   HTMLElement,
   ReturnType<typeof setInterval>
@@ -424,6 +425,8 @@ export interface MessageRenderOptions {
   onRetryError?: (error: Error) => void;
   onFork?: (assistantMessageId: string) => void | Promise<void>;
   onForkError?: (error: Error) => void;
+  onSummarizeReply?: (assistantMessageId: string) => void | Promise<void>;
+  onSummarizeReplyError?: (error: Error) => void;
   onRenderComplete?: () => void;
 }
 
@@ -892,6 +895,8 @@ export function createMessageElement(
     onRerollError,
     renderOptions.onFork,
     renderOptions.onForkError,
+    renderOptions.onSummarizeReply,
+    renderOptions.onSummarizeReplyError,
   );
   if (actions) {
     wrapper.appendChild(actions);
@@ -1095,6 +1100,53 @@ function createForkButton(
   return btn;
 }
 
+function createSummarizeReplyButton(
+  doc: Document,
+  theme: ThemeColors,
+  assistantMessageId: string,
+  onSummarizeReply: (assistantMessageId: string) => void | Promise<void>,
+  onError?: (error: Error) => void,
+): HTMLElement {
+  const label = getString("chat-summarize-reply-note");
+  const btn = createMessageActionButton(doc, theme, label);
+  btn.setAttribute("class", "message-action-btn summarize-reply-note-btn");
+  setIconButtonImage(btn, "write", "");
+
+  btn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    event.preventDefault();
+    if (btn.getAttribute("data-busy") === "true") {
+      return;
+    }
+
+    btn.setAttribute("data-busy", "true");
+    btn.setAttribute("aria-busy", "true");
+    (btn as HTMLButtonElement).disabled = true;
+    btn.style.cursor = "wait";
+    btn.style.opacity = "0.6";
+
+    Promise.resolve(onSummarizeReply(assistantMessageId))
+      .catch((error: unknown) => {
+        const summaryError =
+          error instanceof Error ? error : new Error(String(error));
+        ztoolkit.log(
+          "[MessageRenderer] Summarize reply to note failed:",
+          summaryError,
+        );
+        onError?.(summaryError);
+      })
+      .finally(() => {
+        btn.removeAttribute("data-busy");
+        btn.removeAttribute("aria-busy");
+        (btn as HTMLButtonElement).disabled = false;
+        btn.style.cursor = "pointer";
+        btn.style.opacity = "1";
+      });
+  });
+
+  return btn;
+}
+
 export function createCopyButton(
   doc: Document,
   theme: ThemeColors,
@@ -1129,6 +1181,8 @@ function createMessageActions(
   onRerollError?: (error: Error) => void,
   onFork?: (assistantMessageId: string) => void | Promise<void>,
   onForkError?: (error: Error) => void,
+  onSummarizeReply?: (assistantMessageId: string) => void | Promise<void>,
+  onSummarizeReplyError?: (error: Error) => void,
 ): HTMLElement | null {
   const actions = createElement(
     doc,
@@ -1158,6 +1212,18 @@ function createMessageActions(
       : rawContent;
 
   actions.appendChild(createCopyButton(doc, theme, copyContent));
+
+  if (canSummarizeAssistantReply(msg) && onSummarizeReply) {
+    actions.appendChild(
+      createSummarizeReplyButton(
+        doc,
+        theme,
+        msg.id,
+        onSummarizeReply,
+        onSummarizeReplyError,
+      ),
+    );
+  }
 
   const retryActionButtons: HTMLElement[] = [];
   const setRetryActionsBusy = (busy: boolean) => {

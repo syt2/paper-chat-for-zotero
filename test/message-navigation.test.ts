@@ -1,5 +1,6 @@
 import { assert } from "chai";
 import type { ChatMessage } from "../src/modules/chat/index.ts";
+import { providerSupportsToolCalling } from "../src/modules/providers/provider-capabilities.ts";
 import { darkTheme } from "../src/modules/ui/chat-panel/ChatPanelTheme.ts";
 import {
   createMessageElement,
@@ -7,6 +8,12 @@ import {
   renderMessages,
   scrollToAndHighlightMessage,
 } from "../src/modules/ui/chat-panel/MessageRenderer.ts";
+import {
+  buildReplyNoteSummaryPrompt,
+  canSummarizeAssistantReply,
+  hasConversationMessages,
+  shouldResetSummaryButtonBusyState,
+} from "../src/modules/ui/chat-panel/NoteSummaryActions.ts";
 
 interface RectInit {
   top: number;
@@ -455,6 +462,100 @@ describe("chat message exact navigation", function () {
     assert.equal(
       actions.children[0].getAttribute("class"),
       "message-action-btn copy-message-btn",
+    );
+  });
+
+  it("offers note summarization for completed assistant replies", async function () {
+    const doc = new FakeDocument();
+    const history = new FakeElement(doc, "div");
+    history.scrollHeight = 100;
+    history.clientHeight = 100;
+    let summarizedMessageId: string | null = null;
+
+    renderMessages(
+      asElement(history),
+      null,
+      [
+        message("assistant-to-summarize", {
+          role: "assistant",
+          content: "A completed answer",
+        }),
+      ],
+      darkTheme,
+      undefined,
+      undefined,
+      undefined,
+      {
+        onSummarizeReply: (messageId) => {
+          summarizedMessageId = messageId;
+        },
+      },
+    );
+
+    const actions = history.children[0].children[1];
+    assert.lengthOf(actions.children, 2);
+    const summaryButton = actions.children[1];
+    assert.equal(
+      summaryButton.getAttribute("class"),
+      "message-action-btn summarize-reply-note-btn",
+    );
+    assert.equal(
+      summaryButton.getAttribute("aria-label"),
+      "paperchat-chat-summarize-reply-note",
+    );
+    assert.equal(
+      summaryButton.children[0].getAttribute("src"),
+      "chrome://paperchat/content/icons/write.svg",
+    );
+
+    summaryButton.listeners.get("click")?.[0]?.({
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+    });
+    assert.equal(summarizedMessageId, "assistant-to-summarize");
+    assert.equal(summaryButton.getAttribute("aria-busy"), "true");
+
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.isNull(summaryButton.getAttribute("aria-busy"));
+  });
+
+  it("summarizes only usable conversation messages", function () {
+    const user = message("user-1", { role: "user" });
+    const completedAssistant = message("assistant-1", {
+      role: "assistant",
+      content: "Answer",
+    });
+    const streamingAssistant = message("assistant-streaming", {
+      role: "assistant",
+      content: "Partial",
+      streamingState: "in_progress",
+    });
+    const apiOnlyAssistant = message("assistant-api-only", {
+      role: "assistant",
+      content: "Hidden",
+      apiOnly: true,
+    });
+
+    assert.isFalse(hasConversationMessages([]));
+    assert.isFalse(hasConversationMessages([apiOnlyAssistant]));
+    assert.isTrue(hasConversationMessages([user]));
+    assert.isTrue(canSummarizeAssistantReply(completedAssistant));
+    assert.isFalse(canSummarizeAssistantReply(streamingAssistant));
+    assert.isFalse(canSummarizeAssistantReply(apiOnlyAssistant));
+    assert.equal(
+      buildReplyNoteSummaryPrompt("Summarize", "Answer"),
+      "Summarize\n\n---\nAnswer\n---",
+    );
+    assert.isFalse(shouldResetSummaryButtonBusyState(null, "session-1"));
+    assert.isFalse(shouldResetSummaryButtonBusyState("session-1", "session-1"));
+    assert.isTrue(shouldResetSummaryButtonBusyState("session-1", "session-2"));
+    assert.isFalse(providerSupportsToolCalling(null));
+    assert.isFalse(providerSupportsToolCalling({} as any));
+    assert.isTrue(
+      providerSupportsToolCalling({
+        chatCompletionWithTools: async () => ({ content: "" }),
+      } as any),
     );
   });
 

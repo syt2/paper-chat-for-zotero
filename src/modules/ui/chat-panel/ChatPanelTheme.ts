@@ -171,7 +171,9 @@ export function applyThemeToContainer(container: HTMLElement): void {
 
   // Toolbar buttons
   container
-    .querySelectorAll("#chat-new, #chat-upload-file, #chat-history-btn")
+    .querySelectorAll(
+      "#chat-new, #chat-upload-file, #chat-history-btn, #chat-summarize-conversation-note",
+    )
     .forEach((btn: Element) => {
       const el = btn as HTMLElement;
       el.style.background = theme.buttonBg;

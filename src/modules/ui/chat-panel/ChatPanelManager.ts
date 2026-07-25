@@ -18,6 +18,7 @@ import type {
 } from "../../../types/tool";
 import { getAuthManager } from "../../auth";
 import { getProviderManager } from "../../providers";
+import { providerSupportsToolCalling } from "../../providers/provider-capabilities";
 import { isPaperChatQuotaError } from "../../providers/paperchat-errors";
 import { getPref, setPref } from "../../../utils/prefs";
 
@@ -47,9 +48,15 @@ import {
 import {
   type MarkdownRenderOptions,
   type SourceGroupActionContext,
+  formatMarkdownForMessageCopy,
   renderMarkdownToElement,
   stripIncompleteTrailingToolCall,
 } from "./MarkdownRenderer";
+import {
+  buildReplyNoteSummaryPrompt,
+  canSummarizeAssistantReply,
+  hasConversationMessages,
+} from "./NoteSummaryActions";
 import { navigateToPdfQuote } from "./PdfQuoteNavigator";
 import { normalizeNoteSourceKey } from "./NoteSourceNavigator";
 import { openSourceTarget, type SourceTarget } from "./SourceNavigator";
@@ -65,6 +72,7 @@ import {
   updateModelSelectorDisplay,
   refreshCheckinDisplay,
   syncSendButtonState,
+  updateConversationNoteSummaryButton,
 } from "./ChatPanelEvents";
 import { loadCachedRatios } from "../../preferences/ModelsFetcher";
 import { Guide } from "../Guide";
@@ -476,6 +484,8 @@ interface ChatMessageRenderCallbacks {
   onRerollError?: (error: Error) => void;
   onFork?: (assistantMessageId: string) => void | Promise<void>;
   onForkError?: (error: Error) => void;
+  onSummarizeReply?: (assistantMessageId: string) => void | Promise<void>;
+  onSummarizeReplyError?: (error: Error) => void;
   onMarkdownError?: (message: string) => void;
   onRenderComplete?: () => void;
 }
@@ -504,9 +514,66 @@ function renderMessageElementsWithMarkdownActions(
       onRetryError: callbacks.onRetryError,
       onFork: callbacks.onFork,
       onForkError: callbacks.onForkError,
+      onSummarizeReply: callbacks.onSummarizeReply,
+      onSummarizeReplyError: callbacks.onSummarizeReplyError,
       onRenderComplete: callbacks.onRenderComplete,
     },
   );
+}
+
+async function sendNoteSummaryPrompt(
+  context: ChatPanelContext,
+  session: ChatSession,
+  prompt: string,
+): Promise<void> {
+  if (context.chatManager.getActiveSession() !== session) {
+    throw new Error(getString("chat-note-summary-unavailable"));
+  }
+  if (!providerSupportsToolCalling(getProviderManager().getActiveProvider())) {
+    throw new Error(getString("chat-note-summary-tools-unavailable"));
+  }
+  const item = getQuoteNavigationItem(session, context.getCurrentItem());
+  await context.chatManager.sendMessage(prompt, {
+    item,
+    attachPdf: false,
+    targetSession: session,
+    requireTargetSessionActive: true,
+  });
+}
+
+async function summarizeConversationToNote(
+  context: ChatPanelContext,
+): Promise<void> {
+  const session = context.chatManager.getActiveSession();
+  if (!session || !hasConversationMessages(session.messages)) {
+    throw new Error(getString("chat-note-summary-unavailable"));
+  }
+  await sendNoteSummaryPrompt(
+    context,
+    session,
+    getString("chat-summarize-conversation-note-prompt"),
+  );
+}
+
+async function summarizeReplyToNote(
+  context: ChatPanelContext,
+  assistantMessageId: string,
+): Promise<void> {
+  const session = context.chatManager.getActiveSession();
+  const message = session?.messages.find(
+    (candidate) => candidate.id === assistantMessageId,
+  );
+  if (!session || !message || !canSummarizeAssistantReply(message)) {
+    throw new Error(getString("chat-note-summary-unavailable"));
+  }
+  const replyContent = formatMarkdownForMessageCopy(message.content, {
+    evidenceRecords: message.evidence,
+  });
+  const prompt = buildReplyNoteSummaryPrompt(
+    getString("chat-summarize-reply-note-prompt"),
+    replyContent || message.content,
+  );
+  await sendNoteSummaryPrompt(context, session, prompt);
 }
 
 function buildApprovalActionsForContainer(
@@ -1540,6 +1607,9 @@ async function refreshChatForContainer(container: HTMLElement): Promise<void> {
   ) as HTMLElement;
   if (chatHistory && session) {
     const refreshContext = createContext(container);
+    const supportsToolCalling = providerSupportsToolCalling(
+      getProviderManager().getActiveProvider(),
+    );
     renderMessageElementsWithMarkdownActions(
       chatHistory,
       emptyState,
@@ -1548,8 +1618,21 @@ async function refreshChatForContainer(container: HTMLElement): Promise<void> {
       {
         onFork: (assistantMessageId) =>
           continueInNewChatFromMessage(refreshContext, assistantMessageId),
+        onSummarizeReply: supportsToolCalling
+          ? (assistantMessageId) =>
+              summarizeReplyToNote(refreshContext, assistantMessageId)
+          : undefined,
+        onSummarizeReplyError: (error) => {
+          refreshContext.appendError(error.message);
+        },
         onMarkdownError: refreshContext.appendError,
       },
+    );
+    updateConversationNoteSummaryButton(
+      container,
+      session.messages,
+      session.id,
+      supportsToolCalling,
     );
     updateExecutionInsetsForContainer(
       container,
@@ -2541,6 +2624,7 @@ function createContext(container: HTMLElement): ChatPanelContext {
         await updatePdfCheckboxVisibilityForItem(container, item, manager);
       }
     },
+    summarizeConversationToNote: () => summarizeConversationToNote(context),
     renderMessages: (
       messages: ChatMessage[],
       onRenderComplete?: () => void,
@@ -2557,6 +2641,9 @@ function createContext(container: HTMLElement): ChatPanelContext {
           "#chat-empty-state",
         ) as HTMLElement;
         const session = manager.getActiveSession();
+        const supportsToolCalling = providerSupportsToolCalling(
+          getProviderManager().getActiveProvider(),
+        );
         const retryableErrorMessageId =
           getProviderManager().getActiveProviderId() === "paperchat"
             ? session?.lastRetryableErrorMessageId
@@ -2586,11 +2673,24 @@ function createContext(container: HTMLElement): ChatPanelContext {
               },
               onFork: (assistantMessageId) =>
                 continueInNewChatFromMessage(context, assistantMessageId),
+              onSummarizeReply: supportsToolCalling
+                ? (assistantMessageId) =>
+                    summarizeReplyToNote(context, assistantMessageId)
+                : undefined,
+              onSummarizeReplyError: (error) => {
+                context.appendError(error.message);
+              },
               onMarkdownError: context.appendError,
               onRenderComplete,
             },
           );
         }
+        updateConversationNoteSummaryButton(
+          container,
+          messages,
+          session?.id,
+          supportsToolCalling,
+        );
         if (planPanel) {
           updateExecutionInsetsForContainer(
             container,

@@ -54,6 +54,11 @@ import {
   isNetworkErrorMessage,
 } from "../../analytics/errorClassify";
 import { getReadingLoopService } from "../../reading-loop";
+import {
+  hasConversationMessages,
+  shouldResetSummaryButtonBusyState,
+} from "./NoteSummaryActions";
+import type { ChatMessage } from "../../chat";
 
 // Import getActiveReaderItem from the manager module to avoid circular dependency
 // This is set by ChatPanelManager during initialization
@@ -64,6 +69,7 @@ let togglePanelModeFn: (() => void) | null = null;
 
 // 发送锁（按 session 分配，并附带 token，避免旧请求 finally 误释放新请求的锁）
 const sessionSendLocks = new Map<string, symbol>();
+const conversationSummaryRuns = new WeakMap<HTMLButtonElement, symbol>();
 
 // Duration (ms) to show the "+quota" flash on the check-in button after a successful check-in
 const CHECKIN_FLASH_DURATION_MS = 5000;
@@ -116,6 +122,39 @@ function applySubscriptionLimitStyles(subscriptionEl: HTMLElement): void {
 const MESSAGE_INPUT_MIN_HEIGHT = 60;
 const MESSAGE_INPUT_MAX_HEIGHT = 140;
 const CHAT_HISTORY_BOTTOM_STICKY_THRESHOLD = 24;
+
+function resetConversationSummaryButtonBusyState(
+  button: HTMLButtonElement,
+): void {
+  conversationSummaryRuns.delete(button);
+  button.disabled = false;
+  button.removeAttribute("aria-busy");
+  button.removeAttribute("data-summary-session-id");
+  button.style.cursor = "pointer";
+  button.style.opacity = "1";
+}
+
+export function updateConversationNoteSummaryButton(
+  container: HTMLElement,
+  messages: ChatMessage[],
+  sessionId?: string,
+  supportsToolCalling: boolean = false,
+): void {
+  const button = container.querySelector(
+    "#chat-summarize-conversation-note",
+  ) as HTMLButtonElement | null;
+  if (!button) {
+    return;
+  }
+  const busySessionId = button.getAttribute("data-summary-session-id");
+  if (shouldResetSummaryButtonBusyState(busySessionId, sessionId)) {
+    resetConversationSummaryButtonBusyState(button);
+  }
+  button.style.display =
+    supportsToolCalling && hasConversationMessages(messages)
+      ? "inline-flex"
+      : "none";
+}
 
 interface AttachmentPreviewActions {
   onRemoveImage?: (index: number) => void;
@@ -561,6 +600,9 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
   const historyBtn = container.querySelector(
     "#chat-history-btn",
   ) as HTMLButtonElement;
+  const summarizeConversationBtn = container.querySelector(
+    "#chat-summarize-conversation-note",
+  ) as HTMLButtonElement | null;
   const debugContextBtn = container.querySelector(
     "#chat-debug-context-btn",
   ) as HTMLButtonElement;
@@ -1011,6 +1053,36 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
     updateModelSelectorDisplay(container);
 
     ztoolkit.log("New session created:", newSession.id);
+  });
+
+  summarizeConversationBtn?.addEventListener("click", async () => {
+    if (summarizeConversationBtn.disabled) {
+      return;
+    }
+    const sessionId = chatManager.getActiveSession()?.id;
+    const runToken = Symbol(sessionId);
+    conversationSummaryRuns.set(summarizeConversationBtn, runToken);
+    summarizeConversationBtn.disabled = true;
+    summarizeConversationBtn.setAttribute("aria-busy", "true");
+    if (sessionId) {
+      summarizeConversationBtn.setAttribute(
+        "data-summary-session-id",
+        sessionId,
+      );
+    }
+    summarizeConversationBtn.style.cursor = "wait";
+    summarizeConversationBtn.style.opacity = "0.6";
+    try {
+      await context.summarizeConversationToNote();
+    } catch (error) {
+      context.appendError(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      if (conversationSummaryRuns.get(summarizeConversationBtn) === runToken) {
+        resetConversationSummaryButtonBusyState(summarizeConversationBtn);
+      }
+    }
   });
 
   debugContextBtn?.addEventListener("click", async () => {

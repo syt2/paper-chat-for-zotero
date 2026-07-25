@@ -547,9 +547,30 @@ export function createChatContainer(
   });
   historyBtn.appendChild(historyIcon);
 
+  const summarizeConversationBtn = createElement(
+    doc,
+    "button",
+    { ...btnStyle, display: "none" },
+    {
+      id: "chat-summarize-conversation-note",
+      title: getString("chat-summarize-conversation-note"),
+    },
+  );
+  summarizeConversationBtn.setAttribute("type", "button");
+  summarizeConversationBtn.setAttribute(
+    "aria-label",
+    getString("chat-summarize-conversation-note"),
+  );
+  const summarizeConversationIcon = createElement(doc, "img", iconStyle, {
+    src: `chrome://${config.addonRef}/content/icons/write.svg`,
+    alt: "",
+  });
+  summarizeConversationBtn.appendChild(summarizeConversationIcon);
+
   toolbarButtons.appendChild(newChatBtn);
   toolbarButtons.appendChild(uploadFileBtn);
   toolbarButtons.appendChild(historyBtn);
+  toolbarButtons.appendChild(summarizeConversationBtn);
   if (getPref("debugContextExportEnabled") === true) {
     // Internal debug-only export button. The pref defaults to false and is not exposed in settings.
     const debugContextBtn = createElement(doc, "button", btnStyle, {

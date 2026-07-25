@@ -112,6 +112,7 @@ import {
 } from "./tool-budget/ToolBudgetPolicy";
 import { isAbortError, SessionRunInvalidatedError } from "./errors";
 import { ANALYTICS_EVENTS, getAnalyticsService } from "../analytics";
+import { providerSupportsToolCalling } from "../providers/provider-capabilities";
 import type {
   ChatHistoryMessagePage,
   ChatHistorySearchPage,
@@ -156,20 +157,6 @@ function selectMoreSubstantialSnapshot(
   if (!current) return previous;
   if (!previous) return current;
   return current.content.length >= previous.content.length ? current : previous;
-}
-
-/**
- * Type guard: check if provider supports tool calling
- * Works with any AIProvider (for same-provider retry compatibility)
- */
-function providerSupportsToolCalling(
-  provider: AIProvider,
-): provider is AIProvider & ToolCallingProvider {
-  return (
-    "chatCompletionWithTools" in provider &&
-    typeof (provider as ToolCallingProvider).chatCompletionWithTools ===
-      "function"
-  );
 }
 
 /**
