@@ -16,7 +16,9 @@ import {
 import {
   buildReplyNoteSummaryPrompt,
   canSummarizeAssistantReply,
+  collectNoteSummarySourceItemKeys,
   hasConversationMessages,
+  resolveNoteSummarySourceItem,
   shouldResetSummaryButtonBusyState,
 } from "../src/modules/ui/chat-panel/NoteSummaryActions.ts";
 
@@ -601,6 +603,40 @@ describe("chat message exact navigation", function () {
     assert.equal(
       buildReplyNoteSummaryPrompt("Summarize", "Answer"),
       "Summarize\n\n---\nAnswer\n---",
+    );
+    assert.deepEqual(
+      collectNoteSummarySourceItemKeys([
+        message("assistant-sourced", {
+          role: "assistant",
+          sourceItemKeys: ["paper002"],
+        }),
+      ]),
+      ["PAPER002"],
+    );
+    assert.deepEqual(
+      collectNoteSummarySourceItemKeys([completedAssistant]),
+      [],
+    );
+    const parentItem = {
+      key: "PAPER002",
+      getDisplayTitle: () => "Paper B",
+      isAttachment: () => false,
+      isNote: () => false,
+    } as Zotero.Item;
+    const attachment = {
+      key: "ATTACH01",
+      parentItemID: 42,
+      getDisplayTitle: () => "Preprint PDF",
+      isAttachment: () => true,
+      isNote: () => false,
+    } as Zotero.Item;
+    assert.deepEqual(
+      resolveNoteSummarySourceItem(
+        "ATTACH01",
+        (key) => (key === "ATTACH01" ? attachment : null),
+        (id) => (id === 42 ? parentItem : null),
+      ),
+      { itemKey: "PAPER002", title: "Paper B" },
     );
     assert.isFalse(shouldResetSummaryButtonBusyState(null, "session-1"));
     assert.isFalse(shouldResetSummaryButtonBusyState("session-1", "session-1"));

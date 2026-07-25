@@ -110,6 +110,8 @@ describe("note summary destinations", function () {
       itemKey: "FORGED01",
       item_key: "FORGED02",
       itemkey: "FORGED03",
+      "ITEM-KEY": "FORGED04",
+      "item key": "FORGED05",
     });
     const attached = rewriteCreateNoteTarget(original, "ITEM0001");
     assert.isNotNull(attached);
@@ -537,6 +539,42 @@ describe("note summary destinations", function () {
     assert.include(
       buildNoteSummaryRuntimeInstruction(context),
       "already been created",
+    );
+  });
+
+  it("keeps cancellation waiting while a write-class tool entry is settling", async function () {
+    const runtime = new AgentRuntime({} as any, {} as any, {} as any) as any;
+    const release = runtime.beginMutatingToolEntry("session", [
+      {
+        toolCall: createNoteCall({ content: "Summary" }),
+      },
+    ]);
+    assert.isFunction(release);
+
+    let settled = false;
+    const wait = runtime
+      .waitForPendingMutatingToolExecutions("session")
+      .then(() => {
+        settled = true;
+      });
+    await Promise.resolve();
+    assert.isFalse(settled);
+
+    release();
+    await wait;
+    assert.isTrue(settled);
+    await runtime.waitForPendingMutatingToolExecutions("session");
+
+    assert.isNull(
+      runtime.beginMutatingToolEntry("session", [
+        {
+          toolCall: {
+            id: "read-only",
+            type: "function",
+            function: { name: "search_items", arguments: "{}" },
+          },
+        },
+      ]),
     );
   });
 });

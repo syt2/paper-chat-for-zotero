@@ -133,9 +133,11 @@ export function rewriteCreateNoteTarget(
   }
 
   const args = { ...(parsed as Record<string, unknown>) };
-  delete args.itemKey;
-  delete args.item_key;
-  delete args.itemkey;
+  for (const key of Object.keys(args)) {
+    if (key.toLowerCase().replace(/[^a-z0-9]/g, "") === "itemkey") {
+      delete args[key];
+    }
+  }
   if (itemKey) {
     args.itemKey = itemKey;
   }

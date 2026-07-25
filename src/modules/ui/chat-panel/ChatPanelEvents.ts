@@ -2584,11 +2584,6 @@ function populateModelDropdown(
               defaultModel: model,
             });
 
-            const activeSession = context.chatManager.getActiveSession();
-            if (activeSession) {
-              context.renderMessages(activeSession.messages);
-            }
-
             trackChatModelSwitched({
               source: "model_dropdown",
               previous_provider: previousProviderId || "unknown",

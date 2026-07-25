@@ -3063,6 +3063,29 @@ export class ChatManager {
               timestamp: Date.now(),
             },
           );
+        } else if (noteSummaryContext) {
+          // DeepSeek keeps the large tool catalog in the stable prefix, but a
+          // note-summary action still needs its changing destination and
+          // noteCreated state on every model round.
+          attemptMessagesWithContext.push(
+            {
+              id: "cache-checkpoint",
+              role: "system",
+              content:
+                "Prompt cache checkpoint. This is not user content or an instruction.",
+              timestamp: Date.now(),
+            },
+            {
+              id: "runtime-context",
+              role: "system",
+              content: buildRuntimeSystemPrompt(
+                attemptMessagesWithContext,
+                sendingSession,
+                latestRuntimeState,
+              ),
+              timestamp: Date.now(),
+            },
+          );
         }
       };
       syncModelSpecificRequestContext();
@@ -3087,7 +3110,9 @@ export class ChatManager {
         return isDeepSeekToolPromptCacheTarget(
           currentProvider,
           failedPaperChatModelId || sendingSession.resolvedModelId,
-        ) && !searchScopeGateEnabled
+        ) &&
+          !searchScopeGateEnabled &&
+          !noteSummaryContext
           ? null
           : buildRuntimeSystemPrompt(currentMessages, session, runtimeState);
       };
@@ -3497,7 +3522,10 @@ export class ChatManager {
       return false;
     }
 
-    this.invalidateSessionRun(session.id, { abort: true });
+    // Stop any next provider request immediately. If a write-class tool is
+    // already running, keep the run tracked just long enough to persist its
+    // result before invalidating and cleaning the interrupted turn.
+    this.activeSessionAbortControllers.get(session.id)?.abort();
 
     if (pendingApprovalCount > 0) {
       getToolPermissionManager().denyPendingApprovals({
@@ -3509,9 +3537,17 @@ export class ChatManager {
     if (pendingUserInputCount > 0) {
       this.agentRuntime.cancelPendingUserInputRequests(session.id);
     }
+    if (hasActiveRun) {
+      await this.agentRuntime.waitForPendingMutatingToolExecutions(session.id);
+    }
+    this.invalidateSessionRun(session.id);
 
     const now = Date.now();
     let toolContextChanged = false;
+    const completedToolItemKeys = [
+      ...collectTrustedSourceTargets(session.toolExecutionState?.results || [])
+        .itemKeys,
+    ];
     for (const message of interruptedMessages) {
       toolContextChanged =
         retainCompletedApiOnlyModelContextMessagesForTurn(
@@ -3540,6 +3576,13 @@ export class ChatManager {
       message.evidence = sanitizedEvidence.referencedRecords.length
         ? sanitizedEvidence.referencedRecords
         : undefined;
+      const sourceItemKeys = normalizeSourceItemKeys([
+        ...(message.sourceItemKeys || []),
+        ...completedToolItemKeys,
+      ]);
+      message.sourceItemKeys = sourceItemKeys.length
+        ? sourceItemKeys
+        : undefined;
       message.streamingState = "interrupted";
       message.timestamp = now;
       await this.sessionStorage.updateMessageContent(
@@ -3550,12 +3593,15 @@ export class ChatManager {
         {
           streamingState: "interrupted",
           evidence: message.evidence || [],
+          sourceItemKeys,
         },
       );
     }
 
     session.executionPlan = undefined;
-    session.toolExecutionState = undefined;
+    if (!session.toolExecutionState?.results.length) {
+      session.toolExecutionState = undefined;
+    }
     session.toolApprovalState = undefined;
     session.userInputRequestState = undefined;
     session.updatedAt = now;

@@ -60,7 +60,9 @@ import {
 import {
   buildReplyNoteSummaryPrompt,
   canSummarizeAssistantReply,
+  collectNoteSummarySourceItemKeys,
   hasConversationMessages,
+  resolveNoteSummarySourceItem,
 } from "./NoteSummaryActions";
 import { navigateToPdfQuote } from "./PdfQuoteNavigator";
 import { normalizeNoteSourceKey } from "./NoteSourceNavigator";
@@ -543,10 +545,12 @@ async function sendNoteSummaryPrompt(
   const normalizedSourceItemKeys = normalizeSourceItemKeys(sourceItemKeys);
   const sourceItems: NoteSummarySourceItem[] = normalizedSourceItemKeys.flatMap(
     (itemKey) => {
-      const sourceItem = getItemByLibraryKey(itemKey);
-      return sourceItem
-        ? [{ itemKey, title: sourceItem.getDisplayTitle() || itemKey }]
-        : [];
+      const sourceItem = resolveNoteSummarySourceItem(
+        itemKey,
+        (key) => getItemByLibraryKey(key),
+        (id) => (Zotero.Items.get(id) as Zotero.Item | false) || null,
+      );
+      return sourceItem ? [sourceItem] : [];
     },
   );
   const noteSummaryContext = createNoteSummaryContext(sourceItems);
@@ -566,17 +570,6 @@ async function sendNoteSummaryPrompt(
   });
 }
 
-function collectTrustedMessageSourceItemKeys(
-  messages: readonly ChatMessage[],
-): string[] {
-  return normalizeSourceItemKeys(
-    messages.flatMap((message) => [
-      ...(message.sourceItemKeys || []),
-      ...(message.evidence || []).map((record) => record.itemKey),
-    ]),
-  );
-}
-
 async function summarizeConversationToNote(
   context: ChatPanelContext,
 ): Promise<void> {
@@ -589,7 +582,7 @@ async function summarizeConversationToNote(
     session,
     getString("chat-summarize-conversation-note-prompt"),
     undefined,
-    collectTrustedMessageSourceItemKeys(session.messages),
+    collectNoteSummarySourceItemKeys(session.messages),
   );
 }
 
@@ -616,7 +609,7 @@ async function summarizeReplyToNote(
     session,
     getString("chat-summarize-reply-note"),
     prompt,
-    collectTrustedMessageSourceItemKeys([message]),
+    collectNoteSummarySourceItemKeys([message]),
   );
 }
 

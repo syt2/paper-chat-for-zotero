@@ -276,6 +276,7 @@ export class AgentRuntime {
     string,
     PendingUserInputResolver
   >();
+  private pendingMutatingToolEntries = new Map<string, Set<Promise<void>>>();
   private userInputRequestCounter = 0;
 
   constructor(
@@ -310,6 +311,14 @@ export class AgentRuntime {
       cancelled++;
     }
     return cancelled;
+  }
+
+  async waitForPendingMutatingToolExecutions(sessionId: string): Promise<void> {
+    const pending = this.pendingMutatingToolEntries.get(sessionId);
+    if (!pending?.size) {
+      return;
+    }
+    await Promise.all([...pending]);
   }
 
   async executeStreamingToolLoop(
@@ -1341,196 +1350,204 @@ export class AgentRuntime {
         }
       }
 
-      this.ensureSessionTracked(sendingSession, sessionRunId);
-
-      const batchResults =
+      const releaseMutatingToolEntry =
         entry.kind === "execute"
-          ? await this.executeBatchWithRuntimeEvents(
-              sendingSession,
-              sessionRunId,
-              assistantMessage,
-              entry.requests,
-              iteration,
-            )
-          : entry.kind === "user_input"
-            ? [
-                await this.executeUserInputRequest(
-                  sendingSession,
-                  sessionRunId,
-                  currentMessages,
-                  assistantMessage,
-                  entry.toolCall,
-                  iteration,
-                  noteSummaryContext,
-                ),
-              ]
-            : entry.kind === "search_scope"
-              ? (() => {
-                  const selection = executeSearchScopeSelection(
+          ? this.beginMutatingToolEntry(sendingSession.id, entry.requests)
+          : null;
+      try {
+        this.ensureSessionTracked(sendingSession, sessionRunId);
+
+        const batchResults =
+          entry.kind === "execute"
+            ? await this.executeBatchWithRuntimeEvents(
+                sendingSession,
+                sessionRunId,
+                assistantMessage,
+                entry.requests,
+                iteration,
+              )
+            : entry.kind === "user_input"
+              ? [
+                  await this.executeUserInputRequest(
+                    sendingSession,
+                    sessionRunId,
+                    currentMessages,
+                    assistantMessage,
                     entry.toolCall,
-                    resolvedSearchScope,
-                  );
-                  if (selection.selectedScope) {
-                    resolvedSearchScope = selection.selectedScope;
-                  }
-                  return [selection.result];
-                })()
-              : entry.results;
-      if (
-        noteSummaryContext &&
-        batchResults.some(
-          (result) =>
-            result.toolCall.function.name === "create_note" &&
-            result.status === "completed",
-        )
-      ) {
-        noteSummaryContext.noteCreated = true;
-      }
-      resolvedSearchScope = advanceSearchScopeAfterResults(
-        resolvedSearchScope,
-        batchResults,
-      );
-      if (entry.kind !== "reused") {
-        this.appendToolExecutionResults(sendingSession, batchResults);
-        await this.sessionStorage.updateSessionMeta(sendingSession);
-        this.emitPlanUpdate(sendingSession, sessionRunId);
-      }
-
-      for (const executionResult of batchResults) {
-        this.ensureSessionTracked(sendingSession, sessionRunId);
-        const toolCall = executionResult.toolCall;
-        const toolName = toolCall.function.name;
-        const toolArgs = toolCall.function.arguments;
-        const toolResult = executionResult.content;
-
-        ztoolkit.log(
-          `[${logPrefix}] Result (truncated): ${toolResult.substring(0, 200)}...`,
-        );
-
-        const shouldCompactModelToolResult =
-          contextStrategy.compactToolResultOnCreate &&
-          !executionResult.artifact &&
-          toolName !== "read_artifact";
-        const modelToolResult = shouldCompactModelToolResult
-          ? compactToolResultContent(
-              toolResult,
-              contextStrategy.compactionPolicy,
-            )
-          : toolResult;
-        const toolResultMessage: ChatMessage = {
-          id: this.callbacks.generateId(),
-          role: "tool",
-          content: appendEvidenceCitationCatalog(
-            modelToolResult,
-            executionResult.evidence,
-          ),
-          tool_call_id: toolCall.id,
-          timestamp: Date.now(),
-        };
-        currentMessages.push(toolResultMessage);
+                    iteration,
+                    noteSummaryContext,
+                  ),
+                ]
+              : entry.kind === "search_scope"
+                ? (() => {
+                    const selection = executeSearchScopeSelection(
+                      entry.toolCall,
+                      resolvedSearchScope,
+                    );
+                    if (selection.selectedScope) {
+                      resolvedSearchScope = selection.selectedScope;
+                    }
+                    return [selection.result];
+                  })()
+                : entry.results;
         if (
-          contextStrategy.persistApiOnlyTranscript &&
-          entry.kind !== "reused" &&
-          !unavailableToolCallIds.has(toolCall.id)
+          noteSummaryContext &&
+          batchResults.some(
+            (result) =>
+              result.toolCall.function.name === "create_note" &&
+              result.status === "completed",
+          )
         ) {
-          insertApiOnlyModelContextMessage(sendingSession, assistantMessage, {
-            ...toolResultMessage,
-            id: buildApiOnlyModelContextMessageId(
-              assistantMessage.id,
-              this.callbacks.generateId(),
-            ),
-            apiOnly: true,
-          });
+          noteSummaryContext.noteCreated = true;
         }
-
-        if (entry.kind === "reused") {
-          continue;
-        }
-
-        const toolSucceeded = executionResult.status === "completed";
-        const toolDisplayStatus = toolSucceeded ? "completed" : "error";
-        const planStepStatus = toPlanStepStatus(executionResult.status);
-        const primaryPolicyTrace = getPrimaryPolicyTrace(executionResult);
-        const parsedToolError =
-          executionResult.status === "completed"
-            ? null
-            : parseToolError(executionResult.content);
-
-        accumulatedDisplay += this.callbacks.formatToolCallCard(
-          toolName,
-          toolArgs,
-          toolDisplayStatus,
-          toolResult,
-        );
-        pendingDisplayToolCalls.delete(toolCall.id);
-        const displayWithPendingTools =
-          accumulatedDisplay +
-          formatCallingToolCards([...pendingDisplayToolCalls.values()]);
-        assistantMessage.content = displayWithPendingTools;
-        assistantMessage.streamingState = "in_progress";
-        await this.flushAssistantMessageCheckpoint(
-          sendingSession,
-          sessionRunId,
-          assistantMessage,
-          "in_progress",
-        );
-        this.ensureSessionTracked(sendingSession, sessionRunId);
-        this.executionPlanManager.addOrUpdateToolStep(
-          sendingSession,
-          currentMessages,
-          toolCall.id,
-          toolName,
-          planStepStatus,
-          truncateToolDetail(toolResult),
-        );
-        await this.sessionStorage.updateSessionMeta(sendingSession);
-        this.emitPlanUpdate(sendingSession, sessionRunId);
-
-        this.emitRuntimeEvent<"tool_completed">(
-          sendingSession,
-          sessionRunId,
-          assistantMessage,
-          {
-            type: "tool_completed",
-            toolCallId: toolCall.id,
-            toolName,
-            args: toolArgs,
-            resultPreview: truncateToolDetail(toolResult),
-            status: executionResult.status,
-            origin: primaryPolicyTrace?.stage || "executor",
-            policyName: primaryPolicyTrace?.policy,
-            policyOutcome: primaryPolicyTrace?.outcome,
-            policySummary: primaryPolicyTrace?.summary,
-            policyTrace: executionResult.policyTrace,
-            errorCategory:
-              executionResult.status === "completed"
-                ? undefined
-                : parsedToolError?.category || "unspecified",
-            iteration,
-          },
-        );
-        if (this.callbacks.isSessionActive(sendingSession)) {
-          this.callbacks.onStreamingUpdate?.(
-            displayWithPendingTools,
-            assistantMessage.id,
-          );
-        }
-      }
-
-      const needsRecovery = batchResults.some(
-        (result) => result.status === "denied" || result.status === "failed",
-      );
-      if (needsRecovery) {
-        this.executionPlanManager.recordRecoveryStep(
-          sendingSession,
-          currentMessages,
+        resolvedSearchScope = advanceSearchScopeAfterResults(
+          resolvedSearchScope,
           batchResults,
         );
-        await this.sessionStorage.updateSessionMeta(sendingSession);
-        this.emitPlanUpdate(sendingSession, sessionRunId);
-      }
+        if (entry.kind !== "reused") {
+          this.appendToolExecutionResults(sendingSession, batchResults);
+          await this.sessionStorage.updateSessionMeta(sendingSession);
+          this.emitPlanUpdate(sendingSession, sessionRunId);
+        }
 
-      this.appendRecoveryGuidanceMessage(currentMessages, batchResults);
+        for (const executionResult of batchResults) {
+          this.ensureSessionTracked(sendingSession, sessionRunId);
+          const toolCall = executionResult.toolCall;
+          const toolName = toolCall.function.name;
+          const toolArgs = toolCall.function.arguments;
+          const toolResult = executionResult.content;
+
+          ztoolkit.log(
+            `[${logPrefix}] Result (truncated): ${toolResult.substring(0, 200)}...`,
+          );
+
+          const shouldCompactModelToolResult =
+            contextStrategy.compactToolResultOnCreate &&
+            !executionResult.artifact &&
+            toolName !== "read_artifact";
+          const modelToolResult = shouldCompactModelToolResult
+            ? compactToolResultContent(
+                toolResult,
+                contextStrategy.compactionPolicy,
+              )
+            : toolResult;
+          const toolResultMessage: ChatMessage = {
+            id: this.callbacks.generateId(),
+            role: "tool",
+            content: appendEvidenceCitationCatalog(
+              modelToolResult,
+              executionResult.evidence,
+            ),
+            tool_call_id: toolCall.id,
+            timestamp: Date.now(),
+          };
+          currentMessages.push(toolResultMessage);
+          if (
+            contextStrategy.persistApiOnlyTranscript &&
+            entry.kind !== "reused" &&
+            !unavailableToolCallIds.has(toolCall.id)
+          ) {
+            insertApiOnlyModelContextMessage(sendingSession, assistantMessage, {
+              ...toolResultMessage,
+              id: buildApiOnlyModelContextMessageId(
+                assistantMessage.id,
+                this.callbacks.generateId(),
+              ),
+              apiOnly: true,
+            });
+          }
+
+          if (entry.kind === "reused") {
+            continue;
+          }
+
+          const toolSucceeded = executionResult.status === "completed";
+          const toolDisplayStatus = toolSucceeded ? "completed" : "error";
+          const planStepStatus = toPlanStepStatus(executionResult.status);
+          const primaryPolicyTrace = getPrimaryPolicyTrace(executionResult);
+          const parsedToolError =
+            executionResult.status === "completed"
+              ? null
+              : parseToolError(executionResult.content);
+
+          accumulatedDisplay += this.callbacks.formatToolCallCard(
+            toolName,
+            toolArgs,
+            toolDisplayStatus,
+            toolResult,
+          );
+          pendingDisplayToolCalls.delete(toolCall.id);
+          const displayWithPendingTools =
+            accumulatedDisplay +
+            formatCallingToolCards([...pendingDisplayToolCalls.values()]);
+          assistantMessage.content = displayWithPendingTools;
+          assistantMessage.streamingState = "in_progress";
+          await this.flushAssistantMessageCheckpoint(
+            sendingSession,
+            sessionRunId,
+            assistantMessage,
+            "in_progress",
+          );
+          this.ensureSessionTracked(sendingSession, sessionRunId);
+          this.executionPlanManager.addOrUpdateToolStep(
+            sendingSession,
+            currentMessages,
+            toolCall.id,
+            toolName,
+            planStepStatus,
+            truncateToolDetail(toolResult),
+          );
+          await this.sessionStorage.updateSessionMeta(sendingSession);
+          this.emitPlanUpdate(sendingSession, sessionRunId);
+
+          this.emitRuntimeEvent<"tool_completed">(
+            sendingSession,
+            sessionRunId,
+            assistantMessage,
+            {
+              type: "tool_completed",
+              toolCallId: toolCall.id,
+              toolName,
+              args: toolArgs,
+              resultPreview: truncateToolDetail(toolResult),
+              status: executionResult.status,
+              origin: primaryPolicyTrace?.stage || "executor",
+              policyName: primaryPolicyTrace?.policy,
+              policyOutcome: primaryPolicyTrace?.outcome,
+              policySummary: primaryPolicyTrace?.summary,
+              policyTrace: executionResult.policyTrace,
+              errorCategory:
+                executionResult.status === "completed"
+                  ? undefined
+                  : parsedToolError?.category || "unspecified",
+              iteration,
+            },
+          );
+          if (this.callbacks.isSessionActive(sendingSession)) {
+            this.callbacks.onStreamingUpdate?.(
+              displayWithPendingTools,
+              assistantMessage.id,
+            );
+          }
+        }
+
+        const needsRecovery = batchResults.some(
+          (result) => result.status === "denied" || result.status === "failed",
+        );
+        if (needsRecovery) {
+          this.executionPlanManager.recordRecoveryStep(
+            sendingSession,
+            currentMessages,
+            batchResults,
+          );
+          await this.sessionStorage.updateSessionMeta(sendingSession);
+          this.emitPlanUpdate(sendingSession, sessionRunId);
+        }
+
+        this.appendRecoveryGuidanceMessage(currentMessages, batchResults);
+      } finally {
+        releaseMutatingToolEntry?.();
+      }
     }
 
     this.ensureSessionTracked(sendingSession, sessionRunId);
@@ -1883,6 +1900,43 @@ export class AgentRuntime {
       }
       throw error;
     }
+  }
+
+  private beginMutatingToolEntry(
+    sessionId: string,
+    requests: ToolSchedulerRequest[],
+  ): (() => void) | null {
+    const mutatesState = requests.some(
+      (request) =>
+        getToolRuntimeMetadata(request.toolCall.function.name)?.mutatesState ===
+        true,
+    );
+    if (!mutatesState) {
+      return null;
+    }
+
+    let resolve!: () => void;
+    const pending = new Promise<void>((done) => {
+      resolve = done;
+    });
+    const sessionEntries =
+      this.pendingMutatingToolEntries.get(sessionId) ||
+      new Set<Promise<void>>();
+    sessionEntries.add(pending);
+    this.pendingMutatingToolEntries.set(sessionId, sessionEntries);
+
+    let released = false;
+    return () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      sessionEntries.delete(pending);
+      if (sessionEntries.size === 0) {
+        this.pendingMutatingToolEntries.delete(sessionId);
+      }
+      resolve();
+    };
   }
 
   private async executeUserInputRequest(
@@ -2659,6 +2713,9 @@ export class AgentRuntime {
     const next = previous
       .catch(() => undefined)
       .then(async () => {
+        if (!this.callbacks.isSessionTracked(session, sessionRunId)) {
+          return;
+        }
         const groundedDisplay = this.sanitizeGroundedDisplay(
           session,
           message.content,

@@ -556,9 +556,12 @@ export class StorageDatabase {
         )
       `);
 
-      // 3. Create messages table (may already exist from createTables, use IF NOT EXISTS)
+      // 3. Build the child table against sessions_new. createTables() may
+      // already have created an empty messages table whose foreign key still
+      // targets the legacy sessions table; reusing it would make DROP TABLE
+      // sessions cascade-delete the rows copied below.
       await db.queryAsync(`
-        CREATE TABLE IF NOT EXISTS messages (
+        CREATE TABLE messages_new (
           id TEXT PRIMARY KEY,
           session_id TEXT NOT NULL,
           seq INTEGER NOT NULL,
@@ -607,7 +610,7 @@ export class StorageDatabase {
           if (!msg.id || !msg.role) continue;
 
           await db.queryAsync(
-            `INSERT INTO messages (id, session_id, seq, role, content, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, source_item_keys, is_system_notice)
+            `INSERT INTO messages_new (id, session_id, seq, role, content, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, source_item_keys, is_system_notice)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               msg.id,
@@ -630,9 +633,13 @@ export class StorageDatabase {
         }
       }
 
-      // 5. Drop old sessions table and rename new one
+      // 5. Drop the old child before its parent, then publish both rebuilt
+      // tables. SQLite updates the messages_new foreign-key target when
+      // sessions_new is renamed.
+      await db.queryAsync("DROP TABLE messages");
       await db.queryAsync("DROP TABLE sessions");
       await db.queryAsync("ALTER TABLE sessions_new RENAME TO sessions");
+      await db.queryAsync("ALTER TABLE messages_new RENAME TO messages");
 
       // 6. Rebuild indexes
       await db.queryAsync(`
