@@ -460,12 +460,31 @@ describe("SessionStorageService grouped history search", function () {
       files: "not-json",
       timestamp: 1,
       tool_calls: "[broken",
+      source_item_keys: "{broken",
     });
 
     assert.equal(message.content, "Readable answer");
     assert.isUndefined(message.images);
     assert.isUndefined(message.files);
     assert.isUndefined(message.tool_calls);
+    assert.isUndefined(message.sourceItemKeys);
+  });
+
+  it("loads only normalized Zotero keys from trusted message sources", function () {
+    const message = mapMessageRowToChatMessage({
+      id: "trusted-sources",
+      role: "assistant",
+      content: "Compared sources",
+      timestamp: 1,
+      source_item_keys: JSON.stringify([
+        "item0001",
+        "ITEM0001",
+        "PAPER002",
+        "not-a-key",
+      ]),
+    });
+
+    assert.deepEqual(message.sourceItemKeys, ["ITEM0001", "PAPER002"]);
   });
 
   it("maps narrow Zotero DB projections without reading omitted columns", function () {

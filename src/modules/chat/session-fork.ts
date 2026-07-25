@@ -48,6 +48,9 @@ function cloneMessage(message: ChatMessage, id: string): ChatMessage {
       function: { ...toolCall.function },
     })),
     evidence: message.evidence?.map((record) => ({ ...record })),
+    sourceItemKeys: message.sourceItemKeys
+      ? [...message.sourceItemKeys]
+      : undefined,
   };
 }
 

@@ -29,6 +29,8 @@ import {
   getErrorMessage,
   generateShortId,
 } from "../../../utils/common";
+import { normalizeEvidenceRecords } from "../evidence";
+import { normalizeSourceItemKeys } from "../note-source-provenance";
 
 const MIGRATION_KEY = "migration_v3_completed";
 const MIGRATION_FILE_KEY_PREFIX = "migration_v3_file";
@@ -161,6 +163,8 @@ function prepareImportedSession(
       () => projectMessageSearchNormalizedText(msg),
       `message ${msg.id}`,
     );
+    const evidence = normalizeEvidenceRecords(msg.evidence);
+    const sourceItemKeys = normalizeSourceItemKeys(msg.sourceItemKeys);
     return [
       msg.id,
       session.id,
@@ -175,6 +179,8 @@ function prepareImportedSession(
       msg.selectedText || null,
       msg.tool_calls ? JSON.stringify(msg.tool_calls) : null,
       msg.tool_call_id || null,
+      evidence.length > 0 ? JSON.stringify(evidence) : null,
+      sourceItemKeys.length > 0 ? JSON.stringify(sourceItemKeys) : null,
       msg.streamingState || null,
       msg.apiOnly ? 1 : null,
       msg.isSystemNotice ? 1 : null,
@@ -392,8 +398,8 @@ async function insertSession(
   for (const params of prepared.messageParams) {
     await db.queryAsync(
       `INSERT INTO messages
-       (id, session_id, seq, role, content, reasoning, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, streaming_state, api_only, is_system_notice, search_text, search_index_version)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, session_id, seq, role, content, reasoning, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, source_item_keys, streaming_state, api_only, is_system_notice, search_text, search_index_version)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params,
     );
   }

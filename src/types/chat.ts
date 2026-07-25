@@ -54,6 +54,8 @@ export interface ChatMessage {
   isSystemNotice?: boolean;
   /** Trusted passage records referenced by this assistant message. */
   evidence?: EvidenceRecord[];
+  /** Trusted Zotero paper keys used to produce this assistant message. */
+  sourceItemKeys?: string[];
 }
 
 // 上下文摘要

@@ -11,7 +11,7 @@ import { getErrorMessage } from "../../../utils/common";
 
 const DB_DIR = "paper-chat";
 const DB_FILE = "storage";
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 11;
 
 /** Build absolute DB path so Zotero.DBConnection doesn't parse subdirectory names */
 function getDBPath(): string {
@@ -246,6 +246,7 @@ export class StorageDatabase {
         tool_calls TEXT,
         tool_call_id TEXT,
         evidence TEXT,
+        source_item_keys TEXT,
         streaming_state TEXT,
         api_only INTEGER,
         is_system_notice INTEGER,
@@ -436,7 +437,9 @@ export class StorageDatabase {
         (column: any) => String(column.name),
       ),
     );
-    return messageColumns.has("evidence");
+    return (
+      messageColumns.has("evidence") && messageColumns.has("source_item_keys")
+    );
   }
 
   private async initSchemaVersion(db: ZoteroDBConnection): Promise<void> {
@@ -506,6 +509,10 @@ export class StorageDatabase {
         await this.upgradeToV10(db);
         currentVersion = 10;
       }
+      if (currentVersion < 11) {
+        await this.upgradeToV11(db);
+        currentVersion = 11;
+      }
       if (
         currentVersion === SCHEMA_VERSION &&
         !(await this.hasCurrentSchemaColumns(db))
@@ -514,6 +521,7 @@ export class StorageDatabase {
           await this.upgradeToV9(db);
         }
         await this.upgradeToV10(db);
+        await this.upgradeToV11(db);
       }
     }
   }
@@ -564,6 +572,7 @@ export class StorageDatabase {
           tool_calls TEXT,
           tool_call_id TEXT,
           evidence TEXT,
+          source_item_keys TEXT,
           is_system_notice INTEGER,
           FOREIGN KEY (session_id) REFERENCES sessions_new(id) ON DELETE CASCADE
         )
@@ -598,8 +607,8 @@ export class StorageDatabase {
           if (!msg.id || !msg.role) continue;
 
           await db.queryAsync(
-            `INSERT INTO messages (id, session_id, seq, role, content, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, is_system_notice)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO messages (id, session_id, seq, role, content, images, files, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, source_item_keys, is_system_notice)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               msg.id,
               row.id,
@@ -614,6 +623,7 @@ export class StorageDatabase {
               msg.tool_calls ? JSON.stringify(msg.tool_calls) : null,
               msg.tool_call_id || null,
               msg.evidence ? JSON.stringify(msg.evidence) : null,
+              msg.sourceItemKeys ? JSON.stringify(msg.sourceItemKeys) : null,
               msg.isSystemNotice ? 1 : null,
             ],
           );
@@ -1184,6 +1194,42 @@ export class StorageDatabase {
       }
       ztoolkit.log(
         "[StorageDatabase] Failed to upgrade to v10:",
+        getErrorMessage(error),
+      );
+      throw error;
+    }
+  }
+
+  /** Upgrade schema v10 -> v11: persist trusted paper sources per message. */
+  private async upgradeToV11(db: ZoteroDBConnection): Promise<void> {
+    ztoolkit.log("[StorageDatabase] Upgrading schema v10 -> v11...");
+
+    await db.queryAsync("BEGIN TRANSACTION");
+    try {
+      const messageColumns = new Set(
+        ((await db.queryAsync("PRAGMA table_info(messages)")) || []).map(
+          (column: any) => String(column.name),
+        ),
+      );
+      if (!messageColumns.has("source_item_keys")) {
+        await db.queryAsync(
+          "ALTER TABLE messages ADD COLUMN source_item_keys TEXT",
+        );
+      }
+      await db.queryAsync(
+        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
+        [11, Date.now()],
+      );
+      await db.queryAsync("COMMIT");
+      ztoolkit.log("[StorageDatabase] Schema upgraded to v11");
+    } catch (error) {
+      try {
+        await db.queryAsync("ROLLBACK");
+      } catch {
+        /* ignore */
+      }
+      ztoolkit.log(
+        "[StorageDatabase] Failed to upgrade to v11:",
         getErrorMessage(error),
       );
       throw error;

@@ -96,8 +96,13 @@ import {
 } from "./session-fork";
 import {
   collectTrustedSourceTargets,
+  normalizeSourceItemKeys,
   sanitizeSourceGroupTargets,
 } from "./note-source-provenance";
+import {
+  buildNoteSummaryRuntimeInstruction,
+  type NoteSummaryContext,
+} from "./note-summary-destination";
 import { sanitizeEvidenceReferences } from "./evidence";
 import {
   AgentRuntime,
@@ -138,7 +143,7 @@ type RetryGuardedError = Error & {
 
 type FailedAssistantSnapshot = Pick<
   ChatMessage,
-  "content" | "reasoning" | "evidence"
+  "content" | "reasoning" | "evidence" | "sourceItemKeys"
 >;
 
 type InternalSendMessageOptions = SendMessageOptions & {
@@ -148,6 +153,11 @@ type InternalSendMessageOptions = SendMessageOptions & {
   reuseUserMessageId?: string;
   targetSession?: ChatSession;
   requireTargetSessionActive?: boolean;
+  allowedToolNames?: readonly string[];
+  modelRequestContent?: string;
+  allowPaperChatRetry?: boolean;
+  trustedSourceItemKeys?: readonly string[];
+  noteSummaryContext?: NoteSummaryContext;
 };
 
 function selectMoreSubstantialSnapshot(
@@ -1837,6 +1847,7 @@ export class ChatManager {
     error: unknown,
     failedProviderId: string,
     failedModelId: string | null,
+    allowRetry: boolean = true,
   ): Promise<void> {
     const isPaperChatFailure = failedProviderId === "paperchat";
 
@@ -1847,7 +1858,7 @@ export class ChatManager {
     }
 
     const isRetryablePaperChatFailure =
-      isPaperChatFailure && !isPaperChatQuotaError(error);
+      allowRetry && isPaperChatFailure && !isPaperChatQuotaError(error);
 
     session.lastRetryableUserMessageId = isRetryablePaperChatFailure
       ? userMessageId
@@ -1878,8 +1889,11 @@ export class ChatManager {
     const evidence = assistantMessage.evidence?.length
       ? assistantMessage.evidence
       : undefined;
+    const sourceItemKeys = assistantMessage.sourceItemKeys?.length
+      ? assistantMessage.sourceItemKeys
+      : undefined;
     return content || reasoning || evidence
-      ? { content, reasoning, evidence }
+      ? { content, reasoning, evidence, sourceItemKeys }
       : null;
   }
 
@@ -1927,6 +1941,7 @@ export class ChatManager {
     assistantMessage.content = snapshot.content;
     assistantMessage.reasoning = snapshot.reasoning;
     assistantMessage.evidence = snapshot.evidence;
+    assistantMessage.sourceItemKeys = snapshot.sourceItemKeys;
     assistantMessage.streamingState = "interrupted";
     assistantMessage.timestamp = Date.now();
     delete assistantMessage.tool_calls;
@@ -1938,6 +1953,7 @@ export class ChatManager {
       {
         streamingState: "interrupted",
         evidence: snapshot.evidence || [],
+        sourceItemKeys: snapshot.sourceItemKeys || [],
       },
     );
     if (toolContextChanged) {
@@ -1953,6 +1969,7 @@ export class ChatManager {
     error: unknown,
     failedProviderId: string,
     failedModelId: string | null,
+    allowRetry: boolean = true,
   ): Promise<void> {
     try {
       await this.applyPaperChatFailureState(
@@ -1962,6 +1979,7 @@ export class ChatManager {
         error,
         failedProviderId,
         failedModelId,
+        allowRetry,
       );
     } catch (stateError) {
       ztoolkit.log(
@@ -2222,10 +2240,13 @@ export class ChatManager {
       // 如果 provider 支持 tool calling，启用 tool calling 模式
       // 即使没有 PDF，也可以使用 library 工具（搜索、笔记等）
       const useToolCalling = providerSupportsToolCalling(provider);
+      if (options.allowedToolNames?.length && !useToolCalling) {
+        throw new Error(getString("chat-note-summary-tools-unavailable"));
+      }
 
       if (useToolCalling) {
         // 如果有当前 item，尝试提取 PDF（用于 PDF 相关工具）
-        if (hasCurrentItem && item) {
+        if (hasCurrentItem && item && !options.noteSummaryContext) {
           const hasPdf = await this.pdfExtractor.hasPdfAttachment(item);
           ztoolkit.log("[PDF Auto-detect] Item has PDF:", hasPdf);
 
@@ -2314,6 +2335,23 @@ export class ChatManager {
                 : undefined,
             }
           : sendingSession;
+      // Reply-summary actions send the selected reply as an isolated, ephemeral
+      // user payload. The visible summary command remains in chat history, but
+      // the original conversation is not duplicated in the model request.
+      const apiRequestContextSession =
+        options.modelRequestContent === undefined
+          ? requestContextSession
+          : {
+              ...requestContextSession,
+              messages: [
+                {
+                  ...userMessage,
+                  content: options.modelRequestContent,
+                },
+              ],
+              contextSummary: undefined,
+              contextState: undefined,
+            };
       sendingSession.updatedAt = Date.now();
       if (wasDraftSession) {
         this.notifySessionListUpdated();
@@ -2338,8 +2376,11 @@ export class ChatManager {
       let contextCompacted = false;
       try {
         contextCompacted = await contextManager.compactBeforeSendIfNeeded(
-          requestContextSession,
+          apiRequestContextSession,
           async () => {
+            if (options.modelRequestContent !== undefined) {
+              return;
+            }
             if (requestContextSession !== sendingSession) {
               sendingSession.contextSummary =
                 requestContextSession.contextSummary;
@@ -2371,6 +2412,16 @@ export class ChatManager {
         content: "",
         streamingState: "in_progress",
         timestamp: Date.now(),
+        sourceItemKeys: (() => {
+          const keys = normalizeSourceItemKeys(
+            options.trustedSourceItemKeys === undefined
+              ? itemKey && (useToolCalling || pdfWasAttached)
+                ? [itemKey]
+                : []
+              : options.trustedSourceItemKeys,
+          );
+          return keys.length > 0 ? keys : undefined;
+        })(),
       };
 
       sendingSession.messages.push(assistantMessage);
@@ -2395,7 +2446,7 @@ export class ChatManager {
       }
 
       const { messages: filteredMessages, summaryTriggered } =
-        contextManager.filterMessages(requestContextSession);
+        contextManager.filterMessages(apiRequestContextSession);
 
       // 从过滤后的消息中排除最后一条 (assistant 占位)
       const messagesForApi = filteredMessages.filter(
@@ -2430,6 +2481,9 @@ export class ChatManager {
           },
           options.resumeFailedTurn === true,
           abortSignal,
+          options.allowedToolNames,
+          options.allowPaperChatRetry !== false,
+          options.noteSummaryContext,
         );
         if (toolCallingResult !== null) {
           trackChatCompleted(toolCallingResult);
@@ -2493,7 +2547,11 @@ export class ChatManager {
                     assistantMessage.id,
                     sanitizedCheckpoint.content,
                     assistantMessage.reasoning,
-                    { streamingState, evidence: [] },
+                    {
+                      streamingState,
+                      evidence: [],
+                      sourceItemKeys: assistantMessage.sourceItemKeys || [],
+                    },
                   );
                 });
               return checkpointQueue;
@@ -2759,6 +2817,9 @@ export class ChatManager {
     onProviderUsed: (providerId: string) => void,
     preserveToolExecutionState: boolean,
     abortSignal?: AbortSignal,
+    allowedToolNames?: readonly string[],
+    allowPaperChatRetry: boolean = true,
+    noteSummaryContext?: NoteSummaryContext,
   ): Promise<boolean | null> {
     const pdfToolManager = getPdfToolManager();
     const providerManager = getProviderManager();
@@ -2772,25 +2833,39 @@ export class ChatManager {
           sendingSession.toolExecutionState?.results || [],
         )
       : undefined;
+    const allowedToolNameSet = allowedToolNames
+      ? new Set(allowedToolNames)
+      : null;
     const buildToolsForCurrentSearchScope = (
       provider: AIProvider | null | undefined,
     ): ToolDefinition[] => {
-      searchScopeGateEnabled = provider?.supportsHostedWebSearch?.() === true;
+      // An explicit allowlist is an exact request boundary. Do not inject the
+      // search-scope gate or any other tool that the caller did not authorize.
+      searchScopeGateEnabled =
+        allowedToolNameSet === null &&
+        provider?.supportsHostedWebSearch?.() === true;
       const scopedTools = this.getToolDefinitionsForProvider(
         provider,
         hasCurrentItem,
         selectedSearchScope,
       );
-      return searchScopeGateEnabled && !selectedSearchScope
-        ? createPendingSearchScopeTools(scopedTools)
+      const allowedTools = allowedToolNameSet
+        ? scopedTools.filter((tool) =>
+            allowedToolNameSet.has(tool.function.name),
+          )
         : scopedTools;
+      return searchScopeGateEnabled && !selectedSearchScope
+        ? createPendingSearchScopeTools(allowedTools)
+        : allowedTools;
     };
     const tools = buildToolsForCurrentSearchScope(_provider);
     const getStableSearchToolMode = (): SearchToolPromptMode =>
       searchScopeGateEnabled ? "gated" : getSearchToolPromptMode(tools);
+    const includeFullChatContext = !noteSummaryContext;
+    const hasPromptPaperContext = hasCurrentItem && includeFullChatContext;
 
     // 实时提取论文结构
-    const paperStructure = hasCurrentItem
+    const paperStructure = hasPromptPaperContext
       ? await pdfToolManager.extractAndParsePaper(item.key)
       : undefined;
     ensureSendingSessionTracked();
@@ -2799,13 +2874,15 @@ export class ChatManager {
     const lastUserMessage = messagesForApi
       .filter((m) => m.role === "user")
       .at(-1);
-    const memoryContext = await this.memoryManager.buildPromptContext(
-      lastUserMessage?.content,
-    );
-    const selectedSkills = await this.selectWorkflowSkills({
-      lastUserMessage,
-      item: hasCurrentItem ? item : undefined,
-    });
+    const memoryContext = includeFullChatContext
+      ? await this.memoryManager.buildPromptContext(lastUserMessage?.content)
+      : "";
+    const selectedSkills = includeFullChatContext
+      ? await this.selectWorkflowSkills({
+          lastUserMessage,
+          item: hasCurrentItem ? item : undefined,
+        })
+      : [];
     ensureSendingSessionTracked();
 
     // Keep the large stable paper/tool instructions at the start of the request,
@@ -2819,8 +2896,8 @@ export class ChatManager {
         maxIterations: number;
         forceFinalAnswer: boolean;
       },
-    ) =>
-      this.buildToolCallingRuntimeSystemPrompt({
+    ) => {
+      const prompt = this.buildToolCallingRuntimeSystemPrompt({
         memoryContext,
         selectedSkills,
         searchScope: selectedSearchScope,
@@ -2831,11 +2908,15 @@ export class ChatManager {
         sendingSession,
         runtimeState,
       });
+      return noteSummaryContext
+        ? `${prompt}\n\n${buildNoteSummaryRuntimeInstruction(noteSummaryContext)}`
+        : prompt;
+    };
 
     let paperContextPrompt = this.buildToolCallingStableSystemPrompt({
       paperStructure,
-      hasCurrentItem,
-      item: hasCurrentItem ? item : undefined,
+      hasCurrentItem: hasPromptPaperContext,
+      item: hasPromptPaperContext ? item : undefined,
       searchToolMode: getStableSearchToolMode(),
     });
     const runtimeContextPrompt = buildRuntimeSystemPrompt(
@@ -2930,8 +3011,8 @@ export class ChatManager {
         if (refreshStablePrompt) {
           paperContextPrompt = this.buildToolCallingStableSystemPrompt({
             paperStructure,
-            hasCurrentItem,
-            item: hasCurrentItem ? item : undefined,
+            hasCurrentItem: hasPromptPaperContext,
+            item: hasPromptPaperContext ? item : undefined,
             searchToolMode: getStableSearchToolMode(),
           });
         }
@@ -3091,6 +3172,7 @@ export class ChatManager {
           runtimePromptBuilder,
           executeProviderRequest,
           preserveToolExecutionState,
+          noteSummaryContext,
           searchScopeGate,
           abortSignal,
         );
@@ -3111,6 +3193,7 @@ export class ChatManager {
           runtimePromptBuilder,
           executeProviderRequest,
           preserveToolExecutionState,
+          noteSummaryContext,
           searchScopeGate,
           abortSignal,
         );
@@ -3150,6 +3233,7 @@ export class ChatManager {
         failedProviderId === "paperchat"
           ? failedPaperChatModelId || sendingSession.resolvedModelId || null
           : null,
+        allowPaperChatRetry,
       );
       sendingSession.messages.push(errorMessage);
       await this.sessionStorage.insertMessage(sendingSession.id, errorMessage);
@@ -3298,6 +3382,7 @@ export class ChatManager {
       onProviderRerouted?: () => void,
     ) => Promise<T>,
     preserveToolExecutionState: boolean,
+    noteSummaryContext?: NoteSummaryContext,
     searchScopeGate?: SearchScopeGateConfig,
     abortSignal?: AbortSignal,
   ): Promise<void> {
@@ -3315,6 +3400,7 @@ export class ChatManager {
       abortSignal,
       executeProviderRequest,
       preserveToolExecutionState,
+      noteSummaryContext,
       searchScopeGate,
       refreshSystemPrompt: buildSystemPrompt,
     });
@@ -3355,6 +3441,7 @@ export class ChatManager {
       onProviderRerouted?: () => void,
     ) => Promise<T>,
     preserveToolExecutionState: boolean,
+    noteSummaryContext?: NoteSummaryContext,
     searchScopeGate?: SearchScopeGateConfig,
     abortSignal?: AbortSignal,
   ): Promise<void> {
@@ -3372,6 +3459,7 @@ export class ChatManager {
       abortSignal,
       executeProviderRequest,
       preserveToolExecutionState,
+      noteSummaryContext,
       searchScopeGate,
       refreshSystemPrompt: buildSystemPrompt,
     });

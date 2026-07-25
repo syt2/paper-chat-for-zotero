@@ -218,6 +218,7 @@ describe("StorageDatabase foundation", function () {
           return [
             { name: "reasoning" },
             { name: "evidence" },
+            { name: "source_item_keys" },
             { name: "search_text" },
             { name: "search_index_version" },
           ];
@@ -347,6 +348,7 @@ describe("StorageDatabase foundation", function () {
           return [
             { name: "id" },
             { name: "evidence" },
+            { name: "source_item_keys" },
             { name: "search_text" },
             { name: "search_index_version" },
           ];
@@ -359,7 +361,7 @@ describe("StorageDatabase foundation", function () {
           ];
         }
         if (normalized === "SELECT version FROM schema_version WHERE id = 1") {
-          return [{ version: 10 }];
+          return [{ version: 11 }];
         }
         return [];
       },
@@ -379,6 +381,91 @@ describe("StorageDatabase foundation", function () {
       recorded,
       "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
     );
+  });
+
+  it("repairs a missing trusted-source column when schema version is current", async function () {
+    const recorded: Array<{ sql: string; params?: unknown[] }> = [];
+    const fakeDb = {
+      async queryAsync(sql: string, params?: unknown[]) {
+        const normalized = normalizeSql(sql);
+        recorded.push({ sql: normalized, params });
+        if (normalized === "PRAGMA table_info(messages)") {
+          return [
+            { name: "reasoning" },
+            { name: "evidence" },
+            { name: "search_text" },
+            { name: "search_index_version" },
+          ];
+        }
+        if (normalized === "PRAGMA table_info(session_meta)") {
+          return [{ name: "search_title" }, { name: "search_index_version" }];
+        }
+        if (normalized === "SELECT version FROM schema_version WHERE id = 1") {
+          return [{ version: 11 }];
+        }
+        return [];
+      },
+    };
+
+    await (new StorageDatabase() as any).initSchemaVersion(fakeDb);
+
+    assert.equal(
+      recorded.filter(
+        (entry) =>
+          entry.sql === "ALTER TABLE messages ADD COLUMN source_item_keys TEXT",
+      ).length,
+      1,
+    );
+    assert.isTrue(
+      recorded.some(
+        (entry) =>
+          entry.sql ===
+            "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1" &&
+          entry.params?.[0] === 11,
+      ),
+    );
+    assert.strictEqual(recorded.at(-1)?.sql, "COMMIT");
+  });
+
+  it("rolls back a failed trusted-source schema repair", async function () {
+    const recorded: string[] = [];
+    const fakeDb = {
+      async queryAsync(sql: string) {
+        const normalized = normalizeSql(sql);
+        recorded.push(normalized);
+        if (normalized === "PRAGMA table_info(messages)") {
+          return [
+            { name: "reasoning" },
+            { name: "evidence" },
+            { name: "search_text" },
+            { name: "search_index_version" },
+          ];
+        }
+        if (normalized === "PRAGMA table_info(session_meta)") {
+          return [{ name: "search_title" }, { name: "search_index_version" }];
+        }
+        if (normalized === "SELECT version FROM schema_version WHERE id = 1") {
+          return [{ version: 11 }];
+        }
+        if (
+          normalized === "ALTER TABLE messages ADD COLUMN source_item_keys TEXT"
+        ) {
+          throw new Error("alter failed");
+        }
+        return [];
+      },
+    };
+
+    let thrown: unknown;
+    try {
+      await (new StorageDatabase() as any).initSchemaVersion(fakeDb);
+    } catch (error) {
+      thrown = error;
+    }
+
+    assert.instanceOf(thrown, Error);
+    assert.include(recorded, "ROLLBACK");
+    assert.strictEqual(recorded.at(-1), "ROLLBACK");
   });
 
   it("adds message evidence when upgrading schema v9 to v10", async function () {
@@ -417,6 +504,47 @@ describe("StorageDatabase foundation", function () {
             "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1" &&
           entry.params?.[0] === 10 &&
           typeof entry.params?.[1] === "number",
+      ),
+    );
+    assert.strictEqual(recorded.at(-1)?.sql, "COMMIT");
+  });
+
+  it("adds trusted message sources when upgrading schema v10 to v11", async function () {
+    const recorded: Array<{ sql: string; params?: unknown[] }> = [];
+    const fakeDb = {
+      async queryAsync(sql: string, params?: unknown[]) {
+        const normalized = normalizeSql(sql);
+        recorded.push({ sql: normalized, params });
+        if (normalized === "SELECT version FROM schema_version WHERE id = 1") {
+          return [{ version: 10 }];
+        }
+        if (normalized === "PRAGMA table_info(messages)") {
+          return [
+            { name: "reasoning" },
+            { name: "evidence" },
+            { name: "search_text" },
+            { name: "search_index_version" },
+          ];
+        }
+        if (normalized === "PRAGMA table_info(session_meta)") {
+          return [{ name: "search_title" }, { name: "search_index_version" }];
+        }
+        return [];
+      },
+    };
+
+    await (new StorageDatabase() as any).initSchemaVersion(fakeDb);
+
+    assert.include(
+      recorded.map((entry) => entry.sql),
+      "ALTER TABLE messages ADD COLUMN source_item_keys TEXT",
+    );
+    assert.isTrue(
+      recorded.some(
+        (entry) =>
+          entry.sql ===
+            "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1" &&
+          entry.params?.[0] === 11,
       ),
     );
     assert.strictEqual(recorded.at(-1)?.sql, "COMMIT");
@@ -468,7 +596,7 @@ describe("StorageDatabase foundation", function () {
         const normalized = normalizeSql(sql);
         recorded.push(normalized);
         if (normalized === "SELECT version FROM schema_version WHERE id = 1") {
-          return [{ version: 10 }];
+          return [{ version: 11 }];
         }
         if (normalized === "PRAGMA table_info(messages)") {
           return [{ name: "id" }, { name: "reasoning" }];

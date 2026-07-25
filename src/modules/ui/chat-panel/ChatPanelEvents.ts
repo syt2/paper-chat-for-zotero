@@ -1247,6 +1247,7 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
           chatHistory.textContent = "";
           chatHistory.appendChild(emptyState);
           emptyState.style.display = "flex";
+          updateConversationNoteSummaryButton(container, [], undefined, false);
         }
         updateModelSelectorDisplay(container);
         syncSendButtonState(sendButton, chatManager);
@@ -2582,6 +2583,11 @@ function populateModelDropdown(
             providerManager.updateProviderConfig(config.id, {
               defaultModel: model,
             });
+
+            const activeSession = context.chatManager.getActiveSession();
+            if (activeSession) {
+              context.renderMessages(activeSession.messages);
+            }
 
             trackChatModelSwitched({
               source: "model_dropdown",

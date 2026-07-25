@@ -81,6 +81,7 @@ describe("chat session fork", function () {
             resultIndex: 1,
           })!,
         ],
+        sourceItemKeys: ["ITEM0001", "PAPER002"],
         timestamp: 4,
       },
       {
@@ -112,6 +113,11 @@ describe("chat session fork", function () {
     assert.notStrictEqual(forked[1]?.tool_calls, messages[1]?.tool_calls);
     assert.notStrictEqual(forked[3]?.evidence, messages[3]?.evidence);
     assert.notStrictEqual(forked[3]?.evidence?.[0], messages[3]?.evidence?.[0]);
+    assert.deepEqual(forked[3]?.sourceItemKeys, ["ITEM0001", "PAPER002"]);
+    assert.notStrictEqual(
+      forked[3]?.sourceItemKeys,
+      messages[3]?.sourceItemKeys,
+    );
     assert.equal(messages[0]?.id, "user-1");
     assert.equal(messages[4]?.id, "user-2");
   });

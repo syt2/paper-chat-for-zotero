@@ -1,5 +1,5 @@
 import { assert } from "chai";
-import type { ToolExecutionResult } from "../src/types/tool";
+import type { ToolDefinition, ToolExecutionResult } from "../src/types/tool";
 import {
   assertAssistantContentMatches,
   assertExecutedTools,
@@ -12,6 +12,17 @@ import {
   getToolCompletionStatuses,
   runAgentTraceScenario,
 } from "./helpers/agentTraceHarness.ts";
+
+function createToolDefinition(name: string): ToolDefinition {
+  return {
+    type: "function",
+    function: {
+      name,
+      description: `${name} test tool`,
+      parameters: { type: "object", properties: {} },
+    },
+  };
+}
 
 describe("agent trace eval harness", function () {
   it("replans after denied web_search and falls back to Zotero tools", async function () {
@@ -58,6 +69,7 @@ describe("agent trace eval harness", function () {
         }
         throw new Error(`Unexpected tool execution: ${toolCall.function.name}`);
       },
+      tools: [createToolDefinition("get_item_metadata")],
     });
 
     assertTraceContainsSequence(result, [
@@ -141,6 +153,10 @@ describe("agent trace eval harness", function () {
         }
         throw new Error(`Unexpected tool execution: ${toolCall.function.name}`);
       },
+      tools: [
+        createToolDefinition("get_full_text"),
+        createToolDefinition("search_paper_content"),
+      ],
     });
 
     assertTraceContainsSequence(result, [
@@ -213,6 +229,7 @@ describe("agent trace eval harness", function () {
           },
         },
       ],
+      tools: [createToolDefinition("create_note")],
     });
 
     assertTraceContainsSequence(result, [
@@ -260,6 +277,7 @@ describe("agent trace eval harness", function () {
         }
         throw new Error(`Unexpected tool execution: ${toolCall.function.name}`);
       },
+      tools: [createToolDefinition("search_paper_content")],
     });
 
     assertTraceContainsSequence(result, [
@@ -300,6 +318,7 @@ describe("agent trace eval harness", function () {
       },
       isSessionTracked: () => tracked,
       executeTool: () => "Method section: interrupted after start.",
+      tools: [createToolDefinition("search_paper_content")],
     });
 
     assertTraceContainsSequence(result, [
@@ -345,6 +364,7 @@ describe("agent trace eval harness", function () {
         },
       ],
       executeTool: () => "fresh narrower result",
+      tools: [createToolDefinition("search_paper_content")],
     });
 
     // Only the genuinely new call executes; the reused one is replayed from

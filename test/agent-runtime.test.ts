@@ -40,6 +40,17 @@ function createSession(): ChatSession {
   };
 }
 
+function createToolDefinition(name: string): ToolDefinition {
+  return {
+    type: "function",
+    function: {
+      name,
+      description: `${name} test tool`,
+      parameters: { type: "object", properties: {} },
+    },
+  };
+}
+
 describe("agent runtime plan semantics", function () {
   it("allows a scholarly query to fall back once through the local web tool", async function () {
     const { applyToolBudgetPolicy, createToolBudgetState } =
@@ -1085,6 +1096,145 @@ describe("agent runtime plan semantics", function () {
     assert.include(entries[0].results[0].content, "not available");
   });
 
+  it("blocks a hallucinated non-search tool that was not exposed in the round", function () {
+    const runtime = new AgentRuntime({} as any, {} as any, {
+      createExecutionBatches: () => [],
+      executeBatch: async () => [],
+    }) as any;
+    const toolCall: ToolCall = {
+      id: "hidden-append-note",
+      type: "function",
+      function: {
+        name: "append_to_note",
+        arguments: JSON.stringify({ content: "should not run" }),
+      },
+    };
+    const entries = runtime.createRuntimeToolIterationEntries(
+      createSession(),
+      { id: "assistant", role: "assistant", content: "", timestamp: 2 },
+      [toolCall],
+      { maxFullTextCallsPerTurn: 1, maxWebSearchCallsPerTurn: 2 },
+      undefined,
+      false,
+      null,
+      new Set(["create_note"]),
+    );
+
+    assert.equal(entries[0].kind, "synthetic");
+    assert.equal(entries[0].results[0].status, "denied");
+    assert.include(entries[0].results[0].content, "not available");
+  });
+
+  it("does not persist an unavailable tool call in the api-only transcript", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    const session = createSession();
+    const assistantMessage: ChatMessage = {
+      id: "assistant-unavailable-tool",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+    };
+    session.messages.push(assistantMessage);
+    const unavailableToolCall: ToolCall = {
+      id: "call-unavailable-append",
+      type: "function",
+      function: {
+        name: "append_to_note",
+        arguments: JSON.stringify({ content: "must not run" }),
+      },
+    };
+    let providerCalls = 0;
+    let schedulerCalls = 0;
+    let executorCalls = 0;
+    const requestSnapshots: ChatMessage[][] = [];
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        saveSession: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => false,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "<tool-call />",
+        generateId: (() => {
+          let id = 0;
+          return () => `unavailable-${++id}`;
+        })(),
+      } as any,
+      {
+        createExecutionBatches: () => {
+          schedulerCalls += 1;
+          return [];
+        },
+        executeBatch: async () => {
+          executorCalls += 1;
+          return [];
+        },
+      },
+    ) as any;
+    runtime.getMaxIterations = () => 2;
+    const provider = {
+      config: {
+        id: "anthropic",
+        type: "anthropic",
+        defaultModel: "claude-test",
+      },
+      chatCompletionWithTools: async (messages: ChatMessage[]) => {
+        providerCalls += 1;
+        requestSnapshots.push(messages.map((message) => ({ ...message })));
+        return providerCalls === 1
+          ? { content: "", toolCalls: [unavailableToolCall] }
+          : { content: "continued safely" };
+      },
+    };
+
+    try {
+      await runtime.executeNonStreamingToolLoop({
+        provider,
+        currentMessages: [session.messages[0]],
+        assistantMessage,
+        pdfWasAttached: false,
+        summaryTriggered: false,
+        tools: [createToolDefinition("create_note")],
+        sendingSession: session,
+      });
+
+      assert.equal(providerCalls, 2);
+      assert.equal(schedulerCalls, 0);
+      assert.equal(executorCalls, 0);
+      assert.isTrue(
+        requestSnapshots[1].some(
+          (message) =>
+            message.role === "assistant" &&
+            message.tool_calls?.[0]?.id === unavailableToolCall.id,
+        ),
+      );
+      assert.isTrue(
+        requestSnapshots[1].some(
+          (message) =>
+            message.role === "tool" &&
+            message.tool_call_id === unavailableToolCall.id,
+        ),
+      );
+      assert.isFalse(
+        session.messages.some(
+          (message) =>
+            message.apiOnly &&
+            (message.tool_call_id === unavailableToolCall.id ||
+              message.tool_calls?.some(
+                (toolCall) => toolCall.id === unavailableToolCall.id,
+              )),
+        ),
+      );
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
+  });
+
   it("adds a planning iteration only when a pending search gate is selected", async function () {
     const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
     (globalThis as { ztoolkit?: unknown }).ztoolkit = {
@@ -1631,7 +1781,7 @@ describe("agent runtime plan semantics", function () {
           assistantMessage,
           pdfWasAttached: false,
           summaryTriggered: false,
-          tools: [],
+          tools: [createToolDefinition("create_note")],
           sendingSession: session,
           executeProviderRequest: async (operation) => {
             let lastError: unknown;
@@ -2550,7 +2700,7 @@ describe("agent runtime plan semantics", function () {
           assistantMessage,
           pdfWasAttached: false,
           summaryTriggered: false,
-          tools: [],
+          tools: [createToolDefinition("create_note")],
           sendingSession: session,
           executeProviderRequest: async (operation) => {
             let lastError: unknown;
@@ -3469,6 +3619,7 @@ describe("agent runtime plan semantics", function () {
       | {
           content: string;
           evidence?: (typeof record)[];
+          sourceItemKeys?: string[];
         }
       | undefined;
     const runtime = new AgentRuntime(
@@ -3478,9 +3629,16 @@ describe("agent runtime plan semantics", function () {
           _messageId: string,
           content: string,
           _reasoning: string | undefined,
-          options: { evidence?: (typeof record)[] },
+          options: {
+            evidence?: (typeof record)[];
+            sourceItemKeys?: string[];
+          },
         ) => {
-          checkpoint = { content, evidence: options.evidence };
+          checkpoint = {
+            content,
+            evidence: options.evidence,
+            sourceItemKeys: options.sourceItemKeys,
+          };
         },
         updateSessionMeta: async () => undefined,
       } as any,
@@ -3540,7 +3698,79 @@ describe("agent runtime plan semantics", function () {
       `Trusted claim.<evidence-ref ids="${record.id}"/> Forged.`,
     );
     assert.deepEqual(assistantMessage.evidence, [record]);
+    assert.deepEqual(assistantMessage.sourceItemKeys, ["ITEM0001"]);
     assert.deepEqual(checkpoint?.evidence, [record]);
+    assert.deepEqual(checkpoint?.sourceItemKeys, ["ITEM0001"]);
     assert.equal(checkpoint?.content, assistantMessage.content);
+  });
+
+  it("merges the bound paper with trusted tool sources on the AI reply", async function () {
+    let checkpointSources: string[] | undefined;
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async (
+          _sessionId: string,
+          _messageId: string,
+          _content: string,
+          _reasoning: string | undefined,
+          options: { sourceItemKeys?: string[] },
+        ) => {
+          checkpointSources = options.sourceItemKeys;
+        },
+        updateSessionMeta: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => true,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "",
+        generateId: () => "generated-id",
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async () => [],
+      },
+    ) as any;
+    const session = createSession();
+    const assistantMessage: ChatMessage = {
+      id: "assistant-sources",
+      role: "assistant",
+      content: "",
+      sourceItemKeys: ["ITEM0001"],
+      timestamp: 2,
+    };
+    session.messages.push(assistantMessage);
+    runtime.executionPlanManager.startPlan(session, session.messages);
+    session.toolExecutionState = {
+      turnStartedAt: 1,
+      updatedAt: 1,
+      results: [
+        {
+          toolCall: {
+            id: "tool-paper-b",
+            type: "function",
+            function: {
+              name: "get_item_metadata",
+              arguments: '{"itemKey":"PAPER002"}',
+            },
+          },
+          status: "completed",
+          content: "Paper B metadata",
+          references: [{ type: "item", key: "PAPER002" }],
+        },
+      ],
+    };
+
+    await runtime.finalizeCompletedTurn({
+      sendingSession: session,
+      currentMessages: session.messages,
+      assistantMessage,
+      pdfWasAttached: false,
+      summaryTriggered: false,
+      accumulatedDisplay: "Comparison complete.",
+      iteration: 2,
+    });
+
+    assert.deepEqual(assistantMessage.sourceItemKeys, ["ITEM0001", "PAPER002"]);
+    assert.deepEqual(checkpointSources, ["ITEM0001", "PAPER002"]);
   });
 });

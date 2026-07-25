@@ -10,6 +10,7 @@ import type {
 const MAX_QUESTIONS = 3;
 const MIN_OPTIONS = 2;
 const MAX_OPTIONS = 4;
+const MAX_APPLICATION_OPTIONS = 100;
 const MAX_TEXT_LENGTH = 500;
 const MIN_AUTO_RESOLUTION_MS = 60_000;
 const MAX_AUTO_RESOLUTION_MS = 240_000;
@@ -86,6 +87,7 @@ function normalizeQuestion(
   usedIds: Set<string>,
   issues: string[],
   warnings: string[],
+  maxOptions: number,
 ): RequestUserInputQuestion | null {
   if (
     !rawQuestion ||
@@ -130,10 +132,8 @@ function normalizeQuestion(
         `Question ${id} must include at least ${MIN_OPTIONS} options.`,
       );
     }
-    if (options && options.length > MAX_OPTIONS) {
-      issues.push(
-        `Question ${id} must include at most ${MAX_OPTIONS} options.`,
-      );
+    if (options && options.length > maxOptions) {
+      issues.push(`Question ${id} must include at most ${maxOptions} options.`);
     }
   }
   if ((type === "text" || type === "secret") && options?.length) {
@@ -208,6 +208,7 @@ function hasAutoResolutionDefault(question: RequestUserInputQuestion): boolean {
 
 export function normalizeRequestUserInputArgs(
   rawArgs: unknown,
+  limits?: { maxOptions?: number },
 ): RequestUserInputValidationResult {
   if (!rawArgs || typeof rawArgs !== "object" || Array.isArray(rawArgs)) {
     return {
@@ -231,10 +232,14 @@ export function normalizeRequestUserInputArgs(
   }
 
   const usedIds = new Set<string>();
+  const maxOptions = Math.min(
+    MAX_APPLICATION_OPTIONS,
+    Math.max(MAX_OPTIONS, Math.floor(limits?.maxOptions || MAX_OPTIONS)),
+  );
   const questions = rawQuestions
     .slice(0, MAX_QUESTIONS)
     .map((question, index) =>
-      normalizeQuestion(question, index, usedIds, issues, warnings),
+      normalizeQuestion(question, index, usedIds, issues, warnings, maxOptions),
     )
     .filter((question): question is RequestUserInputQuestion => !!question);
 

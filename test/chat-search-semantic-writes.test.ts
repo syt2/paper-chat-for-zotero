@@ -162,12 +162,13 @@ class SemanticWriteFakeDatabase {
         tool_calls: (params[11] as string | null) || null,
         tool_call_id: (params[12] as string | null) || null,
         evidence: (params[13] as string | null) || null,
+        source_item_keys: (params[14] as string | null) || null,
         streaming_state:
-          (params[14] as StoredMessage["streaming_state"]) || null,
-        api_only: (params[15] as number | null) || null,
-        is_system_notice: (params[16] as number | null) || null,
-        search_text: String(params[17] || ""),
-        search_index_version: Number(params[18]),
+          (params[15] as StoredMessage["streaming_state"]) || null,
+        api_only: (params[16] as number | null) || null,
+        is_system_notice: (params[17] as number | null) || null,
+        search_text: String(params[18] || ""),
+        search_index_version: Number(params[19]),
       };
       this.messages.set(message.id, message);
       return [];
@@ -209,16 +210,17 @@ class SemanticWriteFakeDatabase {
       return [];
     }
     if (statement.startsWith("UPDATE messages SET content = ?")) {
-      const message = this.messages.get(String(params[7]));
-      if (message && message.session_id === params[8]) {
+      const message = this.messages.get(String(params[8]));
+      if (message && message.session_id === params[9]) {
         message.content = String(params[0] || "");
         message.reasoning = (params[1] as string | null) || null;
         message.timestamp = Number(params[2]);
         message.streaming_state =
           (params[3] as StoredMessage["streaming_state"]) || null;
         message.evidence = (params[4] as string | null) || null;
-        message.search_text = String(params[5] || "");
-        message.search_index_version = Number(params[6]);
+        message.source_item_keys = (params[5] as string | null) || null;
+        message.search_text = String(params[6] || "");
+        message.search_index_version = Number(params[7]);
       }
       return [];
     }
@@ -478,6 +480,7 @@ describe("chat search semantic writes", function () {
       role: "user",
       selectedText: "Selected Text",
       content: "[Question]: Hello ＷＯＲＬＤ",
+      sourceItemKeys: ["item0001", "invalid"],
       timestamp: 10,
     });
 
@@ -487,6 +490,7 @@ describe("chat search semantic writes", function () {
       `selected text${FIELD_BOUNDARY_TOKEN}hello world`,
     );
     assert.equal(stored?.search_index_version, CURRENT_SEARCH_VERSION);
+    assert.equal(stored?.source_item_keys, '["ITEM0001"]');
     assert.equal(fake.state?.search_revision, 5);
 
     const semanticWrites = fake.queries.filter(
@@ -527,10 +531,17 @@ describe("chat search semantic writes", function () {
       "assistant-1",
       "partial **answer**",
       "hidden reasoning",
-      { streamingState: "in_progress" },
+      {
+        streamingState: "in_progress",
+        sourceItemKeys: ["item0001"],
+      },
     );
     assert.equal(fake.state?.search_revision, 7);
     assert.equal(fake.messages.get("assistant-1")?.search_text, "");
+    assert.equal(
+      fake.messages.get("assistant-1")?.source_item_keys,
+      '["ITEM0001"]',
+    );
 
     await service.updateMessageContent(
       "session-1",
@@ -540,6 +551,10 @@ describe("chat search semantic writes", function () {
     );
     assert.equal(fake.state?.search_revision, 8);
     assert.equal(fake.messages.get("assistant-1")?.search_text, "final answer");
+    assert.equal(
+      fake.messages.get("assistant-1")?.source_item_keys,
+      '["ITEM0001"]',
+    );
 
     const revisionWrites = fake.queries.filter((query) =>
       query.sql.startsWith("UPDATE chat_search_state SET search_revision"),

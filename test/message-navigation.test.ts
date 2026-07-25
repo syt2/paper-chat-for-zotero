@@ -7,7 +7,12 @@ import {
   findRenderedMessageElement,
   renderMessages,
   scrollToAndHighlightMessage,
+  updateUserInputRequestView,
 } from "../src/modules/ui/chat-panel/MessageRenderer.ts";
+import {
+  buildNoteSummaryDestinationRequestArgs,
+  createNoteSummaryContext,
+} from "../src/modules/chat/note-summary-destination.ts";
 import {
   buildReplyNoteSummaryPrompt,
   canSummarizeAssistantReply,
@@ -32,10 +37,18 @@ class FakeElement {
   readonly children: FakeElement[] = [];
   readonly listeners = new Map<string, Array<(event: any) => void>>();
   parentElement: FakeElement | null = null;
+  readonly dataset: Record<string, string> = {};
   scrollTop = 0;
   scrollHeight = 0;
   clientHeight = 0;
+  offsetHeight = 0;
   disabled = false;
+  value = "";
+  checked = false;
+  type = "";
+  name = "";
+  placeholder = "";
+  autocomplete = "";
   private textValue = "";
   private rect: RectInit = { top: 0, height: 0 };
 
@@ -80,7 +93,20 @@ class FakeElement {
   appendChild(child: FakeElement): FakeElement {
     child.parentElement = this;
     this.children.push(child);
+    if (
+      this.tagName === "select" &&
+      !this.value &&
+      child.tagName === "option"
+    ) {
+      this.value = child.value;
+    }
     return child;
+  }
+
+  replaceChildren(...children: FakeElement[]): void {
+    for (const child of this.children) child.parentElement = null;
+    this.children.length = 0;
+    for (const child of children) this.appendChild(child);
   }
 
   remove(): void {
@@ -112,12 +138,37 @@ class FakeElement {
     this.listeners.set(type, listeners);
   }
 
-  querySelector(_selector: string): FakeElement | null {
-    return null;
+  querySelector(selector: string): FakeElement | null {
+    return this.querySelectorAll(selector)[0] || null;
   }
 
-  querySelectorAll(_selector: string): FakeElement[] {
-    return [];
+  querySelectorAll(selector: string): FakeElement[] {
+    const matches = (element: FakeElement): boolean => {
+      if (selector.startsWith("#")) {
+        return element.getAttribute("id") === selector.slice(1);
+      }
+      if (selector.startsWith(".")) {
+        return (element.getAttribute("class") || "")
+          .split(/\s+/)
+          .includes(selector.slice(1));
+      }
+      if (selector.startsWith("[")) {
+        const attributes = [...selector.matchAll(/\[([^=\]]+)="([^"]*)"\]/g)];
+        return attributes.every(
+          (match) => element.getAttribute(match[1]) === match[2],
+        );
+      }
+      return element.tagName === selector.toLowerCase();
+    };
+    const found: FakeElement[] = [];
+    const visit = (element: FakeElement) => {
+      for (const child of element.children) {
+        if (matches(child)) found.push(child);
+        visit(child);
+      }
+    };
+    visit(this);
+    return found;
   }
 }
 
@@ -129,7 +180,11 @@ class FakeDocument {
   }
 
   createElementNS(_namespace: string, tagName: string): FakeElement {
-    return new FakeElement(this, tagName);
+    return new FakeElement(this, tagName.toLowerCase());
+  }
+
+  createElement(tagName: string): FakeElement {
+    return new FakeElement(this, tagName.toLowerCase());
   }
 
   createTextNode(value: string): FakeElement {
@@ -556,6 +611,73 @@ describe("chat message exact navigation", function () {
       providerSupportsToolCalling({
         chatCompletionWithTools: async () => ({ content: "" }),
       } as any),
+    );
+  });
+
+  it("renders destination radios up to four choices and a paper select above four", function () {
+    const renderDestination = (paperCount: number) => {
+      const doc = new FakeDocument();
+      const panel = new FakeElement(doc, "div");
+      const context = createNoteSummaryContext(
+        Array.from({ length: paperCount }, (_, index) => ({
+          itemKey: `PAPER${String(index + 1).padStart(3, "0")}`,
+          title: `Paper ${index + 1}`,
+        })),
+      );
+      let response: any;
+      updateUserInputRequestView(
+        asElement(panel),
+        darkTheme,
+        {
+          pendingRequests: [
+            {
+              id: "destination-request",
+              sessionId: "session",
+              assistantMessageId: "assistant",
+              toolCallId: "request-user-input",
+              toolName: "request_user_input",
+              args: buildNoteSummaryDestinationRequestArgs(context),
+              status: "pending",
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          ],
+          updatedAt: 1,
+        },
+        {
+          onResolveUserInput: (_requestId, value) => {
+            response = value;
+          },
+        },
+      );
+      return { panel, getResponse: () => response };
+    };
+
+    const fourChoices = renderDestination(3).panel;
+    assert.lengthOf(fourChoices.querySelectorAll("input"), 4);
+    assert.lengthOf(fourChoices.querySelectorAll("select"), 0);
+
+    const fiveChoices = renderDestination(4);
+    const radios = fiveChoices.panel.querySelectorAll("input");
+    const selects = fiveChoices.panel.querySelectorAll("select");
+    assert.lengthOf(radios, 2);
+    assert.lengthOf(selects, 1);
+    assert.isTrue(radios[0].checked);
+    assert.isFalse(radios[1].checked);
+
+    const select = selects[0];
+    select.value = "paper:PAPER004";
+    select.listeners.get("change")?.[0]?.({});
+    assert.isTrue(radios[1].checked);
+    assert.equal(radios[1].value, "paper:PAPER004");
+
+    const form = fiveChoices.panel.querySelector("form")!;
+    form.listeners.get("submit")?.[0]?.({
+      preventDefault: () => undefined,
+    });
+    assert.deepEqual(
+      fiveChoices.getResponse().answers.note_summary_destination.answers,
+      ["paper:PAPER004"],
     );
   });
 
