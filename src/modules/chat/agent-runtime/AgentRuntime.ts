@@ -67,8 +67,15 @@ import {
 } from "../user-input-request";
 import {
   collectTrustedSourceTargets,
+  normalizeSourceItemKeys,
   sanitizeSourceGroupTargets,
 } from "../note-source-provenance";
+import {
+  applyNoteSummaryDestinationResponse,
+  buildNoteSummaryDestinationRequestArgs,
+  rewriteCreateNoteTarget,
+  type NoteSummaryContext,
+} from "../note-summary-destination";
 import {
   appendEvidenceCitationCatalog,
   collectToolEvidenceRecords,
@@ -148,6 +155,7 @@ interface RuntimeExecutionOptions {
   abortSignal?: AbortSignal;
   executeProviderRequest?: ProviderRequestExecutor;
   preserveToolExecutionState?: boolean;
+  noteSummaryContext?: NoteSummaryContext;
   searchScopeGate?: SearchScopeGateConfig;
   refreshSystemPrompt?: (
     currentMessages: ChatMessage[],
@@ -192,6 +200,7 @@ interface ToolIterationParams {
   currentItemKey?: string | null;
   allowedToolNames: Set<string>;
   selectedSearchScope?: SelectedSearchScope;
+  noteSummaryContext?: NoteSummaryContext;
 }
 
 // Hard stop for a single assistant turn. Keeps malformed tool loops bounded
@@ -222,6 +231,31 @@ interface PendingUserInputResolver {
   }) => void;
 }
 
+function createUnavailableToolResult(toolCall: ToolCall): ToolExecutionResult {
+  return {
+    toolCall,
+    status: "denied",
+    policyTrace: [
+      {
+        stage: "planner",
+        policy: "permission_decision",
+        outcome: "blocked",
+        summary:
+          "Blocked a tool that was not available in the current model round.",
+      },
+    ],
+    content: formatToolError({
+      summary: `Tool ${toolCall.function.name} is not available in the current model round.`,
+      category: "permission_denied",
+      retryable: true,
+      cause:
+        "The model requested a tool that was not included in the current request.",
+      suggestedFix:
+        "Continue using only the tools exposed in this model round.",
+    }),
+  };
+}
+
 interface IterationControlState {
   currentIteration: number;
   remainingIterations: number;
@@ -242,6 +276,7 @@ export class AgentRuntime {
     string,
     PendingUserInputResolver
   >();
+  private pendingMutatingToolEntries = new Map<string, Set<Promise<void>>>();
   private userInputRequestCounter = 0;
 
   constructor(
@@ -278,6 +313,14 @@ export class AgentRuntime {
     return cancelled;
   }
 
+  async waitForPendingMutatingToolExecutions(sessionId: string): Promise<void> {
+    const pending = this.pendingMutatingToolEntries.get(sessionId);
+    if (!pending?.size) {
+      return;
+    }
+    await Promise.all([...pending]);
+  }
+
   async executeStreamingToolLoop(
     options: StreamingRuntimeExecutionOptions,
   ): Promise<void> {
@@ -295,6 +338,7 @@ export class AgentRuntime {
       abortSignal,
       executeProviderRequest = (operation) => operation(),
       preserveToolExecutionState = false,
+      noteSummaryContext,
       searchScopeGate,
       refreshSystemPrompt,
     } = options;
@@ -427,6 +471,7 @@ export class AgentRuntime {
               iterationControl.toolsForRound.map((tool) => tool.function.name),
             ),
             selectedSearchScope,
+            noteSummaryContext,
           });
           accumulatedDisplay = toolIteration.accumulatedDisplay;
           if (
@@ -537,6 +582,7 @@ export class AgentRuntime {
       abortSignal,
       executeProviderRequest = (operation) => operation(),
       preserveToolExecutionState = false,
+      noteSummaryContext,
       searchScopeGate,
       refreshSystemPrompt,
     } = options;
@@ -663,6 +709,7 @@ export class AgentRuntime {
               iterationControl.toolsForRound.map((tool) => tool.function.name),
             ),
             selectedSearchScope,
+            noteSummaryContext,
           });
           accumulatedDisplay = toolIteration.accumulatedDisplay;
           if (
@@ -1125,15 +1172,49 @@ export class AgentRuntime {
       currentItemKey,
       allowedToolNames,
       selectedSearchScope,
+      noteSummaryContext,
     } = params;
     const contextStrategy = getToolContextStrategy(provider);
+
+    const invalidSummaryCreateNoteCallIds = new Set<string>();
+    const protectedToolCalls = toolCalls.map((toolCall) => {
+      if (!noteSummaryContext) {
+        return toolCall;
+      }
+      if (toolCall.function.name === "request_user_input") {
+        return {
+          ...toolCall,
+          function: {
+            ...toolCall.function,
+            arguments: JSON.stringify(
+              buildNoteSummaryDestinationRequestArgs(noteSummaryContext),
+            ),
+          },
+        };
+      }
+      if (
+        toolCall.function.name === "create_note" &&
+        noteSummaryContext.destination.status === "resolved"
+      ) {
+        const rewritten = rewriteCreateNoteTarget(
+          toolCall,
+          noteSummaryContext.destination.itemKey,
+        );
+        if (!rewritten) {
+          invalidSummaryCreateNoteCallIds.add(toolCall.id);
+          return toolCall;
+        }
+        return rewritten;
+      }
+      return toolCall;
+    });
 
     const assistantToolMessage: ChatMessage = {
       id: this.callbacks.generateId(),
       role: "assistant",
       content: roundContent,
       reasoning: roundReasoning,
-      tool_calls: toolCalls,
+      tool_calls: protectedToolCalls,
       timestamp: Date.now(),
     };
     currentMessages.push(assistantToolMessage);
@@ -1141,12 +1222,14 @@ export class AgentRuntime {
     const executionEntries = this.createRuntimeToolIterationEntries(
       sendingSession,
       assistantMessage,
-      toolCalls,
+      protectedToolCalls,
       budgetLimits,
       paperStructure,
       reuseCompletedResults,
       currentItemKey,
       allowedToolNames,
+      noteSummaryContext,
+      invalidSummaryCreateNoteCallIds,
     );
 
     // Reused exchanges already live in the previous turn's retained apiOnly
@@ -1159,9 +1242,16 @@ export class AgentRuntime {
           : [],
       ),
     );
+    const unavailableToolCallIds = new Set(
+      protectedToolCalls
+        .filter((toolCall) => !allowedToolNames.has(toolCall.function.name))
+        .map((toolCall) => toolCall.id),
+    );
     if (contextStrategy.persistApiOnlyTranscript) {
-      const persistedToolCalls = toolCalls.filter(
-        (toolCall) => !reusedToolCallIds.has(toolCall.id),
+      const persistedToolCalls = protectedToolCalls.filter(
+        (toolCall) =>
+          !reusedToolCallIds.has(toolCall.id) &&
+          !unavailableToolCallIds.has(toolCall.id),
       );
       if (persistedToolCalls.length > 0) {
         insertApiOnlyModelContextMessage(sendingSession, assistantMessage, {
@@ -1260,184 +1350,204 @@ export class AgentRuntime {
         }
       }
 
-      this.ensureSessionTracked(sendingSession, sessionRunId);
-
-      const batchResults =
+      const releaseMutatingToolEntry =
         entry.kind === "execute"
-          ? await this.executeBatchWithRuntimeEvents(
-              sendingSession,
-              sessionRunId,
-              assistantMessage,
-              entry.requests,
-              iteration,
-            )
-          : entry.kind === "user_input"
-            ? [
-                await this.executeUserInputRequest(
-                  sendingSession,
-                  sessionRunId,
-                  currentMessages,
-                  assistantMessage,
-                  entry.toolCall,
-                  iteration,
-                ),
-              ]
-            : entry.kind === "search_scope"
-              ? (() => {
-                  const selection = executeSearchScopeSelection(
+          ? this.beginMutatingToolEntry(sendingSession.id, entry.requests)
+          : null;
+      try {
+        this.ensureSessionTracked(sendingSession, sessionRunId);
+
+        const batchResults =
+          entry.kind === "execute"
+            ? await this.executeBatchWithRuntimeEvents(
+                sendingSession,
+                sessionRunId,
+                assistantMessage,
+                entry.requests,
+                iteration,
+              )
+            : entry.kind === "user_input"
+              ? [
+                  await this.executeUserInputRequest(
+                    sendingSession,
+                    sessionRunId,
+                    currentMessages,
+                    assistantMessage,
                     entry.toolCall,
-                    resolvedSearchScope,
-                  );
-                  if (selection.selectedScope) {
-                    resolvedSearchScope = selection.selectedScope;
-                  }
-                  return [selection.result];
-                })()
-              : entry.results;
-      resolvedSearchScope = advanceSearchScopeAfterResults(
-        resolvedSearchScope,
-        batchResults,
-      );
-      if (entry.kind !== "reused") {
-        this.appendToolExecutionResults(sendingSession, batchResults);
-        await this.sessionStorage.updateSessionMeta(sendingSession);
-        this.emitPlanUpdate(sendingSession, sessionRunId);
-      }
-
-      for (const executionResult of batchResults) {
-        this.ensureSessionTracked(sendingSession, sessionRunId);
-        const toolCall = executionResult.toolCall;
-        const toolName = toolCall.function.name;
-        const toolArgs = toolCall.function.arguments;
-        const toolResult = executionResult.content;
-
-        ztoolkit.log(
-          `[${logPrefix}] Result (truncated): ${toolResult.substring(0, 200)}...`,
-        );
-
-        const shouldCompactModelToolResult =
-          contextStrategy.compactToolResultOnCreate &&
-          !executionResult.artifact &&
-          toolName !== "read_artifact";
-        const modelToolResult = shouldCompactModelToolResult
-          ? compactToolResultContent(
-              toolResult,
-              contextStrategy.compactionPolicy,
-            )
-          : toolResult;
-        const toolResultMessage: ChatMessage = {
-          id: this.callbacks.generateId(),
-          role: "tool",
-          content: appendEvidenceCitationCatalog(
-            modelToolResult,
-            executionResult.evidence,
-          ),
-          tool_call_id: toolCall.id,
-          timestamp: Date.now(),
-        };
-        currentMessages.push(toolResultMessage);
+                    iteration,
+                    noteSummaryContext,
+                  ),
+                ]
+              : entry.kind === "search_scope"
+                ? (() => {
+                    const selection = executeSearchScopeSelection(
+                      entry.toolCall,
+                      resolvedSearchScope,
+                    );
+                    if (selection.selectedScope) {
+                      resolvedSearchScope = selection.selectedScope;
+                    }
+                    return [selection.result];
+                  })()
+                : entry.results;
         if (
-          contextStrategy.persistApiOnlyTranscript &&
-          entry.kind !== "reused"
+          noteSummaryContext &&
+          batchResults.some(
+            (result) =>
+              result.toolCall.function.name === "create_note" &&
+              result.status === "completed",
+          )
         ) {
-          insertApiOnlyModelContextMessage(sendingSession, assistantMessage, {
-            ...toolResultMessage,
-            id: buildApiOnlyModelContextMessageId(
-              assistantMessage.id,
-              this.callbacks.generateId(),
-            ),
-            apiOnly: true,
-          });
+          noteSummaryContext.noteCreated = true;
         }
-
-        if (entry.kind === "reused") {
-          continue;
-        }
-
-        const toolSucceeded = executionResult.status === "completed";
-        const toolDisplayStatus = toolSucceeded ? "completed" : "error";
-        const planStepStatus = toPlanStepStatus(executionResult.status);
-        const primaryPolicyTrace = getPrimaryPolicyTrace(executionResult);
-        const parsedToolError =
-          executionResult.status === "completed"
-            ? null
-            : parseToolError(executionResult.content);
-
-        accumulatedDisplay += this.callbacks.formatToolCallCard(
-          toolName,
-          toolArgs,
-          toolDisplayStatus,
-          toolResult,
-        );
-        pendingDisplayToolCalls.delete(toolCall.id);
-        const displayWithPendingTools =
-          accumulatedDisplay +
-          formatCallingToolCards([...pendingDisplayToolCalls.values()]);
-        assistantMessage.content = displayWithPendingTools;
-        assistantMessage.streamingState = "in_progress";
-        await this.flushAssistantMessageCheckpoint(
-          sendingSession,
-          sessionRunId,
-          assistantMessage,
-          "in_progress",
-        );
-        this.ensureSessionTracked(sendingSession, sessionRunId);
-        this.executionPlanManager.addOrUpdateToolStep(
-          sendingSession,
-          currentMessages,
-          toolCall.id,
-          toolName,
-          planStepStatus,
-          truncateToolDetail(toolResult),
-        );
-        await this.sessionStorage.updateSessionMeta(sendingSession);
-        this.emitPlanUpdate(sendingSession, sessionRunId);
-
-        this.emitRuntimeEvent<"tool_completed">(
-          sendingSession,
-          sessionRunId,
-          assistantMessage,
-          {
-            type: "tool_completed",
-            toolCallId: toolCall.id,
-            toolName,
-            args: toolArgs,
-            resultPreview: truncateToolDetail(toolResult),
-            status: executionResult.status,
-            origin: primaryPolicyTrace?.stage || "executor",
-            policyName: primaryPolicyTrace?.policy,
-            policyOutcome: primaryPolicyTrace?.outcome,
-            policySummary: primaryPolicyTrace?.summary,
-            policyTrace: executionResult.policyTrace,
-            errorCategory:
-              executionResult.status === "completed"
-                ? undefined
-                : parsedToolError?.category || "unspecified",
-            iteration,
-          },
-        );
-        if (this.callbacks.isSessionActive(sendingSession)) {
-          this.callbacks.onStreamingUpdate?.(
-            displayWithPendingTools,
-            assistantMessage.id,
-          );
-        }
-      }
-
-      const needsRecovery = batchResults.some(
-        (result) => result.status === "denied" || result.status === "failed",
-      );
-      if (needsRecovery) {
-        this.executionPlanManager.recordRecoveryStep(
-          sendingSession,
-          currentMessages,
+        resolvedSearchScope = advanceSearchScopeAfterResults(
+          resolvedSearchScope,
           batchResults,
         );
-        await this.sessionStorage.updateSessionMeta(sendingSession);
-        this.emitPlanUpdate(sendingSession, sessionRunId);
-      }
+        if (entry.kind !== "reused") {
+          this.appendToolExecutionResults(sendingSession, batchResults);
+          await this.sessionStorage.updateSessionMeta(sendingSession);
+          this.emitPlanUpdate(sendingSession, sessionRunId);
+        }
 
-      this.appendRecoveryGuidanceMessage(currentMessages, batchResults);
+        for (const executionResult of batchResults) {
+          this.ensureSessionTracked(sendingSession, sessionRunId);
+          const toolCall = executionResult.toolCall;
+          const toolName = toolCall.function.name;
+          const toolArgs = toolCall.function.arguments;
+          const toolResult = executionResult.content;
+
+          ztoolkit.log(
+            `[${logPrefix}] Result (truncated): ${toolResult.substring(0, 200)}...`,
+          );
+
+          const shouldCompactModelToolResult =
+            contextStrategy.compactToolResultOnCreate &&
+            !executionResult.artifact &&
+            toolName !== "read_artifact";
+          const modelToolResult = shouldCompactModelToolResult
+            ? compactToolResultContent(
+                toolResult,
+                contextStrategy.compactionPolicy,
+              )
+            : toolResult;
+          const toolResultMessage: ChatMessage = {
+            id: this.callbacks.generateId(),
+            role: "tool",
+            content: appendEvidenceCitationCatalog(
+              modelToolResult,
+              executionResult.evidence,
+            ),
+            tool_call_id: toolCall.id,
+            timestamp: Date.now(),
+          };
+          currentMessages.push(toolResultMessage);
+          if (
+            contextStrategy.persistApiOnlyTranscript &&
+            entry.kind !== "reused" &&
+            !unavailableToolCallIds.has(toolCall.id)
+          ) {
+            insertApiOnlyModelContextMessage(sendingSession, assistantMessage, {
+              ...toolResultMessage,
+              id: buildApiOnlyModelContextMessageId(
+                assistantMessage.id,
+                this.callbacks.generateId(),
+              ),
+              apiOnly: true,
+            });
+          }
+
+          if (entry.kind === "reused") {
+            continue;
+          }
+
+          const toolSucceeded = executionResult.status === "completed";
+          const toolDisplayStatus = toolSucceeded ? "completed" : "error";
+          const planStepStatus = toPlanStepStatus(executionResult.status);
+          const primaryPolicyTrace = getPrimaryPolicyTrace(executionResult);
+          const parsedToolError =
+            executionResult.status === "completed"
+              ? null
+              : parseToolError(executionResult.content);
+
+          accumulatedDisplay += this.callbacks.formatToolCallCard(
+            toolName,
+            toolArgs,
+            toolDisplayStatus,
+            toolResult,
+          );
+          pendingDisplayToolCalls.delete(toolCall.id);
+          const displayWithPendingTools =
+            accumulatedDisplay +
+            formatCallingToolCards([...pendingDisplayToolCalls.values()]);
+          assistantMessage.content = displayWithPendingTools;
+          assistantMessage.streamingState = "in_progress";
+          await this.flushAssistantMessageCheckpoint(
+            sendingSession,
+            sessionRunId,
+            assistantMessage,
+            "in_progress",
+          );
+          this.ensureSessionTracked(sendingSession, sessionRunId);
+          this.executionPlanManager.addOrUpdateToolStep(
+            sendingSession,
+            currentMessages,
+            toolCall.id,
+            toolName,
+            planStepStatus,
+            truncateToolDetail(toolResult),
+          );
+          await this.sessionStorage.updateSessionMeta(sendingSession);
+          this.emitPlanUpdate(sendingSession, sessionRunId);
+
+          this.emitRuntimeEvent<"tool_completed">(
+            sendingSession,
+            sessionRunId,
+            assistantMessage,
+            {
+              type: "tool_completed",
+              toolCallId: toolCall.id,
+              toolName,
+              args: toolArgs,
+              resultPreview: truncateToolDetail(toolResult),
+              status: executionResult.status,
+              origin: primaryPolicyTrace?.stage || "executor",
+              policyName: primaryPolicyTrace?.policy,
+              policyOutcome: primaryPolicyTrace?.outcome,
+              policySummary: primaryPolicyTrace?.summary,
+              policyTrace: executionResult.policyTrace,
+              errorCategory:
+                executionResult.status === "completed"
+                  ? undefined
+                  : parsedToolError?.category || "unspecified",
+              iteration,
+            },
+          );
+          if (this.callbacks.isSessionActive(sendingSession)) {
+            this.callbacks.onStreamingUpdate?.(
+              displayWithPendingTools,
+              assistantMessage.id,
+            );
+          }
+        }
+
+        const needsRecovery = batchResults.some(
+          (result) => result.status === "denied" || result.status === "failed",
+        );
+        if (needsRecovery) {
+          this.executionPlanManager.recordRecoveryStep(
+            sendingSession,
+            currentMessages,
+            batchResults,
+          );
+          await this.sessionStorage.updateSessionMeta(sendingSession);
+          this.emitPlanUpdate(sendingSession, sessionRunId);
+        }
+
+        this.appendRecoveryGuidanceMessage(currentMessages, batchResults);
+      } finally {
+        releaseMutatingToolEntry?.();
+      }
     }
 
     this.ensureSessionTracked(sendingSession, sessionRunId);
@@ -1500,10 +1610,13 @@ export class AgentRuntime {
     paperStructure?: PaperStructure | PaperStructureExtended | null,
     reuseCompletedResults: boolean = false,
     currentItemKey?: string | null,
-    allowedToolNames: Set<string> = new Set(),
+    allowedToolNames?: Set<string>,
+    noteSummaryContext?: NoteSummaryContext,
+    invalidSummaryCreateNoteCallIds: ReadonlySet<string> = new Set(),
   ): RuntimeToolIterationEntry[] {
     const entries: RuntimeToolIterationEntry[] = [];
     let runnableSegment: ToolCall[] = [];
+    let noteCreationReserved = noteSummaryContext?.noteCreated === true;
     const seenUserInputFingerprints = new Set<string>();
 
     const flushRunnableSegment = () => {
@@ -1518,16 +1631,30 @@ export class AgentRuntime {
           budgetLimits,
           paperStructure,
           reuseCompletedResults,
-          currentItemKey,
+          noteSummaryContext?.destination.status === "resolved"
+            ? noteSummaryContext.destination.itemKey
+            : currentItemKey,
         ),
       );
       runnableSegment = [];
     };
 
     for (const toolCall of toolCalls) {
+      if (allowedToolNames && !allowedToolNames.has(toolCall.function.name)) {
+        flushRunnableSegment();
+        entries.push({
+          kind: "synthetic",
+          results: [
+            isSearchScopeControlledToolName(toolCall.function.name)
+              ? createUnavailableSearchToolResult(toolCall)
+              : createUnavailableToolResult(toolCall),
+          ],
+        });
+        continue;
+      }
       if (
         isSearchScopeControlledToolName(toolCall.function.name) &&
-        !allowedToolNames.has(toolCall.function.name)
+        !allowedToolNames?.has(toolCall.function.name)
       ) {
         flushRunnableSegment();
         entries.push({
@@ -1543,6 +1670,25 @@ export class AgentRuntime {
       }
       if (toolCall.function.name === "request_user_input") {
         flushRunnableSegment();
+        if (
+          noteSummaryContext &&
+          noteSummaryContext.destination.status !== "pending"
+        ) {
+          entries.push({
+            kind: "synthetic",
+            results: [
+              {
+                toolCall,
+                status: "completed",
+                content:
+                  noteSummaryContext.destination.status === "cancelled"
+                    ? "The user cancelled note destination selection. Do not create a note."
+                    : "The note destination is already selected. Continue without asking again.",
+              },
+            ],
+          });
+          continue;
+        }
         const completedResult = reuseCompletedResults
           ? findCompletedToolResultMatch(
               toolCall,
@@ -1587,6 +1733,119 @@ export class AgentRuntime {
           toolCall,
         });
         continue;
+      }
+      if (
+        toolCall.function.name === "create_note" &&
+        noteSummaryContext &&
+        noteSummaryContext.destination.status !== "resolved"
+      ) {
+        flushRunnableSegment();
+        const cancelled = noteSummaryContext.destination.status === "cancelled";
+        entries.push({
+          kind: "synthetic",
+          results: [
+            {
+              toolCall,
+              status: "denied",
+              policyTrace: [
+                {
+                  stage: "planner",
+                  policy: "permission_decision",
+                  outcome: "blocked",
+                  summary: cancelled
+                    ? "Blocked note creation because the user cancelled destination selection."
+                    : "Blocked note creation until the user selects a destination.",
+                },
+              ],
+              content: formatToolError({
+                summary: cancelled
+                  ? "Note creation was cancelled by the user."
+                  : "Choose a note destination before creating the note.",
+                category: "missing_context",
+                retryable: !cancelled,
+                cause: cancelled
+                  ? "The user cancelled the destination request."
+                  : "No application-validated destination has been selected.",
+                suggestedFix: cancelled
+                  ? "End this note-summary action without creating a note."
+                  : "Call request_user_input by itself, wait for the response, then call create_note in the next model turn.",
+              }),
+            },
+          ],
+        });
+        continue;
+      }
+      if (
+        toolCall.function.name === "create_note" &&
+        invalidSummaryCreateNoteCallIds.has(toolCall.id)
+      ) {
+        flushRunnableSegment();
+        entries.push({
+          kind: "synthetic",
+          results: [
+            {
+              toolCall,
+              status: "denied",
+              policyTrace: [
+                {
+                  stage: "planner",
+                  policy: "argument_parse",
+                  outcome: "blocked",
+                  summary:
+                    "Blocked note creation because its arguments were not a JSON object.",
+                },
+              ],
+              content: formatToolError({
+                summary: "Invalid arguments for create_note.",
+                category: "invalid_arguments",
+                retryable: true,
+                cause: "Arguments must be a valid JSON object.",
+                suggestedFix:
+                  "Retry create_note with a valid JSON object containing note content.",
+              }),
+            },
+          ],
+        });
+        continue;
+      }
+      if (
+        toolCall.function.name === "create_note" &&
+        noteSummaryContext &&
+        noteCreationReserved
+      ) {
+        flushRunnableSegment();
+        entries.push({
+          kind: "synthetic",
+          results: [
+            {
+              toolCall,
+              status: "denied",
+              policyTrace: [
+                {
+                  stage: "planner",
+                  policy: "permission_decision",
+                  outcome: "blocked",
+                  summary:
+                    "Blocked duplicate note creation in the same summary action.",
+                },
+              ],
+              content: formatToolError({
+                summary:
+                  "The summary note has already been created or scheduled.",
+                category: "permission_denied",
+                retryable: false,
+                cause:
+                  "A note summary action may create at most one Zotero note.",
+                suggestedFix:
+                  "Continue with a brief completion message without calling create_note again.",
+              }),
+            },
+          ],
+        });
+        continue;
+      }
+      if (toolCall.function.name === "create_note" && noteSummaryContext) {
+        noteCreationReserved = true;
       }
       runnableSegment.push(toolCall);
     }
@@ -1643,6 +1902,43 @@ export class AgentRuntime {
     }
   }
 
+  private beginMutatingToolEntry(
+    sessionId: string,
+    requests: ToolSchedulerRequest[],
+  ): (() => void) | null {
+    const mutatesState = requests.some(
+      (request) =>
+        getToolRuntimeMetadata(request.toolCall.function.name)?.mutatesState ===
+        true,
+    );
+    if (!mutatesState) {
+      return null;
+    }
+
+    let resolve!: () => void;
+    const pending = new Promise<void>((done) => {
+      resolve = done;
+    });
+    const sessionEntries =
+      this.pendingMutatingToolEntries.get(sessionId) ||
+      new Set<Promise<void>>();
+    sessionEntries.add(pending);
+    this.pendingMutatingToolEntries.set(sessionId, sessionEntries);
+
+    let released = false;
+    return () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      sessionEntries.delete(pending);
+      if (sessionEntries.size === 0) {
+        this.pendingMutatingToolEntries.delete(sessionId);
+      }
+      resolve();
+    };
+  }
+
   private async executeUserInputRequest(
     session: ChatSession,
     sessionRunId: number | undefined,
@@ -1650,6 +1946,7 @@ export class AgentRuntime {
     assistantMessage: ChatMessage,
     toolCall: ToolCall,
     iteration: number,
+    noteSummaryContext?: NoteSummaryContext,
   ): Promise<ToolExecutionResult> {
     let parsedArgs: unknown;
     try {
@@ -1681,7 +1978,10 @@ export class AgentRuntime {
       };
     }
 
-    const normalized = normalizeRequestUserInputArgs(parsedArgs);
+    const normalized = normalizeRequestUserInputArgs(
+      parsedArgs,
+      noteSummaryContext ? { maxOptions: 100 } : undefined,
+    );
     if (!normalized.ok) {
       return {
         toolCall,
@@ -1761,6 +2061,12 @@ export class AgentRuntime {
       request,
     );
     this.ensureSessionTracked(session, sessionRunId);
+    if (noteSummaryContext) {
+      applyNoteSummaryDestinationResponse(
+        noteSummaryContext,
+        resolution.response,
+      );
+    }
 
     this.emitRuntimeEvent<"user_input_resolved">(
       session,
@@ -1965,6 +2271,10 @@ export class AgentRuntime {
 
     assistantMessage.content = sanitizedDisplay;
     assistantMessage.evidence = groundedDisplay.evidence;
+    assistantMessage.sourceItemKeys = this.mergeAssistantSourceItemKeys(
+      assistantMessage,
+      groundedDisplay.sourceItemKeys,
+    );
     assistantMessage.timestamp = Date.now();
     sendingSession.updatedAt = Date.now();
 
@@ -2040,6 +2350,10 @@ export class AgentRuntime {
     );
     assistantMessage.content = groundedDisplay.content;
     assistantMessage.evidence = groundedDisplay.evidence;
+    assistantMessage.sourceItemKeys = this.mergeAssistantSourceItemKeys(
+      assistantMessage,
+      groundedDisplay.sourceItemKeys,
+    );
     assistantMessage.timestamp = Date.now();
     sendingSession.updatedAt = Date.now();
     this.executionPlanManager.failPlan(
@@ -2114,6 +2428,10 @@ export class AgentRuntime {
     );
     assistantMessage.content = groundedDisplay.content;
     assistantMessage.evidence = groundedDisplay.evidence;
+    assistantMessage.sourceItemKeys = this.mergeAssistantSourceItemKeys(
+      assistantMessage,
+      groundedDisplay.sourceItemKeys,
+    );
     await this.flushAssistantMessageCheckpoint(
       sendingSession,
       sessionRunId,
@@ -2161,23 +2479,42 @@ export class AgentRuntime {
   private sanitizeGroundedDisplay(
     session: ChatSession,
     content: string,
-  ): { content: string; evidence: ChatMessage["evidence"] } {
+  ): {
+    content: string;
+    evidence: ChatMessage["evidence"];
+    sourceItemKeys: ChatMessage["sourceItemKeys"];
+  } {
     const results = session.toolExecutionState?.results || [];
-    const sourceSanitized = sanitizeSourceGroupTargets(
-      content,
-      collectTrustedSourceTargets(results),
-    );
+    const trustedTargets = collectTrustedSourceTargets(results);
+    const sourceSanitized = sanitizeSourceGroupTargets(content, trustedTargets);
     const evidenceSanitized = sanitizeEvidenceReferences(
       sourceSanitized,
       collectToolEvidenceRecords(results),
     );
+    const referencedEvidence =
+      evidenceSanitized.referencedRecords.length > 0
+        ? evidenceSanitized.referencedRecords
+        : undefined;
+    const sourceItemKeys = normalizeSourceItemKeys([
+      ...trustedTargets.itemKeys,
+      ...(referencedEvidence || []).map((record) => record.itemKey),
+    ]);
     return {
       content: evidenceSanitized.content,
-      evidence:
-        evidenceSanitized.referencedRecords.length > 0
-          ? evidenceSanitized.referencedRecords
-          : undefined,
+      evidence: referencedEvidence,
+      sourceItemKeys: sourceItemKeys.length > 0 ? sourceItemKeys : undefined,
     };
+  }
+
+  private mergeAssistantSourceItemKeys(
+    message: ChatMessage,
+    collected: ChatMessage["sourceItemKeys"],
+  ): ChatMessage["sourceItemKeys"] {
+    const keys = normalizeSourceItemKeys([
+      ...(message.sourceItemKeys || []),
+      ...(collected || []),
+    ]);
+    return keys.length > 0 ? keys : undefined;
   }
 
   private appendToolExecutionResults(
@@ -2376,10 +2713,19 @@ export class AgentRuntime {
     const next = previous
       .catch(() => undefined)
       .then(async () => {
+        if (!this.callbacks.isSessionTracked(session, sessionRunId)) {
+          return;
+        }
         const groundedDisplay = this.sanitizeGroundedDisplay(
           session,
           message.content,
         );
+        const mergedSourceItemKeys = this.mergeAssistantSourceItemKeys(
+          message,
+          groundedDisplay.sourceItemKeys,
+        );
+        const sourceItemKeys = mergedSourceItemKeys || [];
+        message.sourceItemKeys = mergedSourceItemKeys;
         await this.sessionStorage.updateMessageContent(
           session.id,
           message.id,
@@ -2388,6 +2734,7 @@ export class AgentRuntime {
           {
             streamingState,
             evidence: groundedDisplay.evidence || [],
+            sourceItemKeys,
           },
         );
       });

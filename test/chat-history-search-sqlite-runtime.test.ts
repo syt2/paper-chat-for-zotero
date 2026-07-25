@@ -470,7 +470,7 @@ describe("chat history search SQLite runtime", function () {
     }
   });
 
-  it("repairs reasoning and upgrades message metadata to schema v11", async function () {
+  it("repairs reasoning and upgrades message metadata to schema v12", async function () {
     const runtime = globalThis as any;
     if (
       !runtime.Zotero?.DBConnection ||
@@ -527,13 +527,13 @@ describe("chat history search SQLite runtime", function () {
         )) || [];
       assert.includeMembers(
         columnRows.map((row) => String(row.name)),
-        ["reasoning", "evidence", "quoted_messages"],
+        ["reasoning", "evidence", "quoted_messages", "source_item_keys"],
       );
       const versionRows =
         (await db.queryAsync(
           "SELECT version FROM schema_version WHERE id = 1",
         )) || [];
-      assert.equal(Number(versionRows[0]?.version), 11);
+      assert.equal(Number(versionRows[0]?.version), 12);
 
       await db.queryAsync(
         `INSERT INTO messages

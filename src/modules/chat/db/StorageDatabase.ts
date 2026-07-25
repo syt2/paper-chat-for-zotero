@@ -11,7 +11,7 @@ import { getErrorMessage } from "../../../utils/common";
 
 const DB_DIR = "paper-chat";
 const DB_FILE = "storage";
-const SCHEMA_VERSION = 11;
+const SCHEMA_VERSION = 12;
 
 /** Build absolute DB path so Zotero.DBConnection doesn't parse subdirectory names */
 function getDBPath(): string {
@@ -247,6 +247,7 @@ export class StorageDatabase {
         tool_calls TEXT,
         tool_call_id TEXT,
         evidence TEXT,
+        source_item_keys TEXT,
         streaming_state TEXT,
         api_only INTEGER,
         is_system_notice INTEGER,
@@ -438,7 +439,9 @@ export class StorageDatabase {
       ),
     );
     return (
-      messageColumns.has("evidence") && messageColumns.has("quoted_messages")
+      messageColumns.has("evidence") &&
+      messageColumns.has("quoted_messages") &&
+      messageColumns.has("source_item_keys")
     );
   }
 
@@ -513,6 +516,10 @@ export class StorageDatabase {
         await this.upgradeToV11(db);
         currentVersion = 11;
       }
+      if (currentVersion < 12) {
+        await this.upgradeToV12(db);
+        currentVersion = 12;
+      }
       if (
         currentVersion === SCHEMA_VERSION &&
         !(await this.hasCurrentSchemaColumns(db))
@@ -521,7 +528,7 @@ export class StorageDatabase {
           await this.upgradeToV9(db);
         }
         await this.upgradeToV10(db);
-        await this.upgradeToV11(db);
+        await this.upgradeToV12(db);
       }
     }
   }
@@ -556,9 +563,12 @@ export class StorageDatabase {
         )
       `);
 
-      // 3. Create messages table (may already exist from createTables, use IF NOT EXISTS)
+      // 3. Build the child table against sessions_new. createTables() may
+      // already have created an empty messages table whose foreign key still
+      // targets the legacy sessions table; reusing it would make DROP TABLE
+      // sessions cascade-delete the rows copied below.
       await db.queryAsync(`
-        CREATE TABLE IF NOT EXISTS messages (
+        CREATE TABLE messages_new (
           id TEXT PRIMARY KEY,
           session_id TEXT NOT NULL,
           seq INTEGER NOT NULL,
@@ -573,6 +583,7 @@ export class StorageDatabase {
           tool_calls TEXT,
           tool_call_id TEXT,
           evidence TEXT,
+          source_item_keys TEXT,
           is_system_notice INTEGER,
           FOREIGN KEY (session_id) REFERENCES sessions_new(id) ON DELETE CASCADE
         )
@@ -607,8 +618,8 @@ export class StorageDatabase {
           if (!msg.id || !msg.role) continue;
 
           await db.queryAsync(
-            `INSERT INTO messages (id, session_id, seq, role, content, images, files, quoted_messages, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, is_system_notice)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO messages_new (id, session_id, seq, role, content, images, files, quoted_messages, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, source_item_keys, is_system_notice)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               msg.id,
               row.id,
@@ -624,15 +635,20 @@ export class StorageDatabase {
               msg.tool_calls ? JSON.stringify(msg.tool_calls) : null,
               msg.tool_call_id || null,
               msg.evidence ? JSON.stringify(msg.evidence) : null,
+              msg.sourceItemKeys ? JSON.stringify(msg.sourceItemKeys) : null,
               msg.isSystemNotice ? 1 : null,
             ],
           );
         }
       }
 
-      // 5. Drop old sessions table and rename new one
+      // 5. Drop the old child before its parent, then publish both rebuilt
+      // tables. SQLite updates the messages_new foreign-key target when
+      // sessions_new is renamed.
+      await db.queryAsync("DROP TABLE messages");
       await db.queryAsync("DROP TABLE sessions");
       await db.queryAsync("ALTER TABLE sessions_new RENAME TO sessions");
+      await db.queryAsync("ALTER TABLE messages_new RENAME TO messages");
 
       // 6. Rebuild indexes
       await db.queryAsync(`
@@ -1231,6 +1247,51 @@ export class StorageDatabase {
       }
       ztoolkit.log(
         "[StorageDatabase] Failed to upgrade to v11:",
+        getErrorMessage(error),
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Upgrade schema v11 -> v12. Both feature branches shipped a different v11
+   * message column, so reconcile either valid development shape here.
+   */
+  private async upgradeToV12(db: ZoteroDBConnection): Promise<void> {
+    ztoolkit.log("[StorageDatabase] Upgrading schema v11 -> v12...");
+
+    await db.queryAsync("BEGIN TRANSACTION");
+    try {
+      const messageColumns = new Set(
+        ((await db.queryAsync("PRAGMA table_info(messages)")) || []).map(
+          (column: any) => String(column.name),
+        ),
+      );
+      if (!messageColumns.has("quoted_messages")) {
+        await db.queryAsync(
+          "ALTER TABLE messages ADD COLUMN quoted_messages TEXT",
+        );
+      }
+      if (!messageColumns.has("source_item_keys")) {
+        await db.queryAsync(
+          "ALTER TABLE messages ADD COLUMN source_item_keys TEXT",
+        );
+      }
+      await this.ensureSearchInvalidationTriggers(db);
+      await db.queryAsync(
+        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
+        [12, Date.now()],
+      );
+      await db.queryAsync("COMMIT");
+      ztoolkit.log("[StorageDatabase] Schema upgraded to v12");
+    } catch (error) {
+      try {
+        await db.queryAsync("ROLLBACK");
+      } catch {
+        /* ignore */
+      }
+      ztoolkit.log(
+        "[StorageDatabase] Failed to upgrade to v12:",
         getErrorMessage(error),
       );
       throw error;

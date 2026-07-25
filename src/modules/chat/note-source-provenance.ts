@@ -30,12 +30,26 @@ interface ParsedTagAttributes {
   valid: boolean;
 }
 
-function normalizeZoteroKey(value: unknown): string | null {
+export function normalizeZoteroKey(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
   }
   const key = value.trim().toUpperCase();
   return ZOTERO_KEY_PATTERN.test(key) ? key : null;
+}
+
+export function normalizeSourceItemKeys(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const keys = new Set<string>();
+  for (const candidate of value) {
+    const key = normalizeZoteroKey(candidate);
+    if (key) {
+      keys.add(key);
+    }
+  }
+  return [...keys];
 }
 
 function unescapeSourceAttribute(value: string): string {

@@ -195,11 +195,12 @@ function getProviderModelId(
   config: ProviderConfig,
   session?: Pick<ChatSession, "resolvedModelId">,
 ): string | undefined {
-  if (session?.resolvedModelId) {
-    return session.resolvedModelId;
-  }
   if (config.type === "paperchat") {
-    return config.resolvedModelOverride || config.defaultModel;
+    return (
+      session?.resolvedModelId ||
+      config.resolvedModelOverride ||
+      config.defaultModel
+    );
   }
   return config.defaultModel;
 }
@@ -254,9 +255,13 @@ export function getContextAutoCompactTokenLimit(
   const configuredContextWindow = normalizeContextAutoCompactWindowTokens(
     getPref("contextAutoCompactWindowTokens"),
   );
-  const contextWindow =
+  const declaredContextWindow =
     routingModelInfo.contextWindow && routingModelInfo.contextWindow > 0
-      ? Math.min(configuredContextWindow, routingModelInfo.contextWindow)
+      ? routingModelInfo.contextWindow
+      : modelInfo?.contextWindow;
+  const contextWindow =
+    declaredContextWindow && declaredContextWindow > 0
+      ? Math.min(configuredContextWindow, declaredContextWindow)
       : configuredContextWindow;
   const maxOutput =
     config?.type !== "paperchat" &&

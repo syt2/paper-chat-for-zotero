@@ -22,6 +22,11 @@ import { getProviderManager } from "../../providers";
 import { providerSupportsToolCalling } from "../../providers/provider-capabilities";
 import { isPaperChatQuotaError } from "../../providers/paperchat-errors";
 import { getPref, setPref } from "../../../utils/prefs";
+import {
+  createNoteSummaryContext,
+  type NoteSummarySourceItem,
+} from "../../chat/note-summary-destination";
+import { normalizeSourceItemKeys } from "../../chat/note-source-provenance";
 
 import { HTML_NS, type AttachmentState, type ChatPanelContext } from "./types";
 import { chatColors } from "../../../utils/colors";
@@ -57,7 +62,9 @@ import {
 import {
   buildReplyNoteSummaryPrompt,
   canSummarizeAssistantReply,
+  collectNoteSummarySourceItemKeys,
   hasConversationMessages,
+  resolveNoteSummarySourceItem,
 } from "./NoteSummaryActions";
 import {
   appendPendingQuotedMessage,
@@ -537,6 +544,8 @@ async function sendNoteSummaryPrompt(
   context: ChatPanelContext,
   session: ChatSession,
   prompt: string,
+  modelRequestContent?: string,
+  sourceItemKeys: readonly string[] = [],
 ): Promise<void> {
   if (context.chatManager.getActiveSession() !== session) {
     throw new Error(getString("chat-note-summary-unavailable"));
@@ -545,11 +554,31 @@ async function sendNoteSummaryPrompt(
     throw new Error(getString("chat-note-summary-tools-unavailable"));
   }
   const item = getQuoteNavigationItem(session, context.getCurrentItem());
+  const normalizedSourceItemKeys = normalizeSourceItemKeys(sourceItemKeys);
+  const sourceItems: NoteSummarySourceItem[] = normalizedSourceItemKeys.flatMap(
+    (itemKey) => {
+      const sourceItem = resolveNoteSummarySourceItem(
+        itemKey,
+        (key) => getItemByLibraryKey(key),
+        (id) => (Zotero.Items.get(id) as Zotero.Item | false) || null,
+      );
+      return sourceItem ? [sourceItem] : [];
+    },
+  );
+  const noteSummaryContext = createNoteSummaryContext(sourceItems);
   await context.chatManager.sendMessage(prompt, {
     item,
     attachPdf: false,
     targetSession: session,
     requireTargetSessionActive: true,
+    allowedToolNames:
+      noteSummaryContext.sourceItems.length > 1
+        ? ["request_user_input", "create_note"]
+        : ["create_note"],
+    modelRequestContent,
+    allowPaperChatRetry: false,
+    trustedSourceItemKeys: normalizedSourceItemKeys,
+    noteSummaryContext,
   });
 }
 
@@ -564,6 +593,8 @@ async function summarizeConversationToNote(
     context,
     session,
     getString("chat-summarize-conversation-note-prompt"),
+    undefined,
+    collectNoteSummarySourceItemKeys(session.messages),
   );
 }
 
@@ -585,7 +616,13 @@ async function summarizeReplyToNote(
     getString("chat-summarize-reply-note-prompt"),
     replyContent || message.content,
   );
-  await sendNoteSummaryPrompt(context, session, prompt);
+  await sendNoteSummaryPrompt(
+    context,
+    session,
+    getString("chat-summarize-reply-note"),
+    prompt,
+    collectNoteSummarySourceItemKeys([message]),
+  );
 }
 
 function buildApprovalActionsForContainer(

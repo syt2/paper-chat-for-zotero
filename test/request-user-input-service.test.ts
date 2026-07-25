@@ -113,6 +113,31 @@ describe("request user input service", function () {
     assert.include(result.issues.join(" "), "at most 3");
   });
 
+  it("keeps ordinary choices at four but permits a bounded application list", function () {
+    const requestWith = (count: number) => ({
+      questions: [
+        {
+          id: "destination",
+          header: "Destination",
+          question: "Choose one.",
+          options: Array.from({ length: count }, (_, index) => ({
+            label: `Option ${index + 1}`,
+            description: `Option ${index + 1}.`,
+          })),
+        },
+      ],
+    });
+
+    assert.isTrue(normalizeRequestUserInputArgs(requestWith(4)).ok);
+    assert.isFalse(normalizeRequestUserInputArgs(requestWith(5)).ok);
+    assert.isTrue(
+      normalizeRequestUserInputArgs(requestWith(100), { maxOptions: 100 }).ok,
+    );
+    assert.isFalse(
+      normalizeRequestUserInputArgs(requestWith(101), { maxOptions: 100 }).ok,
+    );
+  });
+
   it("drops auto-resolution when a required question has no safe default", function () {
     const result = normalizeRequestUserInputArgs({
       autoResolutionMs: 60_000,

@@ -12,6 +12,10 @@ import type {
   ToolApprovalState,
 } from "../../chat";
 import type { UserInputRequestState } from "../../../types/chat";
+import {
+  NOTE_SUMMARY_DESTINATION_QUESTION_ID,
+  NOTE_SUMMARY_STANDALONE_DESTINATION_VALUE,
+} from "../../chat/note-summary-destination";
 import type {
   RequestUserInputResponse,
   ToolApprovalResolution,
@@ -2661,6 +2665,14 @@ function createChoiceQuestionControl(
   requestId: string,
   question: UserInputQuestionViewModel,
 ): HTMLElement {
+  if (
+    question.id === NOTE_SUMMARY_DESTINATION_QUESTION_ID &&
+    (question.options?.length || 0) > 4 &&
+    question.type === "single_choice"
+  ) {
+    return createNoteDestinationSelectControl(doc, theme, requestId, question);
+  }
+
   const optionsWrap = createElement(doc, "div", {
     display: "flex",
     flexDirection: "column",
@@ -2763,6 +2775,140 @@ function createChoiceQuestionControl(
     otherRow.appendChild(otherInput);
     optionsWrap.appendChild(otherRow);
   }
+
+  return optionsWrap;
+}
+
+function createNoteDestinationSelectControl(
+  doc: Document,
+  theme: ThemeColors,
+  requestId: string,
+  question: UserInputQuestionViewModel,
+): HTMLElement {
+  const optionsWrap = createElement(doc, "div", {
+    display: "flex",
+    flexDirection: "column",
+    gap: "4px",
+    minWidth: "0",
+  });
+  const standaloneOption = question.options?.find(
+    (option) =>
+      (option.value || option.label) ===
+      NOTE_SUMMARY_STANDALONE_DESTINATION_VALUE,
+  );
+  const paperOptions = (question.options || []).filter(
+    (option) => option !== standaloneOption,
+  );
+  if (!standaloneOption || paperOptions.length === 0) {
+    return optionsWrap;
+  }
+
+  const groupName = `user-input-${requestId}-${question.id}`;
+  const createRow = (): HTMLLabelElement =>
+    createElement(doc, "label", {
+      border: `1px solid ${theme.borderColor}`,
+      background: theme.inputBg,
+      color: theme.textPrimary,
+      borderRadius: "9px",
+      padding: "6px 7px",
+      display: "flex",
+      alignItems: "center",
+      gap: "6px",
+      cursor: "pointer",
+      minWidth: "0",
+    }) as HTMLLabelElement;
+  const createRadio = (value: string): HTMLInputElement => {
+    const input = doc.createElement("input") as HTMLInputElement;
+    input.type = "radio";
+    input.name = groupName;
+    input.value = value;
+    input.setAttribute("data-question-id", question.id);
+    input.setAttribute("data-question-type", "single_choice");
+    input.style.margin = "0";
+    input.style.flexShrink = "0";
+    return input;
+  };
+
+  const standaloneRow = createRow();
+  const standaloneRadio = createRadio(
+    standaloneOption.value || standaloneOption.label,
+  );
+  const defaultValues = getQuestionDefaultValues(question);
+  const defaultPaper = paperOptions.find((option) =>
+    defaultValues.has(option.value || option.label),
+  );
+  standaloneRadio.checked =
+    defaultValues.has(standaloneRadio.value) || !defaultPaper;
+  const standaloneText = createElement(doc, "span", {
+    display: "flex",
+    flexDirection: "column",
+    gap: "2px",
+    minWidth: "0",
+  });
+  const standaloneTitle = createElement(doc, "span", {
+    fontSize: "10px",
+    fontWeight: "700",
+    lineHeight: "1.2",
+  });
+  standaloneTitle.textContent = standaloneOption.label;
+  standaloneText.appendChild(standaloneTitle);
+  if (standaloneOption.description) {
+    const description = createElement(doc, "span", {
+      color: theme.textSecondary,
+      fontSize: "9px",
+      lineHeight: "1.25",
+    });
+    description.textContent = standaloneOption.description;
+    standaloneText.appendChild(description);
+  }
+  standaloneRow.appendChild(standaloneRadio);
+  standaloneRow.appendChild(standaloneText);
+  optionsWrap.appendChild(standaloneRow);
+
+  const paperRow = createRow();
+  paperRow.style.alignItems = "center";
+  const paperRadio = createRadio(
+    paperOptions[0].value || paperOptions[0].label,
+  );
+  const paperLabel = createElement(doc, "span", {
+    fontSize: "10px",
+    fontWeight: "600",
+    whiteSpace: "nowrap",
+  });
+  paperLabel.textContent = getString(
+    "chat-note-summary-destination-paper-select",
+  );
+  const select = doc.createElement("select") as HTMLSelectElement;
+  select.style.flex = "1 1 auto";
+  select.style.minWidth = "0";
+  select.style.border = `1px solid ${theme.borderColor}`;
+  select.style.borderRadius = "7px";
+  select.style.padding = "4px 6px";
+  select.style.background = theme.inputBg;
+  select.style.color = theme.textPrimary;
+  select.style.fontSize = "10px";
+  for (const option of paperOptions) {
+    const selectOption = doc.createElement("option") as HTMLOptionElement;
+    selectOption.value = option.value || option.label;
+    selectOption.textContent = option.label;
+    select.appendChild(selectOption);
+  }
+  if (defaultPaper) {
+    select.value = defaultPaper.value || defaultPaper.label;
+  }
+  paperRadio.value = select.value;
+  paperRadio.checked = !!defaultPaper;
+  const selectPaper = () => {
+    paperRadio.value = select.value;
+    paperRadio.checked = true;
+    standaloneRadio.checked = false;
+  };
+  select.addEventListener("change", selectPaper);
+  select.addEventListener("focus", selectPaper);
+  paperRow.appendChild(paperRadio);
+  paperRow.appendChild(paperLabel);
+  paperRow.appendChild(select);
+  optionsWrap.appendChild(paperRow);
 
   return optionsWrap;
 }

@@ -219,6 +219,7 @@ describe("StorageDatabase foundation", function () {
             { name: "reasoning" },
             { name: "evidence" },
             { name: "quoted_messages" },
+            { name: "source_item_keys" },
             { name: "search_text" },
             { name: "search_index_version" },
           ];
@@ -338,6 +339,60 @@ describe("StorageDatabase foundation", function () {
     assert.strictEqual(recorded.at(-1), "COMMIT");
   });
 
+  it("rebuilds the v1 messages table before replacing its parent session table", async function () {
+    const recorded: Array<{ sql: string; params?: unknown[] }> = [];
+    const fakeDb = {
+      async queryAsync(sql: string, params?: unknown[]) {
+        const normalized = normalizeSql(sql);
+        recorded.push({ sql: normalized, params });
+        if (normalized.startsWith("SELECT id, created_at")) {
+          return [
+            {
+              id: "session-v1",
+              created_at: 1,
+              updated_at: 2,
+              last_active_item_key: "ITEM0001",
+              messages: JSON.stringify([
+                {
+                  id: "message-v1",
+                  role: "assistant",
+                  content: "preserve me",
+                  timestamp: 3,
+                },
+              ]),
+              context_summary: null,
+              context_state: null,
+            },
+          ];
+        }
+        return [];
+      },
+    };
+
+    await (new StorageDatabase() as any).devUpgradeToV2(fakeDb);
+
+    const statements = recorded.map((entry) => entry.sql);
+    assert.isTrue(
+      statements.some((sql) => sql.startsWith("CREATE TABLE messages_new")),
+    );
+    assert.isTrue(
+      statements.some((sql) => sql.startsWith("INSERT INTO messages_new")),
+    );
+    assert.include(statements, "DROP TABLE messages");
+    assert.include(statements, "DROP TABLE sessions");
+    assert.include(statements, "ALTER TABLE sessions_new RENAME TO sessions");
+    assert.include(statements, "ALTER TABLE messages_new RENAME TO messages");
+    assert.isBelow(
+      statements.indexOf("DROP TABLE messages"),
+      statements.indexOf("DROP TABLE sessions"),
+    );
+    assert.isBelow(
+      statements.indexOf("ALTER TABLE sessions_new RENAME TO sessions"),
+      statements.indexOf("ALTER TABLE messages_new RENAME TO messages"),
+    );
+    assert.strictEqual(statements.at(-1), "COMMIT");
+  });
+
   it("repairs a missing reasoning column even when the schema version is current", async function () {
     const recorded: string[] = [];
     const fakeDb = {
@@ -349,6 +404,7 @@ describe("StorageDatabase foundation", function () {
             { name: "id" },
             { name: "evidence" },
             { name: "quoted_messages" },
+            { name: "source_item_keys" },
             { name: "search_text" },
             { name: "search_index_version" },
           ];
@@ -361,7 +417,7 @@ describe("StorageDatabase foundation", function () {
           ];
         }
         if (normalized === "SELECT version FROM schema_version WHERE id = 1") {
-          return [{ version: 11 }];
+          return [{ version: 12 }];
         }
         return [];
       },
@@ -381,6 +437,103 @@ describe("StorageDatabase foundation", function () {
       recorded,
       "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
     );
+  });
+
+  it("upgrades a quoted-message v11 database with trusted sources", async function () {
+    const recorded: Array<{ sql: string; params?: unknown[] }> = [];
+    let sourceItemKeysAdded = false;
+    const fakeDb = {
+      async queryAsync(sql: string, params?: unknown[]) {
+        const normalized = normalizeSql(sql);
+        recorded.push({ sql: normalized, params });
+        if (
+          normalized === "ALTER TABLE messages ADD COLUMN source_item_keys TEXT"
+        ) {
+          sourceItemKeysAdded = true;
+        }
+        if (normalized === "PRAGMA table_info(messages)") {
+          return [
+            { name: "reasoning" },
+            { name: "evidence" },
+            { name: "quoted_messages" },
+            ...(sourceItemKeysAdded ? [{ name: "source_item_keys" }] : []),
+            { name: "search_text" },
+            { name: "search_index_version" },
+          ];
+        }
+        if (normalized === "PRAGMA table_info(session_meta)") {
+          return [{ name: "search_title" }, { name: "search_index_version" }];
+        }
+        if (normalized === "SELECT version FROM schema_version WHERE id = 1") {
+          return [{ version: 11 }];
+        }
+        return [];
+      },
+    };
+
+    await (new StorageDatabase() as any).initSchemaVersion(fakeDb);
+
+    assert.equal(
+      recorded.filter(
+        (entry) =>
+          entry.sql === "ALTER TABLE messages ADD COLUMN source_item_keys TEXT",
+      ).length,
+      1,
+    );
+    assert.isTrue(
+      recorded.some(
+        (entry) =>
+          entry.sql ===
+            "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1" &&
+          entry.params?.[0] === 12,
+      ),
+    );
+    assert.include(
+      recorded.map((entry) => entry.sql),
+      "COMMIT",
+    );
+  });
+
+  it("rolls back a failed trusted-source schema repair", async function () {
+    const recorded: string[] = [];
+    const fakeDb = {
+      async queryAsync(sql: string) {
+        const normalized = normalizeSql(sql);
+        recorded.push(normalized);
+        if (normalized === "PRAGMA table_info(messages)") {
+          return [
+            { name: "reasoning" },
+            { name: "evidence" },
+            { name: "quoted_messages" },
+            { name: "search_text" },
+            { name: "search_index_version" },
+          ];
+        }
+        if (normalized === "PRAGMA table_info(session_meta)") {
+          return [{ name: "search_title" }, { name: "search_index_version" }];
+        }
+        if (normalized === "SELECT version FROM schema_version WHERE id = 1") {
+          return [{ version: 11 }];
+        }
+        if (
+          normalized === "ALTER TABLE messages ADD COLUMN source_item_keys TEXT"
+        ) {
+          throw new Error("alter failed");
+        }
+        return [];
+      },
+    };
+
+    let thrown: unknown;
+    try {
+      await (new StorageDatabase() as any).initSchemaVersion(fakeDb);
+    } catch (error) {
+      thrown = error;
+    }
+
+    assert.instanceOf(thrown, Error);
+    assert.include(recorded, "ROLLBACK");
+    assert.strictEqual(recorded.at(-1), "ROLLBACK");
   });
 
   it("adds message evidence when upgrading schema v9 to v10", async function () {
@@ -421,12 +574,16 @@ describe("StorageDatabase foundation", function () {
           typeof entry.params?.[1] === "number",
       ),
     );
-    assert.strictEqual(recorded.at(-1)?.sql, "COMMIT");
+    assert.include(
+      recorded.map((entry) => entry.sql),
+      "COMMIT",
+    );
   });
 
-  it("adds quoted messages when upgrading schema v10 to v11", async function () {
+  it("adds quoted messages and trusted sources when upgrading schema v10 to v12", async function () {
     const recorded: Array<{ sql: string; params?: unknown[] }> = [];
     let quotedMessagesAdded = false;
+    let sourceItemKeysAdded = false;
     const fakeDb = {
       async queryAsync(sql: string, params?: unknown[]) {
         const normalized = normalizeSql(sql);
@@ -435,6 +592,11 @@ describe("StorageDatabase foundation", function () {
           normalized === "ALTER TABLE messages ADD COLUMN quoted_messages TEXT"
         ) {
           quotedMessagesAdded = true;
+        }
+        if (
+          normalized === "ALTER TABLE messages ADD COLUMN source_item_keys TEXT"
+        ) {
+          sourceItemKeysAdded = true;
         }
         if (normalized === "SELECT version FROM schema_version WHERE id = 1") {
           return [{ version: 10 }];
@@ -446,6 +608,7 @@ describe("StorageDatabase foundation", function () {
             { name: "search_text" },
             { name: "search_index_version" },
             ...(quotedMessagesAdded ? [{ name: "quoted_messages" }] : []),
+            ...(sourceItemKeysAdded ? [{ name: "source_item_keys" }] : []),
           ];
         }
         if (normalized === "PRAGMA table_info(session_meta)") {
@@ -461,6 +624,10 @@ describe("StorageDatabase foundation", function () {
       recorded.map((entry) => entry.sql),
       "ALTER TABLE messages ADD COLUMN quoted_messages TEXT",
     );
+    assert.include(
+      recorded.map((entry) => entry.sql),
+      "ALTER TABLE messages ADD COLUMN source_item_keys TEXT",
+    );
     assert.isTrue(
       recorded.some(
         (entry) =>
@@ -475,6 +642,15 @@ describe("StorageDatabase foundation", function () {
           entry.sql ===
             "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1" &&
           entry.params?.[0] === 11 &&
+          typeof entry.params?.[1] === "number",
+      ),
+    );
+    assert.isTrue(
+      recorded.some(
+        (entry) =>
+          entry.sql ===
+            "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1" &&
+          entry.params?.[0] === 12 &&
           typeof entry.params?.[1] === "number",
       ),
     );
@@ -530,7 +706,7 @@ describe("StorageDatabase foundation", function () {
         const normalized = normalizeSql(sql);
         recorded.push(normalized);
         if (normalized === "SELECT version FROM schema_version WHERE id = 1") {
-          return [{ version: 11 }];
+          return [{ version: 12 }];
         }
         if (normalized === "PRAGMA table_info(messages)") {
           return [{ name: "id" }, { name: "reasoning" }];

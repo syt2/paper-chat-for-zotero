@@ -21,6 +21,7 @@ import type {
 import type { EvidenceRecord } from "../../types/evidence";
 import { filterValidMessages, generateShortId } from "../../utils/common";
 import { normalizeEvidenceRecords } from "./evidence";
+import { normalizeSourceItemKeys } from "./note-source-provenance";
 import {
   normalizeQuotedMessageRefs,
   serializeQuotedMessageRefs,
@@ -155,6 +156,7 @@ export interface MessageStorageRow {
   tool_calls?: string | null;
   tool_call_id?: string | null;
   evidence?: string | null;
+  source_item_keys?: string | null;
   streaming_state?: ChatMessageStreamingState | null;
   api_only?: number | null;
   is_system_notice?: number | null;
@@ -366,6 +368,23 @@ function serializeEvidenceRecords(value: unknown): string | null {
   return records.length > 0 ? JSON.stringify(records) : null;
 }
 
+function parseStoredSourceItemKeys(
+  value: string | null | undefined,
+): string[] | undefined {
+  if (!value) return undefined;
+  try {
+    const keys = normalizeSourceItemKeys(JSON.parse(value));
+    return keys.length > 0 ? keys : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function serializeSourceItemKeys(value: unknown): string | null {
+  const keys = normalizeSourceItemKeys(value);
+  return keys.length > 0 ? JSON.stringify(keys) : null;
+}
+
 function getSearchBackfillRetryDelayMs(consecutiveFailures: number): number {
   if (consecutiveFailures <= 0) return 0;
   const exponent = Math.min(consecutiveFailures - 1, 30);
@@ -539,6 +558,10 @@ export function mapMessageRowToChatMessage(
     readOptionalMessageColumn(row, "evidence"),
   );
   if (evidence) message.evidence = evidence;
+  const sourceItemKeys = parseStoredSourceItemKeys(
+    readOptionalMessageColumn(row, "source_item_keys"),
+  );
+  if (sourceItemKeys) message.sourceItemKeys = sourceItemKeys;
   const streamingState = readOptionalMessageColumn(row, "streaming_state");
   if (streamingState) message.streamingState = streamingState;
   if (readOptionalMessageColumn(row, "api_only")) message.apiOnly = true;
@@ -2032,8 +2055,8 @@ export class SessionStorageService {
 
         await db.queryAsync(
           `INSERT INTO messages
-           (id, session_id, seq, role, content, reasoning, images, files, quoted_messages, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, streaming_state, api_only, is_system_notice, search_text, search_index_version)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, session_id, seq, role, content, reasoning, images, files, quoted_messages, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, source_item_keys, streaming_state, api_only, is_system_notice, search_text, search_index_version)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             message.id,
             sessionId,
@@ -2050,6 +2073,7 @@ export class SessionStorageService {
             message.tool_calls ? JSON.stringify(message.tool_calls) : null,
             message.tool_call_id || null,
             serializeEvidenceRecords(message.evidence),
+            serializeSourceItemKeys(message.sourceItemKeys),
             message.streamingState || null,
             message.apiOnly ? 1 : null,
             message.isSystemNotice ? 1 : null,
@@ -2178,6 +2202,7 @@ export class SessionStorageService {
     options?: {
       streamingState?: ChatMessageStreamingState | null;
       evidence?: EvidenceRecord[];
+      sourceItemKeys?: string[];
     },
   ): Promise<void> {
     await this.init();
@@ -2203,6 +2228,12 @@ export class SessionStorageService {
         )
           ? normalizeEvidenceRecords(options?.evidence)
           : previousMessage.evidence;
+        const nextSourceItemKeys = Object.prototype.hasOwnProperty.call(
+          options || {},
+          "sourceItemKeys",
+        )
+          ? normalizeSourceItemKeys(options?.sourceItemKeys)
+          : previousMessage.sourceItemKeys;
         const nextMessage: ChatMessage = {
           ...previousMessage,
           content,
@@ -2210,6 +2241,10 @@ export class SessionStorageService {
           timestamp: now,
           streamingState: options?.streamingState ?? undefined,
           evidence: nextEvidence,
+          sourceItemKeys:
+            nextSourceItemKeys && nextSourceItemKeys.length > 0
+              ? nextSourceItemKeys
+              : undefined,
         };
         const previousProjection =
           projectMessageSearchTextSafe(previousMessage);
@@ -2223,7 +2258,7 @@ export class SessionStorageService {
         );
         await db.queryAsync(
           `UPDATE messages SET
-            content = ?, reasoning = ?, timestamp = ?, streaming_state = ?, evidence = ?,
+            content = ?, reasoning = ?, timestamp = ?, streaming_state = ?, evidence = ?, source_item_keys = ?,
             search_text = ?, search_index_version = ?
           WHERE id = ? AND session_id = ?`,
           [
@@ -2232,6 +2267,7 @@ export class SessionStorageService {
             now,
             options?.streamingState ?? null,
             serializeEvidenceRecords(nextEvidence),
+            serializeSourceItemKeys(nextSourceItemKeys),
             nextProjection.searchText,
             nextProjection.searchIndexVersion,
             messageId,
@@ -2638,8 +2674,8 @@ export class SessionStorageService {
             } = messagesForStorage[seq];
             await db.queryAsync(
               `INSERT INTO messages
-               (id, session_id, seq, role, content, reasoning, images, files, quoted_messages, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, streaming_state, api_only, is_system_notice, search_text, search_index_version)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               (id, session_id, seq, role, content, reasoning, images, files, quoted_messages, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, source_item_keys, streaming_state, api_only, is_system_notice, search_text, search_index_version)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               [
                 msg.id,
                 session.id,
@@ -2656,6 +2692,7 @@ export class SessionStorageService {
                 msg.tool_calls ? JSON.stringify(msg.tool_calls) : null,
                 msg.tool_call_id || null,
                 serializeEvidenceRecords(msg.evidence),
+                serializeSourceItemKeys(msg.sourceItemKeys),
                 msg.streamingState || null,
                 msg.apiOnly ? 1 : null,
                 msg.isSystemNotice ? 1 : null,
