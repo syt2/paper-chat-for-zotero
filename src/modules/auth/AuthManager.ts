@@ -729,7 +729,7 @@ export class AuthManager {
     this.isAutoReloginInProgress = true;
 
     try {
-      // 清除旧的 CookieSandbox，确保使用新的 session
+      // 清除旧的 session cookie，确保使用新的 session
       this.authService.clearSessionCookie();
 
       const result = await this.authService.login({

@@ -18,6 +18,7 @@ import type {
 } from "../../types/auth";
 import { BUILTIN_PROVIDERS } from "../providers/ProviderManager";
 import { getString } from "../../utils/locale";
+import { NO_RETRY_ON_THROTTLE } from "../../utils/http";
 
 const DEFAULT_API_BASE = BUILTIN_PROVIDERS.paperchat.website!;
 
@@ -294,6 +295,8 @@ export class AuthService {
         body: options.body ? JSON.stringify(options.body) : undefined,
         responseType: "json",
         successCodes: false as const,
+        // Quota errors must reach the UI immediately for its own handling.
+        ...NO_RETRY_ON_THROTTLE,
       });
 
       const data = response.response as T;

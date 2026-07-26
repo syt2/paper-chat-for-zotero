@@ -1,9 +1,7 @@
 import pkg from "../../package.json";
 import { config } from "../../package.json";
-import {
-  getGithubUrlCandidates,
-  getUpdateURLTemplate,
-} from "./updateUrls";
+import { getGithubUrlCandidates, getUpdateURLTemplate } from "./updateUrls";
+import { NO_RETRY_ON_THROTTLE } from "./http";
 
 type AddonManagerLike = {
   STATE_AVAILABLE?: number;
@@ -97,6 +95,7 @@ async function requestTextWithFallback(url: string): Promise<string> {
       const response = await Zotero.HTTP.request("GET", candidate, {
         timeout: 15000,
         noCache: true,
+        ...NO_RETRY_ON_THROTTLE,
       });
       return response.responseText || response.response;
     } catch (error) {

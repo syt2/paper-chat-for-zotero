@@ -6,6 +6,7 @@ import {
   type AnalyticsHttpTransport,
   type AnalyticsLogger,
 } from "./AnalyticsService";
+import { NO_RETRY_ON_THROTTLE } from "../../utils/http";
 
 export { AnalyticsService } from "./AnalyticsService";
 export type {
@@ -79,6 +80,7 @@ function createZoteroHttpTransport(): AnalyticsHttpTransport | null {
       body,
       responseType: "text",
       successCodes: false as const,
+      ...NO_RETRY_ON_THROTTLE,
     });
     return {
       status: response.status,

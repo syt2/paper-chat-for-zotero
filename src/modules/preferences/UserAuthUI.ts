@@ -18,6 +18,7 @@ import type { PrefsRefreshOptions } from "./types";
 import { showMessage } from "./utils";
 import { ANALYTICS_EVENTS, getAnalyticsService } from "../analytics";
 import { renderSanitizedHtmlToElement } from "./PaperChatNoticeRenderer";
+import { NO_RETRY_ON_THROTTLE } from "../../utils/http";
 
 type AuthManagerType = ReturnType<typeof getAuthManager>;
 
@@ -1606,6 +1607,7 @@ async function fetchRedeemCodeInfo(): Promise<RedeemCodeInfo> {
     const response = await Zotero.HTTP.request("GET", getRedeemCodeInfoUrl(), {
       responseType: "json",
       successCodes: false as const,
+      ...NO_RETRY_ON_THROTTLE,
     });
     if (response.status >= 400) {
       return fallback;
