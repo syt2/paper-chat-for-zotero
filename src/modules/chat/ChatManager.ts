@@ -53,7 +53,7 @@ import { getProviderManager, PaperChatProvider } from "../providers";
 import type { ProviderRetryOptions } from "../providers/ProviderManager";
 import { getAuthManager } from "../auth";
 import { getString } from "../../utils/locale";
-import { getPref, setPref } from "../../utils/prefs";
+import { getPref } from "../../utils/prefs";
 import {
   createAbortController,
   type ManagedAbortController,
@@ -67,7 +67,6 @@ import {
   getModelRatios,
   getModelRoutingMeta,
 } from "../preferences/ModelsFetcher";
-import { isEmbeddingModel } from "../embedding/providers/PaperChatEmbedding";
 import {
   rerollTierModel,
   deriveTierPools,
@@ -78,13 +77,14 @@ import { isPaperChatQuotaError } from "../providers/paperchat-errors";
 import {
   applyPaperChatSessionBinding,
   clearPaperChatRetryableState,
-  repairPaperChatSessionBindingAfterHardFailure,
   resolvePaperChatSessionBinding,
 } from "./paperchat-session-state";
+import { rerollPaperChatFailureAndReplay } from "./paperchat-retry-orchestration";
 import {
-  repairPaperChatSessionAfterHardFailureWithRollback,
-  rerollPaperChatFailureAndReplay,
-} from "./paperchat-retry-orchestration";
+  PaperChatRetryOrchestrator,
+  getPaperChatChatModels,
+  pickRandomCandidate,
+} from "./PaperChatRetryOrchestrator";
 import { stripPendingAndIncompleteToolCallContent } from "./interrupted-message";
 import { saveDebugContextSnapshot } from "./DebugContextExporter";
 import { MemoryManager } from "./memory/MemoryManager";
@@ -224,58 +224,11 @@ function buildStableToolCatalogForPromptCache(tools: ToolDefinition[]): string {
   return lines.join("\n");
 }
 
-function pickRandomCandidate(
-  candidates: string[],
-  weights: Record<string, number> = {},
-): string | null {
-  if (candidates.length === 0) {
-    return null;
-  }
-
-  let totalWeight = 0;
-  for (const candidate of candidates) {
-    const weight = weights[candidate] ?? 1;
-    if (Number.isFinite(weight) && weight > 0) {
-      totalWeight += weight;
-    }
-  }
-
-  if (totalWeight <= 0) {
-    const index = Math.floor(Math.random() * candidates.length);
-    return candidates[index] ?? null;
-  }
-
-  let cursor = Math.random() * totalWeight;
-  for (const candidate of candidates) {
-    const weight = weights[candidate] ?? 1;
-    if (!Number.isFinite(weight) || weight <= 0) {
-      continue;
-    }
-    cursor -= weight;
-    if (cursor < 0) {
-      return candidate;
-    }
-  }
-
-  return candidates[candidates.length - 1] ?? null;
-}
-
-function getPaperChatChatModels(): string[] {
-  const providerConfig = getProviderManager().getProviderConfig(
-    "paperchat",
-  ) as PaperChatProviderConfig | null;
-  const configuredModels = providerConfig?.availableModels;
-  if (Array.isArray(configuredModels) && configuredModels.length > 0) {
-    return configuredModels.filter((model) => !isEmbeddingModel(model));
-  }
-
-  return [];
-}
-
 // 使用 common.ts 中的 getItemTitleSmart 获取 item 标题
 
 export class ChatManager {
   private sessionStorage: SessionStorageService;
+  private paperChatRetry: PaperChatRetryOrchestrator;
   private pdfExtractor: PdfExtractor;
   private currentSession: ChatSession | null = null;
   private currentItemKey: string | null = null;
@@ -313,6 +266,12 @@ export class ChatManager {
 
   constructor() {
     this.sessionStorage = new SessionStorageService();
+    this.paperChatRetry = new PaperChatRetryOrchestrator({
+      updateSessionMeta: (session) =>
+        this.sessionStorage.updateSessionMeta(session),
+      insertSystemNotice: (session, content) =>
+        this.insertSystemNotice(session, content),
+    });
     this.pdfExtractor = new PdfExtractor();
     this.memoryManager = new MemoryManager(this.sessionStorage);
     this.sessionTitleService = new SessionTitleService();
@@ -632,175 +591,6 @@ export class ChatManager {
     });
 
     return binding.modelId;
-  }
-
-  private buildPaperChatReroutedNotice(
-    tier: PaperChatTier,
-    previousModel: string,
-    nextModel: string,
-  ): string {
-    const tierLabel =
-      tier === "paperchat-lite"
-        ? getString("chat-tier-lite")
-        : tier === "paperchat-ultra"
-          ? getString("chat-tier-ultra")
-          : tier === "paperchat-pro"
-            ? getString("chat-tier-pro")
-            : getString("chat-tier-standard");
-
-    return getString("chat-model-rerouted", {
-      args: {
-        tier: tierLabel,
-        old: previousModel,
-        new: nextModel,
-      },
-    });
-  }
-
-  private trackPaperChatModelRerouted(
-    tier: PaperChatTier,
-    previousModel: string,
-    nextModel: string,
-    reason: "streaming" | "tool_calling" | "failure_repair",
-  ): void {
-    getAnalyticsService().track(ANALYTICS_EVENTS.paperChatModelRerouted, {
-      tier,
-      previous_model: previousModel,
-      next_model: nextModel,
-      reason,
-    });
-  }
-
-  private async repairPaperChatSessionAfterHardFailure(
-    session: ChatSession,
-    failedModelId: string | null,
-    persist: boolean = true,
-  ): Promise<{
-    previousModel: string;
-    nextModel: string;
-    tier: PaperChatTier;
-  } | null> {
-    const previousTierStateRaw =
-      (getPref("paperchatTierState") as string | undefined) || "";
-    const updateProviderOverride = (modelId: string | undefined) => {
-      getProviderManager().getProvider("paperchat")?.updateConfig({
-        resolvedModelOverride: modelId,
-      });
-    };
-
-    if (!persist) {
-      const repair = repairPaperChatSessionBindingAfterHardFailure(
-        session,
-        previousTierStateRaw,
-        getPaperChatChatModels(),
-        getModelRatios(),
-        failedModelId,
-        pickRandomCandidate,
-        getModelRoutingMeta(),
-      );
-
-      if (!repair || !repair.previousModelId) {
-        return null;
-      }
-
-      setPref("paperchatTierState", JSON.stringify(repair.state));
-      applyPaperChatSessionBinding(session, repair);
-      updateProviderOverride(repair.modelId);
-
-      return {
-        previousModel: repair.previousModelId,
-        nextModel: repair.modelId,
-        tier: repair.selectedTier,
-      };
-    }
-
-    const reroute = await repairPaperChatSessionAfterHardFailureWithRollback({
-      session,
-      failedModelId,
-      previousTierStateRaw,
-      availableModels: getPaperChatChatModels(),
-      ratios: getModelRatios(),
-      routingMeta: getModelRoutingMeta(),
-      persistSessionMeta: (updatedSession) =>
-        this.sessionStorage.updateSessionMeta(updatedSession),
-      setTierStateRaw: (raw) => {
-        setPref("paperchatTierState", raw);
-      },
-      updateProviderOverride,
-      pickRandom: pickRandomCandidate,
-    });
-
-    if (!reroute) {
-      return null;
-    }
-
-    return reroute;
-  }
-
-  /**
-   * Shared one-shot reroute for PaperChat hard model failures. Returns the
-   * reroute details when the caller should replay the request on the new
-   * model, or null when the error must be rethrown as-is.
-   */
-  private async reroutePaperChatSessionForHardFailure(params: {
-    session: ChatSession;
-    provider: AIProvider;
-    error: unknown;
-    failedModelId: string | null;
-    alreadyRerouted: boolean;
-    reason: "streaming" | "tool_calling";
-    ensureSessionTracked: () => void;
-  }): Promise<{
-    previousModel: string;
-    nextModel: string;
-    tier: PaperChatTier;
-  } | null> {
-    const {
-      session,
-      provider,
-      error,
-      failedModelId,
-      alreadyRerouted,
-      reason,
-      ensureSessionTracked,
-    } = params;
-    if (
-      provider.config.id !== "paperchat" ||
-      !(error instanceof Error) ||
-      !isPaperChatModelHardFailure(error) ||
-      alreadyRerouted
-    ) {
-      return null;
-    }
-
-    const reroute = await this.repairPaperChatSessionAfterHardFailure(
-      session,
-      failedModelId,
-    );
-    ensureSessionTracked();
-    if (!reroute) {
-      return null;
-    }
-
-    provider.updateConfig({
-      resolvedModelOverride: reroute.nextModel,
-    });
-    await this.insertSystemNotice(
-      session,
-      this.buildPaperChatReroutedNotice(
-        reroute.tier,
-        reroute.previousModel,
-        reroute.nextModel,
-      ),
-    );
-    this.trackPaperChatModelRerouted(
-      reroute.tier,
-      reroute.previousModel,
-      reroute.nextModel,
-      reason,
-    );
-    ensureSessionTracked();
-    return reroute;
   }
 
   private async insertSystemNotice(
@@ -1754,7 +1544,7 @@ export class ChatManager {
         session,
         rerollTier: () => this.rerollCurrentPaperChatTier(),
         buildSystemNotice: (reroute) =>
-          this.buildPaperChatReroutedNotice(
+          this.paperChatRetry.buildReroutedNotice(
             reroute.tier,
             reroute.previousModel,
             reroute.nextModel,
@@ -2712,15 +2502,18 @@ export class ChatManager {
             } catch (error) {
               await checkpointQueue.catch(() => undefined);
               captureFailedAssistantSnapshot();
-              const reroute = await this.reroutePaperChatSessionForHardFailure({
-                session: sendingSession,
-                provider: currentProvider,
-                error,
-                failedModelId: failedPaperChatModelId,
-                alreadyRerouted: paperChatHardRerouteUsed,
-                reason: "streaming",
-                ensureSessionTracked: ensureSendingSessionTracked,
-              });
+              const reroute =
+                await this.paperChatRetry.reroutePaperChatSessionForHardFailure(
+                  {
+                    session: sendingSession,
+                    provider: currentProvider,
+                    error,
+                    failedModelId: failedPaperChatModelId,
+                    alreadyRerouted: paperChatHardRerouteUsed,
+                    reason: "streaming",
+                    ensureSessionTracked: ensureSendingSessionTracked,
+                  },
+                );
               if (!reroute) {
                 throw error;
               }
@@ -3165,15 +2958,18 @@ export class ChatManager {
               ) {
                 throw error;
               }
-              const reroute = await this.reroutePaperChatSessionForHardFailure({
-                session: sendingSession,
-                provider: currentProvider,
-                error,
-                failedModelId: failedPaperChatModelId,
-                alreadyRerouted: paperChatHardRerouteUsed,
-                reason: "tool_calling",
-                ensureSessionTracked: ensureSendingSessionTracked,
-              });
+              const reroute =
+                await this.paperChatRetry.reroutePaperChatSessionForHardFailure(
+                  {
+                    session: sendingSession,
+                    provider: currentProvider,
+                    error,
+                    failedModelId: failedPaperChatModelId,
+                    alreadyRerouted: paperChatHardRerouteUsed,
+                    reason: "tool_calling",
+                    ensureSessionTracked: ensureSendingSessionTracked,
+                  },
+                );
               if (!reroute) {
                 throw error;
               }

@@ -4,6 +4,7 @@ import {
   getAuthManager,
 } from "../src/modules/auth/index.ts";
 import { ChatManager } from "../src/modules/chat/ChatManager.ts";
+import { PaperChatRetryOrchestrator } from "../src/modules/chat/PaperChatRetryOrchestrator.ts";
 import { filterSearchToolsForScope } from "../src/modules/chat/agent-runtime/SearchScopeGate.ts";
 import {
   destroyContextManager,
@@ -385,8 +386,10 @@ describe("paperchat storage and chat manager", function () {
       timestamp: 2,
     };
     const manager = Object.create(ChatManager.prototype) as any;
-    manager.repairPaperChatSessionAfterHardFailure = async () =>
-      assert.fail("final failure state must not reroute without replaying");
+    manager.paperChatRetry = {
+      reroutePaperChatSessionForHardFailure: async () =>
+        assert.fail("final failure state must not reroute without replaying"),
+    };
 
     await manager.applyPaperChatFailureState(
       session,
@@ -3344,6 +3347,7 @@ describe("paperchat storage and chat manager", function () {
     manager.currentSession = sourceSession;
     manager.activeSessionRunIds = new Map();
     manager.paperChatRerollSessions = new Set();
+    manager.paperChatRetry = { buildReroutedNotice: () => "rerouted" };
     manager.init = async () => undefined;
     manager.rerollCurrentPaperChatTier = async () => {
       sourceSession.resolvedModelId = "m4";
@@ -4685,18 +4689,6 @@ describe("paperchat storage and chat manager", function () {
       manager.getActiveProvider = () => provider;
       manager.isSessionActive = () => false;
       manager.ensurePaperChatModelResolved = async () => currentModel;
-      manager.repairPaperChatSessionAfterHardFailure = async () => {
-        repairCalls += 1;
-        currentModel = "m2";
-        session.resolvedModelId = currentModel;
-        return {
-          previousModel: "m1",
-          nextModel: "m2",
-          tier: "paperchat-standard",
-        };
-      };
-      manager.buildPaperChatReroutedNotice = () => "rerouted";
-      manager.trackPaperChatModelRerouted = () => undefined;
       manager.insertSystemNotice = async (
         targetSession: ChatSession,
         content: string,
@@ -4711,6 +4703,24 @@ describe("paperchat storage and chat manager", function () {
         targetSession.messages.push(notice);
         return notice;
       };
+      manager.paperChatRetry = new PaperChatRetryOrchestrator({
+        updateSessionMeta: async () => undefined,
+        insertSystemNotice: (targetSession: ChatSession, content: string) =>
+          manager.insertSystemNotice(targetSession, content),
+      });
+      (manager.paperChatRetry as any).repairSessionAfterHardFailure =
+        async () => {
+          repairCalls += 1;
+          currentModel = "m2";
+          session.resolvedModelId = currentModel;
+          return {
+            previousModel: "m1",
+            nextModel: "m2",
+            tier: "paperchat-standard",
+          };
+        };
+      (manager.paperChatRetry as any).buildReroutedNotice = () => "rerouted";
+      (manager.paperChatRetry as any).trackModelRerouted = () => undefined;
       manager.sessionStorage = {
         insertMessage: async () => undefined,
         updateMessageContent: async () => undefined,
@@ -4787,15 +4797,17 @@ describe("paperchat storage and chat manager", function () {
       manager.getToolDefinitionsForProvider = () => [];
       manager.buildToolCallingStableSystemPrompt = () => "stable";
       manager.buildToolCallingRuntimeSystemPrompt = () => "runtime";
-      manager.reroutePaperChatSessionForHardFailure = async () => {
-        rerouteAttempts += 1;
-        return rerouteAttempts === 1
-          ? {
-              previousModel: "initial-model",
-              nextModel: "hosted-model",
-              tier: "paperchat-lite",
-            }
-          : null;
+      manager.paperChatRetry = {
+        reroutePaperChatSessionForHardFailure: async () => {
+          rerouteAttempts += 1;
+          return rerouteAttempts === 1
+            ? {
+                previousModel: "initial-model",
+                nextModel: "hosted-model",
+                tier: "paperchat-lite",
+              }
+            : null;
+        },
       };
       manager.agentRuntime = {
         executeNonStreamingToolLoop: async (options: any) =>
@@ -5387,15 +5399,17 @@ describe("paperchat storage and chat manager", function () {
             currentProvider.supportsHostedWebSearch() === true,
           scope,
         });
-      manager.reroutePaperChatSessionForHardFailure = async () => {
-        hosted = reroutedHosted;
-        provider.updateConfig({ resolvedModelOverride: "rerouted-model" });
-        session.resolvedModelId = "rerouted-model";
-        return {
-          previousModel: "initial-model",
-          nextModel: "rerouted-model",
-          tier: "paperchat-standard",
-        };
+      manager.paperChatRetry = {
+        reroutePaperChatSessionForHardFailure: async () => {
+          hosted = reroutedHosted;
+          provider.updateConfig({ resolvedModelOverride: "rerouted-model" });
+          session.resolvedModelId = "rerouted-model";
+          return {
+            previousModel: "initial-model",
+            nextModel: "rerouted-model",
+            tier: "paperchat-standard",
+          };
+        },
       };
       manager.agentRuntime = {
         executeNonStreamingToolLoop: async (options: any) => {
@@ -6275,6 +6289,9 @@ describe("paperchat storage and chat manager", function () {
       manager.init = async () => undefined;
       manager.getActiveProvider = () => provider as any;
       manager.isSessionActive = () => true;
+      (manager as any).paperChatRetry = {
+        reroutePaperChatSessionForHardFailure: async () => null,
+      };
 
       const sendPromise = manager.sendMessage("abort me");
       await providerStarted;
