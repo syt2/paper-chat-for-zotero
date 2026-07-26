@@ -15,7 +15,6 @@ import type {
   ChatSession,
   ExecutionPlan,
   SendMessageOptions,
-  ToolApprovalState,
   StreamCallbacks,
   SessionMeta,
 } from "../../types/chat";
@@ -84,6 +83,7 @@ import {
   type FailedAssistantSnapshot,
   type PaperChatTierRerollResult,
 } from "./PaperChatTierController";
+import { ToolApprovalCoordinator } from "./ToolApprovalCoordinator";
 import { stripPendingAndIncompleteToolCallContent } from "./interrupted-message";
 import { saveDebugContextSnapshot } from "./DebugContextExporter";
 import { MemoryManager } from "./memory/MemoryManager";
@@ -3117,79 +3117,38 @@ export class ChatManager {
     return generateTimestampId();
   }
 
-  private handleApprovalRequested(approvalRequest: ToolApprovalRequest): void {
-    const session = this.getTrackedSessionById(
-      approvalRequest.request.sessionId,
-    );
-    if (!session) {
-      return;
+  private toolApprovalCoordinator?: ToolApprovalCoordinator;
+
+  /** Lazy for the same Object.create-based white-box tests as paperChatTier. */
+  private get approvals(): ToolApprovalCoordinator {
+    if (!this.toolApprovalCoordinator) {
+      this.toolApprovalCoordinator = new ToolApprovalCoordinator({
+        getTrackedSessionById: (sessionId) =>
+          this.getTrackedSessionById(sessionId),
+        getSessionStorage: () => this.sessionStorage,
+        isSessionActive: (session) => this.isSessionActive(session),
+        isSessionRunActive: (sessionId) =>
+          this.activeSessionRunIds.has(sessionId),
+        notifyExecutionPlanUpdate: (session) => {
+          this.onExecutionPlanUpdate?.(session.executionPlan);
+        },
+        emitRuntimeEvent: (event) => {
+          this.onRuntimeEvent?.(event);
+        },
+      });
     }
+    return this.toolApprovalCoordinator;
+  }
 
-    const pendingRequests = [
-      ...(session.toolApprovalState?.pendingRequests || []).filter(
-        (entry) => entry.id !== approvalRequest.id,
-      ),
-      approvalRequest,
-    ].sort((a, b) => a.createdAt - b.createdAt);
-
-    session.toolApprovalState = {
-      pendingRequests,
-      updatedAt: Date.now(),
-    };
-    this.persistApprovalState(session);
-    this.notifyApprovalStateChanged(session);
-    this.emitApprovalRuntimeEvent(
-      session,
-      {
-        type: "approval_requested",
-        requestId: approvalRequest.id,
-        toolCallId: approvalRequest.request.toolCall.id,
-        toolName: approvalRequest.toolName,
-        riskLevel: approvalRequest.descriptor.riskLevel,
-        pendingCount: pendingRequests.length,
-      },
-      approvalRequest.assistantMessageId,
-    );
+  private handleApprovalRequested(approvalRequest: ToolApprovalRequest): void {
+    this.approvals.handleApprovalRequested(approvalRequest);
   }
 
   private handleApprovalResolved(
     approvalRequest: ToolApprovalRequest,
     decision: ToolPermissionDecision,
   ): void {
-    const session = this.getTrackedSessionById(
-      approvalRequest.request.sessionId,
-    );
-    if (!session) {
-      return;
-    }
-
-    const pendingRequests = (
-      session.toolApprovalState?.pendingRequests || []
-    ).filter((entry) => entry.id !== approvalRequest.id);
-
-    session.toolApprovalState =
-      pendingRequests.length > 0
-        ? {
-            pendingRequests,
-            updatedAt: Date.now(),
-          }
-        : undefined;
-
-    this.persistApprovalState(session);
-    this.notifyApprovalStateChanged(session);
-    this.emitApprovalRuntimeEvent(
-      session,
-      {
-        type: "approval_resolved",
-        requestId: approvalRequest.id,
-        toolCallId: approvalRequest.request.toolCall.id,
-        toolName: approvalRequest.toolName,
-        verdict: decision.verdict,
-        scope: decision.scope,
-        pendingCount: pendingRequests.length,
-      },
-      approvalRequest.assistantMessageId,
-    );
+    this.approvals.handleApprovalResolved(approvalRequest, decision);
   }
 
   private getTrackedSessionById(sessionId?: string): ChatSession | null {
@@ -3242,95 +3201,11 @@ export class ChatManager {
   }
 
   private reconcileApprovalState(session: ChatSession | null): void {
-    if (!session) {
-      return;
-    }
-
-    const pendingRequests = getToolPermissionManager().listPendingApprovals(
-      session.id,
-    );
-    const normalizedState: ToolApprovalState | undefined =
-      pendingRequests.length > 0
-        ? {
-            pendingRequests,
-            updatedAt: Date.now(),
-          }
-        : undefined;
-
-    const currentIds = (session.toolApprovalState?.pendingRequests || [])
-      .map((entry) => entry.id)
-      .sort();
-    const normalizedIds = pendingRequests.map((entry) => entry.id).sort();
-    const isSameState =
-      currentIds.length === normalizedIds.length &&
-      currentIds.every((id, index) => id === normalizedIds[index]);
-
-    if (isSameState && !!session.toolApprovalState === !!normalizedState) {
-      return;
-    }
-
-    session.toolApprovalState = normalizedState;
-    this.persistApprovalState(session);
+    this.approvals.reconcileApprovalState(session);
   }
 
   private reconcileUserInputRequestState(session: ChatSession | null): void {
-    if (!session?.userInputRequestState?.pendingRequests.length) {
-      return;
-    }
-    if (this.activeSessionRunIds.has(session.id)) {
-      return;
-    }
-    session.userInputRequestState = undefined;
-    this.sessionStorage
-      .updateSessionUserInputRequestState(session)
-      .catch((error) => {
-        ztoolkit.log(
-          "[ChatManager] Failed to clear stale user-input request state:",
-          error,
-        );
-      });
-  }
-
-  private persistApprovalState(session: ChatSession): void {
-    this.sessionStorage.updateSessionApprovalState(session).catch((error) => {
-      ztoolkit.log(
-        "[ChatManager] Failed to persist tool approval state:",
-        error,
-      );
-    });
-  }
-
-  private notifyApprovalStateChanged(session: ChatSession): void {
-    if (this.isSessionActive(session)) {
-      this.onExecutionPlanUpdate?.(session.executionPlan);
-    }
-  }
-
-  private emitApprovalRuntimeEvent(
-    session: ChatSession,
-    payload:
-      | Omit<
-          Extract<AgentRuntimeEvent, { type: "approval_requested" }>,
-          "sessionId" | "assistantMessageId" | "timestamp" | "planId"
-        >
-      | Omit<
-          Extract<AgentRuntimeEvent, { type: "approval_resolved" }>,
-          "sessionId" | "assistantMessageId" | "timestamp" | "planId"
-        >,
-    assistantMessageId?: string,
-  ): void {
-    const resolvedAssistantMessageId =
-      assistantMessageId ||
-      [...session.messages].reverse().find((m) => m.role === "assistant")?.id ||
-      payload.toolCallId;
-
-    this.onRuntimeEvent?.({
-      ...payload,
-      sessionId: session.id,
-      assistantMessageId: resolvedAssistantMessageId,
-      timestamp: Date.now(),
-      planId: session.executionPlan?.id,
-    } as AgentRuntimeEvent);
+    this.approvals.reconcileUserInputRequestState(session);
   }
 
   /**
