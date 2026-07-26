@@ -27,7 +27,6 @@ import type {
   BatchUpdateTagsArgs,
   AddItemArgs,
 } from "../../../types/tool";
-import { getString } from "../../../utils/locale";
 import { getErrorMessage, getItemTitleSmart } from "../../../utils/common";
 
 const PAPERCHAT_NOTES_TITLE = "PaperChat Notes";

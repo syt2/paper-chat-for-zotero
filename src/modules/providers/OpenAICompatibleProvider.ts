@@ -403,7 +403,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
     pdfAttachment?: PdfAttachment,
     signal?: AbortSignal,
   ): Promise<void> {
-    const { onChunk, onComplete, onError } = callbacks;
+    const { onError } = callbacks;
 
     if (!this.isReady()) {
       onError(new Error("Provider is not configured"));
@@ -491,23 +491,11 @@ export class OpenAICompatibleProvider extends BaseProvider {
   }
 
   async testConnection(): Promise<boolean> {
-    try {
-      const response = await fetch(`${this._config.baseUrl}/models`, {
+    return this.runTestConnection(() =>
+      fetch(`${this._config.baseUrl}/models`, {
         headers: { Authorization: `Bearer ${this._config.apiKey}` },
-      });
-      if (!response.ok) {
-        ztoolkit.log(
-          `[${this.getName()}] testConnection failed: ${response.status} ${response.statusText}`,
-        );
-      }
-      return response.ok;
-    } catch (error) {
-      ztoolkit.log(
-        `[${this.getName()}] testConnection error:`,
-        getErrorMessage(error),
-      );
-      return false;
-    }
+      }),
+    );
   }
 
   async getAvailableModels(): Promise<string[]> {

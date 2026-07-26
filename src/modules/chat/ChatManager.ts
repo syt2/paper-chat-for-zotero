@@ -596,10 +596,6 @@ export class ChatManager {
     };
   }
 
-  private syncSessionItemState(session: ChatSession | null): void {
-    this.applySessionItemContext(session);
-  }
-
   private async ensurePaperChatModelResolved(
     session: ChatSession,
     persist: boolean = true,

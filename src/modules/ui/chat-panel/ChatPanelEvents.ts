@@ -4,7 +4,6 @@
 
 import { config } from "../../../../package.json";
 import type { ChatPanelContext, AttachmentState, SessionInfo } from "./types";
-import { chatColors } from "../../../utils/colors";
 import { createElement, copyToClipboard } from "./ChatPanelBuilder";
 import { getCurrentTheme } from "./ChatPanelTheme";
 import {
@@ -586,6 +585,12 @@ export async function refreshCheckinDisplay(
  */
 export function setupEventHandlers(context: ChatPanelContext): () => void {
   const { container, chatManager, authManager } = context;
+
+  // Disposers for listeners attached to long-lived targets (document/window).
+  // Element-scoped listeners are freed with their nodes, but listeners on the
+  // document or window outlive the panel and must be removed on teardown to
+  // avoid leaking them (and the DOM they close over) on every panel rebuild.
+  const disposers: Array<() => void> = [];
 
   const openPluginPreferencesSafely = (): void => {
     void import("../../preferences/UserAuthUI")
@@ -1317,7 +1322,8 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
     });
 
     // Close model dropdown when clicking outside
-    container.ownerDocument?.addEventListener("click", (e: Event) => {
+    const ownerDoc = container.ownerDocument;
+    const closeModelDropdownOnOutsideClick = (e: Event): void => {
       const target = e.target as HTMLElement;
       if (
         !modelSelectorBtn.contains(target) &&
@@ -1325,7 +1331,11 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
       ) {
         modelDropdown.style.display = "none";
       }
-    });
+    };
+    ownerDoc?.addEventListener("click", closeModelDropdownOnOutsideClick);
+    disposers.push(() =>
+      ownerDoc?.removeEventListener("click", closeModelDropdownOnOutsideClick),
+    );
   }
 
   // Settings button - open preferences
@@ -1464,7 +1474,7 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
   }
 
   // @ Mention selector
-  setupMentionSelector(context);
+  disposers.push(setupMentionSelector(context));
 
   ztoolkit.log("Event listeners attached to buttons");
 
@@ -1475,6 +1485,8 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
     historySearchDisposer?.();
     historySearchDisposer = null;
     clearHistoryNotice();
+    disposers.forEach((dispose) => dispose());
+    disposers.length = 0;
   };
 }
 
@@ -2746,7 +2758,7 @@ function populateModelDropdown(
  * When user types @, show a popup to select resources (Items, Attachments, Notes)
  * Selected resource will be inserted as @[title](key:XXX)
  */
-function setupMentionSelector(context: ChatPanelContext): void {
+function setupMentionSelector(context: ChatPanelContext): () => void {
   const { container } = context;
   const theme = getCurrentTheme();
 
@@ -2759,7 +2771,7 @@ function setupMentionSelector(context: ChatPanelContext): void {
 
   if (!messageInput || !mentionPopup) {
     ztoolkit.log("[MentionSelector] Required elements not found");
-    return;
+    return () => {};
   }
 
   // Create and initialize the MentionSelector
@@ -3006,7 +3018,8 @@ function setupMentionSelector(context: ChatPanelContext): void {
   });
 
   // Close popup when clicking outside
-  container.ownerDocument?.addEventListener("click", (e: Event) => {
+  const ownerDoc = container.ownerDocument;
+  const closeMentionOnOutsideClick = (e: Event): void => {
     const target = e.target as HTMLElement;
     if (
       mentionSelector.isVisible() &&
@@ -3015,7 +3028,8 @@ function setupMentionSelector(context: ChatPanelContext): void {
     ) {
       closeMentionPopup();
     }
-  });
+  };
+  ownerDoc?.addEventListener("click", closeMentionOnOutsideClick);
 
   // Close popup when input loses focus (with small delay to allow popup clicks)
   messageInput.addEventListener("blur", () => {
@@ -3044,6 +3058,9 @@ function setupMentionSelector(context: ChatPanelContext): void {
   });
 
   ztoolkit.log("[MentionSelector] Setup complete");
+
+  return () =>
+    ownerDoc?.removeEventListener("click", closeMentionOnOutsideClick);
 }
 
 /**

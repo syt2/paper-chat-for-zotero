@@ -14,7 +14,7 @@ export class GeminiProvider extends BaseProvider {
     _pdfAttachment?: PdfAttachment,
     signal?: AbortSignal,
   ): Promise<void> {
-    const { onChunk, onComplete, onError } = callbacks;
+    const { onError } = callbacks;
 
     if (!this.isReady()) {
       onError(new Error("Provider is not configured"));
@@ -103,23 +103,9 @@ export class GeminiProvider extends BaseProvider {
   }
 
   async testConnection(): Promise<boolean> {
-    try {
-      const response = await fetch(
-        `${this._config.baseUrl}/models?key=${this._config.apiKey}`,
-      );
-      if (!response.ok) {
-        ztoolkit.log(
-          `[${this.getName()}] testConnection failed: ${response.status} ${response.statusText}`,
-        );
-      }
-      return response.ok;
-    } catch (error) {
-      ztoolkit.log(
-        `[${this.getName()}] testConnection error:`,
-        getErrorMessage(error),
-      );
-      return false;
-    }
+    return this.runTestConnection(() =>
+      fetch(`${this._config.baseUrl}/models?key=${this._config.apiKey}`),
+    );
   }
 
   async getAvailableModels(): Promise<string[]> {

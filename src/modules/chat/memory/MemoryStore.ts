@@ -25,7 +25,7 @@ export class MemoryStore {
   private repository: MemoryRepository;
   private searchService: MemorySearchService;
 
-  constructor(private libraryId: number) {
+  constructor(libraryId: number) {
     this.repository = new MemoryRepository(libraryId);
     this.searchService = new MemorySearchService(this.repository);
   }

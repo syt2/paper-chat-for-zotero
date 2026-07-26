@@ -26,6 +26,7 @@ import {
 } from "./SSEParser";
 import { HttpResponseError } from "./HttpResponseError";
 import { sanitizeOpenAIToolCallMessages } from "./openai-tool-call-messages";
+import { getErrorMessage } from "../../utils/common";
 
 export abstract class BaseProvider implements AIProvider {
   protected _config: ApiKeyProviderConfig;
@@ -149,6 +150,30 @@ export abstract class BaseProvider implements AIProvider {
    */
   protected wrapError(error: unknown): Error {
     return error instanceof Error ? error : new Error(String(error));
+  }
+
+  /**
+   * Run a connection test, wrapping the shared success/failure logging so each
+   * provider only has to describe its probe request.
+   */
+  protected async runTestConnection(
+    doFetch: () => Promise<Response>,
+  ): Promise<boolean> {
+    try {
+      const response = await doFetch();
+      if (!response.ok) {
+        ztoolkit.log(
+          `[${this.getName()}] testConnection failed: ${response.status} ${response.statusText}`,
+        );
+      }
+      return response.ok;
+    } catch (error) {
+      ztoolkit.log(
+        `[${this.getName()}] testConnection error:`,
+        getErrorMessage(error),
+      );
+      return false;
+    }
   }
 
   /**

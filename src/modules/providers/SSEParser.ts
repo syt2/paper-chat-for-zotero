@@ -291,9 +291,9 @@ export async function parseSSEStream(
 
       for (const line of lines) {
         const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith("data: ")) continue;
+        if (!trimmed || !trimmed.startsWith("data:")) continue;
 
-        const data = trimmed.slice(6);
+        const data = trimmed.slice(5).trimStart();
         if (data === "[DONE]") continue;
 
         try {
@@ -379,9 +379,9 @@ export async function parseSSEStreamWithToolCalling(
           continue;
         }
 
-        if (!trimmed || !trimmed.startsWith("data: ")) continue;
+        if (!trimmed || !trimmed.startsWith("data:")) continue;
 
-        const data = trimmed.slice(6);
+        const data = trimmed.slice(5).trimStart();
         if (data === "[DONE]") {
           // OpenAI 的完成标记
           if (!hasReceivedDone) {
