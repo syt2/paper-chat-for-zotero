@@ -47,6 +47,10 @@ import {
   initReadingLoopService,
 } from "./modules/reading-loop";
 import { updateSelfIfNeed } from "./utils/selfUpdate";
+import {
+  registerReaderChatEntries,
+  unregisterReaderChatEntries,
+} from "./modules/ui/ReaderChatEntry";
 
 async function onStartup() {
   await Promise.all([
@@ -153,6 +157,9 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
   // Register AISummary menus (must be after createZToolkit)
   getAISummaryService().registerMenus();
 
+  // Register reader-side chat entry points (selection popup + annotation menu)
+  registerReaderChatEntries();
+
   // Register Chat Panel menu in Tools menu
   ztoolkit.Menu.register("menuTools", {
     tag: "menuitem",
@@ -174,6 +181,7 @@ async function onShutdown(): Promise<void> {
   ztoolkit.unregisterAll();
   ztoolkit.Menu.unregister("paperchat-chat-menuitem");
   getAISummaryService().unregisterMenus();
+  unregisterReaderChatEntries();
   // Await so ChatManager.destroy() (session meta write, extraction) finishes
   // before StorageDatabase is torn down below.
   await unregisterChatPanel();

@@ -106,7 +106,12 @@ import {
 
 // Panel display mode: 'sidebar' or 'floating'
 export type PanelMode = "sidebar" | "floating";
-export type ChatPanelOpenSource = "menu" | "toolbar" | "unknown";
+export type ChatPanelOpenSource =
+  | "menu"
+  | "toolbar"
+  | "reader_selection"
+  | "reader_annotation"
+  | "unknown";
 
 const APPROVAL_RESOLVED_ANIMATION_MS = 260;
 const APPROVAL_ENTER_ANIMATION_MS = 220;
