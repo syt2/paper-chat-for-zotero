@@ -52,11 +52,6 @@ export {
   type MessageStorageRow,
   type QueryableDatabase,
 } from "./db/MessageRowStorage";
-export {
-  incrementSearchRevision,
-  readChatSearchState,
-  type ChatSearchState,
-} from "./search/SessionSearchService";
 
 // 最大 session 数量限制
 const MAX_SESSIONS = 1000;

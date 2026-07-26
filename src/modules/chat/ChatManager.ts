@@ -1352,10 +1352,6 @@ export class ChatManager {
     return this.paperChatTier.rerollCurrentPaperChatFailureAndRetry();
   }
 
-  async insertCurrentSessionSystemNotice(content: string): Promise<void> {
-    return this.paperChatTier.insertCurrentSessionSystemNotice(content);
-  }
-
   async applyPaperChatFailureState(
     session: ChatSession,
     userMessageId: string,

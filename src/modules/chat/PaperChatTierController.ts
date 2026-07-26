@@ -421,17 +421,6 @@ export class PaperChatTierController {
     }
   }
 
-  async insertCurrentSessionSystemNotice(content: string): Promise<void> {
-    await this.host.init();
-
-    const session = this.host.getCurrentSession();
-    if (!session) {
-      return;
-    }
-
-    await this.host.insertSystemNotice(session, content);
-  }
-
   async applyPaperChatFailureState(
     session: ChatSession,
     userMessageId: string,
