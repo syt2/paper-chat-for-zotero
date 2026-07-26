@@ -156,6 +156,13 @@ const TOOL_RUNTIME_METADATA: Record<PaperToolName, ToolRuntimeMetadata> = {
     targetScope: "library",
     mutatesState: false,
   },
+  search_fulltext: {
+    name: "search_fulltext",
+    executionClass: "read",
+    concurrency: "parallel_safe",
+    targetScope: "library",
+    mutatesState: false,
+  },
   get_collections: {
     name: "get_collections",
     executionClass: "read",

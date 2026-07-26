@@ -17,6 +17,7 @@ import type {
   AppendToNoteArgs,
   GetAnnotationsArgs,
   SearchItemsArgs,
+  SearchFulltextArgs,
   GetCollectionsArgs,
   GetCollectionItemsArgs,
   GetTagsArgs,
@@ -454,6 +455,78 @@ export async function executeSearchItems(
 
   const header = `Search results for "${query}" (showing ${results.length} of ${itemIDs.length} matches):\n\n`;
   return header + results.join("\n");
+}
+
+// ==================== search_fulltext ====================
+
+/**
+ * 执行 search_fulltext - 全库 PDF 全文检索
+ */
+export async function executeSearchFulltext(
+  args: SearchFulltextArgs,
+): Promise<string> {
+  const { query, itemType, limit = 20 } = args;
+  const limitedLimit = Math.min(Math.max(1, limit), 50);
+
+  if (!query || query.trim() === "") {
+    return `Error: Search query is required.`;
+  }
+
+  const libraryID = Zotero.Libraries.userLibraryID;
+  const search = new Zotero.Search({ libraryID });
+  search.addCondition("fulltextContent", "contains", query);
+
+  const itemIDs = await search.search();
+
+  if (!itemIDs || itemIDs.length === 0) {
+    return `No papers found whose full text mentions "${query}". Note: only indexed attachments are searchable; the paper may still mention it if its PDF is not indexed.`;
+  }
+
+  // fulltextContent matches attachment items; surface their top-level parents.
+  const matched = await Zotero.Items.getAsync(itemIDs);
+  const parentsById = new Map<number, Zotero.Item>();
+  for (const item of matched) {
+    let parent: Zotero.Item | null = item;
+    if (item.isAttachment?.() && item.parentItemID) {
+      parent = Zotero.Items.get(item.parentItemID) || null;
+    }
+    if (!parent || parent.isAttachment?.() || parent.isNote?.()) {
+      continue;
+    }
+    if (itemType && parent.itemType !== itemType) {
+      continue;
+    }
+    if (!parentsById.has(parent.id)) {
+      parentsById.set(parent.id, parent);
+    }
+  }
+
+  if (parentsById.size === 0) {
+    return `No papers found whose full text mentions "${query}"${itemType ? ` with type "${itemType}"` : ""}.`;
+  }
+
+  const parents = [...parentsById.values()];
+  const results = parents
+    .slice(0, limitedLimit)
+    .map((item: Zotero.Item, index: number) => {
+      const itemKey = item.key;
+      const title = getItemTitleSmart(item);
+      const year = item.getField("year") || "";
+      const creators = item.getCreators();
+      const firstAuthor =
+        creators && creators.length > 0
+          ? creators[0].lastName ||
+            (creators[0] as { name?: string }).name ||
+            ""
+          : "";
+      const type = item.itemType;
+
+      return `${index + 1}. [${itemKey}] ${title} (${firstAuthor}${firstAuthor && year ? ", " : ""}${year}) - ${type}`;
+    });
+
+  const header = `Papers whose full text mentions "${query}" (showing ${results.length} of ${parents.length} matches):\n\n`;
+  const hint = `\n\nUse get_full_text or get_annotations with an itemKey above to read the matching paper.`;
+  return header + results.join("\n") + hint;
 }
 
 // ==================== get_collections ====================

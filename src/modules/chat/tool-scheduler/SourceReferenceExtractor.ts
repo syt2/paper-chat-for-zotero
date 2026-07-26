@@ -24,6 +24,7 @@ const PAGE_BEARING_TOOLS = new Set([
 const ITEM_LIST_TOOLS = new Set([
   "list_all_items",
   "search_items",
+  "search_fulltext",
   "get_collection_items",
   "search_by_tag",
   "get_recent",

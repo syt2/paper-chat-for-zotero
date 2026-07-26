@@ -159,6 +159,11 @@ const TOOL_PERMISSION_DESCRIPTORS: Record<
     "read",
     "Search the Zotero library.",
   ),
+  search_fulltext: createDescriptor(
+    "search_fulltext",
+    "read",
+    "Search PDF full text across the Zotero library.",
+  ),
   get_collections: createDescriptor(
     "get_collections",
     "read",

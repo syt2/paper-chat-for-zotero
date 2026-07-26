@@ -122,7 +122,10 @@ describe("tool recovery policy", function () {
 
     assert.include(lines[0] || "", "category=not_found");
     assert.include(lines[0] || "", "Discover valid Zotero keys");
-    assert.include(lines[0] || "", "tools=search_items, list_all_items");
+    assert.include(
+      lines[0] || "",
+      "tools=search_items, search_fulltext, list_all_items",
+    );
   });
 
   it("maps budget-exhausted full-text failures to cheaper fallback tools", async function () {

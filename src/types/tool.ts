@@ -330,6 +330,7 @@ export type PaperToolName =
   | "get_annotations"
   | "get_pdf_selection"
   | "search_items"
+  | "search_fulltext"
   | "get_collections"
   | "get_collection_items"
   | "get_tags"
@@ -434,6 +435,13 @@ export interface SearchItemsArgs {
   query: string;
   field?: "title" | "creator" | "tag" | "everywhere"; // 搜索范围
   itemType?: string; // 条目类型筛选
+  limit?: number;
+}
+
+// 全文检索 Zotero 库的参数
+export interface SearchFulltextArgs {
+  query: string;
+  itemType?: string; // 按父条目类型筛选
   limit?: number;
 }
 

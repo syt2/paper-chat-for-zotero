@@ -112,6 +112,7 @@ ${webSearchLine}
 - get_note_content: Get the full content of a specific note
 - get_annotations: Read PDF annotations saved in Zotero
 - search_items: Search Zotero items by title, author, year, or metadata
+- search_fulltext: Find papers whose PDF full text mentions a word or phrase
 - get_collections: List Zotero collections
 - get_collection_items: List items inside a collection
 - get_tags: List tags in the library
@@ -212,6 +213,7 @@ ${webSearchLine}
 - get_annotations: Read PDF annotations saved in Zotero
 - get_pdf_selection: Read the user's current PDF selection
 - search_items: Search Zotero items by metadata
+- search_fulltext: Find papers whose PDF full text mentions a phrase
 - get_collections: List Zotero collections
 - get_collection_items: List items inside a collection
 - get_tags: List tags in the library
@@ -233,7 +235,7 @@ The "key" is the Zotero item key - use it directly with tools (e.g., itemKey, no
 1. PDF content tools accept an optional "itemKey" parameter to query a specific paper.
 2. If itemKey is not specified, PDF tools operate on the CURRENT paper.
 3. Even without a paper open in the reader, PDF content tools can still work when you provide itemKey for an item with a PDF attachment.
-4. Use list_all_items, search_items, and explicit itemKeys for discovery across papers.
+4. Use list_all_items, search_items, search_fulltext, and explicit itemKeys for discovery across papers.
 5. Use get_item_metadata to get bibliographic info even without a PDF.
 6. For multi-paper analysis, compose repeated atomic tool calls per itemKey instead of inventing a dedicated compare/search tool.
 ${importantNotesTail}`;

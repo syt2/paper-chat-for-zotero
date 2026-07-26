@@ -40,6 +40,7 @@ export {
 export {
   executeGetAnnotations,
   executeSearchItems,
+  executeSearchFulltext,
   executeGetCollections,
   executeGetCollectionItems,
   executeGetTags,

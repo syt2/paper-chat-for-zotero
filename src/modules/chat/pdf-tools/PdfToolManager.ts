@@ -37,6 +37,7 @@ import type {
   // 新增类型
   GetAnnotationsArgs,
   SearchItemsArgs,
+  SearchFulltextArgs,
   ScholarlySearchArgs,
   WebSearchArgs,
   GetCollectionsArgs,
@@ -90,6 +91,7 @@ import {
   executeGetAnnotations,
   executeGetPdfSelection,
   executeSearchItems,
+  executeSearchFulltext,
   executeGetCollections,
   executeGetCollectionItems,
   executeGetTags,
@@ -710,6 +712,35 @@ export class PdfToolManager {
       {
         type: "function",
         function: {
+          name: "search_fulltext",
+          description:
+            "Search the full text of all indexed PDFs in the Zotero library. Use this to find which papers mention a concept, method, or phrase anywhere in their body text - not just in titles or metadata. Returns the parent papers, which can then be read with get_full_text.",
+          parameters: {
+            type: "object",
+            properties: {
+              query: {
+                type: "string",
+                description:
+                  "The word or phrase to look for inside PDF full text. Required.",
+              },
+              itemType: {
+                type: "string",
+                description:
+                  "Filter results by parent item type (e.g., journalArticle, book, conferencePaper). Optional.",
+              },
+              limit: {
+                type: "number",
+                description:
+                  "Maximum number of papers to return (max 50). Default: 20",
+              },
+            },
+            required: ["query"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
           name: "get_collections",
           description:
             "List collections (folders) in the Zotero library. Shows collection hierarchy with item counts.",
@@ -1285,6 +1316,14 @@ export class PdfToolManager {
     );
   }
 
+  private isSearchFulltextArgs(args: unknown): args is SearchFulltextArgs {
+    return (
+      typeof args === "object" &&
+      args !== null &&
+      typeof (args as SearchFulltextArgs).query === "string"
+    );
+  }
+
   private isWebSearchArgs(args: unknown): args is WebSearchArgs {
     return isValidWebSearchArgs(args);
   }
@@ -1469,6 +1508,12 @@ export class PdfToolManager {
           return "Error: Invalid arguments for search_items. Required: query (string)";
         }
         return executeSearchItems(args);
+
+      case "search_fulltext":
+        if (!this.isSearchFulltextArgs(args)) {
+          return "Error: Invalid arguments for search_fulltext. Required: query (string)";
+        }
+        return executeSearchFulltext(args);
 
       case "get_collections":
         if (!this.isGetCollectionsArgs(args)) {

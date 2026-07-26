@@ -314,6 +314,7 @@ function getRecommendedTools(
       }
       return dedupeStrings([
         "search_items",
+        "search_fulltext",
         "list_all_items",
         "get_collections",
         "get_collection_items",
