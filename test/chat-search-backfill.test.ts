@@ -400,7 +400,7 @@ describe("chat history search backfill helpers", function () {
     const service = new SessionStorageService();
     await service.init();
 
-    const hasMoreWork = await (service as any).runSearchBackfillSlice();
+    const hasMoreWork = await (service as any).search.runSearchBackfillSlice();
 
     assert.isFalse(hasMoreWork);
     assert.equal(
@@ -468,7 +468,7 @@ describe("chat history search backfill helpers", function () {
     const service = new SessionStorageService();
     await service.init();
 
-    assert.isFalse(await (service as any).runSearchBackfillSlice());
+    assert.isFalse(await (service as any).search.runSearchBackfillSlice());
     assert.equal(
       fake.messages.get("message-malformed")?.search_text,
       "still searchable",
@@ -525,7 +525,7 @@ describe("chat history search backfill helpers", function () {
 
     // The slice completes instead of throwing and re-reading the same
     // poisoned row on every retry forever.
-    assert.isFalse(await (service as any).runSearchBackfillSlice());
+    assert.isFalse(await (service as any).search.runSearchBackfillSlice());
 
     const poisoned = fake.messages.get("message-poisoned");
     assert.equal(poisoned?.search_text, "");
@@ -568,13 +568,13 @@ describe("chat history search backfill helpers", function () {
       fake.messages.get("message-stale")!.content = "Changed answer";
     };
 
-    assert.isTrue(await (service as any).runSearchBackfillSlice());
+    assert.isTrue(await (service as any).search.runSearchBackfillSlice());
     assert.equal(fake.messages.get("message-stale")?.search_index_version, 0);
     assert.equal(fake.messages.get("message-stale")?.search_text, "");
     assert.equal(fake.state.completed, 0);
     assert.equal(fake.state.search_revision, 4);
 
-    assert.isFalse(await (service as any).runSearchBackfillSlice());
+    assert.isFalse(await (service as any).search.runSearchBackfillSlice());
     assert.equal(
       fake.messages.get("message-stale")?.search_index_version,
       CURRENT_SEARCH_VERSION,
@@ -595,7 +595,7 @@ describe("chat history search backfill helpers", function () {
     let concurrent = 0;
     let maxConcurrent = 0;
 
-    (service as any).runSearchBackfillSlice = async () => {
+    (service as any).search.runSearchBackfillSlice = async () => {
       calls += 1;
       concurrent += 1;
       maxConcurrent = Math.max(maxConcurrent, concurrent);
@@ -627,7 +627,7 @@ describe("chat history search backfill helpers", function () {
   it("cancels a future timer before shutdown", async function () {
     const service = new SessionStorageService();
     let calls = 0;
-    (service as any).runSearchBackfillSlice = async () => {
+    (service as any).search.runSearchBackfillSlice = async () => {
       calls += 1;
       return false;
     };
@@ -645,7 +645,7 @@ describe("chat history search backfill helpers", function () {
     const releaseSlice = deferred();
     let calls = 0;
 
-    (service as any).runSearchBackfillSlice = async () => {
+    (service as any).search.runSearchBackfillSlice = async () => {
       calls += 1;
       sliceStarted.resolve();
       await releaseSlice.promise;
@@ -660,7 +660,7 @@ describe("chat history search backfill helpers", function () {
     await new Promise((resolve) => setTimeout(resolve, 5));
 
     assert.equal(calls, 1);
-    assert.isNull((service as any).searchBackfillTimer);
+    assert.isNull((service as any).search.searchBackfillTimer);
   });
 
   it("backs persistent failures off exponentially and resets after success", async function () {
@@ -686,7 +686,7 @@ describe("chat history search backfill helpers", function () {
       if (pendingIndex >= 0) scheduled.splice(pendingIndex, 1);
     }) as typeof clearTimeout;
 
-    (service as any).runSearchBackfillSlice = async () => {
+    (service as any).search.runSearchBackfillSlice = async () => {
       calls += 1;
       if (calls <= 9) throw new Error("persistent failure");
       return true;
