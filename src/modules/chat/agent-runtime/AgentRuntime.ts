@@ -2,7 +2,6 @@ import type {
   AgentRuntimeEvent,
   AgentRuntimeEventType,
   ChatMessage,
-  ChatMessageStreamingState,
   ChatSession,
   ExecutionPlan,
   HostedWebSearchCall,
@@ -62,6 +61,7 @@ import {
   UserInputRequestCoordinator,
   type RuntimeEventPayload,
 } from "./UserInputRequestCoordinator";
+import { AssistantMessageCheckpointer } from "./AssistantMessageCheckpointer";
 import {
   collectTrustedSourceTargets,
   normalizeSourceItemKeys,
@@ -247,11 +247,33 @@ interface IterationControlState {
 
 export class AgentRuntime {
   private executionPlanManager = new ExecutionPlanManager();
-  private messageCheckpointTimers = new Map<
-    string,
-    ReturnType<typeof setTimeout>
-  >();
-  private messageCheckpointQueues = new Map<string, Promise<void>>();
+  private messageCheckpointer = new AssistantMessageCheckpointer({
+    isSessionTracked: (session, sessionRunId) =>
+      this.callbacks.isSessionTracked(session, sessionRunId),
+    persistCheckpoint: async (session, message, streamingState) => {
+      const groundedDisplay = this.sanitizeGroundedDisplay(
+        session,
+        message.content,
+      );
+      const mergedSourceItemKeys = this.mergeAssistantSourceItemKeys(
+        message,
+        groundedDisplay.sourceItemKeys,
+      );
+      const sourceItemKeys = mergedSourceItemKeys || [];
+      message.sourceItemKeys = mergedSourceItemKeys;
+      await this.sessionStorage.updateMessageContent(
+        session.id,
+        message.id,
+        groundedDisplay.content,
+        message.reasoning,
+        {
+          streamingState,
+          evidence: groundedDisplay.evidence || [],
+          sourceItemKeys,
+        },
+      );
+    },
+  });
   private pendingMutatingToolEntries = new Map<string, Set<Promise<void>>>();
   private userInput = new UserInputRequestCoordinator({
     persistUserInputRequestState: (session) =>
@@ -906,7 +928,7 @@ export class AgentRuntime {
           const uiContent = getUiStreamingContent();
           assistantMessage.content = getPersistedStreamingContent();
           assistantMessage.streamingState = "in_progress";
-          this.scheduleAssistantMessageCheckpoint(
+          this.messageCheckpointer.schedule(
             sendingSession,
             sessionRunId,
             assistantMessage,
@@ -981,7 +1003,7 @@ export class AgentRuntime {
             const fullReasoning = reasoningBeforeRound + roundReasoning;
             assistantMessage.reasoning = fullReasoning;
             assistantMessage.streamingState = "in_progress";
-            this.scheduleAssistantMessageCheckpoint(
+            this.messageCheckpointer.schedule(
               sendingSession,
               sessionRunId,
               assistantMessage,
@@ -1298,7 +1320,7 @@ export class AgentRuntime {
 
         assistantMessage.content = callingDisplay;
         assistantMessage.streamingState = "in_progress";
-        await this.flushAssistantMessageCheckpoint(
+        await this.messageCheckpointer.flush(
           sendingSession,
           sessionRunId,
           assistantMessage,
@@ -1318,7 +1340,7 @@ export class AgentRuntime {
       if (entry.kind === "user_input") {
         assistantMessage.content = accumulatedDisplay;
         assistantMessage.streamingState = "in_progress";
-        await this.flushAssistantMessageCheckpoint(
+        await this.messageCheckpointer.flush(
           sendingSession,
           sessionRunId,
           assistantMessage,
@@ -1467,7 +1489,7 @@ export class AgentRuntime {
             formatCallingToolCards([...pendingDisplayToolCalls.values()]);
           assistantMessage.content = displayWithPendingTools;
           assistantMessage.streamingState = "in_progress";
-          await this.flushAssistantMessageCheckpoint(
+          await this.messageCheckpointer.flush(
             sendingSession,
             sessionRunId,
             assistantMessage,
@@ -1544,7 +1566,7 @@ export class AgentRuntime {
     assistantMessage.content = groundedDisplay.content;
     assistantMessage.evidence = groundedDisplay.evidence;
     assistantMessage.streamingState = "in_progress";
-    await this.flushAssistantMessageCheckpoint(
+    await this.messageCheckpointer.flush(
       sendingSession,
       sessionRunId,
       assistantMessage,
@@ -2006,7 +2028,7 @@ export class AgentRuntime {
       truncateToolDetail(sanitizedDisplay),
     );
 
-    await this.flushAssistantMessageCheckpoint(
+    await this.messageCheckpointer.flush(
       sendingSession,
       sessionRunId,
       assistantMessage,
@@ -2087,7 +2109,7 @@ export class AgentRuntime {
         sendingSession,
         assistantMessage.id,
       );
-    await this.flushAssistantMessageCheckpoint(
+    await this.messageCheckpointer.flush(
       sendingSession,
       sessionRunId,
       assistantMessage,
@@ -2149,7 +2171,7 @@ export class AgentRuntime {
       assistantMessage,
       groundedDisplay.sourceItemKeys,
     );
-    await this.flushAssistantMessageCheckpoint(
+    await this.messageCheckpointer.flush(
       sendingSession,
       sessionRunId,
       assistantMessage,
@@ -2364,106 +2386,6 @@ export class AgentRuntime {
     }
     session.toolExecutionState!.planId = session.executionPlan?.id;
     session.toolExecutionState!.updatedAt = Date.now();
-  }
-
-  private scheduleAssistantMessageCheckpoint(
-    session: ChatSession,
-    sessionRunId: number | undefined,
-    message: ChatMessage,
-  ): void {
-    if (!this.callbacks.isSessionTracked(session, sessionRunId)) {
-      return;
-    }
-    if (this.messageCheckpointTimers.has(message.id)) {
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      this.messageCheckpointTimers.delete(message.id);
-      if (!this.callbacks.isSessionTracked(session, sessionRunId)) {
-        return;
-      }
-      void this.enqueueAssistantMessageCheckpoint(
-        session,
-        sessionRunId,
-        message,
-        "in_progress",
-      );
-    }, 1000);
-    this.messageCheckpointTimers.set(message.id, timer);
-  }
-
-  private async flushAssistantMessageCheckpoint(
-    session: ChatSession,
-    sessionRunId: number | undefined,
-    message: ChatMessage,
-    streamingState: ChatMessageStreamingState | null,
-  ): Promise<void> {
-    if (!this.callbacks.isSessionTracked(session, sessionRunId)) {
-      return;
-    }
-    const timer = this.messageCheckpointTimers.get(message.id);
-    if (timer) {
-      clearTimeout(timer);
-      this.messageCheckpointTimers.delete(message.id);
-    }
-
-    await this.enqueueAssistantMessageCheckpoint(
-      session,
-      sessionRunId,
-      message,
-      streamingState,
-    );
-  }
-
-  private async enqueueAssistantMessageCheckpoint(
-    session: ChatSession,
-    sessionRunId: number | undefined,
-    message: ChatMessage,
-    streamingState: ChatMessageStreamingState | null,
-  ): Promise<void> {
-    if (!this.callbacks.isSessionTracked(session, sessionRunId)) {
-      return;
-    }
-    const previous =
-      this.messageCheckpointQueues.get(message.id) || Promise.resolve();
-    const next = previous
-      .catch(() => undefined)
-      .then(async () => {
-        if (!this.callbacks.isSessionTracked(session, sessionRunId)) {
-          return;
-        }
-        const groundedDisplay = this.sanitizeGroundedDisplay(
-          session,
-          message.content,
-        );
-        const mergedSourceItemKeys = this.mergeAssistantSourceItemKeys(
-          message,
-          groundedDisplay.sourceItemKeys,
-        );
-        const sourceItemKeys = mergedSourceItemKeys || [];
-        message.sourceItemKeys = mergedSourceItemKeys;
-        await this.sessionStorage.updateMessageContent(
-          session.id,
-          message.id,
-          groundedDisplay.content,
-          message.reasoning,
-          {
-            streamingState,
-            evidence: groundedDisplay.evidence || [],
-            sourceItemKeys,
-          },
-        );
-      });
-    this.messageCheckpointQueues.set(message.id, next);
-
-    try {
-      await next;
-    } finally {
-      if (this.messageCheckpointQueues.get(message.id) === next) {
-        this.messageCheckpointQueues.delete(message.id);
-      }
-    }
   }
 
   private appendRecoveryGuidanceMessage(
