@@ -68,8 +68,6 @@ import {
   getModelRoutingMeta,
 } from "../preferences/ModelsFetcher";
 import {
-  rerollTierModel,
-  deriveTierPools,
   isPaperChatModelHardFailure,
   type PaperChatTier,
 } from "../providers/paperchat-tier-routing";
@@ -79,12 +77,13 @@ import {
   clearPaperChatRetryableState,
   resolvePaperChatSessionBinding,
 } from "./paperchat-session-state";
-import { rerollPaperChatFailureAndReplay } from "./paperchat-retry-orchestration";
+import { PaperChatRetryOrchestrator } from "./PaperChatRetryOrchestrator";
 import {
-  PaperChatRetryOrchestrator,
-  getPaperChatChatModels,
-  pickRandomCandidate,
-} from "./PaperChatRetryOrchestrator";
+  PaperChatTierController,
+  selectMoreSubstantialSnapshot,
+  type FailedAssistantSnapshot,
+  type PaperChatTierRerollResult,
+} from "./PaperChatTierController";
 import { stripPendingAndIncompleteToolCallContent } from "./interrupted-message";
 import { saveDebugContextSnapshot } from "./DebugContextExporter";
 import { MemoryManager } from "./memory/MemoryManager";
@@ -145,11 +144,6 @@ type RetryGuardedError = Error & {
   [SUPPRESS_AUTOMATIC_RETRY]?: boolean;
 };
 
-type FailedAssistantSnapshot = Pick<
-  ChatMessage,
-  "content" | "reasoning" | "evidence" | "sourceItemKeys"
->;
-
 type InternalSendMessageOptions = SendMessageOptions & {
   item?: Zotero.Item | null;
   fromPaperChatReroll?: boolean;
@@ -163,15 +157,6 @@ type InternalSendMessageOptions = SendMessageOptions & {
   trustedSourceItemKeys?: readonly string[];
   noteSummaryContext?: NoteSummaryContext;
 };
-
-function selectMoreSubstantialSnapshot(
-  current: FailedAssistantSnapshot | null,
-  previous: FailedAssistantSnapshot | null,
-): FailedAssistantSnapshot | null {
-  if (!current) return previous;
-  if (!previous) return current;
-  return current.content.length >= previous.content.length ? current : previous;
-}
 
 /**
  * Type guard: check if provider supports streaming tool calling
@@ -1298,345 +1283,80 @@ export class ChatManager {
     this.onMessageUpdate?.(this.currentSession!.messages);
   }
 
-  async rerollCurrentPaperChatTier(): Promise<{
-    previousModel: string;
-    nextModel: string;
-    tier: PaperChatTier;
-  } | null> {
-    await this.init();
+  private paperChatTierController?: PaperChatTierController;
 
-    const session = this.currentSession;
-    if (!session || !session.selectedTier || !session.resolvedModelId) {
-      return null;
+  /**
+   * Lazily built so white-box tests that create managers via
+   * Object.create(ChatManager.prototype) get a working controller: the
+   * getter lives on the prototype and the host arrows read the manager's
+   * fields at call time.
+   */
+  private get paperChatTier(): PaperChatTierController {
+    if (!this.paperChatTierController) {
+      this.paperChatTierController = new PaperChatTierController({
+        init: () => this.init(),
+        getCurrentSession: () => this.currentSession,
+        getSessionStorage: () => this.sessionStorage,
+        isSessionRunActive: (sessionId) =>
+          this.activeSessionRunIds.has(sessionId),
+        isRerollInProgress: (sessionId) =>
+          this.paperChatRerollSessions.has(sessionId),
+        beginReroll: (sessionId) => {
+          this.paperChatRerollSessions.add(sessionId);
+        },
+        endReroll: (sessionId) => {
+          this.paperChatRerollSessions.delete(sessionId);
+        },
+        rerollTier: () => this.rerollCurrentPaperChatTier(),
+        buildReroutedNotice: (tier, previousModel, nextModel) =>
+          this.paperChatRetry.buildReroutedNotice(
+            tier,
+            previousModel,
+            nextModel,
+          ),
+        insertSystemNotice: (session, content) =>
+          this.insertSystemNotice(session, content),
+        sendMessage: (content, options) => this.sendMessage(content, options),
+        getSessionItem: (session) => this.getSessionItem(session),
+        notifyMessagesUpdated: (messages) => {
+          this.onMessageUpdate?.(messages);
+        },
+      });
     }
+    return this.paperChatTierController;
+  }
 
-    const providerManager = getProviderManager();
-    const provider = this.getActiveProvider();
-    if (!provider || providerManager.getActiveProviderId() !== "paperchat") {
-      return null;
-    }
-
-    const availableModels = getPaperChatChatModels();
-    const routingMeta = getModelRoutingMeta();
-    const pools = deriveTierPools(
-      availableModels,
-      getModelRatios(),
-      routingMeta,
-    );
-    const nextModel = rerollTierModel(
-      pools[session.selectedTier],
-      session.resolvedModelId,
-      pickRandomCandidate,
-      routingMeta,
-    );
-
-    if (!nextModel) {
-      return null;
-    }
-
-    const previousModel = session.resolvedModelId;
-    const previousRetryableState = {
-      lastRetryableUserMessageId: session.lastRetryableUserMessageId,
-      lastRetryableErrorMessageId: session.lastRetryableErrorMessageId,
-      lastRetryableFailedModelId: session.lastRetryableFailedModelId,
-    };
-    const previousUpdatedAt = session.updatedAt;
-
-    session.resolvedModelId = nextModel;
-    clearPaperChatRetryableState(session);
-
-    try {
-      await this.sessionStorage.updateSessionMeta(session);
-    } catch (error) {
-      session.resolvedModelId = previousModel;
-      session.lastRetryableUserMessageId =
-        previousRetryableState.lastRetryableUserMessageId;
-      session.lastRetryableErrorMessageId =
-        previousRetryableState.lastRetryableErrorMessageId;
-      session.lastRetryableFailedModelId =
-        previousRetryableState.lastRetryableFailedModelId;
-      session.updatedAt = previousUpdatedAt;
-      throw error;
-    }
-
-    const paperchatProvider = providerManager.getProvider("paperchat");
-    paperchatProvider?.updateConfig({
-      resolvedModelOverride: nextModel,
-    });
-
-    return {
-      previousModel,
-      nextModel,
-      tier: session.selectedTier,
-    };
+  async rerollCurrentPaperChatTier(): Promise<PaperChatTierRerollResult | null> {
+    return this.paperChatTier.rerollCurrentPaperChatTier();
   }
 
   async switchCurrentSessionPaperChatTier(
     tier: PaperChatTier,
     modelOverride?: string | null,
   ): Promise<void> {
-    await this.init();
-
-    const session = this.currentSession;
-    if (!session) {
-      return;
-    }
-
-    const nextResolvedModelId =
-      modelOverride === undefined ? undefined : modelOverride || undefined;
-    if (modelOverride === undefined && session.selectedTier === tier) {
-      return;
-    }
-    if (
-      modelOverride !== undefined &&
-      session.selectedTier === tier &&
-      session.resolvedModelId === nextResolvedModelId
-    ) {
-      return;
-    }
-
-    const previousSessionState = {
-      selectedTier: session.selectedTier,
-      resolvedModelId: session.resolvedModelId,
-      lastRetryableUserMessageId: session.lastRetryableUserMessageId,
-      lastRetryableErrorMessageId: session.lastRetryableErrorMessageId,
-      lastRetryableFailedModelId: session.lastRetryableFailedModelId,
-      updatedAt: session.updatedAt,
-    };
-
-    session.selectedTier = tier;
-    session.resolvedModelId = nextResolvedModelId;
-    clearPaperChatRetryableState(session);
-
-    try {
-      await this.sessionStorage.updateSessionMeta(session);
-    } catch (error) {
-      session.selectedTier = previousSessionState.selectedTier;
-      session.resolvedModelId = previousSessionState.resolvedModelId;
-      session.lastRetryableUserMessageId =
-        previousSessionState.lastRetryableUserMessageId;
-      session.lastRetryableErrorMessageId =
-        previousSessionState.lastRetryableErrorMessageId;
-      session.lastRetryableFailedModelId =
-        previousSessionState.lastRetryableFailedModelId;
-      session.updatedAt = previousSessionState.updatedAt;
-      throw error;
-    }
-
-    const providerManager = getProviderManager();
-    const paperchatProvider = providerManager.getProvider("paperchat");
-    paperchatProvider?.updateConfig({
-      resolvedModelOverride: nextResolvedModelId,
-    });
+    return this.paperChatTier.switchCurrentSessionPaperChatTier(
+      tier,
+      modelOverride,
+    );
   }
 
   async clearCurrentSessionPaperChatRetryableState(): Promise<void> {
-    await this.init();
-
-    const session = this.currentSession;
-    if (!session) {
-      return;
-    }
-
-    const hadRetryableState =
-      !!session.lastRetryableUserMessageId ||
-      !!session.lastRetryableErrorMessageId ||
-      !!session.lastRetryableFailedModelId;
-
-    if (!hadRetryableState) {
-      return;
-    }
-
-    const previousState = {
-      lastRetryableUserMessageId: session.lastRetryableUserMessageId,
-      lastRetryableErrorMessageId: session.lastRetryableErrorMessageId,
-      lastRetryableFailedModelId: session.lastRetryableFailedModelId,
-      updatedAt: session.updatedAt,
-    };
-
-    clearPaperChatRetryableState(session);
-
-    try {
-      await this.sessionStorage.updateSessionMeta(session);
-    } catch (error) {
-      session.lastRetryableUserMessageId =
-        previousState.lastRetryableUserMessageId;
-      session.lastRetryableErrorMessageId =
-        previousState.lastRetryableErrorMessageId;
-      session.lastRetryableFailedModelId =
-        previousState.lastRetryableFailedModelId;
-      session.updatedAt = previousState.updatedAt;
-      throw error;
-    }
+    return this.paperChatTier.clearCurrentSessionPaperChatRetryableState();
   }
 
   async retryCurrentPaperChatFailure(): Promise<boolean> {
-    await this.init();
-
-    const session = this.currentSession;
-    if (
-      !session ||
-      getProviderManager().getActiveProviderId() !== "paperchat" ||
-      this.activeSessionRunIds.has(session.id) ||
-      this.paperChatRerollSessions.has(session.id) ||
-      !session.lastRetryableUserMessageId ||
-      !session.lastRetryableErrorMessageId
-    ) {
-      return false;
-    }
-
-    const userMessage = session.messages.find(
-      (message) =>
-        message.id === session.lastRetryableUserMessageId &&
-        message.role === "user",
-    );
-    const errorMessage = session.messages.find(
-      (message) =>
-        message.id === session.lastRetryableErrorMessageId &&
-        message.role === "error",
-    );
-    if (!userMessage || !errorMessage) {
-      return false;
-    }
-
-    this.paperChatRerollSessions.add(session.id);
-    try {
-      return await this.sendMessage(userMessage.content, {
-        item: this.getSessionItem(session),
-        images: userMessage.images,
-        fromPaperChatReroll: true,
-        resumeFailedTurn: true,
-        reuseUserMessageId: userMessage.id,
-        targetSession: session,
-        requireTargetSessionActive: true,
-      });
-    } finally {
-      this.paperChatRerollSessions.delete(session.id);
-    }
+    return this.paperChatTier.retryCurrentPaperChatFailure();
   }
 
-  async rerollCurrentPaperChatFailureAndRetry(): Promise<{
-    previousModel: string;
-    nextModel: string;
-    tier: PaperChatTier;
-  } | null> {
-    await this.init();
-
-    const session = this.currentSession;
-    if (
-      !session ||
-      this.activeSessionRunIds.has(session.id) ||
-      this.paperChatRerollSessions.has(session.id)
-    ) {
-      return null;
-    }
-
-    this.paperChatRerollSessions.add(session.id);
-    const previousState = {
-      resolvedModelId: session.resolvedModelId,
-      lastRetryableUserMessageId: session.lastRetryableUserMessageId,
-      lastRetryableErrorMessageId: session.lastRetryableErrorMessageId,
-      lastRetryableFailedModelId: session.lastRetryableFailedModelId,
-      updatedAt: session.updatedAt,
-    };
-    try {
-      return await rerollPaperChatFailureAndReplay<Zotero.Item | null>({
-        session,
-        rerollTier: () => this.rerollCurrentPaperChatTier(),
-        buildSystemNotice: (reroute) =>
-          this.paperChatRetry.buildReroutedNotice(
-            reroute.tier,
-            reroute.previousModel,
-            reroute.nextModel,
-          ),
-        insertSystemNotice: async (targetSession, content) =>
-          (await this.insertSystemNotice(targetSession, content)).id,
-        rollbackReroute: async (_reroute, noticeMessageId) => {
-          const restoreState = (targetSession: ChatSession) => {
-            targetSession.resolvedModelId = previousState.resolvedModelId;
-            targetSession.lastRetryableUserMessageId =
-              previousState.lastRetryableUserMessageId;
-            targetSession.lastRetryableErrorMessageId =
-              previousState.lastRetryableErrorMessageId;
-            targetSession.lastRetryableFailedModelId =
-              previousState.lastRetryableFailedModelId;
-            targetSession.updatedAt = previousState.updatedAt;
-          };
-          restoreState(session);
-          if (
-            this.currentSession?.id === session.id &&
-            this.currentSession !== session
-          ) {
-            restoreState(this.currentSession);
-          }
-
-          if (noticeMessageId) {
-            const noticeIndex = session.messages.findIndex(
-              (message) => message.id === noticeMessageId,
-            );
-            if (noticeIndex >= 0) {
-              session.messages.splice(noticeIndex, 1);
-            }
-          }
-
-          getProviderManager()
-            .getProvider("paperchat")
-            ?.updateConfig({
-              resolvedModelOverride:
-                this.currentSession?.resolvedModelId ||
-                previousState.resolvedModelId,
-            });
-          if (this.currentSession?.id === session.id) {
-            this.onMessageUpdate?.(this.currentSession.messages);
-          }
-          let rollbackError: unknown = null;
-          try {
-            await this.sessionStorage.updateSessionMeta(session);
-          } catch (error) {
-            rollbackError = error;
-          }
-          if (noticeMessageId) {
-            try {
-              await this.sessionStorage.deleteMessage(
-                session.id,
-                noticeMessageId,
-              );
-            } catch (error) {
-              rollbackError ||= error;
-            }
-          }
-          if (rollbackError) {
-            throw rollbackError;
-          }
-        },
-        resend: ({ content, images, item, sourceUserMessageId }) =>
-          this.sendMessage(content, {
-            item,
-            images,
-            fromPaperChatReroll: true,
-            resumeFailedTurn: true,
-            reuseUserMessageId: sourceUserMessageId,
-            targetSession: session,
-            requireTargetSessionActive: true,
-          }),
-        getItem: (targetSession) => this.getSessionItem(targetSession),
-      });
-    } finally {
-      this.paperChatRerollSessions.delete(session.id);
-    }
+  async rerollCurrentPaperChatFailureAndRetry(): Promise<PaperChatTierRerollResult | null> {
+    return this.paperChatTier.rerollCurrentPaperChatFailureAndRetry();
   }
 
   async insertCurrentSessionSystemNotice(content: string): Promise<void> {
-    await this.init();
-
-    if (!this.currentSession) {
-      return;
-    }
-
-    await this.insertSystemNotice(this.currentSession, content);
+    return this.paperChatTier.insertCurrentSessionSystemNotice(content);
   }
 
-  private async applyPaperChatFailureState(
+  async applyPaperChatFailureState(
     session: ChatSession,
     userMessageId: string,
     errorMessage: ChatMessage,
@@ -1645,60 +1365,25 @@ export class ChatManager {
     failedModelId: string | null,
     allowRetry: boolean = true,
   ): Promise<void> {
-    const isPaperChatFailure = failedProviderId === "paperchat";
-
-    if (isPaperChatFailure && isPaperChatQuotaError(error)) {
-      getAnalyticsService().track(ANALYTICS_EVENTS.paperChatQuotaError, {
-        provider: failedProviderId,
-      });
-    }
-
-    const isRetryablePaperChatFailure =
-      allowRetry && isPaperChatFailure && !isPaperChatQuotaError(error);
-
-    session.lastRetryableUserMessageId = isRetryablePaperChatFailure
-      ? userMessageId
-      : undefined;
-    session.lastRetryableErrorMessageId = isRetryablePaperChatFailure
-      ? errorMessage.id
-      : undefined;
-    session.lastRetryableFailedModelId = isRetryablePaperChatFailure
-      ? (failedModelId ?? undefined)
-      : undefined;
-  }
-
-  private clearFailedTurnRuntimeState(session: ChatSession): void {
-    session.executionPlan = undefined;
-    if (!session.toolExecutionState?.results.length) {
-      session.toolExecutionState = undefined;
-    }
-    session.toolApprovalState = undefined;
+    return this.paperChatTier.applyPaperChatFailureState(
+      session,
+      userMessageId,
+      errorMessage,
+      error,
+      failedProviderId,
+      failedModelId,
+      allowRetry,
+    );
   }
 
   private createFailedAssistantSnapshot(
     assistantMessage: ChatMessage,
   ): FailedAssistantSnapshot | null {
-    const content = stripPendingAndIncompleteToolCallContent(
-      assistantMessage.content,
-    );
-    const reasoning = assistantMessage.reasoning?.trim() || undefined;
-    const evidence = assistantMessage.evidence?.length
-      ? assistantMessage.evidence
-      : undefined;
-    const sourceItemKeys = assistantMessage.sourceItemKeys?.length
-      ? assistantMessage.sourceItemKeys
-      : undefined;
-    return content || reasoning || evidence
-      ? { content, reasoning, evidence, sourceItemKeys }
-      : null;
+    return this.paperChatTier.createFailedAssistantSnapshot(assistantMessage);
   }
 
   private resetAssistantForRetry(assistantMessage: ChatMessage): void {
-    assistantMessage.content = "";
-    delete assistantMessage.reasoning;
-    delete assistantMessage.evidence;
-    delete assistantMessage.tool_calls;
-    assistantMessage.streamingState = "in_progress";
+    this.paperChatTier.resetAssistantForRetry(assistantMessage);
   }
 
   private async finalizeFailedAssistantMessage(
@@ -1706,56 +1391,11 @@ export class ChatManager {
     assistantMessage: ChatMessage,
     fallbackSnapshot: FailedAssistantSnapshot | null,
   ): Promise<boolean> {
-    const toolContextChanged =
-      retainCompletedApiOnlyModelContextMessagesForTurn(
-        session,
-        assistantMessage.id,
-      );
-    this.clearFailedTurnRuntimeState(session);
-
-    const snapshot = selectMoreSubstantialSnapshot(
-      this.createFailedAssistantSnapshot(assistantMessage),
+    return this.paperChatTier.finalizeFailedAssistantMessage(
+      session,
+      assistantMessage,
       fallbackSnapshot,
     );
-    if (!snapshot) {
-      const assistantIndex = session.messages.findIndex(
-        (message) => message.id === assistantMessage.id,
-      );
-      if (assistantIndex >= 0) {
-        session.messages.splice(assistantIndex, 1);
-        await this.sessionStorage.deleteMessage(
-          session.id,
-          assistantMessage.id,
-        );
-      }
-      if (toolContextChanged) {
-        await this.sessionStorage.saveSession(session);
-      }
-      return false;
-    }
-
-    assistantMessage.content = snapshot.content;
-    assistantMessage.reasoning = snapshot.reasoning;
-    assistantMessage.evidence = snapshot.evidence;
-    assistantMessage.sourceItemKeys = snapshot.sourceItemKeys;
-    assistantMessage.streamingState = "interrupted";
-    assistantMessage.timestamp = Date.now();
-    delete assistantMessage.tool_calls;
-    await this.sessionStorage.updateMessageContent(
-      session.id,
-      assistantMessage.id,
-      snapshot.content,
-      snapshot.reasoning,
-      {
-        streamingState: "interrupted",
-        evidence: snapshot.evidence || [],
-        sourceItemKeys: snapshot.sourceItemKeys || [],
-      },
-    );
-    if (toolContextChanged) {
-      await this.sessionStorage.saveSession(session);
-    }
-    return true;
   }
 
   private async applyFailureStateSafely(
@@ -1767,22 +1407,15 @@ export class ChatManager {
     failedModelId: string | null,
     allowRetry: boolean = true,
   ): Promise<void> {
-    try {
-      await this.applyPaperChatFailureState(
-        session,
-        userMessageId,
-        errorMessage,
-        error,
-        failedProviderId,
-        failedModelId,
-        allowRetry,
-      );
-    } catch (stateError) {
-      ztoolkit.log(
-        "[ChatManager] Failed to apply provider failure state:",
-        getErrorMessage(stateError),
-      );
-    }
+    return this.paperChatTier.applyFailureStateSafely(
+      session,
+      userMessageId,
+      errorMessage,
+      error,
+      failedProviderId,
+      failedModelId,
+      allowRetry,
+    );
   }
 
   /**
