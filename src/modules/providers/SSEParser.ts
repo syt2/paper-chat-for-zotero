@@ -294,7 +294,10 @@ export async function parseSSEStream(
         if (!trimmed || !trimmed.startsWith("data:")) continue;
 
         const data = trimmed.slice(5).trimStart();
-        if (data === "[DONE]") continue;
+        // Bare `data:` lines are spec-valid keep-alives; JSON.parse("") would
+        // throw with an engine-specific message the catch below cannot
+        // reliably distinguish from extractor errors (SpiderMonkey vs V8).
+        if (!data || data === "[DONE]") continue;
 
         try {
           const parsed = JSON.parse(data);

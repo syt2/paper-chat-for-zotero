@@ -217,6 +217,35 @@ describe("SSEParser", function () {
     assert.deepEqual(text, ["answer"]);
   });
 
+  it("skips bare data: keep-alive lines without erroring the stream", async function () {
+    const text: string[] = [];
+    const errors: Error[] = [];
+    let done = false;
+
+    await parseSSEStream(
+      readerFromSSE([
+        "data:\n\n",
+        `data: ${JSON.stringify({
+          choices: [{ index: 0, delta: { content: "after keep-alive" } }],
+        })}\n\n`,
+        "data:\n\n",
+        "data: [DONE]\n\n",
+      ]),
+      "openai",
+      {
+        onText: (chunk) => text.push(chunk),
+        onDone: () => {
+          done = true;
+        },
+        onError: (error) => errors.push(error),
+      },
+    );
+
+    assert.deepEqual(text, ["after keep-alive"]);
+    assert.deepEqual(errors, []);
+    assert.isTrue(done);
+  });
+
   it("does not let Anthropic message_stop overwrite tool_use completion", async function () {
     const events: SSEToolCallingEvent[] = [];
     const sse = [
