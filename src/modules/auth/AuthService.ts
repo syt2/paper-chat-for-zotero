@@ -74,7 +74,6 @@ export class AuthService {
   private sessionToken: string | null = null;
   private userId: number | null = null;
   private accessToken: string | null = null;
-  private dashboardAccessToken: string | null = null;
   private httpObserver: any = null;
 
   constructor(baseUrl?: string) {
@@ -150,16 +149,11 @@ export class AuthService {
     this.accessToken = token;
   }
 
-  setDashboardAccessToken(token: string | null): void {
-    this.dashboardAccessToken = token;
-  }
-
   /**
    * 清除 session（包括浏览器 cookie jar）
    */
   clearSessionCookie(): void {
     this.sessionToken = null;
-    this.dashboardAccessToken = null;
     pendingSessionCookie = null;
 
     // 从浏览器 cookie jar 中删除
@@ -286,11 +280,7 @@ export class AuthService {
         headers["New-Api-User"] = String(this.userId);
       }
 
-      if (this.dashboardAccessToken) {
-        headers["Authorization"] = `Bearer ${this.dashboardAccessToken}`;
-      }
-
-      // 只有在不跳过的情况下才发送 PaperChat 模型 API key
+      // 只有在不跳过的情况下才发送 accessToken
       if (this.accessToken && !options.skipAccessToken) {
         headers["Authorization"] = `Bearer ${this.accessToken}`;
       }
@@ -448,12 +438,7 @@ export class AuthService {
 
     // 不支持 2FA
     const responseData = result.data as ApiResponse & {
-      data?: {
-        id?: number;
-        access_token?: string;
-        require_2fa?: boolean;
-        user?: { id?: number };
-      };
+      data?: { id?: number; require_2fa?: boolean };
     };
     if (responseData.data?.require_2fa) {
       return {
@@ -463,13 +448,8 @@ export class AuthService {
     }
 
     // 提取用户ID
-    const userId = responseData.data?.id ?? responseData.data?.user?.id;
-    if (userId) {
-      this.userId = userId;
-    }
-
-    if (responseData.data?.access_token) {
-      this.dashboardAccessToken = responseData.data.access_token;
+    if (responseData.data?.id) {
+      this.userId = responseData.data.id;
     }
 
     return result.data;
@@ -481,7 +461,6 @@ export class AuthService {
 
     this.sessionToken = null;
     this.userId = null;
-    this.dashboardAccessToken = null;
 
     if (result.error) {
       return { success: false, message: result.error };
@@ -559,7 +538,6 @@ export class AuthService {
     const url = `${this.baseUrl}/api/user/self`;
     const result = await this.request<ApiResponse>("PUT", url, {
       body: { language },
-      skipAccessToken: true,
     });
 
     if (result.error) {
@@ -583,9 +561,7 @@ export class AuthService {
 
   async getPricing(): Promise<PaperChatPricingResult> {
     const url = `${this.baseUrl}/api/pricing`;
-    const result = await this.request<PaperChatPricingResult>("GET", url, {
-      skipAccessToken: true,
-    });
+    const result = await this.request<PaperChatPricingResult>("GET", url);
 
     if (result.error) {
       return { success: false, message: result.error };
@@ -678,7 +654,6 @@ export class AuthService {
     const result = await this.request<ApiResponse<{ key: string }>>(
       "POST",
       url,
-      { skipAccessToken: true },
     );
 
     if (result.error) {
@@ -707,7 +682,7 @@ export class AuthService {
     const url = `${this.baseUrl}/api/token/?p=${page}&page_size=${pageSize}`;
     const result = await this.request<
       ApiResponse<PaginatedResponse<TokenInfo>>
-    >("GET", url, { skipAccessToken: true });
+    >("GET", url);
 
     if (result.error) {
       return { success: false, message: result.error };
@@ -732,7 +707,6 @@ export class AuthService {
     const url = `${this.baseUrl}/api/token/`;
     const result = await this.request<ApiResponse<string>>("POST", url, {
       body: request,
-      skipAccessToken: true,
     });
 
     if (result.error) {
@@ -756,9 +730,7 @@ export class AuthService {
 
   async deleteToken(tokenId: number): Promise<ApiResponse> {
     const url = `${this.baseUrl}/api/token/${tokenId}`;
-    const result = await this.request<ApiResponse>("DELETE", url, {
-      skipAccessToken: true,
-    });
+    const result = await this.request<ApiResponse>("DELETE", url);
 
     if (result.error) {
       return { success: false, message: result.error };
@@ -783,7 +755,6 @@ export class AuthService {
     const url = `${this.baseUrl}/api/user/topup`;
     const result = await this.request<ApiResponse>("POST", url, {
       body: { key: code } as TopUpRequest,
-      skipAccessToken: true,
     });
 
     if (result.error) {
