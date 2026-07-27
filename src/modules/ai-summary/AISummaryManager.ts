@@ -16,7 +16,6 @@ import { DEFAULT_AISUMMARY_CONFIG } from "../../types/ai-summary";
 import { AISummaryProcessor } from "./AISummaryProcessor";
 import { AISummaryStorage } from "./AISummaryStorage";
 import { getTemplateById } from "./defaultTemplates";
-import { getString } from "../../utils/locale";
 import {
   createAbortController,
   type ManagedAbortController,

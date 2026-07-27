@@ -3,7 +3,6 @@
  * Uses Anthropic Messages API format (different from OpenAI)
  */
 
-import { getErrorMessage } from "../../utils/common";
 import { BaseProvider } from "./BaseProvider";
 import type {
   ChatMessage,
@@ -34,7 +33,7 @@ export class AnthropicProvider extends BaseProvider {
     pdfAttachment?: PdfAttachment,
     signal?: AbortSignal,
   ): Promise<void> {
-    const { onChunk, onComplete, onError } = callbacks;
+    const { onError } = callbacks;
 
     if (!this.isReady()) {
       onError(new Error("Provider is not configured"));
@@ -112,11 +111,11 @@ export class AnthropicProvider extends BaseProvider {
   }
 
   async testConnection(): Promise<boolean> {
-    try {
-      if (!this._config.defaultModel) {
-        return false;
-      }
-      const response = await fetch(`${this._config.baseUrl}/messages`, {
+    if (!this._config.defaultModel) {
+      return false;
+    }
+    return this.runTestConnection(() =>
+      fetch(`${this._config.baseUrl}/messages`, {
         method: "POST",
         headers: {
           "x-api-key": this._config.apiKey,
@@ -128,20 +127,8 @@ export class AnthropicProvider extends BaseProvider {
           max_tokens: 10,
           messages: [{ role: "user", content: "Hi" }],
         }),
-      });
-      if (!response.ok) {
-        ztoolkit.log(
-          `[${this.getName()}] testConnection failed: ${response.status} ${response.statusText}`,
-        );
-      }
-      return response.ok;
-    } catch (error) {
-      ztoolkit.log(
-        `[${this.getName()}] testConnection error:`,
-        getErrorMessage(error),
-      );
-      return false;
-    }
+      }),
+    );
   }
 
   async getAvailableModels(): Promise<string[]> {

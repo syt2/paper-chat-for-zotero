@@ -360,7 +360,7 @@ export class AISummaryProcessor {
 
   private async processDeepItem(
     item: Zotero.Item,
-    template: AISummaryTemplate,
+    _template: AISummaryTemplate,
     config: AISummaryConfig,
     signal?: AbortSignal,
   ): Promise<string | null> {

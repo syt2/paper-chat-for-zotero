@@ -535,7 +535,7 @@ describe("SessionStorageService grouped history search", function () {
       )
       .run("{", "not-json", "[broken", "mixed-exact-new");
 
-    const page = await service.searchHistoryGroups({
+    const page = await service.search.searchHistoryGroups({
       query: SEARCH_QUERY,
       sessionLimit: 20,
     });
@@ -550,7 +550,7 @@ describe("SessionStorageService grouped history search", function () {
 
   it("keeps indexed and partial source results identical with title-only groups, exact totals, top three, and snippets", async function () {
     const indexedService = await createService("indexed");
-    const indexed = await indexedService.searchHistoryGroups({
+    const indexed = await indexedService.search.searchHistoryGroups({
       query: SEARCH_QUERY,
       sessionLimit: 20,
       initialMessageLimit: 99,
@@ -593,7 +593,7 @@ describe("SessionStorageService grouped history search", function () {
     fake.close();
     fake = null;
     const partialService = await createService("partial");
-    const partial = await partialService.searchHistoryGroups({
+    const partial = await partialService.search.searchHistoryGroups({
       query: SEARCH_QUERY,
       sessionLimit: 20,
     });
@@ -603,7 +603,7 @@ describe("SessionStorageService grouped history search", function () {
 
   it("paginates session groups and independent in-session message cursors", async function () {
     const service = await createService("indexed");
-    const first = await service.searchHistoryGroups({
+    const first = await service.search.searchHistoryGroups({
       query: SEARCH_QUERY,
       sessionLimit: 2,
     });
@@ -613,7 +613,7 @@ describe("SessionStorageService grouped history search", function () {
     );
     assert.exists(first.nextSessionCursor);
 
-    const second = await service.searchHistoryGroups({
+    const second = await service.search.searchHistoryGroups({
       query: SEARCH_QUERY,
       sessionLimit: 2,
       sessionCursor: first.nextSessionCursor,
@@ -625,7 +625,7 @@ describe("SessionStorageService grouped history search", function () {
     assert.isUndefined(second.nextSessionCursor);
 
     const mixed = first.groups[1];
-    const expansionOne = await service.searchHistorySessionMatches({
+    const expansionOne = await service.search.searchHistorySessionMatches({
       query: SEARCH_QUERY,
       queryKey: first.queryKey,
       searchRevision: first.searchRevision,
@@ -640,7 +640,7 @@ describe("SessionStorageService grouped history search", function () {
     );
     assert.exists(expansionOne.nextMessageCursor);
 
-    const expansionTwo = await service.searchHistorySessionMatches({
+    const expansionTwo = await service.search.searchHistorySessionMatches({
       query: SEARCH_QUERY,
       queryKey: first.queryKey,
       searchRevision: first.searchRevision,
@@ -657,7 +657,7 @@ describe("SessionStorageService grouped history search", function () {
 
   it("falls back to every source row when the stored target is from a future projector", async function () {
     const futureService = await createService("future");
-    const future = await futureService.searchHistoryGroups({
+    const future = await futureService.search.searchHistoryGroups({
       query: SEARCH_QUERY,
       sessionLimit: 20,
     });
@@ -666,7 +666,7 @@ describe("SessionStorageService grouped history search", function () {
     fake.close();
     fake = null;
     const indexedService = await createService("indexed");
-    const indexed = await indexedService.searchHistoryGroups({
+    const indexed = await indexedService.search.searchHistoryGroups({
       query: SEARCH_QUERY,
       sessionLimit: 20,
     });
@@ -679,7 +679,7 @@ describe("SessionStorageService grouped history search", function () {
     const service = await createService("indexed");
     fake!.setRevisionReads([11, 12, 12, 12]);
 
-    const retried = await service.searchHistoryGroups({
+    const retried = await service.search.searchHistoryGroups({
       query: SEARCH_QUERY,
       sessionLimit: 20,
     });
@@ -697,7 +697,7 @@ describe("SessionStorageService grouped history search", function () {
     fake!.setRevisionReads([21, 22, 22, 23]);
     let staleError: unknown;
     try {
-      await service.searchHistoryGroups({
+      await service.search.searchHistoryGroups({
         query: SEARCH_QUERY,
         sessionLimit: 20,
       });
@@ -710,7 +710,7 @@ describe("SessionStorageService grouped history search", function () {
 
   it("uses bound literal input and only literal SELECT row-returning statements without loading a session", async function () {
     const service = await createService("indexed");
-    const page = await service.searchHistoryGroups({
+    const page = await service.search.searchHistoryGroups({
       query: "%_",
       sessionLimit: 20,
     });
@@ -737,7 +737,7 @@ describe("SessionStorageService grouped history search", function () {
   it("does not invoke the session-retention policy from a read-only search", async function () {
     const service = await createService("indexed");
 
-    await service.searchHistoryGroups({
+    await service.search.searchHistoryGroups({
       query: SEARCH_QUERY,
       sessionLimit: 20,
     });

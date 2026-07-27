@@ -94,6 +94,15 @@ class FakeElement {
   }
 
   appendChild(child: FakeElement): FakeElement {
+    // Mirror DOM DocumentFragment semantics: appending a fragment moves its
+    // children into this node and leaves the fragment empty.
+    if (child.tagName === "#fragment") {
+      for (const grandChild of [...child.children]) {
+        this.appendChild(grandChild);
+      }
+      child.children.length = 0;
+      return child;
+    }
     child.parentElement = this;
     this.children.push(child);
     if (
@@ -188,6 +197,10 @@ class FakeDocument {
 
   createElement(tagName: string): FakeElement {
     return new FakeElement(this, tagName.toLowerCase());
+  }
+
+  createDocumentFragment(): FakeElement {
+    return new FakeElement(this, "#fragment");
   }
 
   createTextNode(value: string): FakeElement {

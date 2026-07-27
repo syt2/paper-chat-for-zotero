@@ -15,7 +15,6 @@ import type {
   UserInfo,
   TokenInfo,
   AuthState,
-  ApiResponse,
   CreateTokenRequest,
   SubscriptionSelfInfo,
   SubscriptionUsageSummary,

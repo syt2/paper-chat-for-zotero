@@ -1499,7 +1499,10 @@ export function renderMessages(
     }
   }
 
-  // Render each message
+  // Render each message into an off-DOM fragment, then insert once. Appending
+  // 100+ message elements directly to the live chatHistory forces a reflow per
+  // node; batching through a fragment collapses that to a single insertion.
+  const fragment = doc.createDocumentFragment();
   for (let index = 0; index < presentations.length; index++) {
     const {
       message: msg,
@@ -1510,7 +1513,7 @@ export function renderMessages(
     const attachedQuota = attachedError
       ? parsePaperChatQuotaError(attachedError.content)
       : null;
-    chatHistory.appendChild(
+    fragment.appendChild(
       createMessageElement(
         doc,
         msg,
@@ -1528,6 +1531,7 @@ export function renderMessages(
       ),
     );
   }
+  chatHistory.appendChild(fragment);
 
   if (shouldScrollToBottom) {
     scrollChatHistoryToBottom(chatHistory);
@@ -1862,7 +1866,6 @@ function syncExecutionInsets(panel: HTMLElement): void {
   }
 
   const previousScrollTop = chatHistory.scrollTop;
-  const previousScrollHeight = chatHistory.scrollHeight;
   const wasNearBottom =
     isChatHistoryNearBottom(chatHistory) ||
     shouldAutoScrollChatHistory(chatHistory);

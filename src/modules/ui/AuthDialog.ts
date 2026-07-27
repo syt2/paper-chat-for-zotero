@@ -6,7 +6,7 @@
 
 import { openZToolkitDialog } from "../../utils/dialog";
 import { getString } from "../../utils/locale";
-import { authColors, colors } from "../../utils/colors";
+import { authColors } from "../../utils/colors";
 import { getAuthManager } from "../auth";
 import { ANALYTICS_EVENTS, getAnalyticsService } from "../analytics";
 import { buildErrorProps } from "../analytics/errorProps";
