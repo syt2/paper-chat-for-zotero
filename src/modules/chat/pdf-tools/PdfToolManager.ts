@@ -39,6 +39,8 @@ import type {
   SearchItemsArgs,
   SearchFulltextArgs,
   RunSavedSearchArgs,
+  UpdateItemMetadataArgs,
+  LinkRelatedItemsArgs,
   ScholarlySearchArgs,
   WebSearchArgs,
   GetCollectionsArgs,
@@ -95,6 +97,8 @@ import {
   executeSearchFulltext,
   executeListSavedSearches,
   executeRunSavedSearch,
+  executeUpdateItemMetadata,
+  executeLinkRelatedItems,
   executeGetCollections,
   executeGetCollectionItems,
   executeGetTags,
@@ -985,13 +989,20 @@ export class PdfToolManager {
         function: {
           name: "batch_update_tags",
           description:
-            "Add or remove tags from multiple items matching a search query. Useful for organizing your library.",
+            "Add or remove tags on multiple items. Prefer itemKeys to target exactly the papers you just analyzed; fall back to query only when you have no keys.",
           parameters: {
             type: "object",
             properties: {
+              itemKeys: {
+                type: "array",
+                items: { type: "string" },
+                description:
+                  "Exact item keys to update. Preferred over query when you already know which papers to tag.",
+              },
               query: {
                 type: "string",
-                description: "Search query to find items to update. Required.",
+                description:
+                  "Search query to find items to update. Used only when itemKeys is omitted.",
               },
               addTags: {
                 type: "string",
@@ -1009,7 +1020,52 @@ export class PdfToolManager {
                   "Maximum number of items to affect (max 100). Default: 50",
               },
             },
-            required: ["query"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "update_item_metadata",
+          description:
+            "Correct bibliographic fields on a Zotero item (for example a wrong year or a missing DOI). Only editable fields are accepted; creators and item type cannot be changed here.",
+          parameters: {
+            type: "object",
+            properties: {
+              itemKey: {
+                type: "string",
+                description: "The Zotero item key to update. Required.",
+              },
+              fields: {
+                type: "object",
+                description:
+                  'Field name to new value, e.g. {"date": "2022", "DOI": "10.1000/xyz"}. Editable: title, abstractNote, date, DOI, url, publicationTitle, journalAbbreviation, volume, issue, pages, publisher, place, edition, ISBN, ISSN, language, extra.',
+              },
+            },
+            required: ["itemKey", "fields"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "link_related_items",
+          description:
+            "Link Zotero items as related, in both directions. Use after identifying papers that cite, extend, or contradict each other.",
+          parameters: {
+            type: "object",
+            properties: {
+              itemKey: {
+                type: "string",
+                description: "The item to link from. Required.",
+              },
+              relatedItemKeys: {
+                type: "array",
+                items: { type: "string" },
+                description: "Item keys to link to. Required.",
+              },
+            },
+            required: ["itemKey", "relatedItemKeys"],
           },
         },
       },
@@ -1363,6 +1419,28 @@ export class PdfToolManager {
     );
   }
 
+  private isUpdateItemMetadataArgs(
+    args: unknown,
+  ): args is UpdateItemMetadataArgs {
+    if (typeof args !== "object" || args === null) return false;
+    const candidate = args as UpdateItemMetadataArgs;
+    return (
+      typeof candidate.itemKey === "string" &&
+      typeof candidate.fields === "object" &&
+      candidate.fields !== null &&
+      !Array.isArray(candidate.fields)
+    );
+  }
+
+  private isLinkRelatedItemsArgs(args: unknown): args is LinkRelatedItemsArgs {
+    if (typeof args !== "object" || args === null) return false;
+    const candidate = args as LinkRelatedItemsArgs;
+    return (
+      typeof candidate.itemKey === "string" &&
+      Array.isArray(candidate.relatedItemKeys)
+    );
+  }
+
   private isRunSavedSearchArgs(args: unknown): args is RunSavedSearchArgs {
     return (
       typeof args === "object" &&
@@ -1570,6 +1648,18 @@ export class PdfToolManager {
           return "Error: Invalid arguments for run_saved_search. Required: searchKey (string)";
         }
         return executeRunSavedSearch(args);
+
+      case "update_item_metadata":
+        if (!this.isUpdateItemMetadataArgs(args)) {
+          return "Error: Invalid arguments for update_item_metadata. Required: itemKey (string), fields (object)";
+        }
+        return executeUpdateItemMetadata(args);
+
+      case "link_related_items":
+        if (!this.isLinkRelatedItemsArgs(args)) {
+          return "Error: Invalid arguments for link_related_items. Required: itemKey (string), relatedItemKeys (string[])";
+        }
+        return executeLinkRelatedItems(args);
 
       case "get_collections":
         if (!this.isGetCollectionsArgs(args)) {

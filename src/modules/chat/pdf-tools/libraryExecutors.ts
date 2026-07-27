@@ -19,6 +19,8 @@ import type {
   SearchItemsArgs,
   SearchFulltextArgs,
   RunSavedSearchArgs,
+  UpdateItemMetadataArgs,
+  LinkRelatedItemsArgs,
   GetCollectionsArgs,
   GetCollectionItemsArgs,
   GetTagsArgs,
@@ -1053,33 +1055,50 @@ export async function executeAppendToNote(
 export async function executeBatchUpdateTags(
   args: BatchUpdateTagsArgs,
 ): Promise<string> {
-  const { query, addTags, removeTags, limit = 50 } = args;
+  const { query, itemKeys, addTags, removeTags, limit = 50 } = args;
   const limitedLimit = Math.min(Math.max(1, limit), 100);
   const libraryID = Zotero.Libraries.userLibraryID;
 
-  if (!query || query.trim() === "") {
-    return `Error: Search query is required to identify items to update.`;
+  if (!query?.trim() && !itemKeys?.length) {
+    return `Error: Provide itemKeys (preferred) or a query to identify items to update.`;
   }
 
   if (!addTags && !removeTags) {
     return `Error: At least one of addTags or removeTags is required.`;
   }
 
-  // 搜索条目
-  const search = new Zotero.Search({ libraryID });
-  search.addCondition("quicksearch-titleCreatorYear", "contains", query);
-  search.addCondition("itemType", "isNot", "attachment");
-  search.addCondition("itemType", "isNot", "note");
+  // itemKeys 优先：模型刚分析过的论文可以被精确定位，无需靠文本查询碰运气。
+  let items: Zotero.Item[];
+  let totalMatched: number;
+  if (itemKeys?.length) {
+    const resolved: Zotero.Item[] = [];
+    const missing: string[] = [];
+    for (const key of itemKeys) {
+      const item = Zotero.Items.getByLibraryAndKey(libraryID, key);
+      if (item && !item.isAttachment?.() && !item.isNote?.()) {
+        resolved.push(item);
+      } else {
+        missing.push(key);
+      }
+    }
+    if (!resolved.length) {
+      return `Error: None of the provided itemKeys resolved to a regular item: ${missing.join(", ")}`;
+    }
+    totalMatched = resolved.length;
+    items = resolved.slice(0, limitedLimit);
+  } else {
+    const search = new Zotero.Search({ libraryID });
+    search.addCondition("quicksearch-titleCreatorYear", "contains", query!);
+    search.addCondition("itemType", "isNot", "attachment");
+    search.addCondition("itemType", "isNot", "note");
 
-  const itemIDs = await search.search();
-
-  if (!itemIDs || itemIDs.length === 0) {
-    return `No items found matching query "${query}".`;
+    const itemIDs = await search.search();
+    if (!itemIDs || itemIDs.length === 0) {
+      return `No items found matching query "${query}".`;
+    }
+    totalMatched = itemIDs.length;
+    items = await Zotero.Items.getAsync(itemIDs.slice(0, limitedLimit));
   }
-
-  // 限制数量
-  const targetIDs = itemIDs.slice(0, limitedLimit);
-  const items = await Zotero.Items.getAsync(targetIDs);
 
   // 解析标签列表
   const tagsToAdd = addTags
@@ -1131,7 +1150,159 @@ export async function executeBatchUpdateTags(
     );
   }
 
-  return `Batch tag update completed!\nItems affected: ${items.length}${itemIDs.length > limitedLimit ? ` (limited from ${itemIDs.length})` : ""}\n${parts.join("\n")}`;
+  return `Batch tag update completed!\nItems affected: ${items.length}${totalMatched > limitedLimit ? ` (limited from ${totalMatched})` : ""}\n${parts.join("\n")}`;
+}
+
+// ==================== update_item_metadata ====================
+
+/**
+ * 可安全写入的字段白名单。
+ *
+ * 刻意排除 creators（结构化数据，需要专门的 API）和 itemType（会改变条目
+ * 的整个字段形状）——它们需要独立工具而不是通用 setField。
+ */
+const EDITABLE_METADATA_FIELDS = new Set([
+  "title",
+  "abstractNote",
+  "date",
+  "DOI",
+  "url",
+  "publicationTitle",
+  "journalAbbreviation",
+  "volume",
+  "issue",
+  "pages",
+  "publisher",
+  "place",
+  "edition",
+  "ISBN",
+  "ISSN",
+  "language",
+  "extra",
+]);
+
+/**
+ * 执行 update_item_metadata - 修正条目的书目字段
+ */
+export async function executeUpdateItemMetadata(
+  args: UpdateItemMetadataArgs,
+): Promise<string> {
+  const { itemKey, fields } = args;
+
+  if (!itemKey?.trim()) {
+    return "Error: itemKey is required.";
+  }
+  if (!fields || Object.keys(fields).length === 0) {
+    return "Error: fields is required and must contain at least one field.";
+  }
+
+  const item = getItemByKey(itemKey.trim());
+  if (!item || item.isAttachment?.() || item.isNote?.()) {
+    return `Error: Item with key "${itemKey}" not found or is not a regular Zotero item.`;
+  }
+
+  const rejected = Object.keys(fields).filter(
+    (field) => !EDITABLE_METADATA_FIELDS.has(field),
+  );
+  if (rejected.length) {
+    return (
+      `Error: These fields are not editable: ${rejected.join(", ")}.\n` +
+      `Editable fields: ${[...EDITABLE_METADATA_FIELDS].join(", ")}.`
+    );
+  }
+
+  const changes: string[] = [];
+  for (const [field, nextValue] of Object.entries(fields)) {
+    let previous: string;
+    try {
+      previous = String(item.getField(field) || "");
+    } catch {
+      return `Error: Field "${field}" does not apply to item type "${item.itemType}".`;
+    }
+    const next = String(nextValue ?? "");
+    if (previous === next) {
+      continue;
+    }
+    try {
+      item.setField(field, next);
+    } catch (error) {
+      return `Error: Could not set "${field}" on item type "${item.itemType}": ${getErrorMessage(error)}`;
+    }
+    changes.push(`- ${field}: "${previous}" -> "${next}"`);
+  }
+
+  if (!changes.length) {
+    return `No changes: every provided field already had the requested value on [${item.key}].`;
+  }
+
+  await item.saveTx();
+
+  return `Updated metadata on [${item.key}] ${getItemTitleSmart(item)}:\n${changes.join("\n")}`;
+}
+
+// ==================== link_related_items ====================
+
+/**
+ * 执行 link_related_items - 在条目之间建立 Zotero 关联
+ */
+export async function executeLinkRelatedItems(
+  args: LinkRelatedItemsArgs,
+): Promise<string> {
+  const { itemKey, relatedItemKeys } = args;
+
+  if (!itemKey?.trim()) {
+    return "Error: itemKey is required.";
+  }
+  if (!relatedItemKeys?.length) {
+    return "Error: relatedItemKeys is required and must contain at least one key.";
+  }
+
+  const item = getItemByKey(itemKey.trim());
+  if (!item || item.isAttachment?.() || item.isNote?.()) {
+    return `Error: Item with key "${itemKey}" not found or is not a regular Zotero item.`;
+  }
+
+  const linked: string[] = [];
+  const skipped: string[] = [];
+  const touched: Zotero.Item[] = [];
+
+  for (const rawKey of relatedItemKeys) {
+    const key = rawKey.trim();
+    if (!key || key === item.key) {
+      skipped.push(rawKey);
+      continue;
+    }
+    const related = getItemByKey(key);
+    if (!related || related.isAttachment?.() || related.isNote?.()) {
+      skipped.push(rawKey);
+      continue;
+    }
+    // Zotero relations are bidirectional only if both sides are set.
+    const forward = item.addRelatedItem(related);
+    const backward = related.addRelatedItem(item);
+    if (forward || backward) {
+      linked.push(key);
+      if (backward) touched.push(related);
+    } else {
+      skipped.push(key);
+    }
+  }
+
+  if (!linked.length) {
+    return `No relations added. Unresolved or already-linked keys: ${skipped.join(", ")}`;
+  }
+
+  await Zotero.DB.executeTransaction(async () => {
+    await item.save();
+    for (const related of touched) {
+      await related.save();
+    }
+  });
+
+  const skippedNote = skipped.length
+    ? `\nSkipped (unresolved, self, or already linked): ${skipped.join(", ")}`
+    : "";
+  return `Linked [${item.key}] to ${linked.length} related item(s): ${linked.join(", ")}${skippedNote}`;
 }
 
 // ==================== add_item ====================
@@ -1192,6 +1363,21 @@ export async function executeAddItem(args: AddItemArgs): Promise<string> {
       return `Error: Could not retrieve metadata for identifier "${identifier}". The identifier may be invalid or the item could not be found.`;
     }
 
+    // 顺带尝试抓取开放获取 PDF，这样"把这篇加进来然后读一下"能一步到位。
+    // 失败不影响条目本身已成功添加。
+    const pdfAttached = new Set<string>();
+    try {
+      await Zotero.Attachments.addAvailableFiles(items);
+      for (const item of items) {
+        const hasPdf = (item.getAttachments?.() || []).some((id) =>
+          Zotero.Items.get(id)?.isPDFAttachment?.(),
+        );
+        if (hasPdf) pdfAttached.add(item.key);
+      }
+    } catch (error) {
+      ztoolkit.log("[add_item] PDF fetch skipped:", getErrorMessage(error));
+    }
+
     // 格式化成功信息
     const results = items.map((item: Zotero.Item) => {
       const title = getItemTitleSmart(item);
@@ -1215,6 +1401,11 @@ export async function executeAddItem(args: AddItemArgs): Promise<string> {
       if (year) parts.push(`Year: ${year}`);
       parts.push(`Type: ${type}`);
       parts.push(`Item Key: ${item.key}`);
+      parts.push(
+        pdfAttached.has(item.key)
+          ? `PDF: attached (readable with get_full_text)`
+          : `PDF: not available`,
+      );
       if (collection_key) {
         parts.push(`Added to collection: ${collection_key}`);
       }

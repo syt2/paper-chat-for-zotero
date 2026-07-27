@@ -240,6 +240,20 @@ const TOOL_RUNTIME_METADATA: Record<PaperToolName, ToolRuntimeMetadata> = {
     targetScope: "library",
     mutatesState: true,
   },
+  update_item_metadata: {
+    name: "update_item_metadata",
+    executionClass: "write",
+    concurrency: "serial",
+    targetScope: "library",
+    mutatesState: true,
+  },
+  link_related_items: {
+    name: "link_related_items",
+    executionClass: "write",
+    concurrency: "serial",
+    targetScope: "library",
+    mutatesState: true,
+  },
   add_item: {
     name: "add_item",
     executionClass: "write",

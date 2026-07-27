@@ -215,6 +215,16 @@ const TOOL_PERMISSION_DESCRIPTORS: Record<
     "write",
     "Modify tags on multiple Zotero items.",
   ),
+  update_item_metadata: createDescriptor(
+    "update_item_metadata",
+    "write",
+    "Correct bibliographic fields on a Zotero item.",
+  ),
+  link_related_items: createDescriptor(
+    "link_related_items",
+    "write",
+    "Link Zotero items as related.",
+  ),
   add_item: createDescriptor("add_item", "write", "Add a new Zotero item."),
   save_memory: createDescriptor(
     "save_memory",

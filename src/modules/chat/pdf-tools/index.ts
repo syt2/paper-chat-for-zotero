@@ -43,6 +43,8 @@ export {
   executeSearchFulltext,
   executeListSavedSearches,
   executeRunSavedSearch,
+  executeUpdateItemMetadata,
+  executeLinkRelatedItems,
   executeGetCollections,
   executeGetCollectionItems,
   executeGetTags,

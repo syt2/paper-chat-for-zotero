@@ -333,6 +333,8 @@ export type PaperToolName =
   | "search_fulltext"
   | "list_saved_searches"
   | "run_saved_search"
+  | "update_item_metadata"
+  | "link_related_items"
   | "get_collections"
   | "get_collection_items"
   | "get_tags"
@@ -588,10 +590,23 @@ export interface AppendToNoteArgs extends BaseToolArgs {
 
 // 批量更新标签的参数
 export interface BatchUpdateTagsArgs {
-  query: string; // 搜索条件，找到要更新的 items
+  itemKeys?: string[]; // 精确指定要更新的条目（优先于 query）
+  query?: string; // 搜索条件，找到要更新的 items
   addTags?: string; // 要添加的标签（逗号分隔）
   removeTags?: string; // 要移除的标签（逗号分隔）
   limit?: number; // 最多影响的条目数
+}
+
+// 更新条目元数据的参数
+export interface UpdateItemMetadataArgs {
+  itemKey: string;
+  fields: Record<string, string>;
+}
+
+// 关联条目的参数
+export interface LinkRelatedItemsArgs {
+  itemKey: string;
+  relatedItemKeys: string[];
 }
 
 // 通过标识符添加条目的参数
