@@ -1,5 +1,8 @@
 import { assert } from "chai";
-import { StorageDatabase } from "../src/modules/chat/db/StorageDatabase.ts";
+import {
+  SCHEMA_VERSION,
+  StorageDatabase,
+} from "../src/modules/chat/db/StorageDatabase.ts";
 
 type Deferred = {
   promise: Promise<void>;
@@ -417,7 +420,7 @@ describe("StorageDatabase foundation", function () {
           ];
         }
         if (normalized === "SELECT version FROM schema_version WHERE id = 1") {
-          return [{ version: 12 }];
+          return [{ version: SCHEMA_VERSION }];
         }
         return [];
       },
@@ -706,7 +709,7 @@ describe("StorageDatabase foundation", function () {
         const normalized = normalizeSql(sql);
         recorded.push(normalized);
         if (normalized === "SELECT version FROM schema_version WHERE id = 1") {
-          return [{ version: 12 }];
+          return [{ version: SCHEMA_VERSION }];
         }
         if (normalized === "PRAGMA table_info(messages)") {
           return [{ name: "id" }, { name: "reasoning" }];

@@ -2608,7 +2608,7 @@ describe("paperchat storage and chat manager", function () {
 
     assert.deepEqual(sql.slice(transactionStart, transactionEnd + 1), [
       "BEGIN TRANSACTION",
-      "UPDATE sessions SET updated_at = ?, last_active_item_key = ?, title = ?, title_source = ?, title_generated_at = ?, title_edited_at = ?, context_summary = ?, context_state = ?, execution_plan = ?, tool_execution_state = ?, tool_approval_state = ?, user_input_request_state = ? WHERE id = ?",
+      "UPDATE sessions SET updated_at = ?, last_active_item_key = ?, scope_item_keys = ?, scope_label = ?, title = ?, title_source = ?, title_generated_at = ?, title_edited_at = ?, context_summary = ?, context_state = ?, execution_plan = ?, tool_execution_state = ?, tool_approval_state = ?, user_input_request_state = ? WHERE id = ?",
       "INSERT INTO paperchat_session_state (session_id, selected_tier, resolved_model_id, last_retryable_user_message_id, last_retryable_error_message_id, last_retryable_failed_model_id) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET selected_tier = excluded.selected_tier, resolved_model_id = excluded.resolved_model_id, last_retryable_user_message_id = excluded.last_retryable_user_message_id, last_retryable_error_message_id = excluded.last_retryable_error_message_id, last_retryable_failed_model_id = excluded.last_retryable_failed_model_id",
       "UPDATE session_meta SET search_index_version = ? WHERE id = ?",
       "UPDATE session_meta SET updated_at = ?, title = ?, title_source = ?, title_generated_at = ?, title_edited_at = ?, search_title = ?, search_index_version = ? WHERE id = ?",

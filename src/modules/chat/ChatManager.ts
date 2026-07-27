@@ -136,6 +136,11 @@ import {
   type SearchToolPromptMode,
   type SelectedSearchScope,
 } from "./agent-runtime/SearchScopeGate";
+import {
+  MAX_SCOPE_ITEMS,
+  resolveScopedPapers,
+  type SessionScope,
+} from "./session-scope";
 // V1 migration now handled by migrateToSQLite.ts at startup
 
 const SUPPRESS_AUTOMATIC_RETRY = "paperChatSuppressAutomaticRetry";
@@ -440,6 +445,8 @@ export class ChatManager {
 
     return generateAgentRuntimeContextPrompt(memoryContext, {
       executionPlan: sendingSession.executionPlan,
+      scopedPapers: resolveScopedPapers(sendingSession.scopeItemKeys),
+      scopeLabel: sendingSession.scopeLabel,
       recentToolResults,
       selectedSkills,
       searchScope,
@@ -944,6 +951,33 @@ export class ChatManager {
   /**
    * 创建新 session
    */
+  /**
+   * Start a fresh conversation scoped to a set of papers (a collection or a
+   * manual multi-item selection) and announce the scope in the transcript.
+   */
+  async startScopedSession(scope: SessionScope): Promise<ChatSession> {
+    await this.init();
+
+    const session = await this.createNewSession();
+    session.scopeItemKeys = scope.itemKeys;
+    session.scopeLabel = scope.label;
+    await this.sessionStorage.updateSessionMeta(session);
+
+    const papers = resolveScopedPapers(scope.itemKeys);
+    const notice = getString("chat-scope-notice", {
+      args: { label: scope.label, count: papers.length },
+    });
+    await this.insertSystemNotice(
+      session,
+      scope.truncated
+        ? `${notice} ${getString("chat-scope-truncated", {
+            args: { max: MAX_SCOPE_ITEMS },
+          })}`
+        : notice,
+    );
+    return session;
+  }
+
   async createNewSession(): Promise<ChatSession> {
     await this.init();
     return this.enqueueSessionNavigation(() => this.createNewSessionLocked());

@@ -11,7 +11,7 @@ import { getErrorMessage } from "../../../utils/common";
 
 const DB_DIR = "paper-chat";
 const DB_FILE = "storage";
-const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 13;
 
 /** Build absolute DB path so Zotero.DBConnection doesn't parse subdirectory names */
 function getDBPath(): string {
@@ -153,6 +153,8 @@ export class StorageDatabase {
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         last_active_item_key TEXT,
+        scope_item_keys TEXT,
+        scope_label TEXT,
         context_summary TEXT,
         context_state TEXT,
         execution_plan TEXT,
@@ -520,6 +522,10 @@ export class StorageDatabase {
         await this.upgradeToV12(db);
         currentVersion = 12;
       }
+      if (currentVersion < 13) {
+        await this.upgradeToV13(db);
+        currentVersion = 13;
+      }
       if (
         currentVersion === SCHEMA_VERSION &&
         !(await this.hasCurrentSchemaColumns(db))
@@ -529,6 +535,7 @@ export class StorageDatabase {
         }
         await this.upgradeToV10(db);
         await this.upgradeToV12(db);
+        await this.upgradeToV13(db);
       }
     }
   }
@@ -1292,6 +1299,44 @@ export class StorageDatabase {
       }
       ztoolkit.log(
         "[StorageDatabase] Failed to upgrade to v12:",
+        getErrorMessage(error),
+      );
+      throw error;
+    }
+  }
+
+  private async upgradeToV13(db: ZoteroDBConnection): Promise<void> {
+    ztoolkit.log("[StorageDatabase] Upgrading schema v12 -> v13...");
+
+    await db.queryAsync("BEGIN TRANSACTION");
+    try {
+      const sessionColumns = new Set(
+        ((await db.queryAsync("PRAGMA table_info(sessions)")) || []).map(
+          (column: any) => String(column.name),
+        ),
+      );
+      if (!sessionColumns.has("scope_item_keys")) {
+        await db.queryAsync(
+          "ALTER TABLE sessions ADD COLUMN scope_item_keys TEXT",
+        );
+      }
+      if (!sessionColumns.has("scope_label")) {
+        await db.queryAsync("ALTER TABLE sessions ADD COLUMN scope_label TEXT");
+      }
+      await db.queryAsync(
+        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
+        [13, Date.now()],
+      );
+      await db.queryAsync("COMMIT");
+      ztoolkit.log("[StorageDatabase] Schema upgraded to v13");
+    } catch (error) {
+      try {
+        await db.queryAsync("ROLLBACK");
+      } catch {
+        /* ignore */
+      }
+      ztoolkit.log(
+        "[StorageDatabase] Failed to upgrade to v13:",
         getErrorMessage(error),
       );
       throw error;

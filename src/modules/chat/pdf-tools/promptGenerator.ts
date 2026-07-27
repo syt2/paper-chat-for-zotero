@@ -15,9 +15,12 @@ import {
   type SearchToolPromptMode,
   type SelectedSearchScope,
 } from "../agent-runtime/SearchScopeGate";
+import { formatScopedPapersPrompt, type ScopedPaper } from "../session-scope";
 
 export interface AgentPromptContext {
   executionPlan?: ExecutionPlan;
+  scopedPapers?: readonly ScopedPaper[];
+  scopeLabel?: string;
   recentToolResults?: ToolExecutionResult[];
   searchScope?: SelectedSearchScope;
   searchToolMode?: SearchToolPromptMode;
@@ -261,6 +264,13 @@ function formatAgentPromptContext(agentContext?: AgentPromptContext): string {
   if (!agentContext) return "";
 
   let section = "";
+
+  if (agentContext.scopedPapers?.length) {
+    section += formatScopedPapersPrompt(
+      agentContext.scopedPapers,
+      agentContext.scopeLabel,
+    );
+  }
 
   if (agentContext.searchScope) {
     section += `\n=== EXTERNAL SEARCH SCOPE ===\n`;

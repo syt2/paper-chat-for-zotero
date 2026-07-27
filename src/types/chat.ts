@@ -376,6 +376,9 @@ export interface ChatSession {
   createdAt: number;
   updatedAt: number;
   lastActiveItemKey: string | null; // 上次活动的 item key (向后兼容)
+  // 会话作用域：一个分类或一组手选论文。为空表示沿用 lastActiveItemKey 单篇模式。
+  scopeItemKeys?: string[];
+  scopeLabel?: string;
   messages: ChatMessage[];
   title?: string;
   titleSource?: "generated" | "user";

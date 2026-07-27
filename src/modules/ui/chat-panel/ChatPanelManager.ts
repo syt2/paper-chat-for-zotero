@@ -111,6 +111,7 @@ export type ChatPanelOpenSource =
   | "toolbar"
   | "reader_selection"
   | "reader_annotation"
+  | "library_scope"
   | "unknown";
 
 const APPROVAL_RESOLVED_ANIMATION_MS = 260;

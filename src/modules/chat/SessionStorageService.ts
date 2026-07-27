@@ -61,6 +61,8 @@ type SessionRow = {
   created_at: number;
   updated_at: number;
   last_active_item_key: string | null;
+  scope_item_keys?: string | null;
+  scope_label?: string | null;
   context_summary: string | null;
   context_state: string | null;
   execution_plan?: string | null;
@@ -142,6 +144,22 @@ function toValidTitleSource(value: string | null): ChatSession["titleSource"] {
   return undefined;
 }
 
+function parseScopeItemKeys(
+  raw: string | null | undefined,
+): string[] | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return undefined;
+    const keys = parsed.filter(
+      (k): k is string => typeof k === "string" && k.length > 0,
+    );
+    return keys.length > 0 ? keys : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function mapSessionRowToChatSession(
   row: SessionRow,
   messages: ChatMessage[],
@@ -151,6 +169,8 @@ export function mapSessionRowToChatSession(
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lastActiveItemKey: row.last_active_item_key || null,
+    scopeItemKeys: parseScopeItemKeys(row.scope_item_keys),
+    scopeLabel: row.scope_label || undefined,
     messages: filterValidMessages(messages),
     title: row.title || undefined,
     titleSource: toValidTitleSource(row.title_source),
@@ -712,6 +732,8 @@ export class SessionStorageService {
           `UPDATE sessions SET
             updated_at = ?,
             last_active_item_key = ?,
+            scope_item_keys = ?,
+            scope_label = ?,
             title = ?,
             title_source = ?,
             title_generated_at = ?,
@@ -726,6 +748,10 @@ export class SessionStorageService {
           [
             nextUpdatedAt,
             session.lastActiveItemKey || null,
+            session.scopeItemKeys?.length
+              ? JSON.stringify(session.scopeItemKeys)
+              : null,
+            session.scopeLabel || null,
             session.title || null,
             session.titleSource || null,
             session.titleGeneratedAt ?? null,
@@ -974,12 +1000,14 @@ export class SessionStorageService {
         // Upsert session (no messages column)
         await db.queryAsync(
           `INSERT INTO sessions
-           (id, created_at, updated_at, last_active_item_key, title, title_source, title_generated_at, title_edited_at, context_summary, context_state, execution_plan, tool_execution_state, tool_approval_state, user_input_request_state, memory_extracted_at, memory_extracted_msg_count)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           (id, created_at, updated_at, last_active_item_key, scope_item_keys, scope_label, title, title_source, title_generated_at, title_edited_at, context_summary, context_state, execution_plan, tool_execution_state, tool_approval_state, user_input_request_state, memory_extracted_at, memory_extracted_msg_count)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              created_at = excluded.created_at,
              updated_at = excluded.updated_at,
              last_active_item_key = excluded.last_active_item_key,
+             scope_item_keys = excluded.scope_item_keys,
+             scope_label = excluded.scope_label,
              title = excluded.title,
              title_source = excluded.title_source,
              title_generated_at = excluded.title_generated_at,
@@ -997,6 +1025,10 @@ export class SessionStorageService {
             session.createdAt,
             nextUpdatedAt,
             session.lastActiveItemKey || null,
+            session.scopeItemKeys?.length
+              ? JSON.stringify(session.scopeItemKeys)
+              : null,
+            session.scopeLabel || null,
             session.title || null,
             session.titleSource || null,
             session.titleGeneratedAt ?? null,
