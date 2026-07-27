@@ -116,6 +116,7 @@ ${webSearchLine}
 - get_annotations: Read PDF annotations saved in Zotero
 - search_items: Search Zotero items by title, author, year, or metadata
 - search_fulltext: Find papers whose PDF full text mentions a word or phrase
+- list_saved_searches / run_saved_search: Discover and execute the user's own saved searches
 - get_collections: List Zotero collections
 - get_collection_items: List items inside a collection
 - get_tags: List tags in the library
@@ -217,6 +218,7 @@ ${webSearchLine}
 - get_pdf_selection: Read the user's current PDF selection
 - search_items: Search Zotero items by metadata
 - search_fulltext: Find papers whose PDF full text mentions a phrase
+- list_saved_searches / run_saved_search: Discover and run the user's saved searches
 - get_collections: List Zotero collections
 - get_collection_items: List items inside a collection
 - get_tags: List tags in the library

@@ -164,6 +164,16 @@ const TOOL_PERMISSION_DESCRIPTORS: Record<
     "read",
     "Search PDF full text across the Zotero library.",
   ),
+  list_saved_searches: createDescriptor(
+    "list_saved_searches",
+    "read",
+    "List the user's saved searches.",
+  ),
+  run_saved_search: createDescriptor(
+    "run_saved_search",
+    "read",
+    "Run one of the user's saved searches.",
+  ),
   get_collections: createDescriptor(
     "get_collections",
     "read",

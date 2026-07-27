@@ -25,6 +25,7 @@ const ITEM_LIST_TOOLS = new Set([
   "list_all_items",
   "search_items",
   "search_fulltext",
+  "run_saved_search",
   "get_collection_items",
   "search_by_tag",
   "get_recent",

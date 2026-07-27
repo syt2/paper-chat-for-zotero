@@ -163,6 +163,20 @@ const TOOL_RUNTIME_METADATA: Record<PaperToolName, ToolRuntimeMetadata> = {
     targetScope: "library",
     mutatesState: false,
   },
+  list_saved_searches: {
+    name: "list_saved_searches",
+    executionClass: "read",
+    concurrency: "parallel_safe",
+    targetScope: "library",
+    mutatesState: false,
+  },
+  run_saved_search: {
+    name: "run_saved_search",
+    executionClass: "read",
+    concurrency: "parallel_safe",
+    targetScope: "library",
+    mutatesState: false,
+  },
   get_collections: {
     name: "get_collections",
     executionClass: "read",

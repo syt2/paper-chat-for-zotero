@@ -33,6 +33,8 @@ function getToolIntentTitle(toolName: string): string {
     case "list_all_items":
     case "search_items":
     case "search_fulltext":
+    case "list_saved_searches":
+    case "run_saved_search":
     case "get_recent":
     case "get_collections":
     case "get_collection_items":

@@ -18,6 +18,7 @@ import type {
   GetAnnotationsArgs,
   SearchItemsArgs,
   SearchFulltextArgs,
+  RunSavedSearchArgs,
   GetCollectionsArgs,
   GetCollectionItemsArgs,
   GetTagsArgs,
@@ -386,6 +387,24 @@ export function executeGetPdfSelection(): string {
   }
 }
 
+/**
+ * One-line summary of a Zotero item for list-style tool results.
+ * Shared by search_items, search_fulltext, and run_saved_search so their
+ * output stays consistent and downstream itemKey parsing has one shape.
+ */
+function formatItemSummaryLine(item: Zotero.Item, index: number): string {
+  const title = getItemTitleSmart(item);
+  const year = item.getField("year") || "";
+  const creators = item.getCreators();
+  const firstAuthor =
+    creators && creators.length > 0
+      ? creators[0].lastName || (creators[0] as { name?: string }).name || ""
+      : "";
+  return `${index + 1}. [${item.key}] ${title} (${firstAuthor}${
+    firstAuthor && year ? ", " : ""
+  }${year}) - ${item.itemType}`;
+}
+
 // ==================== search_items ====================
 
 /**
@@ -439,19 +458,7 @@ export async function executeSearchItems(
   const items = await Zotero.Items.getAsync(itemIDs.slice(0, limitedLimit));
 
   // 格式化结果
-  const results = items.map((item: Zotero.Item, index: number) => {
-    const itemKey = item.key;
-    const title = getItemTitleSmart(item);
-    const year = item.getField("year") || "";
-    const creators = item.getCreators();
-    const firstAuthor =
-      creators && creators.length > 0
-        ? creators[0].lastName || (creators[0] as { name?: string }).name || ""
-        : "";
-    const type = item.itemType;
-
-    return `${index + 1}. [${itemKey}] ${title} (${firstAuthor}${firstAuthor && year ? ", " : ""}${year}) - ${type}`;
-  });
+  const results = items.map(formatItemSummaryLine);
 
   const header = `Search results for "${query}" (showing ${results.length} of ${itemIDs.length} matches):\n\n`;
   return header + results.join("\n");
@@ -506,27 +513,89 @@ export async function executeSearchFulltext(
   }
 
   const parents = [...parentsById.values()];
-  const results = parents
-    .slice(0, limitedLimit)
-    .map((item: Zotero.Item, index: number) => {
-      const itemKey = item.key;
-      const title = getItemTitleSmart(item);
-      const year = item.getField("year") || "";
-      const creators = item.getCreators();
-      const firstAuthor =
-        creators && creators.length > 0
-          ? creators[0].lastName ||
-            (creators[0] as { name?: string }).name ||
-            ""
-          : "";
-      const type = item.itemType;
-
-      return `${index + 1}. [${itemKey}] ${title} (${firstAuthor}${firstAuthor && year ? ", " : ""}${year}) - ${type}`;
-    });
+  const results = parents.slice(0, limitedLimit).map(formatItemSummaryLine);
 
   const header = `Papers whose full text mentions "${query}" (showing ${results.length} of ${parents.length} matches):\n\n`;
   const hint = `\n\nUse get_full_text or get_annotations with an itemKey above to read the matching paper.`;
   return header + results.join("\n") + hint;
+}
+
+// ==================== saved searches ====================
+
+/**
+ * 执行 list_saved_searches - 列出用户的保存搜索
+ */
+export async function executeListSavedSearches(): Promise<string> {
+  const libraryID = Zotero.Libraries.userLibraryID;
+  const ids = await Zotero.Searches.getAllIDs(libraryID);
+  if (!ids?.length) {
+    return "No saved searches found in the Zotero library.";
+  }
+
+  const lines: string[] = [];
+  for (const id of ids) {
+    const search = Zotero.Searches.get(id);
+    if (!search?.key) {
+      continue;
+    }
+    lines.push(`${lines.length + 1}. [${search.key}] ${search.name}`);
+  }
+
+  if (!lines.length) {
+    return "No saved searches found in the Zotero library.";
+  }
+
+  return (
+    `Saved searches (${lines.length}):\n\n` +
+    lines.join("\n") +
+    `\n\nUse run_saved_search with a searchKey above to execute one.`
+  );
+}
+
+/**
+ * 执行 run_saved_search - 按 key 执行保存搜索
+ *
+ * 只调用 search.search()，不解析或回写 condition 结构：Zotero 10 重写了
+ * 保存搜索的内部表示（嵌套条件组、resultLevel 标记条件），任何对条件形状
+ * 的假设都会在升级后失效。
+ */
+export async function executeRunSavedSearch(
+  args: RunSavedSearchArgs,
+): Promise<string> {
+  const { searchKey, limit = 20 } = args;
+  const limitedLimit = Math.min(Math.max(1, limit), 50);
+
+  if (!searchKey || searchKey.trim() === "") {
+    return "Error: searchKey is required. Use list_saved_searches to discover keys.";
+  }
+
+  const libraryID = Zotero.Libraries.userLibraryID;
+  const search = Zotero.Searches.getByLibraryAndKey(
+    libraryID,
+    searchKey.trim(),
+  );
+  if (!search) {
+    return `Error: No saved search found with key "${searchKey}". Use list_saved_searches to see available searches.`;
+  }
+
+  const ids = await search.search();
+  if (!ids?.length) {
+    return `Saved search "${search.name}" returned no items.`;
+  }
+
+  const items = await Zotero.Items.getAsync(ids.slice(0, limitedLimit));
+  const results = items
+    .filter((item: Zotero.Item) => !item.isNote?.())
+    .map(formatItemSummaryLine);
+
+  if (!results.length) {
+    return `Saved search "${search.name}" returned no regular items.`;
+  }
+
+  return (
+    `Saved search "${search.name}" (showing ${results.length} of ${ids.length} matches):\n\n` +
+    results.join("\n")
+  );
 }
 
 // ==================== get_collections ====================

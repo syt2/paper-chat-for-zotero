@@ -331,6 +331,8 @@ export type PaperToolName =
   | "get_pdf_selection"
   | "search_items"
   | "search_fulltext"
+  | "list_saved_searches"
+  | "run_saved_search"
   | "get_collections"
   | "get_collection_items"
   | "get_tags"
@@ -442,6 +444,12 @@ export interface SearchItemsArgs {
 export interface SearchFulltextArgs {
   query: string;
   itemType?: string; // 按父条目类型筛选
+  limit?: number;
+}
+
+// 执行保存搜索的参数
+export interface RunSavedSearchArgs {
+  searchKey: string;
   limit?: number;
 }
 

@@ -41,6 +41,8 @@ export {
   executeGetAnnotations,
   executeSearchItems,
   executeSearchFulltext,
+  executeListSavedSearches,
+  executeRunSavedSearch,
   executeGetCollections,
   executeGetCollectionItems,
   executeGetTags,

@@ -38,6 +38,7 @@ import type {
   GetAnnotationsArgs,
   SearchItemsArgs,
   SearchFulltextArgs,
+  RunSavedSearchArgs,
   ScholarlySearchArgs,
   WebSearchArgs,
   GetCollectionsArgs,
@@ -92,6 +93,8 @@ import {
   executeGetPdfSelection,
   executeSearchItems,
   executeSearchFulltext,
+  executeListSavedSearches,
+  executeRunSavedSearch,
   executeGetCollections,
   executeGetCollectionItems,
   executeGetTags,
@@ -741,6 +744,42 @@ export class PdfToolManager {
       {
         type: "function",
         function: {
+          name: "list_saved_searches",
+          description:
+            "List the user's saved searches in Zotero. Use this when the user refers to their own saved search by name, or to discover how they organize their library.",
+          parameters: {
+            type: "object",
+            properties: {},
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "run_saved_search",
+          description:
+            "Execute one of the user's saved searches and return the matching items. Get the searchKey from list_saved_searches first.",
+          parameters: {
+            type: "object",
+            properties: {
+              searchKey: {
+                type: "string",
+                description:
+                  "The saved search key from list_saved_searches. Required.",
+              },
+              limit: {
+                type: "number",
+                description:
+                  "Maximum number of items to return (max 50). Default: 20",
+              },
+            },
+            required: ["searchKey"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
           name: "get_collections",
           description:
             "List collections (folders) in the Zotero library. Shows collection hierarchy with item counts.",
@@ -1324,6 +1363,14 @@ export class PdfToolManager {
     );
   }
 
+  private isRunSavedSearchArgs(args: unknown): args is RunSavedSearchArgs {
+    return (
+      typeof args === "object" &&
+      args !== null &&
+      typeof (args as RunSavedSearchArgs).searchKey === "string"
+    );
+  }
+
   private isWebSearchArgs(args: unknown): args is WebSearchArgs {
     return isValidWebSearchArgs(args);
   }
@@ -1514,6 +1561,15 @@ export class PdfToolManager {
           return "Error: Invalid arguments for search_fulltext. Required: query (string)";
         }
         return executeSearchFulltext(args);
+
+      case "list_saved_searches":
+        return executeListSavedSearches();
+
+      case "run_saved_search":
+        if (!this.isRunSavedSearchArgs(args)) {
+          return "Error: Invalid arguments for run_saved_search. Required: searchKey (string)";
+        }
+        return executeRunSavedSearch(args);
 
       case "get_collections":
         if (!this.isGetCollectionsArgs(args)) {
