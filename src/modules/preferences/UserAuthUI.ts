@@ -46,6 +46,21 @@ interface RedeemCodeInfo {
   html: string | null;
 }
 
+function setDynamicXulText(
+  element: HTMLElement | null,
+  text: string,
+  legacyAttribute: "label" | "value",
+): void {
+  if (!element) {
+    return;
+  }
+
+  // Zotero 10 may retain the text node created for a previous XUL attribute,
+  // causing old and new values to render together after an auth-state change.
+  element.removeAttribute(legacyAttribute);
+  element.textContent = text;
+}
+
 type TopupAttentionAddonData = typeof addon.data & {
   paperchatTopupAttentionUntil?: number;
 };
@@ -313,33 +328,36 @@ export function updateUserDisplay(
       !!subscriptionUsage &&
       subscriptionUsage.amountRemaining > LOW_BALANCE_WARNING_THRESHOLD;
     if (userStatusEl) {
-      userStatusEl.setAttribute(
-        "value",
+      setDynamicXulText(
+        userStatusEl,
         `${getString("user-panel-logged-in", { args: { username: user?.username || "" } })}`,
+        "value",
       );
       userStatusEl.style.color = prefColors.userLoggedIn;
     }
     if (userBalanceEl) {
       if (shouldHideTokenBalance) {
-        userBalanceEl.setAttribute("value", "");
+        setDynamicXulText(userBalanceEl, "", "value");
         userBalanceEl.style.display = "none";
       } else {
         userBalanceEl.style.display = "";
-        userBalanceEl.setAttribute(
-          "value",
+        setDynamicXulText(
+          userBalanceEl,
           `${getString("user-panel-balance")}: ${authManager.formatBalance()}`,
+          "value",
         );
       }
     }
     if (userUsedEl) {
       if (shouldHideTokenBalance) {
-        userUsedEl.setAttribute("value", "");
+        setDynamicXulText(userUsedEl, "", "value");
         userUsedEl.style.display = "none";
       } else {
         userUsedEl.style.display = "";
-        userUsedEl.setAttribute(
-          "value",
+        setDynamicXulText(
+          userUsedEl,
           `${getString("user-panel-used")}: ${authManager.formatUsedQuota()}`,
+          "value",
         );
       }
     }
@@ -370,22 +388,26 @@ export function updateUserDisplay(
       }
     }
     if (loginBtn) {
-      loginBtn.setAttribute("label", getString("user-panel-logout-btn"));
+      setDynamicXulText(loginBtn, getString("user-panel-logout-btn"), "label");
     }
     if (getRedeemCodeBtn) {
       getRedeemCodeBtn.style.display = "";
     }
   } else {
     if (userStatusEl) {
-      userStatusEl.setAttribute("value", getString("user-panel-not-logged-in"));
+      setDynamicXulText(
+        userStatusEl,
+        getString("user-panel-not-logged-in"),
+        "value",
+      );
       userStatusEl.style.color = prefColors.userLoggedOut;
     }
     if (userBalanceEl) {
-      userBalanceEl.setAttribute("value", "");
+      setDynamicXulText(userBalanceEl, "", "value");
       userBalanceEl.style.display = "";
     }
     if (userUsedEl) {
-      userUsedEl.setAttribute("value", "");
+      setDynamicXulText(userUsedEl, "", "value");
       userUsedEl.style.display = "";
     }
     if (
@@ -399,7 +421,7 @@ export function updateUserDisplay(
       userSubscriptionEl.style.display = "none";
     }
     if (loginBtn) {
-      loginBtn.setAttribute("label", getString("user-panel-login-btn"));
+      setDynamicXulText(loginBtn, getString("user-panel-login-btn"), "label");
     }
     if (getRedeemCodeBtn) {
       getRedeemCodeBtn.style.display = "none";
