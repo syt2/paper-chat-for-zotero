@@ -19,14 +19,20 @@ import type {
   SubscriptionSelfInfo,
   SubscriptionUsageSummary,
 } from "../../types/auth";
-import { getPref, setPref } from "../../utils/prefs";
+import { clearPref, getPref, setPref } from "../../utils/prefs";
 import { getString } from "../../utils/locale";
-import { BUILTIN_PROVIDERS, getProviderManager } from "../providers";
+import { getProviderManager } from "../providers";
 import {
+  getPaperChatApiBaseUrl,
+  getPaperChatSiteBaseUrl,
+} from "../providers/PaperChatUrls";
+import {
+  clearPaperchatModelCaches,
   fetchPaperchatRoutingMeta,
   fetchPaperchatRatios,
   getModelRatios,
   getModelRoutingMeta,
+  getPaperchatModelCacheGeneration,
 } from "../preferences/ModelsFetcher";
 import {
   parseTierState,
@@ -190,6 +196,7 @@ export class AuthManager {
   };
   private isAutoReloginInProgress = false; // 防止无限循环
   private modelRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  private environmentGeneration = 0;
 
   constructor() {
     this.authService = new AuthService();
@@ -304,15 +311,23 @@ export class AuthManager {
    */
   private async withSessionRetry<
     T extends { success: boolean; message?: string },
-  >(operation: () => Promise<T>, operationName: string): Promise<T> {
+  >(
+    operation: () => Promise<T>,
+    operationName: string,
+    expectedGeneration: number = this.environmentGeneration,
+  ): Promise<T> {
     let result = await operation();
+
+    if (expectedGeneration !== this.environmentGeneration) {
+      return result;
+    }
 
     if (!result.success && this.isSessionInvalidError(result.message || "")) {
       ztoolkit.log(
         `[AuthManager] Session invalid for ${operationName}, attempting auto-relogin`,
       );
       const reloginSuccess = await this.autoRelogin();
-      if (reloginSuccess) {
+      if (reloginSuccess && expectedGeneration === this.environmentGeneration) {
         result = await operation();
       }
     }
@@ -382,7 +397,6 @@ export class AuthManager {
         setPref("apiKey", "");
       } else {
         this.state.apiKey = key;
-        this.authService.setAccessToken(key);
       }
     }
 
@@ -424,7 +438,6 @@ export class AuthManager {
   private saveState(): void {
     if (this.state.apiKey) {
       setPref("apiKey", this.state.apiKey);
-      this.authService.setAccessToken(this.state.apiKey);
     }
     // sessionToken 由浏览器 cookie jar 自动持久化，不需要存 prefs
     if (this.state.userId !== null && this.state.userId > 0) {
@@ -485,19 +498,27 @@ export class AuthManager {
     this.state.token = token;
     this.state.apiKey = normalizePluginApiKey(key);
     setPref("apiKey", this.state.apiKey);
-    this.authService.setAccessToken(this.state.apiKey);
     return this.state.apiKey;
   }
 
   private async fetchAndSavePluginTokenKey(
     token: TokenInfo,
     operationName: string,
+    expectedGeneration: number,
   ): Promise<string | null> {
+    if (expectedGeneration !== this.environmentGeneration) {
+      return null;
+    }
     const keyResult = await this.withSessionRetry(
       () => this.authService.getTokenKey(token.id),
       operationName,
+      expectedGeneration,
     );
-    if (keyResult.success && keyResult.data?.key) {
+    if (
+      expectedGeneration === this.environmentGeneration &&
+      keyResult.success &&
+      keyResult.data?.key
+    ) {
       return this.savePluginTokenKey(token, keyResult.data.key);
     }
     return null;
@@ -506,15 +527,30 @@ export class AuthManager {
   private async fetchAndSavePluginTokenKeyWithRetry(
     token: TokenInfo,
     operationName: string,
+    expectedGeneration: number,
   ): Promise<string | null> {
-    let apiKey = await this.fetchAndSavePluginTokenKey(token, operationName);
+    let apiKey = await this.fetchAndSavePluginTokenKey(
+      token,
+      operationName,
+      expectedGeneration,
+    );
     if (apiKey) {
       return apiKey;
+    }
+    if (expectedGeneration !== this.environmentGeneration) {
+      return null;
     }
 
     ztoolkit.log(`[AuthManager] ${operationName} failed, retrying after 2s...`);
     await new Promise((resolve) => setTimeout(resolve, 2000));
-    apiKey = await this.fetchAndSavePluginTokenKey(token, operationName);
+    if (expectedGeneration !== this.environmentGeneration) {
+      return null;
+    }
+    apiKey = await this.fetchAndSavePluginTokenKey(
+      token,
+      operationName,
+      expectedGeneration,
+    );
     if (!apiKey) {
       ztoolkit.log(
         `[AuthManager] ${operationName} failed after retry, token key unavailable`,
@@ -528,20 +564,33 @@ export class AuthManager {
     selectToken: (tokens: TokenInfo[]) => TokenInfo | undefined,
     createOperationName: string,
     getKeyOperationName: string,
+    expectedGeneration: number,
   ): Promise<string | null> {
+    if (expectedGeneration !== this.environmentGeneration) {
+      return null;
+    }
     const createResult = await this.withSessionRetry(
       () => this.authService.createToken(request),
       createOperationName,
+      expectedGeneration,
     );
-    if (!createResult.success) {
+    if (
+      expectedGeneration !== this.environmentGeneration ||
+      !createResult.success
+    ) {
       return null;
     }
 
     const tokensResult = await this.withSessionRetry(
       () => this.authService.getTokens(0, 100),
       `${createOperationName}:getTokens`,
+      expectedGeneration,
     );
-    if (!tokensResult.success || !tokensResult.data) {
+    if (
+      expectedGeneration !== this.environmentGeneration ||
+      !tokensResult.success ||
+      !tokensResult.data
+    ) {
       return null;
     }
 
@@ -550,7 +599,11 @@ export class AuthManager {
       return null;
     }
 
-    return this.fetchAndSavePluginTokenKeyWithRetry(token, getKeyOperationName);
+    return this.fetchAndSavePluginTokenKeyWithRetry(
+      token,
+      getKeyOperationName,
+      expectedGeneration,
+    );
   }
 
   /**
@@ -586,6 +639,7 @@ export class AuthManager {
     verificationCode: string,
     affCode?: string,
   ): Promise<{ success: boolean; message: string }> {
+    const generation = this.environmentGeneration;
     const result = await this.authService.register({
       username,
       password,
@@ -593,6 +647,13 @@ export class AuthManager {
       verification_code: verificationCode,
       aff_code: affCode,
     });
+
+    if (generation !== this.environmentGeneration) {
+      return {
+        success: false,
+        message: "PaperChat service changed during registration",
+      };
+    }
 
     if (result.success) {
       // 注册成功后自动登录
@@ -625,6 +686,7 @@ export class AuthManager {
     username: string,
     password: string,
   ): Promise<{ success: boolean; message: string }> {
+    const generation = this.environmentGeneration;
     // 登录前始终清除旧状态，确保干净的登录环境
     ztoolkit.log("[AuthManager] Clearing old state before login");
     this.state.userId = null;
@@ -634,11 +696,17 @@ export class AuthManager {
     this.state.sessionToken = null;
     this.state.isLoggedIn = false;
     this.authService.setUserId(null);
-    this.authService.setAccessToken(null);
     this.authService.clearSessionCookie();
     setPref("userSubscriptionJson", "");
 
     const result = await this.authService.login({ username, password });
+
+    if (generation !== this.environmentGeneration) {
+      return {
+        success: false,
+        message: result.message || "PaperChat service changed during login",
+      };
+    }
 
     if (result.success) {
       // 保存用户ID (从AuthService获取，login时已提取)
@@ -668,13 +736,31 @@ export class AuthManager {
       }
 
       // 获取用户信息
-      await this.refreshUserInfo();
+      await this.refreshUserInfo(generation);
+      if (generation !== this.environmentGeneration) {
+        return {
+          success: false,
+          message: "PaperChat service changed during login",
+        };
+      }
 
       // 确保有可用的Token (需要 session cookie)
-      await this.ensurePluginToken();
+      await this.ensurePluginToken(false, generation);
+      if (generation !== this.environmentGeneration) {
+        return {
+          success: false,
+          message: "PaperChat service changed during login",
+        };
+      }
 
       // 获取可用模型列表并设置默认模型
-      await this.fetchAndSetDefaultModel();
+      await this.fetchAndSetDefaultModel(generation);
+      if (generation !== this.environmentGeneration) {
+        return {
+          success: false,
+          message: "PaperChat service changed during login",
+        };
+      }
 
       // 保存状态
       this.saveState();
@@ -704,6 +790,7 @@ export class AuthManager {
    * 当 session 过期时调用，作为 cookie 恢复失败的兜底方案
    */
   async autoRelogin(): Promise<boolean> {
+    const generation = this.environmentGeneration;
     // 防止无限循环
     if (this.isAutoReloginInProgress) {
       ztoolkit.log("[AuthManager] Auto-relogin already in progress, skipping");
@@ -736,6 +823,10 @@ export class AuthManager {
         username: savedUsername,
         password: savedPassword,
       });
+
+      if (generation !== this.environmentGeneration) {
+        return false;
+      }
 
       if (result.success) {
         ztoolkit.log("[AuthManager] Auto-relogin successful");
@@ -772,8 +863,13 @@ export class AuthManager {
    * 用户登出
    */
   async logout(): Promise<void> {
+    const generation = this.environmentGeneration;
     this.stopModelRefreshTimer();
     await this.authService.logout();
+
+    if (generation !== this.environmentGeneration) {
+      return;
+    }
 
     // 清除状态
     this.state = {
@@ -788,7 +884,6 @@ export class AuthManager {
 
     // 清除 AuthService 状态
     this.authService.setUserId(null);
-    this.authService.setAccessToken(null);
     this.authService.clearSessionCookie();
 
     // 清除偏好设置（sessionToken 由浏览器 cookie jar 管理）
@@ -802,6 +897,38 @@ export class AuthManager {
 
     this.notifyLoginStatusChange(false);
     this.notifyUserInfoUpdate(null);
+  }
+
+  applyPaperChatBaseUrlChange(): void {
+    this.environmentGeneration += 1;
+    this.authService.clearSessionCookie();
+    this.authService.setBaseUrl(getPaperChatSiteBaseUrl());
+    this.authService.setUserId(null);
+    this.authService.setDashboardAccessToken(null);
+
+    this.state = {
+      isLoggedIn: false,
+      user: null,
+      subscription: null,
+      token: null,
+      apiKey: null,
+      sessionToken: null,
+      userId: null,
+    };
+
+    setPref("apiKey", "");
+    setPref("userId", 0);
+    setPref("username", "");
+    setPref("loginPassword", "");
+    setPref("userQuotaJson", "");
+    setPref("userSubscriptionJson", "");
+    clearPaperchatModelCaches();
+    clearPref("paperchatTierState");
+
+    this.stopModelRefreshTimer();
+    this.notifyLoginStatusChange(false);
+    this.notifyUserInfoUpdate(null);
+    this.notifyBalanceUpdate(0, 0);
   }
 
   /**
@@ -839,16 +966,26 @@ export class AuthManager {
   /**
    * 刷新用户信息
    */
-  async refreshUserInfo(): Promise<void> {
+  async refreshUserInfo(
+    expectedGeneration: number = this.environmentGeneration,
+  ): Promise<void> {
     const result = await this.withSessionRetry(
       () => this.authService.getUserInfo(),
       "getUserInfo",
+      expectedGeneration,
     );
+
+    if (expectedGeneration !== this.environmentGeneration) {
+      return;
+    }
 
     if (result.success && result.data) {
       this.state.user = result.data;
       this.state.isLoggedIn = true;
-      await this.refreshSubscriptionInfo();
+      await this.refreshSubscriptionInfo(expectedGeneration);
+      if (expectedGeneration !== this.environmentGeneration) {
+        return;
+      }
       // 保存用户信息到本地，以便重启后恢复
       // quota 值可能超过 32 位整数，存为 JSON 字符串
       ztoolkit.log("[AuthManager] refreshUserInfo - saving to prefs:", {
@@ -885,11 +1022,18 @@ export class AuthManager {
     );
   }
 
-  async refreshSubscriptionInfo(): Promise<void> {
+  async refreshSubscriptionInfo(
+    expectedGeneration: number = this.environmentGeneration,
+  ): Promise<void> {
     const result = await this.withSessionRetry(
       () => this.authService.getSubscriptionSelf(),
       "getSubscriptionSelf",
+      expectedGeneration,
     );
+
+    if (expectedGeneration !== this.environmentGeneration) {
+      return;
+    }
 
     if (result.success) {
       const activeSubscription = getActiveSubscriptionInfo(result.data || null);
@@ -997,12 +1141,20 @@ export class AuthManager {
    * 公开方法，允许在 API key 失效时刷新
    * @param forceRefresh 是否强制刷新（删除旧 token 并创建新的）
    */
-  async ensurePluginToken(forceRefresh: boolean = false): Promise<boolean> {
+  async ensurePluginToken(
+    forceRefresh: boolean = false,
+    expectedGeneration: number = this.environmentGeneration,
+  ): Promise<boolean> {
     // 先检查是否已有插件Token
     const tokensResult = await this.withSessionRetry(
       () => this.authService.getTokens(0, 100),
       "getTokens",
+      expectedGeneration,
     );
+
+    if (expectedGeneration !== this.environmentGeneration) {
+      return false;
+    }
 
     let legacyToken: TokenInfo | undefined;
     if (tokensResult.success && tokensResult.data) {
@@ -1015,24 +1167,24 @@ export class AuthManager {
         const apiKey = await this.fetchAndSavePluginTokenKey(
           autoToken,
           "getTokenKey",
+          expectedGeneration,
         );
         if (apiKey) {
           ztoolkit.log(
             "[AuthManager] Using existing auto plugin token:",
-            apiKey.substring(0, 10) + "...",
+            autoToken.id,
           );
           return true;
+        }
+        if (expectedGeneration !== this.environmentGeneration) {
+          return false;
         }
         // getTokenKey failed (e.g. 429 rate limit) — keep using cached apiKey if available
         const cachedApiKey = getPref("apiKey") as string;
         if (cachedApiKey && !cachedApiKey.includes("*")) {
           this.state.token = autoToken;
           this.state.apiKey = cachedApiKey;
-          this.authService.setAccessToken(cachedApiKey);
-          ztoolkit.log(
-            "[AuthManager] getTokenKey failed, using cached apiKey:",
-            cachedApiKey.substring(0, 10) + "...",
-          );
+          ztoolkit.log("[AuthManager] getTokenKey failed, using cached apiKey");
           return true;
         }
         // No cached key — cannot proceed, log warning
@@ -1043,11 +1195,12 @@ export class AuthManager {
           const legacyApiKey = await this.fetchAndSavePluginTokenKey(
             legacyToken,
             "getLegacyTokenKey",
+            expectedGeneration,
           );
           if (legacyApiKey) {
             ztoolkit.log(
               "[AuthManager] Falling back to legacy plugin token:",
-              legacyApiKey.substring(0, 10) + "...",
+              legacyToken.id,
             );
           }
           return !!legacyApiKey;
@@ -1064,7 +1217,11 @@ export class AuthManager {
         await this.withSessionRetry(
           () => this.authService.deleteToken(autoToken.id),
           "deleteOldAutoToken",
+          expectedGeneration,
         );
+        if (expectedGeneration !== this.environmentGeneration) {
+          return false;
+        }
       } else if (legacyToken) {
         ztoolkit.log(
           "[AuthManager] Found legacy plugin token, creating auto token",
@@ -1077,13 +1234,14 @@ export class AuthManager {
       findActiveAutoPluginToken,
       "createAutoToken",
       "getAutoTokenKey",
+      expectedGeneration,
     );
     if (autoApiKey) {
-      ztoolkit.log(
-        "[AuthManager] Auto plugin token created and saved:",
-        autoApiKey.substring(0, 10) + "...",
-      );
+      ztoolkit.log("[AuthManager] Auto plugin token created and saved");
       return true;
+    }
+    if (expectedGeneration !== this.environmentGeneration) {
+      return false;
     }
 
     if (legacyToken && !forceRefresh) {
@@ -1093,6 +1251,7 @@ export class AuthManager {
       const legacyApiKey = await this.fetchAndSavePluginTokenKey(
         legacyToken,
         "getLegacyTokenKey",
+        expectedGeneration,
       );
       if (legacyApiKey) {
         return true;
@@ -1104,12 +1263,10 @@ export class AuthManager {
       findLegacyPluginToken,
       "createLegacyToken",
       "getLegacyTokenKey",
+      expectedGeneration,
     );
     if (legacyCreateApiKey) {
-      ztoolkit.log(
-        "[AuthManager] Legacy plugin token created and saved:",
-        legacyCreateApiKey.substring(0, 10) + "...",
-      );
+      ztoolkit.log("[AuthManager] Legacy plugin token created and saved");
       return true;
     }
     return false;
@@ -1120,14 +1277,17 @@ export class AuthManager {
    * 在登录成功后调用，确保使用服务端支持的模型
    * 如果已选模型不可用，自动切换到下一个可用模型并通知用户
    */
-  private async fetchAndSetDefaultModel(): Promise<void> {
+  private async fetchAndSetDefaultModel(
+    expectedGeneration: number = this.environmentGeneration,
+  ): Promise<void> {
+    const modelCacheGeneration = getPaperchatModelCacheGeneration();
     const apiKey = this.getApiKey();
     if (!apiKey) {
       ztoolkit.log("[AuthManager] No API key, skip fetching models");
       return;
     }
 
-    const url = `${BUILTIN_PROVIDERS.paperchat.defaultBaseUrl}/models`;
+    const url = `${getPaperChatApiBaseUrl()}/models`;
     ztoolkit.log("[AuthManager] Fetching models from:", url);
 
     try {
@@ -1141,6 +1301,13 @@ export class AuthManager {
         fetchPaperchatRoutingMeta(),
       ]);
 
+      if (
+        expectedGeneration !== this.environmentGeneration ||
+        modelCacheGeneration !== getPaperchatModelCacheGeneration()
+      ) {
+        return;
+      }
+
       if (!response.ok) {
         ztoolkit.log("[AuthManager] Failed to fetch models:", response.status);
         return;
@@ -1149,6 +1316,13 @@ export class AuthManager {
       const result = (await response.json()) as {
         data?: Array<{ id: string }>;
       };
+
+      if (
+        expectedGeneration !== this.environmentGeneration ||
+        modelCacheGeneration !== getPaperchatModelCacheGeneration()
+      ) {
+        return;
+      }
 
       if (result.data && Array.isArray(result.data)) {
         const allModels = result.data.map((m) => m.id).sort();

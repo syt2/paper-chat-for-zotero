@@ -7,6 +7,7 @@ import {
 } from "../providers/PaperChatNoticeService";
 import { renderMarkdownToElement } from "../ui/chat-panel/MarkdownRenderer";
 import { getString } from "../../utils/locale";
+import { getPaperChatSiteBaseUrl } from "../providers/PaperChatUrls";
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 const NOTICE_COLLAPSED_HEIGHT_PX = 100;
@@ -122,7 +123,7 @@ function sanitizeStyle(styleText: string): string {
 
 function sanitizeUrl(rawUrl: string): string | null {
   try {
-    const parsed = new URL(rawUrl, "https://paperchat.zotero.store");
+    const parsed = new URL(rawUrl, getPaperChatSiteBaseUrl());
     if (parsed.protocol === "http:" || parsed.protocol === "https:") {
       return parsed.toString();
     }

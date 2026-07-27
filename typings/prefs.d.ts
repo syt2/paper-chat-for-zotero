@@ -23,6 +23,7 @@ declare namespace _ZoteroTypes {
       "paperchatRoutingConfigCache": string;
       "paperchatTierState": string;
       "paperchatSuppressHighTierWarning": boolean;
+      "paperchatBaseUrlOverride": string;
       "uploadRawPdfOnFailure": boolean;
       "panelMode": string;
       "debugContextExportEnabled": boolean;

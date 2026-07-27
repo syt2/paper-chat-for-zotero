@@ -16,11 +16,9 @@ import type {
   TopUpRequest,
   PaginatedResponse,
 } from "../../types/auth";
-import { BUILTIN_PROVIDERS } from "../providers/ProviderManager";
+import { getPaperChatSiteBaseUrl } from "../providers/PaperChatUrls";
 import { getString } from "../../utils/locale";
 import { NO_RETRY_ON_THROTTLE } from "../../utils/http";
-
-const DEFAULT_API_BASE = BUILTIN_PROVIDERS.paperchat.website!;
 
 export interface PaperChatProduct {
   sku: string;
@@ -67,17 +65,46 @@ export interface PaperChatPricingResult extends ApiResponse<
 }
 
 // 临时存储从 HTTP Observer 捕获的 session cookie
-let pendingSessionCookie: string | null = null;
+let pendingSessionCookie: { value: string; generation: number } | null = null;
+
+const SENSITIVE_LOG_FIELDS = new Set([
+  "access_token",
+  "api_key",
+  "authorization",
+  "cookie",
+  "key",
+  "password",
+  "refresh_token",
+  "session",
+  "session_token",
+  "token",
+  "verification_code",
+]);
+
+function stringifyForAuthLog(value: unknown): string {
+  try {
+    return JSON.stringify(value, (key, nestedValue) =>
+      SENSITIVE_LOG_FIELDS.has(
+        key.replace(/[A-Z]/g, (char) => `_${char.toLowerCase()}`),
+      )
+        ? "[REDACTED]"
+        : nestedValue,
+    );
+  } catch {
+    return "[unserializable]";
+  }
+}
 
 export class AuthService {
   private baseUrl: string;
   private sessionToken: string | null = null;
   private userId: number | null = null;
-  private accessToken: string | null = null;
+  private dashboardAccessToken: string | null = null;
   private httpObserver: any = null;
+  private environmentGeneration = 0;
 
   constructor(baseUrl?: string) {
-    this.baseUrl = baseUrl || DEFAULT_API_BASE;
+    this.baseUrl = baseUrl || getPaperChatSiteBaseUrl();
     this.setupHttpObserver();
   }
 
@@ -86,9 +113,11 @@ export class AuthService {
    * 由于 Zotero 环境下浏览器 cookie jar 不可用，需要手动捕获
    */
   private setupHttpObserver(): void {
+    if (typeof Services === "undefined") return;
     if (this.httpObserver) return;
 
     const baseUrl = this.baseUrl; // 捕获到闭包中
+    const generation = this.environmentGeneration;
 
     this.httpObserver = {
       observe(subject: any, topic: string, _data: string) {
@@ -105,7 +134,7 @@ export class AuthService {
             if (setCookie?.includes("session=")) {
               const match = setCookie.match(/session=([^;]+)/);
               if (match?.[1]) {
-                pendingSessionCookie = match[1];
+                pendingSessionCookie = { value: match[1], generation };
               }
             }
           } catch {
@@ -125,16 +154,36 @@ export class AuthService {
    */
   destroy(): void {
     if (this.httpObserver) {
-      Services.obs.removeObserver(
-        this.httpObserver,
-        "http-on-examine-response",
-      );
+      if (typeof Services !== "undefined") {
+        Services.obs.removeObserver(
+          this.httpObserver,
+          "http-on-examine-response",
+        );
+      }
       this.httpObserver = null;
     }
   }
 
   getSessionToken(): string | null {
     return this.sessionToken;
+  }
+
+  setBaseUrl(baseUrl: string): void {
+    if (this.baseUrl === baseUrl) {
+      return;
+    }
+    if (this.httpObserver) {
+      if (typeof Services !== "undefined") {
+        Services.obs.removeObserver(
+          this.httpObserver,
+          "http-on-examine-response",
+        );
+      }
+      this.httpObserver = null;
+    }
+    this.environmentGeneration += 1;
+    this.baseUrl = baseUrl;
+    this.setupHttpObserver();
   }
 
   setUserId(id: number | null): void {
@@ -145,8 +194,8 @@ export class AuthService {
     return this.userId;
   }
 
-  setAccessToken(token: string | null): void {
-    this.accessToken = token;
+  setDashboardAccessToken(token: string | null): void {
+    this.dashboardAccessToken = token;
   }
 
   /**
@@ -154,6 +203,7 @@ export class AuthService {
    */
   clearSessionCookie(): void {
     this.sessionToken = null;
+    this.dashboardAccessToken = null;
     pendingSessionCookie = null;
 
     // 从浏览器 cookie jar 中删除
@@ -224,7 +274,7 @@ export class AuthService {
   private logRequest(method: string, url: string, body?: unknown): void {
     ztoolkit.log(
       `[AuthService] ${method} ${url}`,
-      body ? JSON.stringify(body) : "",
+      body ? stringifyForAuthLog(body) : "",
     );
   }
 
@@ -236,12 +286,15 @@ export class AuthService {
   ): void {
     ztoolkit.log(
       `[AuthService] ${method} ${url} -> ${status}`,
-      JSON.stringify(data),
+      stringifyForAuthLog(data),
     );
   }
 
   private logError(method: string, url: string, error: unknown): void {
-    ztoolkit.log(`[AuthService] ${method} ${url} ERROR:`, error);
+    ztoolkit.log(
+      `[AuthService] ${method} ${url} ERROR:`,
+      error instanceof Error ? error.message : stringifyForAuthLog(error),
+    );
   }
 
   private parseErrorMessage(data: unknown, defaultMsg: string): string {
@@ -263,9 +316,9 @@ export class AuthService {
       body?: unknown;
       headers?: Record<string, string>;
       extractSession?: boolean;
-      skipAccessToken?: boolean; // 跳过 Authorization header（用于 session-only 接口）
     } = {},
   ): Promise<{ status: number; data: T | null; error?: string }> {
+    const generation = this.environmentGeneration;
     const fullUrl = url.startsWith("http") ? url : `${this.baseUrl}${url}`;
     this.logRequest(method, fullUrl, options.body);
 
@@ -280,9 +333,8 @@ export class AuthService {
         headers["New-Api-User"] = String(this.userId);
       }
 
-      // 只有在不跳过的情况下才发送 accessToken
-      if (this.accessToken && !options.skipAccessToken) {
-        headers["Authorization"] = `Bearer ${this.accessToken}`;
+      if (this.dashboardAccessToken) {
+        headers["Authorization"] = `Bearer ${this.dashboardAccessToken}`;
       }
 
       // 手动添加 session cookie（Zotero 环境下浏览器 cookie jar 不可用）
@@ -299,16 +351,31 @@ export class AuthService {
         ...NO_RETRY_ON_THROTTLE,
       });
 
+      if (generation !== this.environmentGeneration) {
+        return {
+          status: 0,
+          data: null,
+          error: "PaperChat service changed during request",
+        };
+      }
+
       const data = response.response as T;
 
       // 登录/注册时从 HTTP Observer 提取 session
-      if (options.extractSession) {
+      if (options.extractSession && generation === this.environmentGeneration) {
         this.extractSessionFromObserver();
       }
 
       this.logResponse(method, fullUrl, response.status, data);
       return { status: response.status, data };
     } catch (error: unknown) {
+      if (generation !== this.environmentGeneration) {
+        return {
+          status: 0,
+          data: null,
+          error: "PaperChat service changed during request",
+        };
+      }
       this.logError(method, fullUrl, error);
 
       if (error && typeof error === "object" && "status" in error) {
@@ -333,9 +400,10 @@ export class AuthService {
    * 从 HTTP Observer 提取 session cookie 并保存到 cookie jar
    */
   private extractSessionFromObserver(): void {
-    if (pendingSessionCookie) {
-      this.sessionToken = pendingSessionCookie;
-      pendingSessionCookie = null;
+    const pending = pendingSessionCookie;
+    pendingSessionCookie = null;
+    if (pending?.generation === this.environmentGeneration) {
+      this.sessionToken = pending.value;
       // 保存到 cookie jar 以便重启后恢复
       this.saveSessionToCookieJar();
     }
@@ -414,6 +482,7 @@ export class AuthService {
   }
 
   async login(request: LoginRequest): Promise<ApiResponse> {
+    const generation = this.environmentGeneration;
     const url = `${this.baseUrl}/api/user/login`;
     const result = await this.request<ApiResponse>("POST", url, {
       body: request,
@@ -436,9 +505,21 @@ export class AuthService {
       };
     }
 
+    if (generation !== this.environmentGeneration) {
+      return {
+        success: false,
+        message: "PaperChat service changed during login",
+      };
+    }
+
     // 不支持 2FA
     const responseData = result.data as ApiResponse & {
-      data?: { id?: number; require_2fa?: boolean };
+      data?: {
+        id?: number;
+        access_token?: string;
+        require_2fa?: boolean;
+        user?: { id?: number };
+      };
     };
     if (responseData.data?.require_2fa) {
       return {
@@ -448,19 +529,45 @@ export class AuthService {
     }
 
     // 提取用户ID
-    if (responseData.data?.id) {
-      this.userId = responseData.data.id;
+    const userId = responseData.data?.id ?? responseData.data?.user?.id;
+    if (userId) {
+      this.userId = userId;
+    }
+
+    const dashboardAccessToken = responseData.data?.access_token;
+    if (
+      typeof dashboardAccessToken === "string" &&
+      dashboardAccessToken.trim()
+    ) {
+      this.dashboardAccessToken = dashboardAccessToken.trim();
     }
 
     return result.data;
   }
 
   async logout(): Promise<ApiResponse> {
-    const url = `${this.baseUrl}/api/user/logout`;
-    const result = await this.request<ApiResponse>("POST", url);
+    const generation = this.environmentGeneration;
+    let result = await this.request<ApiResponse>(
+      "POST",
+      `${this.baseUrl}/api/user/auth/logout`,
+    );
+    if (result.status === 404) {
+      result = await this.request<ApiResponse>(
+        "POST",
+        `${this.baseUrl}/api/user/logout`,
+      );
+    }
+
+    if (generation !== this.environmentGeneration) {
+      return {
+        success: false,
+        message: "PaperChat service changed during logout",
+      };
+    }
 
     this.sessionToken = null;
     this.userId = null;
+    this.dashboardAccessToken = null;
 
     if (result.error) {
       return { success: false, message: result.error };
@@ -483,10 +590,7 @@ export class AuthService {
 
   async getUserInfo(): Promise<ApiResponse<UserInfo>> {
     const url = `${this.baseUrl}/api/user/self`;
-    // 这个接口只接受 session cookie 认证，不需要 accessToken
-    const result = await this.request<ApiResponse<UserInfo>>("GET", url, {
-      skipAccessToken: true,
-    });
+    const result = await this.request<ApiResponse<UserInfo>>("GET", url);
 
     if (result.error) {
       return { success: false, message: result.error };
@@ -512,7 +616,6 @@ export class AuthService {
     const result = await this.request<ApiResponse<SubscriptionSelfInfo>>(
       "GET",
       url,
-      { skipAccessToken: true },
     );
 
     if (result.error) {
@@ -594,7 +697,7 @@ export class AuthService {
         enabled: boolean;
         stats: { checked_in_today: boolean; total_checkins: number };
       };
-    }>("GET", url, { skipAccessToken: true });
+    }>("GET", url);
 
     if (result.error) {
       return {
@@ -637,7 +740,7 @@ export class AuthService {
       success: boolean;
       message: string;
       data: { checkin_date: string; quota_awarded: number };
-    }>("POST", url, { skipAccessToken: true });
+    }>("POST", url);
 
     if (result.error) {
       return { success: false, message: result.error };
@@ -784,9 +887,7 @@ export class AuthService {
       success?: boolean;
       message?: string;
       data?: { products?: PaperChatProduct[] };
-    }>("GET", url, {
-      skipAccessToken: true,
-    });
+    }>("GET", url);
 
     if (result.error) {
       return { success: false, message: result.error, products: [] };
@@ -821,7 +922,6 @@ export class AuthService {
       data?: PaperChatPurchaseOrder;
     }>("POST", url, {
       body: { sku },
-      skipAccessToken: true,
     });
 
     if (result.error) {
@@ -849,9 +949,7 @@ export class AuthService {
       success?: boolean;
       message?: string;
       data?: PaperChatPurchaseOrder;
-    }>("GET", url, {
-      skipAccessToken: true,
-    });
+    }>("GET", url);
 
     if (result.error) {
       return { success: false, message: result.error };
@@ -875,9 +973,7 @@ export class AuthService {
   private async syncCurrentUserEntitlement(): Promise<void> {
     try {
       const url = `${this.baseUrl}/ext/entitlements/sync-current-user`;
-      const result = await this.request<ApiResponse>("POST", url, {
-        skipAccessToken: true,
-      });
+      const result = await this.request<ApiResponse>("POST", url);
 
       if (result.error || result.status >= 400) {
         ztoolkit.log(

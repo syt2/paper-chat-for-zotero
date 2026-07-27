@@ -19,7 +19,7 @@ import type { ToolDefinition, ToolCall } from "../../types/tool";
 import { getAuthManager } from "../auth";
 import { OpenAICompatibleProvider } from "./OpenAICompatibleProvider";
 import { OpenAIResponsesProvider } from "./OpenAIResponsesProvider";
-import { BUILTIN_PROVIDERS } from "./ProviderManager";
+import { getPaperChatApiBaseUrl } from "./PaperChatUrls";
 import { getPref } from "../../utils/prefs";
 import {
   AUTO_MODEL,
@@ -152,7 +152,7 @@ export class PaperChatProvider implements AIProvider {
       isBuiltin: this._config.isBuiltin,
       order: this._config.order,
       apiKey: authManager.getApiKey() || "",
-      baseUrl: BUILTIN_PROVIDERS.paperchat.defaultBaseUrl,
+      baseUrl: getPaperChatApiBaseUrl(),
       defaultModel: model,
       availableModels,
       maxTokens:

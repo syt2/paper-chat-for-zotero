@@ -6,18 +6,21 @@ import type { TagElementProps } from "zotero-plugin-toolkit";
 import { openZToolkitDialog } from "../../utils/dialog";
 import { getString } from "../../utils/locale";
 import { prefColors } from "../../utils/colors";
-import { getPref } from "../../utils/prefs";
 import { getAuthManager } from "../auth";
 import type {
   PaperChatProduct,
   PaperChatPurchaseOrder,
 } from "../auth/AuthService";
-import { BUILTIN_PROVIDERS } from "../providers";
+import {
+  getPaperChatSiteBaseUrl,
+  getPaperChatUrl,
+} from "../providers/PaperChatUrls";
 import { showAuthDialog } from "../ui/AuthDialog";
 import type { PrefsRefreshOptions } from "./types";
 import { showMessage } from "./utils";
 import { ANALYTICS_EVENTS, getAnalyticsService } from "../analytics";
 import { renderSanitizedHtmlToElement } from "./PaperChatNoticeRenderer";
+import { populatePaperchatModels } from "./PaperchatProviderUI";
 import { NO_RETRY_ON_THROTTLE } from "../../utils/http";
 
 type AuthManagerType = ReturnType<typeof getAuthManager>;
@@ -510,7 +513,7 @@ export function bindUserAuthEvents(
   websiteLink?.addEventListener("click", (e: Event) => {
     e.preventDefault();
     // Open the console page
-    Zotero.launchURL(`${BUILTIN_PROVIDERS.paperchat.website}`);
+    Zotero.launchURL(getPaperChatSiteBaseUrl());
   });
 
   // Auth callbacks - refresh provider list on login status change
@@ -518,6 +521,7 @@ export function bindUserAuthEvents(
     onBalanceUpdate: () => updateUserDisplay(doc, authManager),
     onLoginStatusChange: () => {
       updateUserDisplay(doc, authManager);
+      populatePaperchatModels(doc);
       // Refresh provider list to update green dot status
       onProviderListRefresh();
     },
@@ -1620,14 +1624,7 @@ async function fetchRedeemCodeInfo(): Promise<RedeemCodeInfo> {
 }
 
 function getRedeemCodeInfoUrl(): string {
-  const baseUrl =
-    (getPref("baseUrl") as string | undefined) ||
-    BUILTIN_PROVIDERS.paperchat.defaultBaseUrl;
-  try {
-    return `${new URL(baseUrl).origin}${REDEEM_CODE_INFO_PATH}`;
-  } catch {
-    return `${BUILTIN_PROVIDERS.paperchat.website}${REDEEM_CODE_INFO_PATH}`;
-  }
+  return getPaperChatUrl(REDEEM_CODE_INFO_PATH);
 }
 
 function normalizeRedeemCodeInfoResponse(response: unknown): RedeemCodeInfo {
@@ -1697,7 +1694,7 @@ function buildRedeemCodeInfoChildren(
                 type: "click",
                 listener: (event: Event) => {
                   event.preventDefault();
-                  Zotero.launchURL(BUILTIN_PROVIDERS.paperchat.website!);
+                  Zotero.launchURL(getPaperChatSiteBaseUrl());
                 },
               },
             ],

@@ -160,6 +160,44 @@
           ></label>
         </html:details>
 
+        <html:details
+          id="pref-paperchat-baseurl-debug-wrap"
+          hidden="true"
+          style="margin-top: 8px; margin-bottom: 12px"
+        >
+          <html:summary
+            data-l10n-id="pref-paperchat-baseurl-debug-title"
+            style="cursor: pointer; font-weight: bold; margin-bottom: 8px"
+          ></html:summary>
+          <label
+            data-l10n-id="pref-paperchat-baseurl-debug-description"
+            style="display: block; margin: 8px 0; color: #666"
+          ></label>
+          <hbox align="center" style="gap: 8px; margin-bottom: 6px">
+            <html:input
+              id="pref-paperchat-baseurl-debug-input"
+              type="url"
+              placeholder="http://localhost:9002"
+              style="flex: 1; min-width: 220px"
+            ></html:input>
+            <button
+              id="pref-paperchat-baseurl-debug-apply"
+              data-l10n-id="pref-paperchat-baseurl-debug-apply"
+              style="cursor: pointer"
+            ></button>
+            <button
+              id="pref-paperchat-baseurl-debug-clear"
+              data-l10n-id="pref-paperchat-baseurl-debug-clear"
+              style="cursor: pointer"
+            ></button>
+          </hbox>
+          <label
+            id="pref-paperchat-baseurl-debug-status"
+            hidden="true"
+            style="display: block; font-size: 12px; color: #c05621"
+          ></label>
+        </html:details>
+
         <hbox
           id="pref-user-bar"
           align="center"

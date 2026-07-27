@@ -13,7 +13,7 @@ import type {
 import { getAuthManager } from "../../auth";
 import { getPref } from "../../../utils/prefs";
 import { getErrorMessage } from "../../../utils/common";
-import { BUILTIN_PROVIDERS } from "../../providers/ProviderManager";
+import { getPaperChatApiBaseUrl } from "../../providers/PaperChatUrls";
 import { normalizeEmbeddingBatch } from "../EmbeddingInput";
 
 // Preferred embedding models in priority order
@@ -84,12 +84,9 @@ export class PaperChatEmbedding implements EmbeddingProvider {
   readonly type: EmbeddingProviderType = "paperchat";
   readonly dimension = EMBEDDING_DIMENSIONS;
 
-  private baseUrl: string;
   private selectedModel: string;
 
   constructor(model?: string) {
-    this.baseUrl = BUILTIN_PROVIDERS.paperchat.defaultBaseUrl;
-
     // Select model
     if (model) {
       this.selectedModel = model;
@@ -164,7 +161,7 @@ export class PaperChatEmbedding implements EmbeddingProvider {
   }
 
   private async embedBatchInternal(texts: string[]): Promise<number[][]> {
-    const url = `${this.baseUrl}/embeddings`;
+    const url = `${getPaperChatApiBaseUrl()}/embeddings`;
     const apiKey = this.getApiKey();
 
     const response = await fetch(url, {

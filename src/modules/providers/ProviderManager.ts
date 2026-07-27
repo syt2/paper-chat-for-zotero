@@ -20,6 +20,10 @@ import { PaperChatProvider } from "./PaperChatProvider";
 import { config } from "../../../package.json";
 import { getPref } from "../../utils/prefs";
 import {
+  DEFAULT_PAPERCHAT_API_BASE_URL,
+  DEFAULT_PAPERCHAT_SITE_BASE_URL,
+} from "./PaperChatUrls";
+import {
   getProviderRetryBackoffDelayMs,
   isRetryableProviderError,
   PROVIDER_REQUEST_MAX_ATTEMPTS,
@@ -35,8 +39,8 @@ export const BUILTIN_PROVIDERS: Record<BuiltinProviderId, ProviderMetadata> = {
     id: "paperchat",
     name: "PaperChat",
     description: "Login-based AI service with multi-model support",
-    defaultBaseUrl: "https://paperchat.zotero.store/v1",
-    website: "https://paperchat.zotero.store",
+    defaultBaseUrl: DEFAULT_PAPERCHAT_API_BASE_URL,
+    website: DEFAULT_PAPERCHAT_SITE_BASE_URL,
     type: "paperchat",
   },
   openai: {

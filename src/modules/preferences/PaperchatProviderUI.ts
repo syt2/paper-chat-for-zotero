@@ -2,8 +2,16 @@
  * PaperchatProviderUI - PaperChat provider settings panel
  */
 
-import { getPref, setPref } from "../../utils/prefs";
+import { clearPref, getPref, setPref } from "../../utils/prefs";
+import { getAuthManager } from "../auth";
 import { getProviderManager } from "../providers";
+import {
+  DEFAULT_PAPERCHAT_SITE_BASE_URL,
+  getPaperChatBaseUrlOverride,
+  getPaperChatSiteBaseUrl,
+  isPaperChatBaseUrlOverrideAllowed,
+  normalizePaperChatSiteBaseUrl,
+} from "../providers/PaperChatUrls";
 import {
   deriveTierPools,
   getAvailablePaperChatTiers,
@@ -24,11 +32,13 @@ import { isEmbeddingModel } from "../embedding/providers/PaperChatEmbedding";
 import { getString } from "../../utils/locale";
 import {
   bindPaperChatNoticeEvents,
+  refreshPaperChatNoticeUI,
   renderPaperChatNotice,
   syncPaperChatNoticeDebugUI,
 } from "./PaperChatNoticeRenderer";
 import {
   clearPaperChatNoticeDebugOverride,
+  resetPaperChatNoticeCache,
   setPaperChatNoticeDebugOverride,
 } from "../providers/PaperChatNoticeService";
 
@@ -212,6 +222,7 @@ export function populatePaperchatPanel(doc: Document): void {
   bindPaperChatNoticeEvents(doc);
   renderPaperChatNotice(doc);
   syncPaperChatNoticeDebugUI(doc);
+  syncPaperChatBaseUrlDebugUI(doc);
 
   // Populate tier selector and per-tier override dropdowns
   populatePaperchatModels(doc);
@@ -226,6 +237,96 @@ export function populatePaperchatPanel(doc: Document): void {
 
   if (temperatureEl) temperatureEl.value = String(config.temperature ?? 0.7);
   if (systemPromptEl) systemPromptEl.value = config.systemPrompt || "";
+}
+
+function syncPaperChatBaseUrlDebugUI(doc: Document): void {
+  const wrap = doc.getElementById(
+    "pref-paperchat-baseurl-debug-wrap",
+  ) as HTMLElement | null;
+  const input = doc.getElementById(
+    "pref-paperchat-baseurl-debug-input",
+  ) as HTMLInputElement | null;
+  const status = doc.getElementById(
+    "pref-paperchat-baseurl-debug-status",
+  ) as HTMLElement | null;
+  const isAllowed = isPaperChatBaseUrlOverrideAllowed();
+  const override = getPaperChatBaseUrlOverride();
+
+  if (wrap) {
+    wrap.hidden = !isAllowed;
+  }
+  if (!isAllowed) {
+    return;
+  }
+  if (input) {
+    input.value = override || "";
+  }
+  if (!status) {
+    return;
+  }
+  if (override) {
+    status.textContent = getString("pref-paperchat-baseurl-debug-active", {
+      args: { url: getPaperChatSiteBaseUrl() },
+    });
+    status.hidden = false;
+  } else {
+    status.textContent = getString("pref-paperchat-baseurl-debug-default");
+    status.hidden = false;
+  }
+}
+
+function applyPaperChatServiceChange(doc: Document): void {
+  getAuthManager().applyPaperChatBaseUrlChange();
+  getProviderManager().refresh(true);
+  populatePaperchatModels(doc);
+  resetPaperChatNoticeCache();
+  renderPaperChatNotice(doc);
+  void refreshPaperChatNoticeUI(doc);
+  syncPaperChatBaseUrlDebugUI(doc);
+}
+
+function applyPaperChatBaseUrlOverride(doc: Document, rawUrl: string): void {
+  if (!isPaperChatBaseUrlOverrideAllowed()) {
+    return;
+  }
+
+  const status = doc.getElementById(
+    "pref-paperchat-baseurl-debug-status",
+  ) as HTMLElement | null;
+  const normalized = normalizePaperChatSiteBaseUrl(rawUrl);
+  if (!normalized) {
+    if (status) {
+      status.textContent = getString("pref-paperchat-baseurl-debug-invalid");
+      status.hidden = false;
+    }
+    return;
+  }
+  const previousBaseUrl = getPaperChatSiteBaseUrl();
+  if (normalized === DEFAULT_PAPERCHAT_SITE_BASE_URL) {
+    clearPref("paperchatBaseUrlOverride");
+  } else {
+    setPref("paperchatBaseUrlOverride", normalized);
+  }
+  if (getPaperChatSiteBaseUrl() === previousBaseUrl) {
+    syncPaperChatBaseUrlDebugUI(doc);
+    return;
+  }
+
+  applyPaperChatServiceChange(doc);
+}
+
+function clearPaperChatBaseUrlOverride(doc: Document): void {
+  if (!isPaperChatBaseUrlOverrideAllowed() || !getPaperChatBaseUrlOverride()) {
+    return;
+  }
+
+  const previousBaseUrl = getPaperChatSiteBaseUrl();
+  clearPref("paperchatBaseUrlOverride");
+  if (getPaperChatSiteBaseUrl() === previousBaseUrl) {
+    syncPaperChatBaseUrlDebugUI(doc);
+  } else {
+    applyPaperChatServiceChange(doc);
+  }
 }
 
 /**
@@ -375,6 +476,15 @@ export function bindPaperchatEvents(
   const noticeDebugInput = doc.getElementById(
     "pref-paperchat-notice-debug-input",
   ) as HTMLTextAreaElement | null;
+  const baseUrlDebugApplyBtn = doc.getElementById(
+    "pref-paperchat-baseurl-debug-apply",
+  ) as HTMLButtonElement | null;
+  const baseUrlDebugClearBtn = doc.getElementById(
+    "pref-paperchat-baseurl-debug-clear",
+  ) as HTMLButtonElement | null;
+  const baseUrlDebugInput = doc.getElementById(
+    "pref-paperchat-baseurl-debug-input",
+  ) as HTMLInputElement | null;
 
   noticeDebugApplyBtn?.addEventListener("click", () => {
     const content = noticeDebugInput?.value || "";
@@ -390,5 +500,13 @@ export function bindPaperchatEvents(
     clearPaperChatNoticeDebugOverride();
     renderPaperChatNotice(doc);
     syncPaperChatNoticeDebugUI(doc);
+  });
+
+  baseUrlDebugApplyBtn?.addEventListener("click", () => {
+    applyPaperChatBaseUrlOverride(doc, baseUrlDebugInput?.value || "");
+  });
+
+  baseUrlDebugClearBtn?.addEventListener("click", () => {
+    clearPaperChatBaseUrlOverride(doc);
   });
 }

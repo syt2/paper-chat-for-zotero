@@ -4,9 +4,12 @@
 
 import { getString } from "../../utils/locale";
 import { getPref, setPref } from "../../utils/prefs";
-import { BUILTIN_PROVIDERS } from "../providers";
 import { getAuthManager } from "../auth";
 import { showMessage } from "./utils";
+import {
+  getPaperChatApiBaseUrl,
+  getPaperChatUrl,
+} from "../providers/PaperChatUrls";
 import {
   parseModelRoutingConfig,
   type PaperChatModelRoutingMeta,
@@ -16,13 +19,13 @@ import { getEffectivePricingModelRatio } from "./paperchat-effective-ratio";
 // Store model ratios for PaperChat
 let paperchatModelRatios: Record<string, number> = {};
 let paperchatModelRoutingMeta: Record<string, PaperChatModelRoutingMeta> = {};
+let paperchatModelCacheGeneration = 0;
 
 /** Special value stored in pref("model") to indicate auto-selection (cheapest) */
 export const AUTO_MODEL = "auto";
 /** Special value stored in pref("model") to indicate auto-selection (smartest) */
 export const AUTO_MODEL_SMART = "auto-smart";
-const DEFAULT_ROUTING_META_URL =
-  "https://paperchat.zotero.store/ext/paperchat/model-routing.json";
+const MODEL_ROUTING_META_PATH = "/ext/paperchat/model-routing.json";
 
 /** Check if a model value is any auto mode */
 export function isAutoModel(model: string): boolean {
@@ -41,6 +44,19 @@ export function getModelRoutingMeta(): Record<
   PaperChatModelRoutingMeta
 > {
   return paperchatModelRoutingMeta;
+}
+
+export function getPaperchatModelCacheGeneration(): number {
+  return paperchatModelCacheGeneration;
+}
+
+export function clearPaperchatModelCaches(): void {
+  paperchatModelCacheGeneration += 1;
+  paperchatModelRatios = {};
+  paperchatModelRoutingMeta = {};
+  setPref("paperchatModelsCache", "");
+  setPref("paperchatRatiosCache", "");
+  setPref("paperchatRoutingConfigCache", "");
 }
 
 /**
@@ -101,6 +117,7 @@ export function formatModelLabel(model: string, providerId?: string): string {
  * Load cached ratios from prefs
  */
 export function loadCachedRatios(): void {
+  paperchatModelRatios = {};
   const cached = getPref("paperchatRatiosCache") as string;
   if (cached) {
     try {
@@ -115,6 +132,7 @@ export function loadCachedRatios(): void {
     }
   }
 
+  paperchatModelRoutingMeta = {};
   const cachedRoutingMeta = getPref("paperchatRoutingConfigCache") as string;
   if (cachedRoutingMeta) {
     try {
@@ -146,12 +164,16 @@ function getPricingModelName(
  * Fetch model ratios from PaperChat pricing API
  */
 export async function fetchPaperchatRatios(): Promise<void> {
-  const baseUrl = BUILTIN_PROVIDERS.paperchat.defaultBaseUrl.replace("/v1", "");
-  const url = `${baseUrl}/api/pricing`;
+  const generation = paperchatModelCacheGeneration;
+  const url = getPaperChatUrl("/api/pricing");
   ztoolkit.log("[Preferences] Fetching ratios from:", url);
 
   try {
     const result = await getAuthManager().getPricing();
+
+    if (generation !== paperchatModelCacheGeneration) {
+      return;
+    }
 
     if (!result.success) {
       ztoolkit.log("[Preferences] Failed to fetch ratios:", result.message);
@@ -190,13 +212,12 @@ export async function fetchPaperchatRatios(): Promise<void> {
 }
 
 export async function fetchPaperchatRoutingMeta(): Promise<void> {
-  ztoolkit.log(
-    "[Preferences] Fetching routing metadata from:",
-    DEFAULT_ROUTING_META_URL,
-  );
+  const generation = paperchatModelCacheGeneration;
+  const url = getPaperChatUrl(MODEL_ROUTING_META_PATH);
+  ztoolkit.log("[Preferences] Fetching routing metadata from:", url);
 
   try {
-    const response = await fetch(DEFAULT_ROUTING_META_URL, {
+    const response = await fetch(url, {
       method: "GET",
       headers: {
         Accept: "application/json",
@@ -212,6 +233,9 @@ export async function fetchPaperchatRoutingMeta(): Promise<void> {
     }
 
     const result = await response.json();
+    if (generation !== paperchatModelCacheGeneration) {
+      return;
+    }
     const parsed = parseModelRoutingConfig(result);
     paperchatModelRoutingMeta = parsed;
     setPref("paperchatRoutingConfigCache", JSON.stringify(parsed));
@@ -233,6 +257,7 @@ export async function fetchPaperchatModels(
   doc: Document,
   onModelsLoaded: (models: string[]) => void,
 ): Promise<void> {
+  const generation = paperchatModelCacheGeneration;
   ztoolkit.log("[Preferences] fetchPaperchatModels called");
 
   const authManager = getAuthManager();
@@ -250,7 +275,7 @@ export async function fetchPaperchatModels(
   const ratiosPromise = fetchPaperchatRatios();
   const routingMetaPromise = fetchPaperchatRoutingMeta();
 
-  const url = `${BUILTIN_PROVIDERS.paperchat.defaultBaseUrl}/models`;
+  const url = `${getPaperChatApiBaseUrl()}/models`;
   ztoolkit.log("[Preferences] Fetching models from:", url);
 
   try {
@@ -275,6 +300,10 @@ export async function fetchPaperchatModels(
 
     // Wait for ratios and routing metadata to complete
     await Promise.all([ratiosPromise, routingMetaPromise]);
+
+    if (generation !== paperchatModelCacheGeneration) {
+      return;
+    }
 
     if (result.data && Array.isArray(result.data)) {
       const models = result.data.map((m) => m.id).sort();

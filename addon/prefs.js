@@ -21,6 +21,7 @@ pref("paperchatRatiosCache", "");
 pref("paperchatRoutingConfigCache", "");
 pref("paperchatTierState", "");
 pref("paperchatSuppressHighTierWarning", false);
+pref("paperchatBaseUrlOverride", "");
 
 // PDF Settings
 pref("uploadRawPdfOnFailure", false);

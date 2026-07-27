@@ -1,4 +1,4 @@
-import { BUILTIN_PROVIDERS } from "./ProviderManager";
+import { getPaperChatUrl } from "./PaperChatUrls";
 
 interface PaperChatNoticeApiResponse {
   success?: boolean;
@@ -8,6 +8,7 @@ interface PaperChatNoticeApiResponse {
 
 let cachedNotice: string | null = null;
 let inFlightRequest: Promise<string | null> | null = null;
+let requestGeneration = 0;
 let debugNoticeOverride: string | null = null;
 let hasDebugNoticeOverride = false;
 
@@ -59,12 +60,19 @@ export function clearPaperChatNoticeDebugOverride(): void {
   hasDebugNoticeOverride = false;
 }
 
+export function resetPaperChatNoticeCache(): void {
+  requestGeneration += 1;
+  cachedNotice = null;
+  inFlightRequest = null;
+}
+
 export async function refreshPaperChatNotice(): Promise<string | null> {
   if (inFlightRequest) {
     return inFlightRequest;
   }
 
-  const url = `${BUILTIN_PROVIDERS.paperchat.website}/api/notice`;
+  const url = getPaperChatUrl("/api/notice");
+  const generation = requestGeneration;
   inFlightRequest = (async () => {
     try {
       const response = await fetch(url, {
@@ -80,23 +88,30 @@ export async function refreshPaperChatNotice(): Promise<string | null> {
           response.status,
           response.statusText,
         );
-        return cachedNotice;
+        return generation === requestGeneration ? cachedNotice : null;
       }
 
       const payload =
         (await response.json()) as PaperChatNoticeApiResponse | null;
       if (!payload?.success) {
-        cachedNotice = null;
+        if (generation === requestGeneration) {
+          cachedNotice = null;
+        }
         return null;
       }
 
-      cachedNotice = normalizeNoticePayload(payload.data);
-      return cachedNotice;
+      const notice = normalizeNoticePayload(payload.data);
+      if (generation === requestGeneration) {
+        cachedNotice = notice;
+      }
+      return notice;
     } catch (error) {
       ztoolkit.log("[PaperChatNotice] Request error:", error);
-      return cachedNotice;
+      return generation === requestGeneration ? cachedNotice : null;
     } finally {
-      inFlightRequest = null;
+      if (generation === requestGeneration) {
+        inFlightRequest = null;
+      }
     }
   })();
 
