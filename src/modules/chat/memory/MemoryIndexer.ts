@@ -22,10 +22,10 @@ export class MemoryIndexer {
     if (!provider) return;
 
     const db = await this.getDb();
-    const rows = (await db.queryAsync(
-      "SELECT value FROM settings WHERE key = ?",
-      [this.embeddingModelKey],
-    )) || [];
+    const rows =
+      (await db.queryAsync("SELECT value FROM settings WHERE key = ?", [
+        this.embeddingModelKey,
+      ])) || [];
     const storedModel: string | null =
       rows.length > 0 ? (rows[0].value as string) : null;
     const currentModel = provider.modelId;
@@ -57,10 +57,11 @@ export class MemoryIndexer {
     if (!provider) return;
 
     const db = await this.getDb();
-    const rows = (await db.queryAsync(
-      "SELECT id, text FROM memories WHERE library_id = ? AND embedding IS NULL ORDER BY created_at DESC",
-      [this.libraryId],
-    )) || [];
+    const rows =
+      (await db.queryAsync(
+        "SELECT id, text FROM memories WHERE library_id = ? AND embedding IS NULL ORDER BY created_at DESC",
+        [this.libraryId],
+      )) || [];
 
     if (rows.length === 0) return;
     ztoolkit.log(`[MemoryIndexer] Reindexing ${rows.length} memories...`);
@@ -75,7 +76,9 @@ export class MemoryIndexer {
           ...row,
           text: tryNormalizeEmbeddingInput(row.text),
         }))
-        .filter((row): row is { id: string; text: string } => row.text !== null);
+        .filter(
+          (row): row is { id: string; text: string } => row.text !== null,
+        );
       if (normalizedBatch.length === 0) {
         continue;
       }
@@ -88,7 +91,11 @@ export class MemoryIndexer {
           if (!vectors[j]) continue;
           await db.queryAsync(
             "UPDATE memories SET embedding = ?, embedding_model = ? WHERE id = ?",
-            [JSON.stringify(vectors[j]), provider.modelId, normalizedBatch[j].id],
+            [
+              JSON.stringify(vectors[j]),
+              provider.modelId,
+              normalizedBatch[j].id,
+            ],
           );
           indexed++;
         }

@@ -37,7 +37,9 @@ export function resolvePaperChatSessionBinding(
   );
 
   if (!resolution.modelId) {
-    throw new Error("PaperChat tier routing could not resolve an available model");
+    throw new Error(
+      "PaperChat tier routing could not resolve an available model",
+    );
   }
 
   return {
@@ -51,8 +53,8 @@ export function applyPaperChatSessionBinding(
   binding: ResolvePaperChatSessionBindingResult,
 ): boolean {
   const didChange =
-    session.selectedTier !== binding.selectedTier
-    || session.resolvedModelId !== binding.modelId;
+    session.selectedTier !== binding.selectedTier ||
+    session.resolvedModelId !== binding.modelId;
 
   session.selectedTier = binding.selectedTier;
   session.resolvedModelId = binding.modelId;
@@ -95,8 +97,8 @@ export function repairPaperChatSessionBindingAfterHardFailure(
     routingMeta,
   );
   const modelId =
-    reroutedModelId
-    || (resolution.modelId !== previousModelId ? resolution.modelId : null);
+    reroutedModelId ||
+    (resolution.modelId !== previousModelId ? resolution.modelId : null);
 
   if (!modelId) {
     return null;

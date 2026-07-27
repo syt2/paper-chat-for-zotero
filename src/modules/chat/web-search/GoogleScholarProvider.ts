@@ -61,7 +61,9 @@ export class GoogleScholarProvider implements WebSearchProvider {
     bodyText: string,
     html?: string,
   ): void {
-    const combined = cleanText(`${title} ${bodyText} ${html || ""}`).toLowerCase();
+    const combined = cleanText(
+      `${title} ${bodyText} ${html || ""}`,
+    ).toLowerCase();
     if (
       combined.includes("unusual traffic") ||
       combined.includes("not a robot") ||
@@ -71,7 +73,9 @@ export class GoogleScholarProvider implements WebSearchProvider {
       combined.includes("验证码") ||
       combined.includes("/sorry/")
     ) {
-      throw new Error("Google Scholar search was blocked by anti-bot verification");
+      throw new Error(
+        "Google Scholar search was blocked by anti-bot verification",
+      );
     }
   }
 

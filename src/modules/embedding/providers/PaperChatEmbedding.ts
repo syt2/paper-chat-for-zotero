@@ -6,7 +6,10 @@
  */
 
 import pLimit from "p-limit";
-import type { EmbeddingProvider, EmbeddingProviderType } from "../../../types/embedding";
+import type {
+  EmbeddingProvider,
+  EmbeddingProviderType,
+} from "../../../types/embedding";
 import { getAuthManager } from "../../auth";
 import { getPref } from "../../../utils/prefs";
 import { getErrorMessage } from "../../../utils/common";
@@ -15,7 +18,7 @@ import { normalizeEmbeddingBatch } from "../EmbeddingInput";
 
 // Preferred embedding models in priority order
 const PREFERRED_MODELS = [
-  'text-embedding-v4',
+  "text-embedding-v4",
   "text-embedding-3-small",
   "text-embedding-3-large",
   "text-embedding-ada-002",
@@ -148,7 +151,10 @@ export class PaperChatEmbedding implements EmbeddingProvider {
     return this.embedWithRetry(normalizedTexts);
   }
 
-  private async embedWithRetry(texts: string[], retries = 2): Promise<number[][]> {
+  private async embedWithRetry(
+    texts: string[],
+    retries = 2,
+  ): Promise<number[][]> {
     try {
       return await this.embedBatchInternal(texts);
     } catch (error) {

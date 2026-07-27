@@ -12,7 +12,9 @@ interface HiddenBrowserInstance {
   destroy?(): Promise<void> | void;
 }
 
-type HiddenBrowserConstructor = new (options?: Record<string, unknown>) => HiddenBrowserInstance;
+type HiddenBrowserConstructor = new (
+  options?: Record<string, unknown>,
+) => HiddenBrowserInstance;
 
 let hiddenBrowserConstructorForTests: HiddenBrowserConstructor | null = null;
 
@@ -67,7 +69,9 @@ function getHiddenBrowserConstructor(): HiddenBrowserConstructor {
 
   const chromeUtils = (globalThis as any).ChromeUtils;
   if (!chromeUtils) {
-    throw new Error("ChromeUtils is unavailable; HiddenBrowser cannot be loaded");
+    throw new Error(
+      "ChromeUtils is unavailable; HiddenBrowser cannot be loaded",
+    );
   }
 
   for (const path of HIDDEN_BROWSER_MODULE_PATHS) {

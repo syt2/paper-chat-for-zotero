@@ -72,7 +72,8 @@ Please list:
 - 5-7 most important findings or contributions
 - Each point should be 1-2 sentences
 - Focus on empirical results and theoretical contributions`,
-      systemPrompt: "You are a research analyst. Extract and organize key findings from academic papers. User annotations indicate areas of interest.",
+      systemPrompt:
+        "You are a research analyst. Extract and organize key findings from academic papers. User annotations indicate areas of interest.",
       noteTitle: `${getString("aisummary-template-findings-prefix")}: {{title}}`,
       tags: ["ai-processed", "key-findings"],
       maxTokens: 800,
@@ -99,7 +100,8 @@ Please describe:
 2. Data collection methods
 3. Analysis techniques
 4. Strengths and limitations of the methodology`,
-      systemPrompt: "You are a methodologist reviewing research papers. Provide detailed methodological analysis.",
+      systemPrompt:
+        "You are a methodologist reviewing research papers. Provide detailed methodological analysis.",
       noteTitle: `${getString("aisummary-template-methodology-prefix")}: {{title}}`,
       tags: ["ai-processed", "methodology"],
       maxTokens: 1200,
@@ -151,7 +153,8 @@ Why is this paper important?
 
 ## Citation
 How to cite this work`,
-      systemPrompt: "You are a researcher creating detailed literature notes for academic papers. Incorporate user annotations where relevant.",
+      systemPrompt:
+        "You are a researcher creating detailed literature notes for academic papers. Incorporate user annotations where relevant.",
       noteTitle: `${getString("aisummary-template-literature-prefix")}: {{title}}`,
       tags: ["ai-processed", "literature-note"],
       maxTokens: 1500,
@@ -162,7 +165,9 @@ How to cite this work`,
 /**
  * Get template by ID
  */
-export function getTemplateById(templateId: string): AISummaryTemplate | undefined {
+export function getTemplateById(
+  templateId: string,
+): AISummaryTemplate | undefined {
   return getDefaultTemplates().find((t) => t.id === templateId);
 }
 

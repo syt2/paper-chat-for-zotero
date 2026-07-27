@@ -58,7 +58,11 @@ export class OllamaEmbedding implements EmbeddingProvider {
       embeddings?: number[][];
     };
 
-    if (!data.embeddings || data.embeddings.length === 0 || !data.embeddings[0]) {
+    if (
+      !data.embeddings ||
+      data.embeddings.length === 0 ||
+      !data.embeddings[0]
+    ) {
       throw new Error("Invalid response from Ollama Embedding API");
     }
 

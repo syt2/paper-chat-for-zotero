@@ -110,7 +110,9 @@ export async function loadMentionResources(): Promise<MentionResource[]> {
         resources.push({
           type: "attachment",
           key: item.key,
-          title: (item.getField?.("title") as string) || getString("untitled-attachment"),
+          title:
+            (item.getField?.("title") as string) ||
+            getString("untitled-attachment"),
           icon: "📎",
           parentKey,
           parentTitle,

@@ -20,7 +20,9 @@ const DEFAULT_OPTIONS: Required<ChunkOptions> = {
  */
 function estimateTokens(text: string): number {
   // Count CJK characters
-  const cjkCount = (text.match(/[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]/g) || []).length;
+  const cjkCount = (
+    text.match(/[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]/g) || []
+  ).length;
   const otherCount = text.length - cjkCount;
 
   // CJK: ~1.5 chars/token, Other: ~4 chars/token
@@ -121,7 +123,10 @@ export function splitText(
       // If still too large, force split (with max iterations to prevent infinite loop)
       let forceSplitIterations = 0;
       const maxForceSplitIterations = 1000;
-      while (estimateTokens(currentChunk) > opts.maxTokens && forceSplitIterations < maxForceSplitIterations) {
+      while (
+        estimateTokens(currentChunk) > opts.maxTokens &&
+        forceSplitIterations < maxForceSplitIterations
+      ) {
         forceSplitIterations++;
         const targetChars = opts.maxTokens * 4;
         const chunkText = currentChunk.slice(0, targetChars).trim();
@@ -148,7 +153,10 @@ export function splitText(
       // Force split if too large (with max iterations to prevent infinite loop)
       let forceSplitIterations = 0;
       const maxForceSplitIterations = 1000;
-      while (estimateTokens(currentChunk) > opts.maxTokens && forceSplitIterations < maxForceSplitIterations) {
+      while (
+        estimateTokens(currentChunk) > opts.maxTokens &&
+        forceSplitIterations < maxForceSplitIterations
+      ) {
         forceSplitIterations++;
         const targetChars = opts.maxTokens * 4;
         const chunkText = currentChunk.slice(0, targetChars).trim();
@@ -253,7 +261,10 @@ export class ChunkSplitter {
   estimateChunkCount(text: string): number {
     const totalTokens = estimateTokens(text);
     // Ensure effectiveChunkSize is at least 1 to avoid division by zero
-    const effectiveChunkSize = Math.max(1, this.options.maxTokens - this.options.overlap);
+    const effectiveChunkSize = Math.max(
+      1,
+      this.options.maxTokens - this.options.overlap,
+    );
     return Math.ceil(totalTokens / effectiveChunkSize);
   }
 }

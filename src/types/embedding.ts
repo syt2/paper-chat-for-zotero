@@ -5,7 +5,11 @@
 /**
  * Supported embedding provider types
  */
-export type EmbeddingProviderType = "paperchat" | "gemini" | "openai" | "ollama";
+export type EmbeddingProviderType =
+  | "paperchat"
+  | "gemini"
+  | "openai"
+  | "ollama";
 
 /**
  * Embedding provider status for UI display
@@ -178,7 +182,10 @@ export interface EmbeddingModelInfo {
  * Built-in embedding models
  * Note: PaperChat uses dynamic model selection from available models
  */
-export const EMBEDDING_MODELS: Record<EmbeddingProviderType, EmbeddingModelInfo> = {
+export const EMBEDDING_MODELS: Record<
+  EmbeddingProviderType,
+  EmbeddingModelInfo
+> = {
   paperchat: {
     modelId: "text-embedding-3-small", // Default preferred model
     name: "PaperChat Embedding",

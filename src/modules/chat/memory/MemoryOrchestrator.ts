@@ -99,7 +99,9 @@ export class MemoryOrchestrator {
     conversationalCount: number,
   ): Promise<void> {
     try {
-      const extracted = await this.getMemoryExtractor().extract(session.messages);
+      const extracted = await this.getMemoryExtractor().extract(
+        session.messages,
+      );
       if (!extracted.ok) {
         if (extracted.reason === "no_json_array") {
           ztoolkit.log(

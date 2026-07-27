@@ -191,11 +191,14 @@ function deriveRatioTierPools(
     const ratio = ratios[model];
     return ratio >= STANDARD_MIN_RATIO && ratio <= PRO_MIN_RATIO;
   });
-  const proModels = sortedModels.filter((model) => ratios[model] > PRO_MIN_RATIO);
+  const proModels = sortedModels.filter(
+    (model) => ratios[model] > PRO_MIN_RATIO,
+  );
 
   return {
     "paperchat-lite": liteModels.length > 0 ? liteModels : [fallbackModel],
-    "paperchat-standard": standardModels.length > 0 ? standardModels : [fallbackModel],
+    "paperchat-standard":
+      standardModels.length > 0 ? standardModels : [fallbackModel],
     "paperchat-pro": proModels.length > 0 ? proModels : [fallbackModel],
     "paperchat-ultra": [],
   };
@@ -354,7 +357,8 @@ export function rerollTierModel(
 
 export function isPaperChatModelHardFailure(error: Error): boolean {
   const { message, code } = parsePaperChatError(error.message);
-  const normalized = `${error.message}\n${message}\n${code || ""}`.toLowerCase();
+  const normalized =
+    `${error.message}\n${message}\n${code || ""}`.toLowerCase();
 
   return (
     code === "model_not_found" ||

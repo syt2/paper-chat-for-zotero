@@ -154,7 +154,10 @@ function defaultGetOsName(): string {
     return normalizeOsName(appinfoOs);
   }
 
-  if (typeof navigator !== "undefined" && typeof navigator.platform === "string") {
+  if (
+    typeof navigator !== "undefined" &&
+    typeof navigator.platform === "string"
+  ) {
     return normalizeOsName(navigator.platform);
   }
 
@@ -183,7 +186,9 @@ function defaultGetSystemVersion(): string {
 function defaultGetZoteroVersion(): string {
   const zotero = (globalThis as { Zotero?: { version?: unknown } }).Zotero;
   const version = zotero?.version;
-  return typeof version === "string" && version.trim() ? version.trim() : "unknown";
+  return typeof version === "string" && version.trim()
+    ? version.trim()
+    : "unknown";
 }
 
 export class AnalyticsService {
@@ -229,10 +234,8 @@ export class AnalyticsService {
     this.sdkVersion = options.sdkVersion ?? DEFAULT_SDK_VERSION;
     this.getLocale = options.getLocale ?? defaultGetLocale;
     this.getOsName = options.getOsName ?? defaultGetOsName;
-    this.getZoteroVersion =
-      options.getZoteroVersion ?? defaultGetZoteroVersion;
-    this.getSystemVersion =
-      options.getSystemVersion ?? defaultGetSystemVersion;
+    this.getZoteroVersion = options.getZoteroVersion ?? defaultGetZoteroVersion;
+    this.getSystemVersion = options.getSystemVersion ?? defaultGetSystemVersion;
     this.getUserId = options.getUserId ?? (() => "");
     this.now = options.now ?? Date.now;
     this.randomSessionIdSuffix =

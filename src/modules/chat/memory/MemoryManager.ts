@@ -68,7 +68,10 @@ export class MemoryManager {
     try {
       return await this.getMemoryService().buildPromptContext(query);
     } catch (err) {
-      ztoolkit.log("[MemoryManager] Memory search failed:", getErrorMessage(err));
+      ztoolkit.log(
+        "[MemoryManager] Memory search failed:",
+        getErrorMessage(err),
+      );
       return undefined;
     }
   }

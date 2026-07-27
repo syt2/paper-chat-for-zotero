@@ -63,7 +63,9 @@ export class SemanticScholarWebProvider implements WebSearchProvider {
     bodyText: string,
     html?: string,
   ): void {
-    const combined = cleanText(`${title} ${bodyText} ${html || ""}`).toLowerCase();
+    const combined = cleanText(
+      `${title} ${bodyText} ${html || ""}`,
+    ).toLowerCase();
     if (
       combined.includes("human verification") ||
       combined.includes("captcha") ||
@@ -72,9 +74,7 @@ export class SemanticScholarWebProvider implements WebSearchProvider {
       combined.includes("error: 405") ||
       combined.includes("error | semantic scholar")
     ) {
-      throw new Error(
-        "Semantic Scholar web search was blocked or unavailable",
-      );
+      throw new Error("Semantic Scholar web search was blocked or unavailable");
     }
   }
 

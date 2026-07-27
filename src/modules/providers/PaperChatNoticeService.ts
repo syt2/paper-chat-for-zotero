@@ -40,7 +40,9 @@ export function hasPaperChatNoticeDebugOverrideEnabled(): boolean {
   return isDebugNoticeOverrideAllowed() && hasDebugNoticeOverride;
 }
 
-export function setPaperChatNoticeDebugOverride(content: string): string | null {
+export function setPaperChatNoticeDebugOverride(
+  content: string,
+): string | null {
   if (!isDebugNoticeOverrideAllowed()) {
     return null;
   }

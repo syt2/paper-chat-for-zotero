@@ -69,7 +69,14 @@ const EUROPE_PMC_CONCEPT_RULES: EuropePmcConceptRule[] = [
   {
     pattern: /\bcancers?\b|\btumou?rs?\b|\bneoplasms?\b/i,
     clause: "(cancer OR tumor OR tumour OR neoplasm*)",
-    consumeTokens: ["cancer", "cancers", "tumor", "tumors", "tumour", "tumours"],
+    consumeTokens: [
+      "cancer",
+      "cancers",
+      "tumor",
+      "tumors",
+      "tumour",
+      "tumours",
+    ],
   },
 ];
 

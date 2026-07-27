@@ -1,6 +1,9 @@
 import type { ToolCall, ToolExecutionResult } from "../../../types/tool";
 import { preflightToolArguments } from "../tool-arguments/ToolArgumentPreflight";
-import { formatToolError, parseToolError } from "../tool-errors/ToolErrorFormatter";
+import {
+  formatToolError,
+  parseToolError,
+} from "../tool-errors/ToolErrorFormatter";
 
 export interface BlockedRetryMatch {
   fingerprint: string;
@@ -8,7 +11,10 @@ export interface BlockedRetryMatch {
 }
 
 export function fingerprintToolCall(toolCall: ToolCall): string {
-  return buildFingerprint(toolCall.function.name, getNormalizedArgsValue(toolCall));
+  return buildFingerprint(
+    toolCall.function.name,
+    getNormalizedArgsValue(toolCall),
+  );
 }
 
 export function fingerprintToolExecutionResult(
@@ -16,7 +22,10 @@ export function fingerprintToolExecutionResult(
 ): string {
   const toolName = result.toolCall.function.name;
   if (result.args) {
-    return buildFingerprint(toolName, normalizeArgsObject(toolName, result.args));
+    return buildFingerprint(
+      toolName,
+      normalizeArgsObject(toolName, result.args),
+    );
   }
 
   return fingerprintToolCall(result.toolCall);
@@ -107,7 +116,9 @@ export function summarizeRetryBlockedCalls(
   limit: number = 3,
 ): string[] {
   return results
-    .filter((result) => result.status === "failed" || result.status === "denied")
+    .filter(
+      (result) => result.status === "failed" || result.status === "denied",
+    )
     .slice(-limit)
     .map((result) => {
       const label = formatToolCallLabel(result.toolCall, result.args);

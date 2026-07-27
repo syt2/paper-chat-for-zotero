@@ -103,9 +103,10 @@ export class AISummaryStorage {
 
     try {
       const db = await getStorageDatabase().ensureInit();
-      const rows = (await db.queryAsync(
-        "SELECT * FROM ai_summary_progress WHERE id = 1",
-      )) || [];
+      const rows =
+        (await db.queryAsync(
+          "SELECT * FROM ai_summary_progress WHERE id = 1",
+        )) || [];
 
       if (rows.length === 0) {
         return null;
@@ -161,7 +162,10 @@ export class AISummaryStorage {
         return JSON.parse(content) as AISummaryTemplate[];
       }
     } catch (error) {
-      ztoolkit.log("[AISummaryStorage] Failed to load custom templates:", error);
+      ztoolkit.log(
+        "[AISummaryStorage] Failed to load custom templates:",
+        error,
+      );
     }
 
     return [];

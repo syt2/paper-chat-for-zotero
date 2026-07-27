@@ -45,7 +45,8 @@ export class MemoryStore {
     // Prevent TOCTOU: two concurrent saves with the same text both passing
     // isDuplicate() before either INSERT completes. The lock is synchronous so
     // there is no interleaving at this check.
-    if (this.saveLock.has(trimmed)) return { saved: false, reason: "duplicate" };
+    if (this.saveLock.has(trimmed))
+      return { saved: false, reason: "duplicate" };
     this.saveLock.add(trimmed);
 
     try {
@@ -90,7 +91,9 @@ export class MemoryStore {
 
     const excess = count - MAX_MEMORIES;
     await this.repository.pruneOldestLowestImportance(excess);
-    ztoolkit.log(`[MemoryStore] Pruned ${excess} memories (was ${count}, cap ${MAX_MEMORIES})`);
+    ztoolkit.log(
+      `[MemoryStore] Pruned ${excess} memories (was ${count}, cap ${MAX_MEMORIES})`,
+    );
   }
 
   /**

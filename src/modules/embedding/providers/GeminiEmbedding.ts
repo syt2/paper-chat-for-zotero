@@ -96,10 +96,7 @@ export class GeminiEmbedding implements EmbeddingProvider {
     try {
       // Try to embed a simple test text
       const result = await this.embed("test");
-      return (
-        Array.isArray(result) &&
-        result.length === this.dimension
-      );
+      return Array.isArray(result) && result.length === this.dimension;
     } catch (error) {
       ztoolkit.log(
         "[GeminiEmbedding] testConnection failed:",

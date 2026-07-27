@@ -22,34 +22,37 @@ export class MemoryRepository {
 
   async listEmbeddedRows(limit: number): Promise<Array<{ embedding: string }>> {
     const db = await this.getDb();
-    const rows = (await db.queryAsync(
-      `SELECT embedding FROM memories
+    const rows =
+      (await db.queryAsync(
+        `SELECT embedding FROM memories
        WHERE library_id = ? AND embedding IS NOT NULL
        ORDER BY created_at DESC LIMIT ?`,
-      [this.libraryId, limit],
-    )) || [];
+        [this.libraryId, limit],
+      )) || [];
     return rows as Array<{ embedding: string }>;
   }
 
   async listTextRows(limit: number): Promise<Array<{ text: string }>> {
     const db = await this.getDb();
-    const rows = (await db.queryAsync(
-      `SELECT text FROM memories
+    const rows =
+      (await db.queryAsync(
+        `SELECT text FROM memories
        WHERE library_id = ? ORDER BY created_at DESC LIMIT ?`,
-      [this.libraryId, limit],
-    )) || [];
+        [this.libraryId, limit],
+      )) || [];
     return rows as Array<{ text: string }>;
   }
 
   async listRecent(limit: number): Promise<Memory[]> {
     const db = await this.getDb();
-    const rows = (await db.queryAsync(
-      `SELECT id, library_id, text, category, importance, created_at,
+    const rows =
+      (await db.queryAsync(
+        `SELECT id, library_id, text, category, importance, created_at,
               access_count, last_accessed_at, embedding, embedding_model
        FROM memories WHERE library_id = ?
        ORDER BY created_at DESC LIMIT ?`,
-      [this.libraryId, limit],
-    )) || [];
+        [this.libraryId, limit],
+      )) || [];
     return (rows as Array<Record<string, unknown>>).map(rowToMemory);
   }
 
@@ -76,10 +79,11 @@ export class MemoryRepository {
 
   async count(): Promise<number> {
     const db = await this.getDb();
-    const rows = (await db.queryAsync(
-      "SELECT COUNT(*) as cnt FROM memories WHERE library_id = ?",
-      [this.libraryId],
-    )) || [];
+    const rows =
+      (await db.queryAsync(
+        "SELECT COUNT(*) as cnt FROM memories WHERE library_id = ?",
+        [this.libraryId],
+      )) || [];
     return (rows[0]?.cnt as number) ?? 0;
   }
 
@@ -118,12 +122,13 @@ export class MemoryRepository {
 
   async listAll(): Promise<Memory[]> {
     const db = await this.getDb();
-    const rows = (await db.queryAsync(
-      `SELECT id, library_id, text, category, importance, created_at,
+    const rows =
+      (await db.queryAsync(
+        `SELECT id, library_id, text, category, importance, created_at,
               access_count, last_accessed_at, embedding, embedding_model
        FROM memories WHERE library_id = ? ORDER BY created_at DESC`,
-      [this.libraryId],
-    )) || [];
+        [this.libraryId],
+      )) || [];
     return (rows as Array<Record<string, unknown>>).map(rowToMemory);
   }
 }

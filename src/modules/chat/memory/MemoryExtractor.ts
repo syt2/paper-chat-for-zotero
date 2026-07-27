@@ -45,7 +45,9 @@ async function getActiveMemoryProvider(): Promise<MemoryExtractionProvider | nul
 }
 
 export class ProviderMemoryExtractor implements MemoryExtractor {
-  constructor(private getProvider: MemoryProviderGetter = getActiveMemoryProvider) {}
+  constructor(
+    private getProvider: MemoryProviderGetter = getActiveMemoryProvider,
+  ) {}
 
   async extract(messages: ChatMessage[]): Promise<MemoryExtractionResult> {
     const provider = await this.getProvider();
