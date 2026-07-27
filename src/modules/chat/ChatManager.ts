@@ -1193,25 +1193,25 @@ export class ChatManager {
   }
 
   startSearchHistoryBackfill(): void {
-    this.sessionStorage.startSearchBackfill();
+    this.sessionStorage.search.startSearchBackfill();
   }
 
   async stopSearchHistoryBackfill(): Promise<void> {
-    await this.sessionStorage.stopSearchBackfill();
+    await this.sessionStorage.search.stopSearchBackfill();
   }
 
   async searchHistoryGroups(
     input: SearchHistoryGroupsRequest,
   ): Promise<ChatHistorySearchPage> {
     await this.init();
-    return this.sessionStorage.searchHistoryGroups(input);
+    return this.sessionStorage.search.searchHistoryGroups(input);
   }
 
   async searchHistorySessionMatches(
     input: SearchHistorySessionMatchesRequest,
   ): Promise<ChatHistoryMessagePage> {
     await this.init();
-    return this.sessionStorage.searchHistorySessionMatches(input);
+    return this.sessionStorage.search.searchHistorySessionMatches(input);
   }
 
   async updateSessionTitle(
