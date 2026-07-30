@@ -615,6 +615,13 @@ export function createChatContainer(
     borderTop: `1px solid ${theme.borderColor}`,
   });
 
+  const turnQueue = createElement(
+    doc,
+    "div",
+    { display: "none", flexDirection: "column", marginBottom: "3px" },
+    { id: "chat-turn-queue" },
+  );
+
   // Input wrapper - contains textarea
   const inputWrapper = createElement(
     doc,
@@ -963,6 +970,7 @@ export function createChatContainer(
   inputBottomBar.appendChild(leftContainer);
   inputBottomBar.appendChild(sendButton);
 
+  inputArea.appendChild(turnQueue);
   inputArea.appendChild(inputWrapper);
   inputArea.appendChild(inputBottomBar);
 

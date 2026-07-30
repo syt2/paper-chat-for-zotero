@@ -3804,6 +3804,119 @@ describe("paperchat storage and chat manager", function () {
     assert.deepEqual(persistedSources, [["PAPER002"]]);
   });
 
+  it("cancels a tracked background session without touching the displayed session", async function () {
+    const backgroundAssistant: ChatMessage = {
+      id: "assistant-background",
+      role: "assistant",
+      content: "background partial",
+      streamingState: "in_progress",
+      timestamp: 2,
+    };
+    const backgroundSession: ChatSession = {
+      id: "session-background",
+      createdAt: 1,
+      updatedAt: 2,
+      lastActiveItemKey: null,
+      messages: [backgroundAssistant],
+    };
+    const displayedSession: ChatSession = {
+      id: "session-displayed",
+      createdAt: 1,
+      updatedAt: 2,
+      lastActiveItemKey: null,
+      messages: [],
+    };
+    let backgroundAborted = false;
+    let rendered = false;
+    const manager = Object.create(ChatManager.prototype) as any;
+    manager.currentSession = displayedSession;
+    manager.activeSessionRunIds = new Map([[backgroundSession.id, 1]]);
+    manager.activeSessionAbortControllers = new Map([
+      [backgroundSession.id, { abort: () => (backgroundAborted = true) }],
+    ]);
+    manager.streamingSessions = new Map([
+      [backgroundSession.id, backgroundSession],
+    ]);
+    manager.agentRuntime = {
+      waitForPendingMutatingToolExecutions: async () => undefined,
+    };
+    manager.sessionStorage = {
+      updateMessageContent: async () => undefined,
+      updateSessionMeta: async () => undefined,
+    };
+    manager.init = async () => undefined;
+    manager.onMessageUpdate = () => {
+      rendered = true;
+    };
+
+    assert.isTrue(await manager.cancelSessionTurn(backgroundSession.id));
+    assert.isTrue(backgroundAborted);
+    assert.equal(backgroundAssistant.streamingState, "interrupted");
+    assert.isFalse(manager.activeSessionRunIds.has(backgroundSession.id));
+    assert.isFalse(manager.streamingSessions.has(backgroundSession.id));
+    assert.isFalse(rendered);
+    assert.deepEqual(displayedSession.messages, []);
+  });
+
+  it("does not invalidate a newer run that starts while cancellation is finishing", async function () {
+    let finishWrite!: () => void;
+    const writeGate = new Promise<void>((resolve) => {
+      finishWrite = resolve;
+    });
+    const session: ChatSession = {
+      id: "session-cancel-race",
+      createdAt: 1,
+      updatedAt: 2,
+      lastActiveItemKey: null,
+      messages: [
+        {
+          id: "assistant-old-run",
+          role: "assistant",
+          content: "old partial",
+          streamingState: "in_progress",
+          timestamp: 2,
+        },
+      ],
+    };
+    const manager = Object.create(ChatManager.prototype) as any;
+    manager.currentSession = session;
+    manager.activeSessionRunIds = new Map([[session.id, 1]]);
+    manager.activeSessionAbortControllers = new Map([
+      [session.id, { abort: () => undefined }],
+    ]);
+    manager.streamingSessions = new Map([[session.id, session]]);
+    manager.agentRuntime = {
+      waitForPendingMutatingToolExecutions: () => writeGate,
+    };
+    manager.sessionStorage = {
+      updateMessageContent: async () => undefined,
+      updateSessionMeta: async () => undefined,
+    };
+    manager.init = async () => undefined;
+
+    const cancellation = manager.cancelCurrentTurn();
+    await Promise.resolve();
+    manager.activeSessionRunIds.set(session.id, 2);
+    manager.activeSessionAbortControllers.set(session.id, {
+      abort: () => undefined,
+    });
+    session.executionPlan = {
+      id: "new-run-plan",
+      summary: "New run",
+      status: "in_progress",
+      steps: [],
+      createdAt: 3,
+      updatedAt: 3,
+    };
+    finishWrite();
+
+    assert.isTrue(await cancellation);
+    assert.equal(manager.activeSessionRunIds.get(session.id), 2);
+    assert.isTrue(manager.streamingSessions.has(session.id));
+    assert.equal(session.executionPlan?.id, "new-run-plan");
+    assert.equal(session.messages[0].streamingState, "in_progress");
+  });
+
   it("persists completed hidden tool context when cancelling a tool-only reply", async function () {
     const savedSessions: ChatSession[] = [];
     let metadataUpdates = 0;
@@ -5534,6 +5647,7 @@ describe("paperchat storage and chat manager", function () {
     const completedAssistantIds: string[] = [];
     let toolCallingCount = 0;
     const insertedMessageIds: string[] = [];
+    const deletedMessageIds: string[] = [];
     const session: ChatSession = {
       id: "session-continue-1",
       createdAt: 1,
@@ -5597,7 +5711,7 @@ describe("paperchat storage and chat manager", function () {
       ) => {
         toolCallingCount++;
         capturedRequests.push(messages.map((message) => ({ ...message })));
-        assistantMessage.content = `completed answer ${toolCallingCount}`;
+        assistantMessage.content += `completed answer ${toolCallingCount}`;
         delete assistantMessage.streamingState;
         completedAssistantIds.push(assistantMessage.id);
         return true;
@@ -5608,6 +5722,9 @@ describe("paperchat storage and chat manager", function () {
         },
         updateMessageContent: async () => undefined,
         updateSessionMeta: async () => undefined,
+        deleteMessage: async (_sessionId: string, messageId: string) => {
+          deletedMessageIds.push(messageId);
+        },
       };
 
       const quotedMessages = [
@@ -5744,9 +5861,10 @@ describe("paperchat storage and chat manager", function () {
       ];
       capturedRequests.length = 0;
       const toolCallsBeforeReplay = toolCallingCount;
-      const replayAccepted = await manager.sendMessage("继续", {
-        reuseUserMessageId: "replay-source-user",
-      });
+      const replayAccepted = await manager.retryFailedTurn(
+        session.id,
+        "replay-source-error",
+      );
       assert.isTrue(replayAccepted);
       assert.equal(toolCallingCount, toolCallsBeforeReplay + 1);
       assert.lengthOf(capturedRequests, 1);
@@ -5760,10 +5878,11 @@ describe("paperchat storage and chat manager", function () {
         ).length,
         1,
       );
-      assert.notInclude(
-        capturedRequests[0].map((message) => message.id),
-        "replay-source-assistant",
+      const replayContext = capturedRequests[0].find(
+        (message) => message.id === "replay-source-assistant",
       );
+      assert.equal(replayContext?.content, "replay partial");
+      assert.isUndefined(replayContext?.streamingState);
       assert.notInclude(
         capturedRequests[0].map((message) => message.id),
         "replay-source-error",
@@ -5783,16 +5902,12 @@ describe("paperchat storage and chat manager", function () {
         )?.streamingState,
       );
       const futureMessages = contextManager.filterMessages(session).messages;
-      assert.notInclude(
+      assert.include(
         futureMessages.map((message: ChatMessage) => message.id),
         "replay-source-assistant",
       );
-      assert.include(
-        futureMessages.map((message: ChatMessage) => message.id),
-        completedAssistantIds.at(-1),
-      );
       const rerolledAssistant = futureMessages.find(
-        (message: ChatMessage) => message.id === completedAssistantIds.at(-1),
+        (message: ChatMessage) => message.id === "replay-source-assistant",
       );
       assert.include(rerolledAssistant?.content || "", "replay partial");
       assert.include(rerolledAssistant?.content || "", "completed answer");
@@ -5800,6 +5915,14 @@ describe("paperchat storage and chat manager", function () {
         session.messages.filter((message) => message.role === "user").length,
         2,
       );
+      assert.equal(
+        session.messages.filter(
+          (message) => message.id === "replay-source-assistant",
+        ).length,
+        1,
+      );
+      assert.notInclude(insertedMessageIds, "replay-source-assistant");
+      assert.include(deletedMessageIds, "replay-source-error");
 
       const targetUser: ChatMessage = {
         id: "target-user",

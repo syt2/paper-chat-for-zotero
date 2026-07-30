@@ -84,7 +84,10 @@ import {
   type PaperChatTierRerollResult,
 } from "./PaperChatTierController";
 import { ToolApprovalCoordinator } from "./ToolApprovalCoordinator";
-import { stripPendingAndIncompleteToolCallContent } from "./interrupted-message";
+import {
+  createInterruptedAssistantContextMessage,
+  stripPendingAndIncompleteToolCallContent,
+} from "./interrupted-message";
 import { saveDebugContextSnapshot } from "./DebugContextExporter";
 import { MemoryManager } from "./memory/MemoryManager";
 import { SessionTitleService } from "./SessionTitleService";
@@ -154,6 +157,7 @@ type InternalSendMessageOptions = SendMessageOptions & {
   fromPaperChatReroll?: boolean;
   resumeFailedTurn?: boolean;
   reuseUserMessageId?: string;
+  reuseAssistantMessageId?: string;
   targetSession?: ChatSession;
   requireTargetSessionActive?: boolean;
   allowedToolNames?: readonly string[];
@@ -1382,6 +1386,63 @@ export class ChatManager {
     return this.paperChatTier.retryCurrentPaperChatFailure();
   }
 
+  async retryFailedTurn(
+    sessionId: string,
+    errorMessageId: string,
+  ): Promise<boolean> {
+    await this.init();
+    const session = this.currentSession;
+    if (session?.id !== sessionId || this.activeSessionRunIds.has(sessionId)) {
+      return false;
+    }
+
+    const errorIndex = session.messages.findIndex(
+      (message) => message.id === errorMessageId && message.role === "error",
+    );
+    if (errorIndex < 0) return false;
+
+    let userMessage: ChatMessage | undefined;
+    let assistantMessage: ChatMessage | undefined;
+    for (let index = errorIndex - 1; index >= 0; index--) {
+      const message = session.messages[index];
+      if (
+        !assistantMessage &&
+        message.role === "assistant" &&
+        message.streamingState === "interrupted"
+      ) {
+        assistantMessage = message;
+      }
+      if (message.role === "user") {
+        userMessage = message;
+        break;
+      }
+    }
+    if (!userMessage) return false;
+
+    const accepted = await this.sendMessage(userMessage.content, {
+      item: this.getSessionItem(session),
+      images: userMessage.images,
+      resumeFailedTurn: true,
+      reuseUserMessageId: userMessage.id,
+      reuseAssistantMessageId: assistantMessage?.id,
+      targetSession: session,
+      requireTargetSessionActive: true,
+    });
+    if (!accepted) return false;
+
+    const errorMessage = session.messages.find(
+      (message) => message.id === errorMessageId && message.role === "error",
+    );
+    if (errorMessage) {
+      await this.sessionStorage.deleteMessage(session.id, errorMessage.id);
+      session.messages.splice(session.messages.indexOf(errorMessage), 1);
+      if (this.isSessionActive(session)) {
+        this.onMessageUpdate?.(session.messages);
+      }
+    }
+    return true;
+  }
+
   async rerollCurrentPaperChatFailureAndRetry(): Promise<PaperChatTierRerollResult | null> {
     return this.paperChatTier.rerollCurrentPaperChatFailureAndRetry();
   }
@@ -1560,6 +1621,22 @@ export class ChatManager {
     if (options.reuseUserMessageId && !reusedUserMessage) {
       return false;
     }
+    const reusedAssistantMessage = options.reuseAssistantMessageId
+      ? sendingSession.messages.find(
+          (message) =>
+            message.id === options.reuseAssistantMessageId &&
+            message.role === "assistant" &&
+            message.streamingState === "interrupted",
+        )
+      : undefined;
+    if (options.reuseAssistantMessageId && !reusedAssistantMessage) {
+      return false;
+    }
+    const reusedAssistantContext = reusedAssistantMessage
+      ? createInterruptedAssistantContextMessage(reusedAssistantMessage)
+      : null;
+    const initialAssistantContent = reusedAssistantMessage?.content || "";
+    const initialAssistantReasoning = reusedAssistantMessage?.reasoning;
     const { runId: sessionRunId, abortSignal } =
       this.beginSessionRun(sendingSession);
     const ensureSendingSessionTracked = () => {
@@ -1867,7 +1944,7 @@ export class ChatManager {
       }
 
       // 创建 AI 消息占位
-      const assistantMessage: ChatMessage = {
+      const assistantMessage: ChatMessage = reusedAssistantMessage || {
         id: this.generateId(),
         role: "assistant",
         content: "",
@@ -1885,11 +1962,23 @@ export class ChatManager {
         })(),
       };
 
-      sendingSession.messages.push(assistantMessage);
-      await this.sessionStorage.insertMessage(
-        sendingSession.id,
-        assistantMessage,
-      );
+      if (reusedAssistantMessage) {
+        assistantMessage.streamingState = "in_progress";
+        assistantMessage.timestamp = Date.now();
+        await this.sessionStorage.updateMessageContent(
+          sendingSession.id,
+          assistantMessage.id,
+          assistantMessage.content,
+          assistantMessage.reasoning,
+          { streamingState: "in_progress" },
+        );
+      } else {
+        sendingSession.messages.push(assistantMessage);
+        await this.sessionStorage.insertMessage(
+          sendingSession.id,
+          assistantMessage,
+        );
+      }
       sendingSession.executionPlan = undefined;
       if (!options.resumeFailedTurn) {
         sendingSession.toolExecutionState = undefined;
@@ -1910,10 +1999,14 @@ export class ChatManager {
         contextManager.filterMessages(apiRequestContextSession);
 
       // 从过滤后的消息中排除最后一条 (assistant 占位)
+      const messagesWithoutPlaceholder = filteredMessages.filter(
+        (message: ChatMessage) => message.id !== assistantMessage.id,
+      );
+      if (reusedAssistantContext) {
+        messagesWithoutPlaceholder.push(reusedAssistantContext);
+      }
       const messagesForApi = applyQuotedMessagesToModelRequest(
-        filteredMessages.filter(
-          (m: ChatMessage) => m.id !== assistantMessage.id,
-        ),
+        messagesWithoutPlaceholder,
       );
 
       ztoolkit.log(
@@ -1970,6 +2063,13 @@ export class ChatManager {
           latestFailedAssistantSnapshot,
         );
       };
+      const resetAssistantForAttempt = () => {
+        this.resetAssistantForRetry(assistantMessage);
+        if (reusedAssistantMessage) {
+          assistantMessage.content = initialAssistantContent;
+          assistantMessage.reasoning = initialAssistantReasoning;
+        }
+      };
 
       // 传统模式：流式调用（可恢复错误使用同一 Provider/模型重试）
       try {
@@ -1984,7 +2084,7 @@ export class ChatManager {
 
             // 重试时清空当前显示，但保留最后一份非空输出供终态失败恢复。
             captureFailedAssistantSnapshot();
-            this.resetAssistantForRetry(assistantMessage);
+            resetAssistantForAttempt();
 
             let checkpointTimer: ReturnType<typeof setTimeout> | null = null;
             let checkpointQueue: Promise<void> = Promise.resolve();
@@ -2090,7 +2190,7 @@ export class ChatManager {
                     }
                     assistantMessage.content = sanitizeEvidenceReferences(
                       sanitizeSourceGroupTargets(
-                        fullContent,
+                        initialAssistantContent + fullContent,
                         collectTrustedSourceTargets([]),
                       ),
                       [],
@@ -2183,7 +2283,7 @@ export class ChatManager {
 
               paperChatHardRerouteUsed = true;
               failedPaperChatModelId = reroute.nextModel;
-              this.resetAssistantForRetry(assistantMessage);
+              resetAssistantForAttempt();
               try {
                 return await streamCurrentProvider();
               } catch (reroutedError) {
@@ -2447,10 +2547,12 @@ export class ChatManager {
       }
       ensureSendingSessionTracked();
 
-      removeApiOnlyModelContextMessagesForTurn(
-        sendingSession,
-        assistantMessage.id,
-      );
+      if (!preserveToolExecutionState) {
+        removeApiOnlyModelContextMessagesForTurn(
+          sendingSession,
+          assistantMessage.id,
+        );
+      }
       const attemptMessagesWithContext = messagesWithContext.map((message) => ({
         ...message,
       }));
@@ -2964,12 +3066,26 @@ export class ChatManager {
   async cancelCurrentTurn(): Promise<boolean> {
     await this.init();
 
-    const session = this.currentSession;
-    if (!session) {
+    const sessionId = this.currentSession?.id;
+    if (!sessionId) {
       return false;
     }
 
-    const hasActiveRun = this.activeSessionRunIds.has(session.id);
+    return this.cancelTrackedSessionTurn(sessionId);
+  }
+
+  async cancelSessionTurn(sessionId: string): Promise<boolean> {
+    await this.init();
+
+    return this.cancelTrackedSessionTurn(sessionId);
+  }
+
+  private async cancelTrackedSessionTurn(sessionId: string): Promise<boolean> {
+    const session = this.getTrackedSessionById(sessionId);
+    if (!session) return false;
+
+    const activeRunId = this.activeSessionRunIds.get(session.id);
+    const hasActiveRun = activeRunId !== undefined;
     const pendingApprovalCount =
       session.toolApprovalState?.pendingRequests.length || 0;
     const pendingUserInputCount =
@@ -3009,7 +3125,17 @@ export class ChatManager {
     if (hasActiveRun) {
       await this.agentRuntime.waitForPendingMutatingToolExecutions(session.id);
     }
-    this.invalidateSessionRun(session.id);
+    const currentRunId = this.activeSessionRunIds.get(session.id);
+    if (
+      activeRunId !== undefined &&
+      currentRunId !== undefined &&
+      currentRunId !== activeRunId
+    ) {
+      return true;
+    }
+    if (activeRunId === undefined || currentRunId === activeRunId) {
+      this.invalidateSessionRun(session.id);
+    }
 
     const now = Date.now();
     let toolContextChanged = false;

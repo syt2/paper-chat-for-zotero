@@ -2845,7 +2845,7 @@ describe("agent runtime plan semantics", function () {
     const assistantMessage: ChatMessage = {
       id: "assistant-resumed-turn",
       role: "assistant",
-      content: "",
+      content: "partial answer. ",
       timestamp: 3,
     };
     session.messages.push(assistantMessage);
@@ -2924,7 +2924,7 @@ describe("agent runtime plan semantics", function () {
       assert.equal(session.toolExecutionState?.results.length, 1);
       assert.equal(
         assistantMessage.content,
-        "continued without rewriting the note",
+        "partial answer. continued without rewriting the note",
       );
       assert.include(
         session.messages.map((message) => message.content),

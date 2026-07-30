@@ -73,6 +73,7 @@ import {
 } from "../../chat/quoted-messages";
 import { navigateToPdfQuote } from "./PdfQuoteNavigator";
 import { normalizeNoteSourceKey } from "./NoteSourceNavigator";
+import { sessionTurnQueue } from "./SessionTurnQueue";
 import { openSourceTarget, type SourceTarget } from "./SourceNavigator";
 import {
   setupEventHandlers,
@@ -2842,10 +2843,14 @@ function createContext(container: HTMLElement): ChatPanelContext {
         const supportsToolCalling = providerSupportsToolCalling(
           getProviderManager().getActiveProvider(),
         );
+        const queueFailureErrorId = session
+          ? sessionTurnQueue.snapshot(session.id).failureErrorId
+          : undefined;
         const retryableErrorMessageId =
-          getProviderManager().getActiveProviderId() === "paperchat"
+          queueFailureErrorId ||
+          (getProviderManager().getActiveProviderId() === "paperchat"
             ? session?.lastRetryableErrorMessageId
-            : undefined;
+            : undefined);
         if (chatHistory) {
           renderMessageElementsWithMarkdownActions(
             chatHistory,
@@ -2855,6 +2860,16 @@ function createContext(container: HTMLElement): ChatPanelContext {
             {
               retryableErrorMessageId,
               onRetry: async () => {
+                if (
+                  session &&
+                  retryableErrorMessageId &&
+                  (await sessionTurnQueue.retry(
+                    session.id,
+                    retryableErrorMessageId,
+                  ))
+                ) {
+                  return;
+                }
                 const retried = await manager.retryCurrentPaperChatFailure();
                 if (!retried) {
                   throw new Error(getString("chat-retry-unavailable"));
@@ -3027,6 +3042,7 @@ export async function unregisterAll(): Promise<void> {
 
   // Destroy chat manager — await so DB writes complete before StorageDatabase is torn down
   if (chatManager) {
+    sessionTurnQueue.clearAll();
     await chatManager.destroy();
     chatManager = null;
   }

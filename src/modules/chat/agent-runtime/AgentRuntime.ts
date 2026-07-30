@@ -354,7 +354,7 @@ export class AgentRuntime {
     let maxIterations = configuredMaxIterations;
     let budgetLimits = getToolBudgetLimits(configuredMaxIterations);
     let iteration = 0;
-    let accumulatedDisplay = "";
+    let accumulatedDisplay = assistantMessage.content;
     await this.startTurn(
       sendingSession,
       sessionRunId,
@@ -598,7 +598,7 @@ export class AgentRuntime {
     let maxIterations = configuredMaxIterations;
     let budgetLimits = getToolBudgetLimits(configuredMaxIterations);
     let iteration = 0;
-    let accumulatedDisplay = "";
+    let accumulatedDisplay = assistantMessage.content;
     await this.startTurn(
       sendingSession,
       sessionRunId,

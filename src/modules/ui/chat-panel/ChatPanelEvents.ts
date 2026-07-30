@@ -59,9 +59,15 @@ import {
 } from "./NoteSummaryActions";
 import type {
   ChatMessage,
+  ChatSession,
   ImageAttachment,
   QuotedMessageRef,
 } from "../../chat";
+import {
+  sessionTurnQueue,
+  type QueuedTurn,
+  type TurnRunResult,
+} from "./SessionTurnQueue";
 
 // Import getActiveReaderItem from the manager module to avoid circular dependency
 // This is set by ChatPanelManager during initialization
@@ -70,9 +76,8 @@ let getActiveReaderItemFn: (() => Zotero.Item | null) | null = null;
 // Toggle panel mode function reference (set by ChatPanelManager)
 let togglePanelModeFn: (() => void) | null = null;
 
-// 发送锁（按 session 分配，并附带 token，避免旧请求 finally 误释放新请求的锁）
-const sessionSendLocks = new Map<string, symbol>();
 const conversationSummaryRuns = new WeakMap<HTMLButtonElement, symbol>();
+let queuedTurnSequence = 0;
 
 // Duration (ms) to show the "+quota" flash on the check-in button after a successful check-in
 const CHECKIN_FLASH_DURATION_MS = 5000;
@@ -642,6 +647,72 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
   const emptyState = container.querySelector(
     "#chat-empty-state",
   ) as HTMLElement;
+  let submitPending = false;
+  const submitMessage = async (): Promise<void> => {
+    if (submitPending) return;
+    submitPending = true;
+    try {
+      await sendMessage(context, messageInput, sendButton, attachmentsPreview);
+    } finally {
+      submitPending = false;
+    }
+  };
+  const turnQueue = container.querySelector(
+    "#chat-turn-queue",
+  ) as HTMLElement | null;
+
+  disposers.push(
+    sessionTurnQueue.subscribe((sessionId) => {
+      const session = chatManager.getActiveSession();
+      if (session?.id !== sessionId) return;
+      syncSendButtonState(sendButton, chatManager);
+      context.renderMessages(session.messages);
+    }),
+  );
+  syncSendButtonState(sendButton, chatManager);
+
+  turnQueue?.addEventListener("click", (event) => {
+    const button = (event.target as Element | null)?.closest(
+      "button[data-queue-action]",
+    ) as HTMLButtonElement | null;
+    const session = chatManager.getActiveSession();
+    const turnId = button?.getAttribute("data-turn-id");
+    const action = button?.getAttribute("data-queue-action");
+    if (!session || !turnId || !action) return;
+
+    if (action === "delete") {
+      sessionTurnQueue.remove(session.id, turnId);
+      return;
+    }
+    if (action === "edit") {
+      const draft = context.getAttachmentState();
+      if (
+        messageInput.value.trim() ||
+        draft.pendingImages.length ||
+        draft.pendingFiles.length ||
+        draft.pendingSelectedText ||
+        draft.pendingQuotedMessages.length
+      ) {
+        context.appendError(getString("chat-queue-draft-conflict"));
+        return;
+      }
+      const turn = sessionTurnQueue.remove(session.id, turnId);
+      if (!turn) return;
+      messageInput.value = turn.draft.content;
+      context.setAttachmentState(turn.draft.attachmentState);
+      context.updateAttachmentsPreview();
+      resizeMessageInput(messageInput, chatHistory);
+      focusTextarea(messageInput);
+      return;
+    }
+    if (action === "guide") {
+      void sessionTurnQueue.guide(session.id, turnId).catch((error) => {
+        context.appendError(
+          error instanceof Error ? error.message : String(error),
+        );
+      });
+    }
+  });
 
   if (chatHistory) {
     chatHistory.addEventListener("scroll", () => {
@@ -962,20 +1033,20 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
   sendButton?.addEventListener("click", async () => {
     ztoolkit.log("Send button clicked");
     const activeSession = chatManager.getActiveSession();
-    const activeSessionId = activeSession?.id ?? "__no_session__";
-    if (sessionSendLocks.has(activeSessionId)) {
-      const didCancel = await chatManager.cancelCurrentTurn();
-      if (didCancel) {
-        releaseSendLock(activeSessionId, getSendLockToken(activeSessionId));
-        syncSendButtonState(sendButton, chatManager);
-        focusTextarea(messageInput);
-      }
+    if (
+      activeSession &&
+      sessionTurnQueue.snapshot(activeSession.id).status === "running" &&
+      !messageInput.value.trim()
+    ) {
+      await sessionTurnQueue.stop(activeSession.id);
+      syncSendButtonState(sendButton, chatManager);
+      focusTextarea(messageInput);
       return;
     }
-    await sendMessage(context, messageInput, sendButton, attachmentsPreview);
+    await submitMessage();
   });
 
-  // Input keydown - Enter to send (blocked while sending or when mention popup is open)
+  // Input keydown - Enter sends now or queues behind the active turn.
   messageInput?.addEventListener("keydown", (e: KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       // Check if mention popup is open - if so, let mention selector handle Enter
@@ -988,21 +1059,15 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
       }
 
       e.preventDefault();
-      // Block Enter key while sending (lock mechanism handles duplicate prevention)
-      const currentSessionForKey = chatManager.getActiveSession();
-      const currentLockId = currentSessionForKey?.id ?? "__no_session__";
-      if (sessionSendLocks.has(currentLockId)) {
-        ztoolkit.log("Enter key blocked - message is being sent");
-        return;
-      }
       ztoolkit.log("Enter key pressed to send");
-      sendMessage(context, messageInput, sendButton, attachmentsPreview);
+      void submitMessage();
     }
   });
 
   // Input auto-resize
   messageInput?.addEventListener("input", () => {
     resizeMessageInput(messageInput, chatHistory);
+    syncSendButtonState(sendButton, chatManager);
   });
 
   // Set current item when input is focused
@@ -1048,7 +1113,7 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
     // Create a new session
     const newSession = await chatManager.createNewSession();
 
-    // 新 session 没有锁，同步按钮状态（解除旧 session 可能遗留的 disabled）
+    // The new session has its own queue state.
     syncSendButtonState(sendButton, chatManager);
 
     // Update current item from reader if available
@@ -1241,6 +1306,7 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
         ztoolkit.log("Deleting session:", session.id);
         const deletingActiveSession =
           chatManager.getActiveSession()?.id === session.id;
+        sessionTurnQueue.clear(session.id);
         await chatManager.deleteSession(session.id);
         if (deletingActiveSession) {
           clearPendingQuotedMessages(context);
@@ -1668,30 +1734,68 @@ export function updateAttachmentsPreviewDisplay(
   attachmentsPreview.style.display = attachmentCount > 0 ? "flex" : "none";
 }
 
-/**
- * 获取发送锁（按 session 分配，防止竞态条件）
- * @returns 是否成功获取锁
- */
-function acquireSendLock(sessionId: string): boolean {
-  if (sessionSendLocks.has(sessionId)) {
-    return false;
-  }
-  sessionSendLocks.set(sessionId, Symbol(sessionId));
-  return true;
-}
+function renderTurnQueue(container: HTMLElement, sessionId?: string): void {
+  const queue = container.querySelector(
+    "#chat-turn-queue",
+  ) as HTMLElement | null;
+  if (!queue) return;
 
-/**
- * 释放发送锁
- */
-function releaseSendLock(sessionId: string, token?: symbol): void {
-  if (token && sessionSendLocks.get(sessionId) !== token) {
-    return;
-  }
-  sessionSendLocks.delete(sessionId);
-}
+  const turns = sessionId ? sessionTurnQueue.snapshot(sessionId).queued : [];
+  queue.textContent = "";
+  queue.style.display = turns.length ? "flex" : "none";
 
-function getSendLockToken(sessionId: string): symbol | undefined {
-  return sessionSendLocks.get(sessionId);
+  const theme = getCurrentTheme();
+  for (const turn of turns) {
+    const row = createElement(queue.ownerDocument, "div", {
+      display: "flex",
+      alignItems: "center",
+      minHeight: "20px",
+      padding: "1px 0",
+      gap: "4px",
+      color: theme.textSecondary,
+      fontSize: "11px",
+    });
+    const preview = createElement(queue.ownerDocument, "span", {
+      flex: "1",
+      minWidth: "0",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
+    });
+    preview.textContent = turn.content;
+    preview.title = turn.content;
+    row.appendChild(preview);
+
+    for (const [action, label] of [
+      ["edit", getString("chat-queue-edit")],
+      ["guide", getString("chat-queue-guide")],
+      ["delete", getString("chat-queue-delete")],
+    ] as const) {
+      const button = createElement(
+        queue.ownerDocument,
+        "button",
+        {
+          flex: "0 0 auto",
+          padding: "1px 2px",
+          border: "none",
+          background: "transparent",
+          color: theme.textSecondary,
+          cursor: "pointer",
+          fontSize: "11px",
+        },
+        {
+          type: "button",
+          title: label,
+          "aria-label": label,
+          "data-turn-id": turn.id,
+          "data-queue-action": action,
+        },
+      );
+      button.textContent = label;
+      row.appendChild(button);
+    }
+    queue.appendChild(row);
+  }
 }
 
 function updateSendButtonPresentation(
@@ -1743,19 +1847,55 @@ function updateSendButtonPresentation(
   icon.style.fontWeight = "700";
 }
 
-/**
- * 根据当前 session 的锁状态，同步 sendButton 的 disabled 样式
- * 抽取为独立函数，避免在多处重复 button 样式逻辑
- */
 export function syncSendButtonState(
   sendButton: HTMLButtonElement | null,
   chatManager: ChatPanelContext["chatManager"],
 ): void {
   if (!sendButton) return;
   const activeSession = chatManager.getActiveSession();
-  const activeSessionId = activeSession?.id ?? "__no_session__";
-  const isLocked = sessionSendLocks.has(activeSessionId);
-  updateSendButtonPresentation(sendButton, isLocked);
+  const root = sendButton.closest(".chat-panel-root") as HTMLElement | null;
+  const input = root?.querySelector(
+    "#chat-message-input",
+  ) as HTMLTextAreaElement | null;
+  const isRunning = activeSession
+    ? sessionTurnQueue.snapshot(activeSession.id).status === "running"
+    : false;
+  updateSendButtonPresentation(sendButton, isRunning && !input?.value.trim());
+  if (root) renderTurnQueue(root, activeSession?.id);
+}
+
+function createTurnRunner(options: {
+  manager: ChatPanelContext["chatManager"];
+  resolveSession: () => ChatSession;
+  send: (session: ChatSession) => Promise<boolean>;
+}): () => Promise<TurnRunResult> {
+  const run = async (retryErrorId?: string): Promise<TurnRunResult> => {
+    const session = options.resolveSession();
+    const previousErrorIds = new Set(
+      session.messages
+        .filter((message) => message.role === "error")
+        .map((message) => message.id),
+    );
+    const accepted = retryErrorId
+      ? await options.manager.retryFailedTurn(session.id, retryErrorId)
+      : await options.send(session);
+    if (!accepted) return { accepted: false };
+
+    const error = [...options.resolveSession().messages]
+      .reverse()
+      .find(
+        (message) =>
+          message.role === "error" && !previousErrorIds.has(message.id),
+      );
+    return error
+      ? {
+          accepted: true,
+          errorId: error.id,
+          retry: () => run(error.id),
+        }
+      : { accepted: true };
+  };
+  return () => run();
 }
 
 /**
@@ -1772,31 +1912,12 @@ async function sendMessage(
   const chatHistory = context.container.querySelector(
     "#chat-history",
   ) as HTMLElement | null;
-
-  // 获取当前 session ID，用于按 session 分配锁
   const session = chatManager.getActiveSession();
-  const sessionId = session?.id ?? "__no_session__";
+  if (!session) return;
 
-  // 使用锁机制防止同一 session 内重复发送
-  if (!acquireSendLock(sessionId)) {
-    ztoolkit.log(
-      "[sendMessage] Already sending in session",
-      sessionId,
-      ", skipping",
-    );
-    return;
-  }
-
-  let draftState: { content: string; attachmentState: AttachmentState } | null =
-    null;
-  const sendLockToken = getSendLockToken(sessionId);
-
-  // acquire 后立即进 try/finally，确保所有路径都能释放锁并同步按钮状态
   try {
     const content = messageInput?.value?.trim();
-    if (!content) {
-      return;
-    }
+    if (!content) return;
 
     // Get active reader item first (used for PDF attachment)
     const activeReaderItem = getActiveReaderItem();
@@ -1871,33 +1992,8 @@ async function sendMessage(
       throw new Error(getString("chat-error-no-provider"));
     }
 
-    // Disable send button (reflect current session's lock state)
-    syncSendButtonState(sendButton, chatManager);
-
-    // Capture draft state so failures can restore it instead of silently dropping it
     const attachmentState = context.getAttachmentState();
-    draftState = {
-      content,
-      attachmentState: {
-        pendingImages: [...attachmentState.pendingImages],
-        pendingFiles: [...attachmentState.pendingFiles],
-        pendingSelectedText: attachmentState.pendingSelectedText,
-        pendingQuotedMessages: [...attachmentState.pendingQuotedMessages],
-      },
-    };
-    // Auto-detect PDF: attach if we have an active reader item with PDF
     const shouldAttachPdf = activeReaderItem !== null;
-
-    // Clear the composer immediately once the draft is captured so the UI
-    // reflects "message sent" while the async request is still streaming.
-    if (messageInput) {
-      messageInput.value = "";
-      resizeMessageInput(messageInput, chatHistory);
-    }
-    context.clearAttachments();
-    context.updateAttachmentsPreview();
-
-    // Build attachment options (shared between global and item chat)
     const attachmentOptions = {
       images:
         attachmentState.pendingImages.length > 0
@@ -1928,44 +2024,65 @@ async function sendMessage(
       }
     }
 
-    // Send message (unified API handles both global and item-bound chat)
-    const didAcceptMessage = await chatManager.sendMessage(content, {
-      item: targetItem,
-      attachPdf: shouldAttachPdf,
-      targetSession: session || undefined,
-      requireTargetSessionActive: !!session,
-      ...attachmentOptions,
-    });
-
-    if (!didAcceptMessage) {
-      if (draftState && chatManager.getActiveSession() === session) {
-        if (messageInput) {
-          messageInput.value = draftState.content;
-          resizeMessageInput(messageInput, chatHistory);
+    let retainedSession = session;
+    const resolveSession = () => {
+      const current = chatManager.getActiveSession();
+      if (current?.id === session.id) retainedSession = current;
+      return retainedSession;
+    };
+    const run = createTurnRunner({
+      manager: chatManager,
+      resolveSession,
+      send: async (targetSession) => {
+        const accepted = await chatManager.sendMessage(content, {
+          item: targetItem,
+          attachPdf: shouldAttachPdf,
+          targetSession,
+          ...attachmentOptions,
+        });
+        if (accepted) {
+          getReadingLoopService().handleChatMessageSent(content, targetItem);
         }
-        context.setAttachmentState(draftState.attachmentState);
-        context.updateAttachmentsPreview();
+        return accepted;
+      },
+    });
+    const turn: QueuedTurn = {
+      id: `${Date.now()}-${++queuedTurnSequence}`,
+      content,
+      draft: { content, attachmentState },
+      run,
+      cancel: () => chatManager.cancelSessionTurn(session.id),
+      onError: (error) => {
+        if (chatManager.getActiveSession()?.id === session.id) {
+          context.appendError(
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      },
+    };
+    if (!sessionTurnQueue.enqueue(session.id, turn)) {
+      const queueFullMessage = getString("chat-queue-full");
+      const queueFullMessageExists = Array.from(
+        context.container.querySelectorAll(
+          ".error-message-wrapper .message-content",
+        ),
+      ).some((element) => element?.textContent === `⚠️ ${queueFullMessage}`);
+      if (!queueFullMessageExists) {
+        context.appendError(queueFullMessage);
       }
       return;
     }
 
-    getReadingLoopService().handleChatMessageSent(content, targetItem);
-
-    // Composer was already cleared before the async send began.
+    if (messageInput) {
+      messageInput.value = "";
+      resizeMessageInput(messageInput, chatHistory);
+    }
+    context.clearAttachments();
+    context.updateAttachmentsPreview();
   } catch (error) {
     ztoolkit.log("Error in sendMessage:", error);
-    if (draftState && chatManager.getActiveSession() === session) {
-      if (messageInput) {
-        messageInput.value = draftState.content;
-        resizeMessageInput(messageInput, chatHistory);
-      }
-      context.setAttachmentState(draftState.attachmentState);
-      context.updateAttachmentsPreview();
-    }
     context.appendError(error instanceof Error ? error.message : String(error));
   } finally {
-    releaseSendLock(sessionId, sendLockToken);
-    // 根据当前活跃 session 的锁状态同步按钮（而非无条件恢复，避免覆盖其他 session 的 disabled 状态）
     syncSendButtonState(sendButton, chatManager);
     focusTextarea(messageInput);
   }
