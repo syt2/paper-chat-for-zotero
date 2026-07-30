@@ -2,7 +2,7 @@
  * AuthService - 用户认证服务
  *
  * 与 NewAPI 后端交互，处理用户登录、注册、Token 管理等。
- * 使用 HTTP Observer 捕获 Set-Cookie 响应头，手动管理 session cookie。
+ * 使用 HTTP Observer 捕获 Set-Cookie 响应头，手动管理认证 cookie。
  */
 
 import type {
@@ -64,8 +64,43 @@ export interface PaperChatPricingResult extends ApiResponse<
   auto_groups?: unknown[];
 }
 
-// 临时存储从 HTTP Observer 捕获的 session cookie
-let pendingSessionCookie: { value: string; generation: number } | null = null;
+const LEGACY_SESSION_COOKIE = "session";
+const DASHBOARD_REFRESH_COOKIE = "new_api_refresh";
+const LEGACY_SESSION_COOKIE_PATH = "/";
+const DASHBOARD_REFRESH_COOKIE_PATH = "/api/user/auth";
+const AUTH_COOKIE_NAMES = [
+  LEGACY_SESSION_COOKIE,
+  DASHBOARD_REFRESH_COOKIE,
+] as const;
+
+type AuthCookieName = (typeof AUTH_COOKIE_NAMES)[number];
+
+interface PendingAuthCookie {
+  value: string;
+  generation: number;
+}
+
+interface DashboardAuthData {
+  access_token?: string;
+  access_expires_at?: number;
+  session?: { sid?: string };
+  user?: { id?: number };
+}
+
+export interface DashboardSessionRefreshResult extends ApiResponse<DashboardAuthData> {
+  status: number;
+}
+
+function extractSetCookieValue(
+  setCookieHeader: string,
+  cookieName: AuthCookieName,
+): string | null {
+  const escapedName = cookieName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = setCookieHeader.match(
+    new RegExp(`(?:^|[\\r\\n,]\\s*)${escapedName}=([^;]*)`),
+  );
+  return match ? match[1] : null;
+}
 
 const SENSITIVE_LOG_FIELDS = new Set([
   "access_token",
@@ -100,6 +135,17 @@ export class AuthService {
   private sessionToken: string | null = null;
   private userId: number | null = null;
   private dashboardAccessToken: string | null = null;
+  private dashboardRefreshToken: string | null = null;
+  private dashboardSessionId: string | null = null;
+  private pendingAuthCookies = new Map<AuthCookieName, PendingAuthCookie>();
+  private loginAttempt: {
+    generation: number;
+    promise: Promise<ApiResponse>;
+  } | null = null;
+  private refreshAttempt: {
+    generation: number;
+    promise: Promise<DashboardSessionRefreshResult>;
+  } | null = null;
   private httpObserver: any = null;
   private environmentGeneration = 0;
 
@@ -120,7 +166,7 @@ export class AuthService {
     const generation = this.environmentGeneration;
 
     this.httpObserver = {
-      observe(subject: any, topic: string, _data: string) {
+      observe: (subject: any, topic: string, _data: string) => {
         if (topic !== "http-on-examine-response") return;
 
         try {
@@ -131,10 +177,15 @@ export class AuthService {
 
           try {
             const setCookie = channel.getResponseHeader("Set-Cookie");
-            if (setCookie?.includes("session=")) {
-              const match = setCookie.match(/session=([^;]+)/);
-              if (match?.[1]) {
-                pendingSessionCookie = { value: match[1], generation };
+            if (setCookie) {
+              for (const cookieName of AUTH_COOKIE_NAMES) {
+                const value = extractSetCookieValue(setCookie, cookieName);
+                if (value !== null) {
+                  this.pendingAuthCookies.set(cookieName, {
+                    value,
+                    generation,
+                  });
+                }
               }
             }
           } catch {
@@ -198,25 +249,35 @@ export class AuthService {
     this.dashboardAccessToken = token;
   }
 
+  hasDashboardAccessToken(): boolean {
+    return Boolean(this.dashboardAccessToken);
+  }
+
+  hasDashboardRefreshCookie(): boolean {
+    return Boolean(this.dashboardRefreshToken);
+  }
+
   /**
-   * 清除 session（包括浏览器 cookie jar）
+   * 清除所有登录状态（包括浏览器 cookie jar）
    */
   clearSessionCookie(): void {
     this.sessionToken = null;
     this.dashboardAccessToken = null;
-    pendingSessionCookie = null;
-
-    // 从浏览器 cookie jar 中删除
-    try {
-      const host = new URL(this.baseUrl).hostname;
-      Services.cookies.remove(host, "session", "/", {});
-    } catch {
-      // 忽略错误
-    }
+    this.dashboardRefreshToken = null;
+    this.dashboardSessionId = null;
+    this.pendingAuthCookies.clear();
+    this.removeAuthCookieFromJar(
+      LEGACY_SESSION_COOKIE,
+      LEGACY_SESSION_COOKIE_PATH,
+    );
+    this.removeAuthCookieFromJar(
+      DASHBOARD_REFRESH_COOKIE,
+      DASHBOARD_REFRESH_COOKIE_PATH,
+    );
   }
 
   /**
-   * 从浏览器 cookie jar 恢复 session（用于重启后恢复会话）
+   * 从浏览器 cookie jar 恢复认证 cookie（用于重启后恢复会话）
    */
   restoreSessionFromCookieJar(): void {
     try {
@@ -224,16 +285,25 @@ export class AuthService {
       const cookies = Services.cookies.getCookiesFromHost(host, {});
 
       for (const cookie of cookies) {
-        if (cookie.name === "session") {
+        if (
+          cookie.name === LEGACY_SESSION_COOKIE &&
+          cookie.path === LEGACY_SESSION_COOKIE_PATH
+        ) {
           this.sessionToken = cookie.value;
-          ztoolkit.log("[AuthService] Session restored from cookie jar");
-          return;
+        } else if (
+          cookie.name === DASHBOARD_REFRESH_COOKIE &&
+          cookie.path === DASHBOARD_REFRESH_COOKIE_PATH
+        ) {
+          this.dashboardRefreshToken = cookie.value;
         }
       }
-      ztoolkit.log("[AuthService] No session cookie found in cookie jar");
+      ztoolkit.log("[AuthService] Auth cookies restored from cookie jar", {
+        legacySession: Boolean(this.sessionToken),
+        dashboardRefresh: Boolean(this.dashboardRefreshToken),
+      });
     } catch (e) {
       ztoolkit.log(
-        "[AuthService] Failed to restore session from cookie jar:",
+        "[AuthService] Failed to restore auth cookies from cookie jar:",
         e,
       );
     }
@@ -245,6 +315,31 @@ export class AuthService {
   saveSessionToCookieJar(): void {
     if (!this.sessionToken) return;
 
+    this.saveAuthCookieToJar(
+      LEGACY_SESSION_COOKIE,
+      this.sessionToken,
+      LEGACY_SESSION_COOKIE_PATH,
+      Ci.nsICookie.SAMESITE_LAX as number,
+    );
+  }
+
+  private saveDashboardRefreshCookieToJar(): void {
+    if (!this.dashboardRefreshToken) return;
+
+    this.saveAuthCookieToJar(
+      DASHBOARD_REFRESH_COOKIE,
+      this.dashboardRefreshToken,
+      DASHBOARD_REFRESH_COOKIE_PATH,
+      (Ci.nsICookie.SAMESITE_STRICT ?? Ci.nsICookie.SAMESITE_LAX) as number,
+    );
+  }
+
+  private saveAuthCookieToJar(
+    name: AuthCookieName,
+    value: string,
+    path: string,
+    sameSite: number,
+  ): void {
     try {
       const url = new URL(this.baseUrl);
       const host = url.hostname;
@@ -254,20 +349,29 @@ export class AuthService {
 
       Services.cookies.add(
         host, // domain
-        "/", // path
-        "session", // name
-        this.sessionToken, // value
+        path,
+        name,
+        value,
         isSecure, // isSecure
         true, // isHttpOnly
         false, // isSession (false = persistent)
         expiry, // expiry
         {}, // originAttributes
-        Ci.nsICookie.SAMESITE_LAX as number, // sameSite
+        sameSite,
         Ci.nsICookie.SCHEME_HTTPS, // schemeMap
       );
-      ztoolkit.log("[AuthService] Session saved to cookie jar");
+      ztoolkit.log(`[AuthService] ${name} saved to cookie jar`);
     } catch (e) {
-      ztoolkit.log("[AuthService] Failed to save session to cookie jar:", e);
+      ztoolkit.log(`[AuthService] Failed to save ${name} to cookie jar:`, e);
+    }
+  }
+
+  private removeAuthCookieFromJar(name: AuthCookieName, path: string): void {
+    try {
+      const host = new URL(this.baseUrl).hostname;
+      Services.cookies.remove(host, name, path, {});
+    } catch {
+      // Services 在 Node 测试或 Zotero 关闭期间可能不可用。
     }
   }
 
@@ -315,7 +419,7 @@ export class AuthService {
     options: {
       body?: unknown;
       headers?: Record<string, string>;
-      extractSession?: boolean;
+      extractAuthCookies?: boolean;
     } = {},
   ): Promise<{ status: number; data: T | null; error?: string }> {
     const generation = this.environmentGeneration;
@@ -337,9 +441,25 @@ export class AuthService {
         headers["Authorization"] = `Bearer ${this.dashboardAccessToken}`;
       }
 
-      // 手动添加 session cookie（Zotero 环境下浏览器 cookie jar 不可用）
+      const requestPath = new URL(fullUrl).pathname;
+      const cookies: string[] = [];
       if (this.sessionToken) {
-        headers["Cookie"] = `session=${this.sessionToken}`;
+        cookies.push(`${LEGACY_SESSION_COOKIE}=${this.sessionToken}`);
+      }
+      // Refresh Cookie 只允许发送给 NewAPI 的 refresh/logout 路径。
+      if (
+        this.dashboardRefreshToken &&
+        (requestPath === DASHBOARD_REFRESH_COOKIE_PATH ||
+          requestPath.startsWith(`${DASHBOARD_REFRESH_COOKIE_PATH}/`))
+      ) {
+        cookies.push(
+          `${DASHBOARD_REFRESH_COOKIE}=${this.dashboardRefreshToken}`,
+        );
+      }
+      if (cookies.length > 0) {
+        headers["Cookie"] = [headers["Cookie"], ...cookies]
+          .filter(Boolean)
+          .join("; ");
       }
 
       const response = await Zotero.HTTP.request(method, fullUrl, {
@@ -361,9 +481,11 @@ export class AuthService {
 
       const data = response.response as T;
 
-      // 登录/注册时从 HTTP Observer 提取 session
-      if (options.extractSession && generation === this.environmentGeneration) {
-        this.extractSessionFromObserver();
+      if (
+        options.extractAuthCookies &&
+        generation === this.environmentGeneration
+      ) {
+        this.applyPendingAuthCookies();
       }
 
       this.logResponse(method, fullUrl, response.status, data);
@@ -381,6 +503,9 @@ export class AuthService {
       if (error && typeof error === "object" && "status" in error) {
         const httpError = error as { status: number; response?: unknown };
         const data = httpError.response as T;
+        if (options.extractAuthCookies) {
+          this.applyPendingAuthCookies();
+        }
         this.logResponse(method, fullUrl, httpError.status, data);
         return { status: httpError.status, data };
       }
@@ -397,15 +522,36 @@ export class AuthService {
   }
 
   /**
-   * 从 HTTP Observer 提取 session cookie 并保存到 cookie jar
+   * 应用 HTTP Observer 捕获到的认证 cookie。
    */
-  private extractSessionFromObserver(): void {
-    const pending = pendingSessionCookie;
-    pendingSessionCookie = null;
-    if (pending?.generation === this.environmentGeneration) {
-      this.sessionToken = pending.value;
-      // 保存到 cookie jar 以便重启后恢复
-      this.saveSessionToCookieJar();
+  private applyPendingAuthCookies(): void {
+    for (const [name, pending] of this.pendingAuthCookies) {
+      this.pendingAuthCookies.delete(name);
+      if (pending.generation !== this.environmentGeneration) {
+        continue;
+      }
+
+      if (name === LEGACY_SESSION_COOKIE) {
+        this.sessionToken = pending.value || null;
+        if (this.sessionToken) {
+          this.saveSessionToCookieJar();
+        } else {
+          this.removeAuthCookieFromJar(
+            LEGACY_SESSION_COOKIE,
+            LEGACY_SESSION_COOKIE_PATH,
+          );
+        }
+      } else {
+        this.dashboardRefreshToken = pending.value || null;
+        if (this.dashboardRefreshToken) {
+          this.saveDashboardRefreshCookieToJar();
+        } else {
+          this.removeAuthCookieFromJar(
+            DASHBOARD_REFRESH_COOKIE,
+            DASHBOARD_REFRESH_COOKIE_PATH,
+          );
+        }
+      }
     }
   }
 
@@ -459,7 +605,7 @@ export class AuthService {
     const url = `${this.baseUrl}/api/user/register`;
     const result = await this.request<ApiResponse>("POST", url, {
       body: request,
-      extractSession: true,
+      extractAuthCookies: true,
     });
 
     if (result.error) {
@@ -483,10 +629,31 @@ export class AuthService {
 
   async login(request: LoginRequest): Promise<ApiResponse> {
     const generation = this.environmentGeneration;
+    const pending = this.loginAttempt;
+    if (pending?.generation === generation) {
+      return pending.promise;
+    }
+
+    const promise = this.performLogin(request, generation);
+    const attempt = { generation, promise };
+    this.loginAttempt = attempt;
+    try {
+      return await promise;
+    } finally {
+      if (this.loginAttempt === attempt) {
+        this.loginAttempt = null;
+      }
+    }
+  }
+
+  private async performLogin(
+    request: LoginRequest,
+    generation: number,
+  ): Promise<ApiResponse> {
     const url = `${this.baseUrl}/api/user/login`;
     const result = await this.request<ApiResponse>("POST", url, {
       body: request,
-      extractSession: true,
+      extractAuthCookies: true,
     });
 
     if (result.error) {
@@ -513,14 +680,9 @@ export class AuthService {
     }
 
     // 不支持 2FA
-    const responseData = result.data as ApiResponse & {
-      data?: {
-        id?: number;
-        access_token?: string;
-        require_2fa?: boolean;
-        user?: { id?: number };
-      };
-    };
+    const responseData = result.data as ApiResponse<
+      DashboardAuthData & { id?: number; require_2fa?: boolean }
+    >;
     if (responseData.data?.require_2fa) {
       return {
         success: false,
@@ -542,7 +704,123 @@ export class AuthService {
       this.dashboardAccessToken = dashboardAccessToken.trim();
     }
 
+    const dashboardSessionId = responseData.data?.session?.sid;
+    if (typeof dashboardSessionId === "string" && dashboardSessionId.trim()) {
+      this.dashboardSessionId = dashboardSessionId.trim();
+    }
+
     return result.data;
+  }
+
+  async refreshDashboardSession(): Promise<DashboardSessionRefreshResult> {
+    const generation = this.environmentGeneration;
+    const pending = this.refreshAttempt;
+    if (pending?.generation === generation) {
+      return pending.promise;
+    }
+
+    const promise = this.performDashboardSessionRefresh(generation);
+    const attempt = { generation, promise };
+    this.refreshAttempt = attempt;
+    try {
+      return await promise;
+    } finally {
+      if (this.refreshAttempt === attempt) {
+        this.refreshAttempt = null;
+      }
+    }
+  }
+
+  private async performDashboardSessionRefresh(
+    generation: number,
+  ): Promise<DashboardSessionRefreshResult> {
+    if (!this.dashboardRefreshToken) {
+      return {
+        success: false,
+        message: "No dashboard refresh session",
+        status: 0,
+      };
+    }
+
+    const result = await this.request<ApiResponse<DashboardAuthData>>(
+      "POST",
+      `${this.baseUrl}/api/user/auth/refresh`,
+      {
+        headers: this.getDashboardSessionHeaders(),
+        extractAuthCookies: true,
+      },
+    );
+
+    if (generation !== this.environmentGeneration) {
+      return {
+        success: false,
+        message: "PaperChat service changed during session refresh",
+        status: 0,
+      };
+    }
+
+    if (result.error) {
+      return { success: false, message: result.error, status: result.status };
+    }
+
+    if (result.status >= 400 || !result.data?.success) {
+      if (result.status === 401) {
+        this.clearDashboardSession();
+      }
+      return {
+        success: false,
+        message: this.parseErrorMessage(
+          result.data,
+          getString("api-error-request-failed", {
+            args: { status: result.status },
+          }),
+        ),
+        status: result.status,
+      };
+    }
+
+    const data = result.data.data;
+    const accessToken = data?.access_token?.trim();
+    const userId = data?.user?.id;
+    if (!accessToken || !userId) {
+      return {
+        success: false,
+        message: getString("api-error-request-failed", {
+          args: { status: result.status },
+        }),
+        status: result.status,
+      };
+    }
+
+    this.dashboardAccessToken = accessToken;
+    this.userId = userId;
+    const sessionId = data?.session?.sid?.trim();
+    if (sessionId) {
+      this.dashboardSessionId = sessionId;
+    }
+
+    return { ...result.data, status: result.status };
+  }
+
+  private getDashboardSessionHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {
+      Origin: new URL(this.baseUrl).origin,
+    };
+    if (this.dashboardSessionId) {
+      headers["X-Auth-Session"] = this.dashboardSessionId;
+    }
+    return headers;
+  }
+
+  private clearDashboardSession(): void {
+    this.dashboardAccessToken = null;
+    this.dashboardRefreshToken = null;
+    this.dashboardSessionId = null;
+    this.pendingAuthCookies.delete(DASHBOARD_REFRESH_COOKIE);
+    this.removeAuthCookieFromJar(
+      DASHBOARD_REFRESH_COOKIE,
+      DASHBOARD_REFRESH_COOKIE_PATH,
+    );
   }
 
   async logout(): Promise<ApiResponse> {
@@ -550,6 +828,10 @@ export class AuthService {
     let result = await this.request<ApiResponse>(
       "POST",
       `${this.baseUrl}/api/user/auth/logout`,
+      {
+        headers: this.getDashboardSessionHeaders(),
+        extractAuthCookies: true,
+      },
     );
     if (result.status === 404) {
       result = await this.request<ApiResponse>(
@@ -565,9 +847,8 @@ export class AuthService {
       };
     }
 
-    this.sessionToken = null;
     this.userId = null;
-    this.dashboardAccessToken = null;
+    this.clearSessionCookie();
 
     if (result.error) {
       return { success: false, message: result.error };

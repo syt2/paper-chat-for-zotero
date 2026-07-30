@@ -194,7 +194,14 @@ export class AuthManager {
     onBalanceUpdate: [],
     onError: [],
   };
-  private isAutoReloginInProgress = false; // 防止无限循环
+  private autoReloginAttempt: {
+    generation: number;
+    promise: Promise<boolean>;
+  } | null = null;
+  private initializeAttempt: {
+    generation: number;
+    promise: Promise<void>;
+  } | null = null;
   private modelRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private environmentGeneration = 0;
 
@@ -291,15 +298,23 @@ export class AuthManager {
    * 检查是否为 session 失效错误
    */
   private isSessionInvalidError(message: string): boolean {
+    const normalized = message.toLowerCase();
     // 检查 token 无效
     if (
-      message.includes("token") &&
-      (message.includes("无效") || message.includes("invalid"))
+      normalized.includes("token") &&
+      (message.includes("无效") ||
+        normalized.includes("invalid") ||
+        normalized.includes("expired"))
     ) {
       return true;
     }
     // 检查未登录/无权操作
-    if (message.includes("未登录") || message.includes("无权")) {
+    if (
+      message.includes("未登录") ||
+      message.includes("未授权") ||
+      message.includes("无权") ||
+      normalized.includes("unauthorized")
+    ) {
       return true;
     }
     return false;
@@ -307,7 +322,7 @@ export class AuthManager {
 
   /**
    * 带 session 失效重试的 API 调用包装器
-   * 如果 API 返回 session 失效错误，自动尝试重新登录并重试
+   * 如果 API 返回 session 失效错误，优先刷新已有 Dashboard Session，再重试。
    */
   private async withSessionRetry<
     T extends { success: boolean; message?: string },
@@ -324,7 +339,7 @@ export class AuthManager {
 
     if (!result.success && this.isSessionInvalidError(result.message || "")) {
       ztoolkit.log(
-        `[AuthManager] Session invalid for ${operationName}, attempting auto-relogin`,
+        `[AuthManager] Session invalid for ${operationName}, attempting session recovery`,
       );
       const reloginSuccess = await this.autoRelogin();
       if (reloginSuccess && expectedGeneration === this.environmentGeneration) {
@@ -785,16 +800,46 @@ export class AuthManager {
     };
   }
 
-  /**
-   * 自动重新登录（使用保存的凭证）
-   * 当 session 过期时调用，作为 cookie 恢复失败的兜底方案
-   */
+  /** 优先刷新已有 Dashboard Session，仅在刷新凭据失效后回退密码登录。 */
   async autoRelogin(): Promise<boolean> {
     const generation = this.environmentGeneration;
-    // 防止无限循环
-    if (this.isAutoReloginInProgress) {
-      ztoolkit.log("[AuthManager] Auto-relogin already in progress, skipping");
-      return false;
+    const pending = this.autoReloginAttempt;
+    if (pending?.generation === generation) {
+      return pending.promise;
+    }
+
+    const promise = this.performSessionRecovery(generation);
+    const attempt = { generation, promise };
+    this.autoReloginAttempt = attempt;
+    try {
+      return await promise;
+    } finally {
+      if (this.autoReloginAttempt === attempt) {
+        this.autoReloginAttempt = null;
+      }
+    }
+  }
+
+  private async performSessionRecovery(generation: number): Promise<boolean> {
+    if (this.authService.hasDashboardRefreshCookie()) {
+      ztoolkit.log("[AuthManager] Refreshing existing Dashboard Session");
+      const refreshResult = await this.authService.refreshDashboardSession();
+      if (generation !== this.environmentGeneration) {
+        return false;
+      }
+      if (refreshResult.success) {
+        this.syncAuthServiceIdentity();
+        ztoolkit.log("[AuthManager] Dashboard Session refreshed");
+        return true;
+      }
+      // 429、网络错误、服务端错误或 Origin 配置错误都不应创建新 Session。
+      if (refreshResult.status !== 401) {
+        ztoolkit.log(
+          "[AuthManager] Dashboard Session refresh failed without password fallback:",
+          refreshResult.message,
+        );
+        return false;
+      }
     }
 
     const savedUsername = getPref("username") as string;
@@ -809,53 +854,41 @@ export class AuthManager {
     const savedPassword = decodePassword(savedPasswordEncoded);
 
     ztoolkit.log(
-      "[AuthManager] Attempting auto-relogin for user:",
+      "[AuthManager] Refresh session unavailable, falling back to password login for:",
       savedUsername,
     );
 
-    this.isAutoReloginInProgress = true;
+    // 旧凭据已确认不可恢复后才清除 cookie 并创建新的登录 Session。
+    this.authService.clearSessionCookie();
+    const result = await this.authService.login({
+      username: savedUsername,
+      password: savedPassword,
+    });
 
-    try {
-      // 清除旧的 session cookie，确保使用新的 session
-      this.authService.clearSessionCookie();
-
-      const result = await this.authService.login({
-        username: savedUsername,
-        password: savedPassword,
-      });
-
-      if (generation !== this.environmentGeneration) {
-        return false;
-      }
-
-      if (result.success) {
-        ztoolkit.log("[AuthManager] Auto-relogin successful");
-
-        // 更新用户ID
-        const userId = this.authService.getUserId();
-        if (userId !== null) {
-          this.state.userId = userId;
-          this.authService.setUserId(userId);
-        }
-
-        // 从 HTTP Observer 捕获的 session 更新状态
-        const sessionToken = this.authService.getSessionToken();
-        if (sessionToken) {
-          this.state.sessionToken = sessionToken;
-        }
-
-        // 确保 authService 有 userId
-        if (this.state.userId !== null && this.state.userId > 0) {
-          this.authService.setUserId(this.state.userId);
-        }
-
-        return true;
-      }
-
-      ztoolkit.log("[AuthManager] Auto-relogin failed:", result.message);
+    if (generation !== this.environmentGeneration) {
       return false;
-    } finally {
-      this.isAutoReloginInProgress = false;
+    }
+
+    if (!result.success) {
+      ztoolkit.log("[AuthManager] Password fallback failed:", result.message);
+      return false;
+    }
+
+    this.syncAuthServiceIdentity();
+    ztoolkit.log("[AuthManager] Password fallback successful");
+    return true;
+  }
+
+  private syncAuthServiceIdentity(): void {
+    const userId = this.authService.getUserId();
+    if (userId !== null) {
+      this.state.userId = userId;
+      this.authService.setUserId(userId);
+    }
+
+    const sessionToken = this.authService.getSessionToken();
+    if (sessionToken) {
+      this.state.sessionToken = sessionToken;
     }
   }
 
@@ -1458,6 +1491,25 @@ export class AuthManager {
    * 初始化 - 检查登录状态
    */
   async initialize(): Promise<void> {
+    const generation = this.environmentGeneration;
+    const pending = this.initializeAttempt;
+    if (pending?.generation === generation) {
+      return pending.promise;
+    }
+
+    const promise = this.performInitialize(generation);
+    const attempt = { generation, promise };
+    this.initializeAttempt = attempt;
+    try {
+      await promise;
+    } finally {
+      if (this.initializeAttempt === attempt) {
+        this.initializeAttempt = null;
+      }
+    }
+  }
+
+  private async performInitialize(generation: number): Promise<void> {
     ztoolkit.log("[AuthManager] Initializing...", {
       hasApiKey: !!this.state.apiKey,
       hasUserId: this.state.userId !== null && this.state.userId > 0,
@@ -1466,30 +1518,53 @@ export class AuthManager {
       isLoggedIn: this.state.isLoggedIn,
     });
 
+    const hasCachedLogin = Boolean(
+      this.state.apiKey && this.state.userId !== null && this.state.userId > 0,
+    );
+    if (hasCachedLogin && this.state.user && this.state.isLoggedIn) {
+      ztoolkit.log("[AuthManager] Using locally cached user info first");
+      this.notifyLoginStatusChange(true);
+      this.notifyUserInfoUpdate(this.state.user);
+      this.notifyBalanceUpdate(
+        this.state.user.quota,
+        this.state.user.used_quota,
+      );
+    }
+
+    if (
+      this.authService.hasDashboardRefreshCookie() &&
+      !this.authService.hasDashboardAccessToken()
+    ) {
+      const recovered = await this.autoRelogin();
+      if (generation !== this.environmentGeneration) {
+        return;
+      }
+      if (!recovered && !this.authService.getSessionToken()) {
+        ztoolkit.log(
+          "[AuthManager] Dashboard Session could not be restored; keeping cached state",
+        );
+        return;
+      }
+    }
+
     // 如果有apiKey和userId说明之前登录过
     if (
       this.state.apiKey &&
       this.state.userId !== null &&
       this.state.userId > 0
     ) {
-      // 先用本地缓存通知UI，然后异步刷新最新数据
-      if (this.state.user && this.state.isLoggedIn) {
-        ztoolkit.log("[AuthManager] Using locally cached user info first");
-        // 通知UI更新（先用缓存数据）
-        this.notifyLoginStatusChange(true);
-        this.notifyUserInfoUpdate(this.state.user);
-        this.notifyBalanceUpdate(
-          this.state.user.quota,
-          this.state.user.used_quota,
-        );
+      // 认证 cookie 已恢复，刷新最新用户信息。
+      await this.refreshUserInfo(generation);
+      if (generation !== this.environmentGeneration) {
+        return;
       }
-
-      // 尝试从API刷新最新用户信息（session cookie 由 Services.cookies 管理）
-      await this.refreshUserInfo();
       if (this.state.isLoggedIn) {
-        await this.ensurePluginToken();
+        await this.ensurePluginToken(false, generation);
+        if (generation !== this.environmentGeneration) {
+          return;
+        }
         // Refresh model list on startup (non-blocking — don't delay UI registration)
-        this.fetchAndSetDefaultModel().catch((e) => {
+        this.fetchAndSetDefaultModel(generation).catch((e) => {
           ztoolkit.log("[AuthManager] Startup model refresh failed:", e);
         });
         this.syncLocalLanguagePreference().catch((e) => {
@@ -1536,6 +1611,7 @@ export class AuthManager {
    */
   destroy(): void {
     this.stopModelRefreshTimer();
+    this.authService.destroy();
   }
 }
 
