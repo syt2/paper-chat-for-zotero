@@ -51,6 +51,7 @@ import {
 // 密码加密/解密（使用简单的 XOR 加密 + Base64 编码）
 // 加密密钥基于插件 ID 和用户 profile 路径生成，比纯 Base64 更安全
 const ENCRYPTION_SALT = "paper-chat-v1-salt";
+const PASSWORD_LOGIN_CONFLICT_COOLDOWN_MS = 10_000;
 
 function getEncryptionKey(): string {
   // 使用插件 ID、salt 和 Zotero 数据目录生成密钥
@@ -202,6 +203,7 @@ export class AuthManager {
     generation: number;
     promise: Promise<void>;
   } | null = null;
+  private passwordLoginBlockedUntil = 0;
   private modelRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private environmentGeneration = 0;
 
@@ -702,6 +704,27 @@ export class AuthManager {
     password: string,
   ): Promise<{ success: boolean; message: string }> {
     const generation = this.environmentGeneration;
+    this.passwordLoginBlockedUntil = 0;
+
+    // 交互式重新登录会创建新的 NewAPI Session。先尽力注销当前
+    // Session，避免仅清除本地 Cookie 后让旧 Session 在服务端存活 30 天。
+    if (this.authService.hasAuthenticationState()) {
+      ztoolkit.log("[AuthManager] Revoking old session before login");
+      const logoutResult = await this.authService.logout();
+      if (generation !== this.environmentGeneration) {
+        return {
+          success: false,
+          message: "PaperChat service changed during login",
+        };
+      }
+      if (!logoutResult.success) {
+        ztoolkit.log(
+          "[AuthManager] Failed to revoke old session before login:",
+          logoutResult.message,
+        );
+      }
+    }
+
     // 登录前始终清除旧状态，确保干净的登录环境
     ztoolkit.log("[AuthManager] Clearing old state before login");
     this.state.userId = null;
@@ -792,6 +815,11 @@ export class AuthManager {
       return { success: true, message: getString("api-success-login") };
     }
 
+    if (result.status === 409 || result.code === "AUTH_SESSION_LIMIT") {
+      this.passwordLoginBlockedUntil =
+        Date.now() + PASSWORD_LOGIN_CONFLICT_COOLDOWN_MS;
+    }
+
     return {
       success: false,
       message:
@@ -828,6 +856,7 @@ export class AuthManager {
         return false;
       }
       if (refreshResult.success) {
+        this.passwordLoginBlockedUntil = 0;
         this.syncAuthServiceIdentity();
         ztoolkit.log("[AuthManager] Dashboard Session refreshed");
         return true;
@@ -840,6 +869,13 @@ export class AuthManager {
         );
         return false;
       }
+    }
+
+    if (Date.now() < this.passwordLoginBlockedUntil) {
+      ztoolkit.log(
+        "[AuthManager] Automatic password login cooling down after login conflict",
+      );
+      return false;
     }
 
     const savedUsername = getPref("username") as string;
@@ -870,10 +906,15 @@ export class AuthManager {
     }
 
     if (!result.success) {
+      if (result.status === 409 || result.code === "AUTH_SESSION_LIMIT") {
+        this.passwordLoginBlockedUntil =
+          Date.now() + PASSWORD_LOGIN_CONFLICT_COOLDOWN_MS;
+      }
       ztoolkit.log("[AuthManager] Password fallback failed:", result.message);
       return false;
     }
 
+    this.passwordLoginBlockedUntil = 0;
     this.syncAuthServiceIdentity();
     ztoolkit.log("[AuthManager] Password fallback successful");
     return true;
@@ -897,6 +938,7 @@ export class AuthManager {
    */
   async logout(): Promise<void> {
     const generation = this.environmentGeneration;
+    this.passwordLoginBlockedUntil = 0;
     this.stopModelRefreshTimer();
     await this.authService.logout();
 
@@ -934,6 +976,7 @@ export class AuthManager {
 
   applyPaperChatBaseUrlChange(): void {
     this.environmentGeneration += 1;
+    this.passwordLoginBlockedUntil = 0;
     this.authService.clearSessionCookie();
     this.authService.setBaseUrl(getPaperChatSiteBaseUrl());
     this.authService.setUserId(null);

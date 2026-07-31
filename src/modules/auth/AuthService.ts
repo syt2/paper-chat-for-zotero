@@ -257,6 +257,14 @@ export class AuthService {
     return Boolean(this.dashboardRefreshToken);
   }
 
+  hasAuthenticationState(): boolean {
+    return Boolean(
+      this.sessionToken ||
+      this.dashboardAccessToken ||
+      this.dashboardRefreshToken,
+    );
+  }
+
   /**
    * 清除所有登录状态（包括浏览器 cookie jar）
    */
@@ -657,10 +665,17 @@ export class AuthService {
     });
 
     if (result.error) {
-      return { success: false, message: result.error };
+      return {
+        success: false,
+        message: result.error,
+        status: result.status,
+      };
     }
 
     if (result.status >= 400 || !result.data?.success) {
+      const errorData = result.data as
+        | (ApiResponse & { code?: unknown })
+        | null;
       return {
         success: false,
         message: this.parseErrorMessage(
@@ -669,6 +684,8 @@ export class AuthService {
             args: { status: result.status },
           }),
         ),
+        code: typeof errorData?.code === "string" ? errorData.code : undefined,
+        status: result.status,
       };
     }
 
@@ -835,7 +852,7 @@ export class AuthService {
     );
     if (result.status === 404) {
       result = await this.request<ApiResponse>(
-        "POST",
+        "GET",
         `${this.baseUrl}/api/user/logout`,
       );
     }

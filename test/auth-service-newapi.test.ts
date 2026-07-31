@@ -19,13 +19,26 @@ describe("AuthService NewAPI authentication", function () {
   let originalZtoolkit: unknown;
   let originalServices: unknown;
   let originalCi: unknown;
+  let originalAddon: unknown;
 
   beforeEach(function () {
     originalZotero = (globalThis as any).Zotero;
     originalZtoolkit = (globalThis as any).ztoolkit;
     originalServices = (globalThis as any).Services;
     originalCi = (globalThis as any).Ci;
+    originalAddon = (globalThis as any).addon;
     (globalThis as any).ztoolkit = { log: () => undefined };
+    (globalThis as any).addon = {
+      data: {
+        locale: {
+          current: {
+            formatMessagesSync: () => [
+              { value: "localized fallback", attributes: null },
+            ],
+          },
+        },
+      },
+    };
   });
 
   afterEach(function () {
@@ -33,6 +46,7 @@ describe("AuthService NewAPI authentication", function () {
     (globalThis as any).ztoolkit = originalZtoolkit;
     (globalThis as any).Services = originalServices;
     (globalThis as any).Ci = originalCi;
+    (globalThis as any).addon = originalAddon;
   });
 
   it("uses the dashboard bearer token for user APIs and the new logout route", async function () {
@@ -93,12 +107,57 @@ describe("AuthService NewAPI authentication", function () {
 
     assert.isTrue(logout.success);
     assert.deepEqual(
-      calls.slice(1).map((call) => call.url),
+      calls.slice(1).map((call) => [call.method, call.url]),
       [
-        "https://paperchat.test/api/user/auth/logout",
-        "https://paperchat.test/api/user/logout",
+        ["POST", "https://paperchat.test/api/user/auth/logout"],
+        ["GET", "https://paperchat.test/api/user/logout"],
       ],
     );
+  });
+
+  it("revokes the current session before an interactive login", async function () {
+    const calls: string[] = [];
+    (globalThis as any).Zotero = {
+      DataDirectory: { dir: "/tmp/zotero-profile" },
+      Prefs: {
+        set: () => undefined,
+      },
+    };
+    const manager = Object.create(AuthManager.prototype) as any;
+    manager.environmentGeneration = 0;
+    manager.state = {
+      isLoggedIn: true,
+      user: { id: 123 },
+      subscription: null,
+      token: null,
+      apiKey: "sk-plugin",
+      sessionToken: null,
+      userId: 123,
+    };
+    manager.authService = {
+      hasAuthenticationState: () => true,
+      logout: async () => {
+        calls.push("logout");
+        return { success: true, message: "" };
+      },
+      setUserId: () => undefined,
+      clearSessionCookie: () => undefined,
+      login: async () => {
+        calls.push("login");
+        return {
+          success: false,
+          message: "Conflict",
+          status: 409,
+          code: "AUTH_SESSION_LIMIT",
+        };
+      },
+    };
+
+    const result = await manager.login("user", "wrong-password");
+
+    assert.isFalse(result.success);
+    assert.deepEqual(calls, ["logout", "login"]);
+    assert.isAbove(manager.passwordLoginBlockedUntil, Date.now());
   });
 
   it("keeps restoring the legacy session cookie for older NewAPI versions", async function () {
@@ -284,6 +343,28 @@ describe("AuthService NewAPI authentication", function () {
     assert.equal(calls.length, 1);
   });
 
+  it("preserves structured login conflicts for recovery decisions", async function () {
+    const calls: HttpCall[] = [];
+    installHttpMock(
+      calls,
+      [
+        {
+          success: false,
+          code: "AUTH_SESSION_LIMIT",
+          message: "Conflict",
+        },
+      ],
+      [409],
+    );
+    const service = new AuthService("https://paperchat.test");
+
+    const result = await service.login({ username: "user", password: "pass" });
+
+    assert.isFalse(result.success);
+    assert.equal(result.status, 409);
+    assert.equal(result.code, "AUTH_SESSION_LIMIT");
+  });
+
   it("coalesces session recovery and refreshes before password fallback", async function () {
     const manager = Object.create(AuthManager.prototype) as any;
     let refreshCalls = 0;
@@ -415,6 +496,48 @@ describe("AuthService NewAPI authentication", function () {
     assert.isTrue(recovered);
     assert.equal(clearCalls, 1);
     assert.equal(loginCalls, 1);
+  });
+
+  it("does not repeat automatic password login after a session-limit conflict", async function () {
+    const manager = Object.create(AuthManager.prototype) as any;
+    let loginCalls = 0;
+    (globalThis as any).Zotero = {
+      DataDirectory: { dir: "/tmp/zotero-profile" },
+      Prefs: {
+        get(key: string) {
+          if (key.endsWith(".username")) return "user";
+          if (key.endsWith(".loginPassword")) return btoa("pass");
+          return undefined;
+        },
+      },
+    };
+    manager.environmentGeneration = 0;
+    manager.autoReloginAttempt = null;
+    manager.passwordLoginBlockedUntil = 0;
+    manager.state = { userId: 123, sessionToken: null };
+    manager.authService = {
+      hasDashboardRefreshCookie: () => false,
+      clearSessionCookie: () => undefined,
+      login: async () => {
+        loginCalls += 1;
+        return {
+          success: false,
+          message: "Conflict",
+          status: 409,
+          code: "AUTH_SESSION_LIMIT",
+        };
+      },
+    };
+
+    const firstRecovery = await manager.autoRelogin();
+    const secondRecovery = await manager.autoRelogin();
+    manager.passwordLoginBlockedUntil = 0;
+    const thirdRecovery = await manager.autoRelogin();
+
+    assert.isFalse(firstRecovery);
+    assert.isFalse(secondRecovery);
+    assert.isFalse(thirdRecovery);
+    assert.equal(loginCalls, 2);
   });
 
   it("restores the dashboard session once during concurrent initialization", async function () {
