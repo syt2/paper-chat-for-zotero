@@ -32,6 +32,11 @@ import {
   parseTierState,
   type PaperChatTier,
 } from "../../providers/paperchat-tier-routing";
+import {
+  REASONING_EFFORT_OPTIONS,
+  normalizeReasoningEffortPreference,
+  type ReasoningEffortPreference,
+} from "../../providers/reasoning-request";
 import { getChatManager, type PanelMode } from "./ChatPanelManager";
 import {
   MentionSelector,
@@ -1404,6 +1409,43 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
     );
   }
 
+  const reasoningSelectorBtn = container.querySelector(
+    "#chat-reasoning-selector-btn",
+  ) as HTMLButtonElement | null;
+  const reasoningDropdown = container.querySelector(
+    "#chat-reasoning-dropdown",
+  ) as HTMLElement | null;
+  if (reasoningSelectorBtn && reasoningDropdown) {
+    updateReasoningSelectorDisplay(container);
+    reasoningSelectorBtn.addEventListener("click", () => {
+      const isVisible = reasoningDropdown.style.display === "block";
+      if (isVisible) {
+        reasoningDropdown.style.display = "none";
+        return;
+      }
+      populateReasoningDropdown(container, reasoningDropdown);
+      reasoningDropdown.style.display = "block";
+    });
+
+    const ownerDoc = container.ownerDocument;
+    const closeReasoningDropdownOnOutsideClick = (event: Event): void => {
+      const target = event.target as HTMLElement;
+      if (
+        !reasoningSelectorBtn.contains(target) &&
+        !reasoningDropdown.contains(target)
+      ) {
+        reasoningDropdown.style.display = "none";
+      }
+    };
+    ownerDoc?.addEventListener("click", closeReasoningDropdownOnOutsideClick);
+    disposers.push(() =>
+      ownerDoc?.removeEventListener(
+        "click",
+        closeReasoningDropdownOnOutsideClick,
+      ),
+    );
+  }
+
   // Settings button - open preferences
   const settingsBtn = container.querySelector(
     "#chat-settings-btn",
@@ -2320,6 +2362,99 @@ export function updateModelSelectorDisplay(container: HTMLElement): void {
   modelSelectorText.textContent = effectiveModel
     ? `PaperChat: ${tierLabel} · ${effectiveModel}`
     : `PaperChat: ${tierLabel}`;
+}
+
+const REASONING_LABEL_KEYS: Record<ReasoningEffortPreference, string> = {
+  default: "chat-reasoning-default",
+  none: "chat-reasoning-none",
+  low: "chat-reasoning-low",
+  medium: "chat-reasoning-medium",
+  high: "chat-reasoning-high",
+  xhigh: "chat-reasoning-xhigh",
+  max: "chat-reasoning-max",
+};
+
+function getReasoningEffortLabel(effort: ReasoningEffortPreference): string {
+  return getString(REASONING_LABEL_KEYS[effort] as any);
+}
+
+export function updateReasoningSelectorDisplay(container: HTMLElement): void {
+  const text = container.querySelector(
+    "#chat-reasoning-selector-text",
+  ) as HTMLElement | null;
+  if (!text) {
+    return;
+  }
+  const effort = normalizeReasoningEffortPreference(getPref("reasoningEffort"));
+  text.textContent = `${getString("chat-reasoning-label")}: ${getReasoningEffortLabel(effort)}`;
+}
+
+function populateReasoningDropdown(
+  container: HTMLElement,
+  dropdown: HTMLElement,
+): void {
+  const doc = container.ownerDocument!;
+  const theme = getCurrentTheme();
+  const selected = normalizeReasoningEffortPreference(
+    getPref("reasoningEffort"),
+  );
+  dropdown.textContent = "";
+
+  for (const effort of REASONING_EFFORT_OPTIONS) {
+    const isSelected = effort === selected;
+    const item = createElement(doc, "button", {
+      width: "100%",
+      display: "flex",
+      alignItems: "center",
+      gap: "8px",
+      padding: "7px 10px",
+      border: "none",
+      background: isSelected ? theme.dropdownItemHoverBg : "transparent",
+      color: isSelected ? theme.inputFocusBorderColor : theme.textPrimary,
+      cursor: "pointer",
+      fontSize: "12px",
+      textAlign: "left",
+    });
+    item.setAttribute("type", "button");
+
+    const check = createElement(doc, "span", {
+      width: "12px",
+      color: theme.inputFocusBorderColor,
+      fontWeight: "bold",
+    });
+    check.textContent = isSelected ? "✓" : "";
+    item.appendChild(check);
+
+    const label = createElement(doc, "span", {});
+    label.textContent = getReasoningEffortLabel(effort);
+    item.appendChild(label);
+
+    item.addEventListener("mouseenter", () => {
+      if (!isSelected) {
+        item.style.background = theme.dropdownItemHoverBg;
+      }
+    });
+    item.addEventListener("mouseleave", () => {
+      if (!isSelected) {
+        item.style.background = "transparent";
+      }
+    });
+    item.addEventListener("click", () => {
+      setPref("reasoningEffort", effort);
+      for (const provider of getProviderManager().getConfiguredProviders()) {
+        if (
+          provider.config.type === "openai" ||
+          provider.config.type === "openai-compatible" ||
+          provider.config.type === "custom"
+        ) {
+          provider.updateConfig({ reasoningEffort: effort });
+        }
+      }
+      updateReasoningSelectorDisplay(container);
+      dropdown.style.display = "none";
+    });
+    dropdown.appendChild(item);
+  }
 }
 
 /**

@@ -251,6 +251,15 @@ export function applyThemeToContainer(container: HTMLElement): void {
     modelSelectorBtn.style.color = theme.textSecondary;
   }
 
+  const reasoningSelectorBtn = container.querySelector(
+    "#chat-reasoning-selector-btn",
+  ) as HTMLElement;
+  if (reasoningSelectorBtn) {
+    reasoningSelectorBtn.style.background = theme.buttonBg;
+    reasoningSelectorBtn.style.borderColor = theme.inputBorderColor;
+    reasoningSelectorBtn.style.color = theme.textSecondary;
+  }
+
   // Model dropdown
   const modelDropdown = container.querySelector(
     "#chat-model-dropdown",
@@ -258,6 +267,14 @@ export function applyThemeToContainer(container: HTMLElement): void {
   if (modelDropdown) {
     modelDropdown.style.background = theme.dropdownBg;
     modelDropdown.style.borderColor = theme.borderColor;
+  }
+
+  const reasoningDropdown = container.querySelector(
+    "#chat-reasoning-dropdown",
+  ) as HTMLElement;
+  if (reasoningDropdown) {
+    reasoningDropdown.style.background = theme.dropdownBg;
+    reasoningDropdown.style.borderColor = theme.borderColor;
   }
 
   // History dropdown

@@ -17,6 +17,7 @@ import {
   logPromptCacheUsage,
   stablePromptCacheStringify,
 } from "./prompt-cache-diagnostics";
+import { applyReasoningRequestOptions } from "./reasoning-request";
 
 type ResponsesInputItem = Record<string, unknown>;
 type ResponsesOutputItem = Record<string, unknown>;
@@ -1182,6 +1183,7 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     if (hasHostedWebSearch) {
       body.include = ["web_search_call.action.sources"];
     }
+    applyReasoningRequestOptions(body, this._config, "responses");
     return body;
   }
 

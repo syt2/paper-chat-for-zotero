@@ -20,6 +20,7 @@ import {
   recordPromptCacheRequestShape,
   stablePromptCacheStringify,
 } from "./prompt-cache-diagnostics";
+import { applyReasoningRequestOptions } from "./reasoning-request";
 
 const EXTRA_REQUEST_BODY_PROTECTED_KEYS = new Set([
   "model",
@@ -365,6 +366,8 @@ export class OpenAICompatibleProvider extends BaseProvider {
         requestBody.max_tokens = this._config.maxTokens;
       }
     }
+
+    applyReasoningRequestOptions(requestBody, this._config, "chat_completions");
   }
 
   private prepareOpenAIRequestBody(

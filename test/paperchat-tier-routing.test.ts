@@ -188,6 +188,11 @@ describe("paperchat tier routing", function () {
           apiCapabilities: {
             responses: true,
             hostedWebSearch: true,
+            reasoning: {
+              protocol: "openai",
+              efforts: ["none", "low", "medium", "high", "xhigh", "max"],
+              default: "medium",
+            },
           },
         },
         m2: {
@@ -198,6 +203,11 @@ describe("paperchat tier routing", function () {
           tier: "lite",
           apiCapabilities: {
             hostedWebSearch: true,
+            reasoning: {
+              protocol: "deepseek",
+              efforts: ["none", "high", "max", "invalid"],
+              default: "high",
+            },
           },
         },
       },
@@ -212,6 +222,11 @@ describe("paperchat tier routing", function () {
         apiCapabilities: {
           responses: true,
           hostedWebSearch: true,
+          reasoning: {
+            protocol: "openai",
+            efforts: ["none", "low", "medium", "high", "xhigh", "max"],
+            default: "medium",
+          },
         },
       },
       m2: {
@@ -220,6 +235,15 @@ describe("paperchat tier routing", function () {
       },
       m3: {
         tierCode: 1,
+        apiCapabilities: {
+          responses: false,
+          hostedWebSearch: false,
+          reasoning: {
+            protocol: "deepseek",
+            efforts: ["none", "high", "max"],
+            default: "high",
+          },
+        },
       },
     });
   });

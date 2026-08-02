@@ -29,6 +29,7 @@ import {
   PROVIDER_REQUEST_MAX_ATTEMPTS,
   PROVIDER_RETRY_BACKOFF_BASE_MS,
 } from "./provider-retry-policy";
+import { normalizeReasoningEffortPreference } from "./reasoning-request";
 
 /**
  * Built-in provider metadata. Model lists are loaded from provider APIs or
@@ -437,7 +438,12 @@ export class ProviderManager {
       case "openai":
       case "openai-compatible":
       case "custom":
-        return new OpenAICompatibleProvider(config as ApiKeyProviderConfig);
+        return new OpenAICompatibleProvider({
+          ...(config as ApiKeyProviderConfig),
+          reasoningEffort: normalizeReasoningEffortPreference(
+            getPref("reasoningEffort"),
+          ),
+        });
       default:
         return null;
     }

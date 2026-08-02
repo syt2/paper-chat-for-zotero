@@ -32,6 +32,7 @@ import {
 import { isEmbeddingModel } from "../embedding/providers/PaperChatEmbedding";
 import { resolveSelectedTierModel } from "./paperchat-tier-routing";
 import { getPaperChatApiCapabilities } from "./paperchat-routing-metadata";
+import { normalizeReasoningEffortPreference } from "./reasoning-request";
 
 export class PaperChatProvider implements AIProvider {
   private _config: PaperChatProviderConfig;
@@ -144,6 +145,11 @@ export class PaperChatProvider implements AIProvider {
       model = resolveAutoModel(availableModels) || fallbackModel;
     }
 
+    const capabilities = getPaperChatApiCapabilities(
+      model,
+      getModelRoutingMeta(),
+    );
+
     return {
       id: this._config.id,
       name: this._config.name,
@@ -161,6 +167,10 @@ export class PaperChatProvider implements AIProvider {
           : undefined,
       temperature: this._config.temperature ?? 0.7,
       systemPrompt: this._config.systemPrompt || "",
+      reasoningEffort: normalizeReasoningEffortPreference(
+        getPref("reasoningEffort"),
+      ),
+      reasoningCapability: capabilities.reasoning,
     };
   }
 

@@ -19,6 +19,22 @@ export type ModelCapability =
   | "tool_use"
   | "web_search";
 
+export type ReasoningEffort =
+  | "none"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
+
+export type ReasoningProtocol = "openai" | "deepseek";
+
+export interface ModelReasoningCapability {
+  protocol: ReasoningProtocol;
+  efforts: ReasoningEffort[];
+  default: ReasoningEffort;
+}
+
 /**
  * Model information with metadata
  */
@@ -92,6 +108,10 @@ export interface ApiKeyProviderConfig extends BaseProviderConfig {
   maxTokens?: number;
   temperature?: number;
   systemPrompt?: string;
+  /** Runtime generation preference. "default" leaves provider behavior unchanged. */
+  reasoningEffort?: ReasoningEffort | "default";
+  /** Runtime capability of the selected model. */
+  reasoningCapability?: ModelReasoningCapability;
   extraRequestBody?: Record<string, unknown>;
   modelExtraRequestBody?: Record<string, Record<string, unknown>>;
 }

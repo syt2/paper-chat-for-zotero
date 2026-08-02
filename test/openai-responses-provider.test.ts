@@ -12,6 +12,7 @@ import type { ToolDefinition } from "../src/types/tool";
 
 function createProvider(
   runtime: { sessionId?: string; hostedWebSearch?: boolean } = {},
+  configOverrides: Partial<ApiKeyProviderConfig> = {},
 ): OpenAIResponsesProvider {
   return new OpenAIResponsesProvider(
     {
@@ -27,6 +28,7 @@ function createProvider(
       availableModels: ["gpt-5.4"],
       temperature: 0.7,
       maxTokens: 4096,
+      ...configOverrides,
     } satisfies ApiKeyProviderConfig,
     runtime,
   );
@@ -218,6 +220,42 @@ describe("OpenAIResponsesProvider", function () {
       type: "function",
       name: "web_search",
     });
+  });
+
+  it("sends reasoning effort without breaking previous_response_id", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    const responses = [
+      completedResponse("resp_reasoning_1", "first answer"),
+      completedResponse("resp_reasoning_2", "second answer"),
+    ];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse(responses.shift()!);
+    }) as typeof fetch;
+
+    const provider = createProvider(
+      { sessionId: "session-reasoning" },
+      {
+        defaultModel: "gpt-5.6-sol",
+        reasoningEffort: "high",
+        reasoningCapability: {
+          protocol: "openai",
+          efforts: ["none", "low", "medium", "high", "xhigh", "max"],
+          default: "medium",
+        },
+      },
+    );
+    await provider.chatCompletion([message("u1", "user", "first")]);
+    provider.updateConfig({ reasoningEffort: "max" });
+    await provider.chatCompletion([
+      message("u1", "user", "first"),
+      message("a1", "assistant", "first answer"),
+      message("u2", "user", "second"),
+    ]);
+
+    assert.deepEqual(requestBodies[0].reasoning, { effort: "high" });
+    assert.equal(requestBodies[1].previous_response_id, "resp_reasoning_1");
+    assert.deepEqual(requestBodies[1].reasoning, { effort: "max" });
   });
 
   it("preserves caller-provided local search tools when hosted search is disabled", async function () {

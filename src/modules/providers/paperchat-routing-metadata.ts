@@ -2,6 +2,11 @@ import type {
   PaperChatTier,
   PaperChatTierPools,
 } from "./paperchat-tier-routing";
+import type {
+  ModelReasoningCapability,
+  ReasoningEffort,
+  ReasoningProtocol,
+} from "../../types/provider";
 
 export interface PaperChatModelRoutingMeta {
   ratio?: number;
@@ -12,6 +17,7 @@ export interface PaperChatModelRoutingMeta {
   apiCapabilities?: {
     responses?: boolean;
     hostedWebSearch?: boolean;
+    reasoning?: ModelReasoningCapability;
   };
 }
 
@@ -37,6 +43,57 @@ const ROUTING_TIER_TO_CODE: Record<string, number> = {
   ultra: 4,
   "paperchat-ultra": 4,
 };
+
+const REASONING_EFFORTS = new Set<ReasoningEffort>([
+  "none",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
+
+function parseReasoningCapability(
+  value: unknown,
+): ModelReasoningCapability | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (record.protocol !== "openai" && record.protocol !== "deepseek") {
+    return undefined;
+  }
+  if (!Array.isArray(record.efforts)) {
+    return undefined;
+  }
+
+  const efforts = record.efforts.filter(
+    (effort): effort is ReasoningEffort =>
+      typeof effort === "string" &&
+      REASONING_EFFORTS.has(effort as ReasoningEffort),
+  );
+  if (efforts.length === 0) {
+    return undefined;
+  }
+
+  const uniqueEfforts = [...new Set(efforts)];
+  const defaultEffort =
+    typeof record.default === "string" &&
+    REASONING_EFFORTS.has(record.default as ReasoningEffort) &&
+    uniqueEfforts.includes(record.default as ReasoningEffort)
+      ? (record.default as ReasoningEffort)
+      : undefined;
+  if (!defaultEffort) {
+    return undefined;
+  }
+
+  return {
+    protocol: record.protocol as ReasoningProtocol,
+    efforts: uniqueEfforts,
+    default: defaultEffort,
+  };
+}
 
 export function parseModelRoutingConfig(
   value: unknown,
@@ -107,10 +164,13 @@ export function parseModelRoutingConfig(
         string,
         unknown
       >;
-      if (capabilities.responses === true) {
+      const responses = capabilities.responses === true;
+      const reasoning = parseReasoningCapability(capabilities.reasoning);
+      if (responses || reasoning) {
         meta.apiCapabilities = {
-          responses: true,
-          hostedWebSearch: capabilities.hostedWebSearch === true,
+          responses,
+          hostedWebSearch: responses && capabilities.hostedWebSearch === true,
+          ...(reasoning ? { reasoning } : {}),
         };
       }
     }
@@ -132,11 +192,16 @@ export function parseModelRoutingConfig(
 export function getPaperChatApiCapabilities(
   model: string,
   routingMeta: PaperChatModelRoutingMetaMap,
-): { responses: boolean; hostedWebSearch: boolean } {
+): {
+  responses: boolean;
+  hostedWebSearch: boolean;
+  reasoning?: ModelReasoningCapability;
+} {
   const capabilities = routingMeta[model]?.apiCapabilities;
   return {
     responses: capabilities?.responses === true,
     hostedWebSearch: capabilities?.hostedWebSearch === true,
+    reasoning: capabilities?.reasoning,
   };
 }
 
