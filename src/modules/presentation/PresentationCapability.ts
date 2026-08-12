@@ -7,6 +7,7 @@ import {
   getErrorMessage,
 } from "../../utils/common";
 import { getPresentationRenderer } from "./PresentationRendererLoader";
+import { attachPresentationToZotero } from "./PresentationAttachment";
 import {
   PresentationResolvedMediaDuplicateError,
   resolvePresentationMedia,
@@ -488,14 +489,31 @@ export async function executePresentationCapability(
     let visualReviewStatus: "passed" | "warnings" | "not_requested" =
       visualReviewer ? "passed" : "not_requested";
     let visualReviewSummary: string | undefined;
+    const releaseVisualWarnings: string[] = [];
     const acceptReleaseVisualWarning = (summary: string) => {
+      if (!releaseVisualWarnings.includes(summary)) {
+        releaseVisualWarnings.push(summary);
+      }
       visualReviewStatus = "warnings";
-      visualReviewSummary = `Exported with non-blocking visual review warnings: ${summary}`;
+      visualReviewSummary = `Exported with non-blocking visual review warnings: ${releaseVisualWarnings.join(
+        "; ",
+      )}`;
       if (typeof ztoolkit !== "undefined") {
         ztoolkit.log(
           `[presentation] Production export continued after visual review warning: ${summary}`,
         );
       }
+    };
+    const acceptVisualReviewSuccess = (summary: string) => {
+      if (releaseVisualWarnings.length > 0) {
+        visualReviewStatus = "warnings";
+        visualReviewSummary = `Exported with non-blocking visual review warnings: ${releaseVisualWarnings.join(
+          "; ",
+        )}. ${summary}`;
+        return;
+      }
+      visualReviewStatus = "passed";
+      visualReviewSummary = summary;
     };
     if (planningQualityWarnings.length > 0) {
       acceptReleaseVisualWarning(
@@ -505,8 +523,8 @@ export async function executePresentationCapability(
       );
     }
     const releaseBlocksVisualReview = (
-      review: PresentationVisualReviewResponse,
-    ) => strictQuality || review.failureClass === "render_safety";
+      _review: PresentationVisualReviewResponse,
+    ) => strictQuality;
     if (visualReviewer) {
       const draft = await renderPreview(
         renderableRequest,
@@ -532,12 +550,8 @@ export async function executePresentationCapability(
       }
 
       let structuralRepairIssue: string | undefined;
-      let structuralRepairFailureClass:
-        | PresentationVisualReviewResponse["failureClass"]
-        | undefined;
       if (draftReview?.verdict === "reject") {
         structuralRepairIssue = `Draft visual review rejected the deck: ${draftReview.summary}`;
-        structuralRepairFailureClass = draftReview.failureClass;
       } else if (draftReview?.verdict === "revise") {
         const baselineQualityErrors = new Set(
           validatePresentationQuality(
@@ -560,32 +574,37 @@ export async function executePresentationCapability(
             .slice(0, 8)
             .join("; ")}`;
         } else {
-          renderableRequest = revisedRequest;
-          const revised = await renderPreview(
-            renderableRequest,
-            request.slides.length,
-          );
-          bytes = revised.bytes;
-          let finalReview: PresentationVisualReviewResponse | undefined;
           try {
-            finalReview = await visualReviewer({
-              stage: "final",
-              title: request.title,
-              outline: appendPresentationVisualWarnings(
-                buildPresentationVisualReviewOutline(renderableRequest),
-                revised.visualWarnings,
-              ),
-              previewSlides: revised.previewSlides,
-            });
-            visualReviewRounds += 1;
-          } catch (reviewError) {
-            const summary = `Final presentation visual quality review failed before export: ${getErrorMessage(reviewError)}`;
+            const revised = await renderPreview(
+              revisedRequest,
+              request.slides.length,
+            );
+            renderableRequest = revisedRequest;
+            bytes = revised.bytes;
+            let finalReview: PresentationVisualReviewResponse | undefined;
+            try {
+              finalReview = await visualReviewer({
+                stage: "final",
+                title: request.title,
+                outline: appendPresentationVisualWarnings(
+                  buildPresentationVisualReviewOutline(renderableRequest),
+                  revised.visualWarnings,
+                ),
+                previewSlides: revised.previewSlides,
+              });
+              visualReviewRounds += 1;
+            } catch (reviewError) {
+              const summary = `Final presentation visual quality review failed before export: ${getErrorMessage(reviewError)}`;
+              if (strictQuality) throw new Error(summary);
+              acceptReleaseVisualWarning(summary);
+            }
+            if (finalReview && finalReview.verdict !== "pass") {
+              structuralRepairIssue = `Final visual review did not approve the deck: ${finalReview.summary}`;
+            }
+          } catch (revisionError) {
+            const summary = `Presentation visual revision could not produce a replacement deck: ${getErrorMessage(revisionError)}`;
             if (strictQuality) throw new Error(summary);
             acceptReleaseVisualWarning(summary);
-          }
-          if (finalReview && finalReview.verdict !== "pass") {
-            structuralRepairIssue = `Final visual review did not approve the deck: ${finalReview.summary}`;
-            structuralRepairFailureClass = finalReview.failureClass;
           }
         }
       }
@@ -604,10 +623,7 @@ export async function executePresentationCapability(
           );
         } catch (repairError) {
           const summary = `Presentation visual structural repair failed after a usable deck was already rendered: ${getErrorMessage(repairError)}`;
-          if (
-            strictQuality ||
-            structuralRepairFailureClass === "render_safety"
-          ) {
+          if (strictQuality) {
             throw new Error(summary);
           }
           structuralRepairAttemptFailed = true;
@@ -618,105 +634,120 @@ export async function executePresentationCapability(
           // editorial repair attempt fails. The bytes above remain exportable.
         } else if (!repairedRequest) {
           const summary = `Presentation visual quality gate rejected the deck and no full structural replan was available: ${structuralRepairIssue}`;
-          if (
-            strictQuality ||
-            structuralRepairFailureClass === "render_safety"
-          ) {
+          if (strictQuality) {
             throw new Error(summary);
           }
           acceptReleaseVisualWarning(summary);
         } else {
-          resolved = await resolveCandidate(repairedRequest);
-          request = resolved.request;
-          renderableRequest = resolved.renderableRequest;
-          let repaired = await renderPreview(
-            renderableRequest,
-            request.slides.length,
-          );
-          bytes = repaired.bytes;
-          let repairedReview: PresentationVisualReviewResponse | undefined;
+          const lastUsableRequest = request;
+          const lastUsableRenderableRequest = renderableRequest;
+          const lastUsableBytes = bytes;
           try {
-            repairedReview = await visualReviewer({
-              stage: "draft",
-              title: request.title,
-              outline: appendPresentationVisualWarnings(
-                buildPresentationVisualReviewOutline(renderableRequest),
-                repaired.visualWarnings,
-              ),
-              previewSlides: repaired.previewSlides,
-            });
-            visualReviewRounds += 1;
-          } catch (reviewError) {
-            const summary = `Presentation visual review failed after structural repair: ${getErrorMessage(reviewError)}`;
-            if (strictQuality) throw new Error(summary);
-            acceptReleaseVisualWarning(summary);
-          }
-          if (repairedReview?.verdict === "pass") {
-            visualReviewStatus = "passed";
-            visualReviewSummary = `Full structural repair approved after visual rejection: ${repairedReview.summary}`;
-          } else if (repairedReview?.verdict === "revise") {
-            const baselineQualityErrors = new Set(
-              validatePresentationQuality(
-                renderableRequest as unknown as PresentationRequest,
-              ),
+            const repairedResolved = await resolveCandidate(repairedRequest);
+            let repaired = await renderPreview(
+              repairedResolved.renderableRequest,
+              repairedResolved.request.slides.length,
             );
-            const patchedRequest = applyPresentationVisualReviewPatches(
-              renderableRequest,
-              repairedReview.patches || [],
-              repairedReview.deckPatch,
-            );
-            const patchedQualityErrors =
-              filterBlockingPresentationQualityIssues(
+            resolved = repairedResolved;
+            request = repairedResolved.request;
+            renderableRequest = repairedResolved.renderableRequest;
+            bytes = repaired.bytes;
+            let repairedReview: PresentationVisualReviewResponse | undefined;
+            try {
+              repairedReview = await visualReviewer({
+                stage: "draft",
+                title: request.title,
+                outline: appendPresentationVisualWarnings(
+                  buildPresentationVisualReviewOutline(renderableRequest),
+                  repaired.visualWarnings,
+                ),
+                previewSlides: repaired.previewSlides,
+              });
+              visualReviewRounds += 1;
+            } catch (reviewError) {
+              const summary = `Presentation visual review failed after structural repair: ${getErrorMessage(reviewError)}`;
+              if (strictQuality) throw new Error(summary);
+              acceptReleaseVisualWarning(summary);
+            }
+            if (repairedReview?.verdict === "pass") {
+              acceptVisualReviewSuccess(
+                `Full structural repair approved after visual rejection: ${repairedReview.summary}`,
+              );
+            } else if (repairedReview?.verdict === "revise") {
+              const baselineQualityErrors = new Set(
                 validatePresentationQuality(
-                  patchedRequest as unknown as PresentationRequest,
-                ).filter((error) => !baselineQualityErrors.has(error)),
-                strictQuality,
+                  renderableRequest as unknown as PresentationRequest,
+                ),
               );
-            if (patchedQualityErrors.length > 0) {
-              const summary = `Presentation visual patch after structural repair introduced new quality diagnostics: ${patchedQualityErrors
-                .slice(0, 8)
-                .join("; ")}`;
-              throw new Error(summary);
-            } else {
-              renderableRequest = patchedRequest;
-              repaired = await renderPreview(
+              const patchedRequest = applyPresentationVisualReviewPatches(
                 renderableRequest,
-                request.slides.length,
+                repairedReview.patches || [],
+                repairedReview.deckPatch,
               );
-              bytes = repaired.bytes;
-              let terminalReview: PresentationVisualReviewResponse | undefined;
-              try {
-                terminalReview = await visualReviewer({
-                  stage: "final",
-                  title: request.title,
-                  outline: appendPresentationVisualWarnings(
-                    buildPresentationVisualReviewOutline(renderableRequest),
-                    repaired.visualWarnings,
-                  ),
-                  previewSlides: repaired.previewSlides,
-                });
-                visualReviewRounds += 1;
-              } catch (reviewError) {
-                const summary = `Terminal visual review failed after the bounded structural-repair patch: ${getErrorMessage(reviewError)}`;
-                if (strictQuality) throw new Error(summary);
-                acceptReleaseVisualWarning(summary);
-              }
-              if (terminalReview?.verdict === "pass") {
-                visualReviewStatus = "passed";
-                visualReviewSummary = `Full structural repair and one bounded visual patch approved: ${terminalReview.summary}`;
-              } else if (terminalReview) {
-                const summary = `Presentation visual quality gate did not approve the patched structural repair: ${terminalReview.summary}`;
-                if (releaseBlocksVisualReview(terminalReview)) {
-                  throw new Error(summary);
+              const patchedQualityErrors =
+                filterBlockingPresentationQualityIssues(
+                  validatePresentationQuality(
+                    patchedRequest as unknown as PresentationRequest,
+                  ).filter((error) => !baselineQualityErrors.has(error)),
+                  strictQuality,
+                );
+              if (patchedQualityErrors.length > 0) {
+                const summary = `Presentation visual patch after structural repair introduced new quality diagnostics: ${patchedQualityErrors
+                  .slice(0, 8)
+                  .join("; ")}`;
+                throw new Error(summary);
+              } else {
+                const patched = await renderPreview(
+                  patchedRequest,
+                  request.slides.length,
+                );
+                renderableRequest = patchedRequest;
+                repaired = patched;
+                bytes = repaired.bytes;
+                let terminalReview:
+                  | PresentationVisualReviewResponse
+                  | undefined;
+                try {
+                  terminalReview = await visualReviewer({
+                    stage: "final",
+                    title: request.title,
+                    outline: appendPresentationVisualWarnings(
+                      buildPresentationVisualReviewOutline(renderableRequest),
+                      repaired.visualWarnings,
+                    ),
+                    previewSlides: repaired.previewSlides,
+                  });
+                  visualReviewRounds += 1;
+                } catch (reviewError) {
+                  const summary = `Terminal visual review failed after the bounded structural-repair patch: ${getErrorMessage(reviewError)}`;
+                  if (strictQuality) throw new Error(summary);
+                  acceptReleaseVisualWarning(summary);
                 }
-                acceptReleaseVisualWarning(summary);
+                if (terminalReview?.verdict === "pass") {
+                  acceptVisualReviewSuccess(
+                    `Full structural repair and one bounded visual patch approved: ${terminalReview.summary}`,
+                  );
+                } else if (terminalReview) {
+                  const summary = `Presentation visual quality gate did not approve the patched structural repair: ${terminalReview.summary}`;
+                  if (releaseBlocksVisualReview(terminalReview)) {
+                    throw new Error(summary);
+                  }
+                  acceptReleaseVisualWarning(summary);
+                }
               }
+            } else if (repairedReview) {
+              const summary = `Presentation visual quality gate did not approve the structurally repaired deck: ${repairedReview.summary}`;
+              if (releaseBlocksVisualReview(repairedReview)) {
+                throw new Error(summary);
+              }
+              acceptReleaseVisualWarning(summary);
             }
-          } else if (repairedReview) {
-            const summary = `Presentation visual quality gate did not approve the structurally repaired deck: ${repairedReview.summary}`;
-            if (releaseBlocksVisualReview(repairedReview)) {
-              throw new Error(summary);
-            }
+          } catch (repairRenderError) {
+            if (strictQuality) throw repairRenderError;
+            request = lastUsableRequest;
+            renderableRequest = lastUsableRenderableRequest;
+            bytes = lastUsableBytes;
+            const summary = `Presentation visual repair could not replace the last usable deck: ${getErrorMessage(repairRenderError)}`;
             acceptReleaseVisualWarning(summary);
           }
         }
@@ -733,7 +764,18 @@ export async function executePresentationCapability(
       folder,
       `${fileBase}-${Date.now()}-${generateShortId()}.pptx`,
     );
-    await IOUtils.write(outputPath, bytes);
+    await IOUtils.write(outputPath, bytes, {
+      flush: true,
+      tmpPath: `${outputPath}.tmp-${generateShortId()}`,
+    });
+    const attachment = await attachPresentationToZotero({
+      outputPath,
+      presentationTitle: request.title,
+      sourceItemKey: request.sourceItemKey,
+    });
+    if (attachment.warning) {
+      acceptReleaseVisualWarning(attachment.warning);
+    }
 
     return JSON.stringify({
       status: visualReviewSummary?.startsWith(
@@ -741,7 +783,7 @@ export async function executePresentationCapability(
       )
         ? "completed_with_warnings"
         : "completed",
-      path: outputPath,
+      path: attachment.path,
       fileName: PathUtils.filename(outputPath),
       slideCount: request.slides.length + 1,
       bytes: bytes.length,
@@ -751,6 +793,12 @@ export async function executePresentationCapability(
       visualReviewSummary,
       visualReviewRounds,
       planningRounds,
+      attachmentStatus: attachment.status,
+      attachmentItemID: attachment.itemID,
+      attachmentItemKey: attachment.itemKey,
+      attachmentParentItemID: attachment.parentItemID,
+      attachmentMode: attachment.mode,
+      attachmentWarning: attachment.warning,
     });
   } catch (error) {
     const detail = getErrorMessage(error);

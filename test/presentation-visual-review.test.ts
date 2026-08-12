@@ -495,6 +495,7 @@ describe("presentation visual review", function () {
         }),
       );
 
+      if (result.startsWith("Error:")) throw new Error(result);
       const payload = JSON.parse(result);
       assert.equal(payload.status, "completed_with_warnings");
       assert.equal(payload.visualReview, "warnings");
@@ -681,7 +682,7 @@ describe("presentation visual review", function () {
     }
   });
 
-  it("still blocks a production export for a render-safety visual failure", async function () {
+  it("exports the best rendered production deck even when visual review reports render safety", async function () {
     const runtime = globalThis as any;
     const previousEnv = runtime.__env__;
     const hadEnv = Object.prototype.hasOwnProperty.call(runtime, "__env__");
@@ -695,6 +696,13 @@ describe("presentation visual review", function () {
     runtime.Zotero = {
       DataDirectory: { dir: "/zotero-data" },
       getMainWindow: () => target,
+      Libraries: { userLibraryID: 1, getAll: () => [] },
+      Items: { getByLibraryAndKey: () => false, get: () => false },
+      Attachments: {
+        importFromFile: async () => {
+          throw new Error("library is read-only");
+        },
+      },
     };
     runtime.Services = {
       scriptloader: {
@@ -741,9 +749,96 @@ describe("presentation visual review", function () {
         }),
       );
 
-      assert.match(result, /^Error: Presentation generation failed/);
-      assert.include(result, "catastrophically cropped");
-      assert.equal(writeCount, 0);
+      assert.notMatch(result, /^Error:/);
+      const payload = JSON.parse(result);
+      assert.equal(payload.status, "completed_with_warnings");
+      assert.include(payload.visualReviewSummary, "catastrophically cropped");
+      assert.include(payload.visualReviewSummary, "library is read-only");
+      assert.include(payload.attachmentWarning, "library is read-only");
+      assert.equal(writeCount, 1);
+    } finally {
+      resetPresentationRendererForTests();
+      runtime.Zotero = previousZotero;
+      runtime.Services = previousServices;
+      runtime.IOUtils = previousIOUtils;
+      runtime.PathUtils = previousPathUtils;
+      if (hadEnv) runtime.__env__ = previousEnv;
+      else delete runtime.__env__;
+    }
+  });
+
+  it("keeps the last usable production deck when a visual repair cannot render", async function () {
+    const runtime = globalThis as any;
+    const previousEnv = runtime.__env__;
+    const hadEnv = Object.prototype.hasOwnProperty.call(runtime, "__env__");
+    const previousZotero = runtime.Zotero;
+    const previousServices = runtime.Services;
+    const previousIOUtils = runtime.IOUtils;
+    const previousPathUtils = runtime.PathUtils;
+    const target: Record<string, unknown> = {};
+    const writes: Uint8Array[] = [];
+    let renderCount = 0;
+    runtime.__env__ = "production";
+    runtime.Zotero = {
+      DataDirectory: { dir: "/zotero-data" },
+      getMainWindow: () => target,
+    };
+    runtime.Services = {
+      scriptloader: {
+        loadSubScript: () => {
+          target[PRESENTATION_RENDERER_GLOBAL] = {
+            renderPresentation: async () => new Uint8Array([0x50, 0x4b, 3, 1]),
+            renderPresentationWithPreview: async () => {
+              renderCount += 1;
+              if (renderCount > 1) throw new Error("repair renderer failed");
+              return {
+                bytes: new Uint8Array([0x50, 0x4b, 3, 1]),
+                previewSlides: [
+                  "data:image/png;base64,AAAA",
+                  "data:image/png;base64,BBBB",
+                ],
+              };
+            },
+          };
+        },
+      },
+    };
+    runtime.IOUtils = {
+      makeDirectory: async () => undefined,
+      write: async (_path: string, bytes: Uint8Array) => {
+        writes.push(bytes);
+        return bytes.length;
+      },
+    };
+    runtime.PathUtils = {
+      join: (...parts: string[]) => parts.join("/"),
+      filename: (path: string) => path.split("/").pop(),
+    };
+    try {
+      resetPresentationRendererForTests();
+      const result = await executePresentationCapability(
+        {
+          title: "Repair fallback deck",
+          slides: [
+            {
+              title: "The usable original claim",
+              metrics: [{ value: "24%", label: "relative improvement" }],
+            },
+          ],
+        },
+        async () => ({
+          verdict: "revise",
+          summary: "Try a visual repair.",
+          patches: [{ slideNumber: 2, subtitle: "Repaired subtitle" }],
+        }),
+      );
+
+      if (result.startsWith("Error:")) throw new Error(result);
+      const payload = JSON.parse(result);
+      assert.equal(payload.status, "completed_with_warnings");
+      assert.include(payload.visualReviewSummary, "repair renderer failed");
+      assert.lengthOf(writes, 1);
+      assert.equal(writes[0][3], 1);
     } finally {
       resetPresentationRendererForTests();
       runtime.Zotero = previousZotero;

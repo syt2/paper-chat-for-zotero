@@ -694,10 +694,9 @@ describe("presentation capability", function () {
       filterBlockingPresentationQualityIssues(issues, true),
       issues,
     );
-    assert.deepEqual(
-      filterBlockingPresentationQualityIssues(issues, false),
-      [],
-    );
+    assert.deepEqual(filterBlockingPresentationQualityIssues(issues, false), [
+      "/slides/0/table: every row must match the header count.",
+    ]);
   });
 
   it("never blocks a production export on editorial density heuristics", function () {
@@ -728,6 +727,21 @@ describe("presentation capability", function () {
         shouldUseStrictPresentationQualityGate("production"),
       ),
       [],
+    );
+  });
+
+  it("keeps deterministic native-object contract failures blocking in production", function () {
+    const structuralIssues = [
+      "/slides/0/chart: labels and values must have the same length.",
+      "/slides/1/figures/0/crop: x+width and y+height must stay within 1.",
+      "/slides/2/matrix: every row must contain exactly one cell per column.",
+      "/slides/3: process layout requires process steps.",
+      "/slides/4: statement layout cannot hide supplied visual evidence. Use auto, figure, data, process, matrix, timeline, comparison, gallery, ablation, or conclusion.",
+    ];
+
+    assert.deepEqual(
+      filterBlockingPresentationQualityIssues(structuralIssues, false),
+      structuralIssues,
     );
   });
 

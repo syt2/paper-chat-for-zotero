@@ -264,6 +264,44 @@ describe("native PDF outline", function () {
       assert.equal(withReader?.nativeOutline?.[0]?.children[1]?.pageNumber, 0);
     });
 
+    it("extracts a paper from a group library", async function () {
+      const pdfAttachment = {
+        id: 142,
+        key: "GROUPPDF",
+        isAttachment: () => true,
+        isPDFAttachment: () => true,
+        get attachmentText() {
+          return Promise.resolve("Introduction\n\nGroup-library body");
+        },
+      };
+      const parentItem = {
+        id: 107,
+        key: "GROUP001",
+        isAttachment: () => false,
+        getAttachments: () => [pdfAttachment.id],
+      };
+      (globalThis as any).Zotero = {
+        Libraries: {
+          userLibraryID: 1,
+          getAll: () => [{ libraryID: 1 }, { libraryID: 5 }],
+        },
+        Items: {
+          getByLibraryAndKey: (libraryID: number, key: string) =>
+            libraryID === 5 && key === parentItem.key ? parentItem : null,
+          get: (id: number) => (id === pdfAttachment.id ? pdfAttachment : null),
+        },
+      };
+      (globalThis as any).ztoolkit = { log: () => undefined };
+
+      const { PdfToolManager } =
+        await import("../src/modules/chat/pdf-tools/PdfToolManager.ts");
+      const manager = new PdfToolManager();
+      const structure = await manager.extractAndParsePaper(parentItem.key);
+
+      assert.isDefined(structure);
+      assert.include(structure?.fullText, "Group-library body");
+    });
+
     it("enriches fallback content when attachment text extraction rejects", async function () {
       const attachment = {
         id: 44,

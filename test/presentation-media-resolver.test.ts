@@ -348,6 +348,37 @@ describe("presentation media resolver", function () {
     }
   });
 
+  it("resolves presentation metadata from a group library item", function () {
+    const runtime = globalThis as any;
+    const previousZotero = runtime.Zotero;
+    const paper = {
+      getField: (field: string) => (field === "year" ? "2024" : ""),
+      getCreators: () => [{ name: "Group Author" }],
+      isAttachment: () => false,
+      isNote: () => false,
+    };
+    runtime.Zotero = {
+      Libraries: {
+        userLibraryID: 1,
+        getAll: () => [{ libraryID: 1 }, { libraryID: 5 }],
+      },
+      Items: {
+        getByLibraryAndKey: (libraryID: number, key: string) =>
+          libraryID === 5 && key === "GROUP001" ? paper : null,
+      },
+    };
+
+    try {
+      assert.equal(resolvePresentationSourceYear("GROUP001"), "2024");
+      assert.equal(
+        resolvePresentationSourceAuthor("GROUP001", "en-US"),
+        "Group Author",
+      );
+    } finally {
+      runtime.Zotero = previousZotero;
+    }
+  });
+
   it("reads cover authors from a directly selected Zotero paper", function () {
     const runtime = globalThis as any;
     const previousZotero = runtime.Zotero;

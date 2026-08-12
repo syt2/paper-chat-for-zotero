@@ -457,11 +457,15 @@ function waitForReaderTick(timeoutMs: number): Promise<void> {
 }
 
 function getItemByKey(itemKey: string): Zotero.Item | null {
-  const item = Zotero.Items.getByLibraryAndKey(
+  const libraryIDs = [
     Zotero.Libraries.userLibraryID,
-    itemKey,
-  );
-  return item || null;
+    ...(Zotero.Libraries.getAll?.() || []).map((library) => library.libraryID),
+  ].filter((libraryID, index, values) => values.indexOf(libraryID) === index);
+  for (const libraryID of libraryIDs) {
+    const item = Zotero.Items.getByLibraryAndKey(libraryID, itemKey);
+    if (item) return item;
+  }
+  return null;
 }
 
 function resolvePresentationSourceItem(

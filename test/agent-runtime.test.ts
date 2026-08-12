@@ -4545,11 +4545,11 @@ describe("agent runtime plan semantics", function () {
     );
     assert.include(
       capturedMessages[0].content,
-      "editorial verdicts are warnings and the best rendered deck is still exported",
+      "every visual-review verdict is advisory and the best successfully rendered deck is still exported",
     );
     assert.include(
       capturedMessages[0].content,
-      "only render_safety can block writing",
+      "only deterministic schema, renderer, PPTX integrity, or filesystem failures may prevent writing",
     );
     assert.include(
       capturedMessages[0].content,

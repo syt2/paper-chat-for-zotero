@@ -108,19 +108,50 @@ function evidenceModuleCount(slide: PresentationSlide): number {
 
 /**
  * Development builds keep every editorial heuristic blocking so planner drift
- * is visible immediately. Production has already passed the TypeBox schema,
- * so planning-quality diagnostics are advisory: the renderer, preview pass,
- * explicit render-safety review, and final write are the release gates.
- *
- * Do not replace this with a denylist of editorial messages. New quality rules
- * are added frequently, and a denylist makes each new rule an accidental
- * production export blocker until somebody remembers to classify it.
+ * is visible immediately. Production blocks only deterministic structural
+ * contract failures that could corrupt or misrepresent native PPT objects.
+ * Composition, density, hierarchy, and visual-review preferences stay advisory.
  */
+function isStructuralPresentationQualityIssue(issue: string): boolean {
+  return [
+    /itemKey or request-level sourceItemKey is required/u,
+    /figure mode requires captionHint or crop/u,
+    /\/crop: x\+width and y\+height must stay within 1/u,
+    /\/chart: provide exactly one of values or series/u,
+    /\/chart: labels and values must have the same length/u,
+    /\/chart\/series\/\d+: values must match the labels length/u,
+    /\/chart\/highlightIndex: index exceeds labels length/u,
+    /\/table: every row must match the header count/u,
+    /\/table\/highlightRow: index exceeds row count/u,
+    /\/matrix: every row must contain exactly one cell per column/u,
+    /\/matrix\/highlightColumn: index exceeds column count/u,
+    /: figure layout requires figure/u,
+    /: statement layout cannot hide supplied visual evidence/u,
+    /: data layout requires chart, table, or figure/u,
+    /: process layout requires process steps/u,
+    /: process layout supports one source figure/u,
+    /: process layout supports one compact callout/u,
+    /: comparison layout requires comparison content/u,
+    /: comparison layout supports one bottom conclusion callout/u,
+    /: matrix layout requires matrix content/u,
+    /: timeline layout requires timeline content/u,
+    /: gallery layout requires at least two PDF figures/u,
+    /: gallery layout supports exactly two dominant paper figures/u,
+    /: ablation layout requires one editable chart, table, matrix, or a non-table PDF figure/u,
+    /: ablation layout accepts one dominant chart or table/u,
+    /: ablation layout accepts exactly one dominant editable result/u,
+    /: ablation layout cannot display every supplied PDF figure/u,
+    /: conclusion layout requires numbered findings, grouped conclusions, or milestones/u,
+    /: conclusion uses a fixed editorial structure/u,
+    /: conclusion matrix mode uses the matrix plus findings\/keyMessage and timeline/u,
+  ].some((pattern) => pattern.test(issue));
+}
+
 export function filterBlockingPresentationQualityIssues(
   issues: string[],
   strict: boolean,
 ): string[] {
-  return strict ? issues : [];
+  return strict ? issues : issues.filter(isStructuralPresentationQualityIssue);
 }
 
 export function shouldUseStrictPresentationQualityGate(

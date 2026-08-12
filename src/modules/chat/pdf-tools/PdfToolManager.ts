@@ -156,9 +156,17 @@ export class PdfToolManager {
    * 根据 itemKey 获取 Zotero Item
    */
   private getItemByKey(itemKey: string): Zotero.Item | null {
-    const libraryID = Zotero.Libraries.userLibraryID;
-    const item = Zotero.Items.getByLibraryAndKey(libraryID, itemKey);
-    return item || null;
+    const libraryIDs = [
+      Zotero.Libraries.userLibraryID,
+      ...(Zotero.Libraries.getAll?.() || []).map(
+        (library) => library.libraryID,
+      ),
+    ].filter((libraryID, index, values) => values.indexOf(libraryID) === index);
+    for (const libraryID of libraryIDs) {
+      const item = Zotero.Items.getByLibraryAndKey(libraryID, itemKey);
+      if (item) return item;
+    }
+    return null;
   }
 
   /**

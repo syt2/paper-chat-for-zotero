@@ -170,13 +170,34 @@ describe("presentation renderer Zotero runtime probe", function () {
       path: string;
       slideCount: number;
       editable: boolean;
+      attachmentStatus: "attached" | "not_attached";
+      attachmentItemID?: number;
+      attachmentMode?: "child" | "top_level";
     };
+    let importedAttachment: Zotero.Item | false | undefined;
     try {
       if (result.slideCount !== 2 || result.editable !== true) {
         throw new Error(`unexpected capability result: ${rawResult}`);
       }
-      if (PathUtils.parent(result.path) !== getDataPath("presentations")) {
-        throw new Error(`capability escaped its output folder: ${result.path}`);
+      if (result.attachmentStatus !== "attached") {
+        throw new Error(
+          `capability did not create a Zotero attachment: ${rawResult}`,
+        );
+      }
+      if (!result.attachmentItemID || result.attachmentMode !== "top_level") {
+        throw new Error(
+          `capability created an unexpected Zotero item: ${rawResult}`,
+        );
+      }
+      importedAttachment = Zotero.Items.get(result.attachmentItemID);
+      if (!importedAttachment?.isAttachment?.()) {
+        throw new Error(`capability attachment is missing: ${rawResult}`);
+      }
+      const attachmentPath = await importedAttachment.getFilePathAsync?.();
+      if (attachmentPath !== result.path) {
+        throw new Error(
+          `capability returned the wrong attachment path: ${rawResult}`,
+        );
       }
       const bytes = await IOUtils.read(result.path);
       const archive = await JSZip.loadAsync(bytes);
@@ -193,7 +214,9 @@ describe("presentation renderer Zotero runtime probe", function () {
         );
       }
     } finally {
-      if (await IOUtils.exists(result.path)) {
+      if (importedAttachment) {
+        await importedAttachment.eraseTx();
+      } else if (await IOUtils.exists(result.path)) {
         await IOUtils.remove(result.path);
       }
     }

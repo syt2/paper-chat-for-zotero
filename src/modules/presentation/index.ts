@@ -3,6 +3,10 @@ export {
   executePresentationCapability,
 } from "./PresentationCapability";
 export {
+  attachPresentationToZotero,
+  type PresentationAttachmentResult,
+} from "./PresentationAttachment";
+export {
   getPresentationRenderer,
   resetPresentationRendererForTests,
 } from "./PresentationRendererLoader";
