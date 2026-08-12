@@ -3,9 +3,8 @@ import type { ToolCall, ToolExecutionResult } from "../src/types/tool";
 
 describe("tool retry policy", function () {
   it("builds the same fingerprint for semantically identical calls", async function () {
-    const { fingerprintToolCall } = await import(
-      "../src/modules/chat/tool-retry/ToolRetryPolicy.ts"
-    );
+    const { fingerprintToolCall } =
+      await import("../src/modules/chat/tool-retry/ToolRetryPolicy.ts");
 
     const firstCall: ToolCall = {
       id: "tool-1",
@@ -34,13 +33,15 @@ describe("tool retry policy", function () {
       },
     };
 
-    assert.equal(fingerprintToolCall(firstCall), fingerprintToolCall(secondCall));
+    assert.equal(
+      fingerprintToolCall(firstCall),
+      fingerprintToolCall(secondCall),
+    );
   });
 
   it("creates a non-retryable synthetic result for unchanged repeated failures", async function () {
-    const { createBlockedRetryResult, findBlockedRetryMatch } = await import(
-      "../src/modules/chat/tool-retry/ToolRetryPolicy.ts"
-    );
+    const { createBlockedRetryResult, findBlockedRetryMatch } =
+      await import("../src/modules/chat/tool-retry/ToolRetryPolicy.ts");
 
     const previousResult: ToolExecutionResult = {
       toolCall: {
@@ -87,9 +88,8 @@ describe("tool retry policy", function () {
   });
 
   it("does not block a retry when the arguments change", async function () {
-    const { findBlockedRetryMatch } = await import(
-      "../src/modules/chat/tool-retry/ToolRetryPolicy.ts"
-    );
+    const { findBlockedRetryMatch } =
+      await import("../src/modules/chat/tool-retry/ToolRetryPolicy.ts");
 
     const previousResult: ToolExecutionResult = {
       toolCall: {
@@ -114,5 +114,62 @@ describe("tool retry policy", function () {
     };
 
     assert.isNull(findBlockedRetryMatch(changedCall, [previousResult]));
+  });
+
+  it("allows bounded unchanged presentation retries and still blocks denials", async function () {
+    const { findBlockedRetryMatch, summarizeRetryBlockedCalls } =
+      await import("../src/modules/chat/tool-retry/ToolRetryPolicy.ts");
+
+    const presentationCall = (id: string): ToolCall => ({
+      id,
+      type: "function",
+      function: {
+        name: "presentation",
+        arguments: JSON.stringify({ sourceItemKey: "ITEM-1" }),
+      },
+    });
+    const failedResult = (id: string): ToolExecutionResult => ({
+      toolCall: presentationCall(id),
+      args: { sourceItemKey: "ITEM-1" },
+      status: "failed",
+      content: [
+        "Error: Presentation generation failed.",
+        "Category: execution_failed",
+        "Retryable: yes",
+        "Fix hint: Retry the presentation request.",
+      ].join("\n"),
+      error: "Presentation generation failed.",
+    });
+
+    assert.isNull(
+      findBlockedRetryMatch(presentationCall("tool-retry"), [
+        failedResult("tool-first"),
+      ]),
+    );
+
+    const failures = [
+      failedResult("tool-first"),
+      failedResult("tool-second"),
+      failedResult("tool-third"),
+    ];
+    const capped = findBlockedRetryMatch(
+      presentationCall("tool-fourth"),
+      failures,
+    );
+    assert.equal(capped?.previousResult, failures[2]);
+    assert.deepEqual(summarizeRetryBlockedCalls(failures), []);
+
+    const deniedResult: ToolExecutionResult = {
+      ...failedResult("tool-denied"),
+      status: "denied",
+      content: "Error: Permission denied for presentation.",
+      error: "Permission denied.",
+    };
+    const blocked = findBlockedRetryMatch(
+      presentationCall("tool-after-denial"),
+      [...failures, deniedResult],
+    );
+    assert.equal(blocked?.previousResult, deniedResult);
+    assert.lengthOf(summarizeRetryBlockedCalls([deniedResult]), 1);
   });
 });

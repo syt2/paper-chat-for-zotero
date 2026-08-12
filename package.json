@@ -22,10 +22,11 @@
   "scripts": {
     "start": "zotero-plugin serve",
     "build": "zotero-plugin build && tsc --noEmit",
+    "build:release": "NODE_ENV=production zotero-plugin build && tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "lint:check": "prettier --check . && eslint .",
     "lint:fix": "prettier --write . && eslint . --fix",
-    "release": "zotero-plugin release",
+    "release": "NODE_ENV=production zotero-plugin release",
     "test": "zotero-plugin test",
     "test:chat-search": "node --import tsx ./node_modules/mocha/bin/mocha test/chat-history-search-service.test.ts test/chat-search-*.test.ts test/history-dropdown-search.test.ts test/message-navigation.test.ts test/migrate-to-sqlite-search.test.ts test/storage-database-foundation.test.ts",
     "test:online-release-upgrade": "node scripts/test-online-release-upgrade.mjs",
@@ -33,10 +34,12 @@
     "update-deps": "npm update --save"
   },
   "dependencies": {
+    "@sinclair/typebox": "0.34.52",
     "highlight.js": "^11.11.1",
     "katex": "^0.16.33",
     "markdown-it": "^14.1.0",
     "p-limit": "^7.3.0",
+    "pptxgenjs": "4.0.1",
     "unicode-segmenter": "^0.17.0",
     "zotero-plugin-toolkit": "^5.1.0-beta.13"
   },
@@ -49,6 +52,7 @@
     "@zotero-plugin/eslint-config": "^0.6.7",
     "chai": "^6.2.1",
     "eslint": "^9.39.2",
+    "jszip": "3.10.1",
     "mocha": "^11.7.5",
     "prettier": "^3.7.4",
     "tsx": "^4.23.0",

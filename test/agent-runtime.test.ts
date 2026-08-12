@@ -3569,6 +3569,478 @@ describe("agent runtime plan semantics", function () {
     assert.include(prompt, "tools=get_item_metadata, get_item_notes");
   });
 
+  it("treats a short current-paper PPT request as sufficient tool intent", function () {
+    const prompt = generatePaperContextPrompt(
+      undefined,
+      "ITEM-1",
+      "Current paper",
+      true,
+    );
+
+    assert.include(prompt, "=== PRESENTATION TOOL ===");
+    assert.include(
+      prompt,
+      'Treat a short request such as "为这篇论文生成一个 PPT" as complete intent',
+    );
+    assert.include(
+      prompt,
+      'call presentation with only {"sourceItemKey":"<current itemKey>"}',
+    );
+    assert.include(prompt, "call presentation with {}");
+    assert.include(
+      prompt,
+      "the tool resolves the one currently selected Zotero item",
+    );
+    assert.include(
+      prompt,
+      "Do not call request_user_input merely to ask which paper or source",
+    );
+    assert.include(
+      prompt,
+      "only after presentation itself returns an explicit source-missing or multiple-selection ambiguity",
+    );
+    assert.include(prompt, "never invent optional arguments");
+    assert.include(prompt, "exactly the same arguments as the first attempt");
+    assert.include(prompt, "Do not ask the user to provide a long prompt");
+    assert.include(prompt, "call presentation again in this same turn");
+    assert.include(prompt, "bounded presentation retry allowance");
+    assert.include(
+      prompt,
+      "Never claim that presentation is subject to the unchanged-call retry restriction",
+    );
+    assert.include(
+      prompt,
+      "report that the attempts failed instead of changing language or designSystem",
+    );
+  });
+
+  it("tells the model to retry a failed presentation without advertising the unchanged-call block", function () {
+    const prompt = generateAgentRuntimeContextPrompt(undefined, {
+      recentToolResults: [
+        {
+          toolCall: {
+            id: "presentation-1",
+            type: "function",
+            function: {
+              name: "presentation",
+              arguments: JSON.stringify({ sourceItemKey: "ITEM-1" }),
+            },
+          },
+          args: { sourceItemKey: "ITEM-1" },
+          status: "failed",
+          content: [
+            "Error: Presentation generation failed.",
+            "Category: execution_failed",
+            "Retryable: yes",
+            "Cause: Slide 2 render verification failed.",
+            "Fix hint: Retry the presentation request.",
+          ].join("\n"),
+        } satisfies ToolExecutionResult,
+      ],
+    });
+
+    assert.notInclude(prompt, "=== RETRY POLICY ===");
+    assert.include(prompt, "=== FAILURE RECOVERY STRATEGY ===");
+    assert.include(prompt, "Retry the presentation request");
+    assert.notInclude(prompt, "avoid repeating the same call unchanged");
+  });
+
+  it("keeps a tool-capable recovery round after a late presentation failure", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    const session = createSession();
+    session.messages[0].content =
+      "请直接使用 presentation 工具，基于当前论文生成一份 PPT。";
+    const assistantMessage: ChatMessage = {
+      id: "assistant-presentation-recovery-window",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+    };
+    session.messages.push(assistantMessage);
+    let providerCalls = 0;
+    let presentationExecutions = 0;
+    const executedPresentationArgs: Array<Record<string, unknown>> = [];
+    const toolChoices: string[] = [];
+    const providerMessageSnapshots: ChatMessage[][] = [];
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        saveSession: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => false,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "<presentation />",
+        generateId: (() => {
+          let id = 0;
+          return () => `presentation-recovery-${++id}`;
+        })(),
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async (requests: any[]) => {
+          presentationExecutions += 1;
+          executedPresentationArgs.push(
+            JSON.parse(requests[0].toolCall.function.arguments),
+          );
+          return [
+            {
+              toolCall: requests[0].toolCall,
+              status: presentationExecutions === 1 ? "failed" : "completed",
+              content:
+                presentationExecutions === 1
+                  ? [
+                      "Error: Presentation generation failed.",
+                      "Category: execution_failed",
+                      "Retryable: yes",
+                      "Cause: Slide 2 render verification failed.",
+                      "Fix hint: Retry the presentation request.",
+                    ].join("\n")
+                  : JSON.stringify({
+                      status: "completed",
+                      path: "/tmp/recovered.pptx",
+                    }),
+            },
+          ];
+        },
+      },
+    ) as any;
+    runtime.getMaxIterations = () => 2;
+    const provider = {
+      config: {
+        id: "paperchat",
+        type: "paperchat",
+        defaultModel: "gpt-5.6-terra",
+      },
+      chatCompletionWithTools: async (
+        _messages: ChatMessage[],
+        _tools: unknown[],
+        _signal: AbortSignal | undefined,
+        options: { toolChoice?: string },
+      ) => {
+        providerCalls += 1;
+        providerMessageSnapshots.push(
+          _messages.map((message) => ({ ...message })),
+        );
+        toolChoices.push(options.toolChoice || "");
+        if (providerCalls <= 2) {
+          return {
+            content: "",
+            toolCalls: [
+              {
+                id: `presentation-call-${providerCalls}`,
+                type: "function" as const,
+                function: {
+                  name: "presentation",
+                  arguments: JSON.stringify({
+                    sourceItemKey: "ITEM-1",
+                    designSystem:
+                      providerCalls === 1
+                        ? "teal-green-academic-defense"
+                        : "dark-editorial",
+                    instructions:
+                      providerCalls === 1
+                        ? "Invented academic plan"
+                        : "Try a different English style",
+                  }),
+                },
+              },
+            ],
+          };
+        }
+        return { content: "PPT 已生成。" };
+      },
+    };
+
+    try {
+      await runtime.executeNonStreamingToolLoop({
+        provider,
+        currentMessages: session.messages,
+        assistantMessage,
+        pdfWasAttached: false,
+        summaryTriggered: false,
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "presentation",
+              description: "Create a presentation",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
+        sendingSession: session,
+      });
+
+      assert.equal(providerCalls, 3);
+      assert.equal(presentationExecutions, 2);
+      assert.deepEqual(executedPresentationArgs, [
+        { sourceItemKey: "ITEM-1" },
+        { sourceItemKey: "ITEM-1" },
+      ]);
+      assert.deepEqual(toolChoices, ["auto", "auto", "none"]);
+      const finalPrompt = providerMessageSnapshots[2]
+        .map((message) => message.content)
+        .join("\n");
+      assert.include(finalPrompt, "successfully wrote a PPTX file");
+      assert.include(finalPrompt, "/tmp/recovered.pptx");
+      assert.include(
+        finalPrompt,
+        "Treat completed_with_warnings as a successful export",
+      );
+      assert.equal(
+        assistantMessage.content,
+        "<presentation /><presentation />PPT 已生成。",
+      );
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
+  });
+
+  it("does not accept a terminal no-retry apology after a retryable presentation failure", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    const session = createSession();
+    const assistantMessage: ChatMessage = {
+      id: "assistant-presentation-retry-nudge",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+    };
+    session.messages.push(assistantMessage);
+    let providerCalls = 0;
+    let presentationExecutions = 0;
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        saveSession: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => false,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "<presentation />",
+        generateId: (() => {
+          let id = 0;
+          return () => `presentation-nudge-${++id}`;
+        })(),
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async (requests: any[]) => {
+          presentationExecutions += 1;
+          return [
+            {
+              toolCall: requests[0].toolCall,
+              status: presentationExecutions === 1 ? "failed" : "completed",
+              content:
+                presentationExecutions === 1
+                  ? [
+                      "Error: Presentation generation failed.",
+                      "Category: execution_failed",
+                      "Retryable: yes",
+                      "Cause: Slide 2 text and caption verification failed.",
+                      "Fix hint: Retry the presentation request.",
+                    ].join("\n")
+                  : JSON.stringify({
+                      status: "completed",
+                      path: "/tmp/recovered-after-nudge.pptx",
+                    }),
+            },
+          ];
+        },
+      },
+    ) as any;
+    runtime.getMaxIterations = () => 3;
+    const provider = {
+      config: {
+        id: "paperchat",
+        type: "paperchat",
+        defaultModel: "gpt-5.6-terra",
+      },
+      chatCompletionWithTools: async () => {
+        providerCalls += 1;
+        if (providerCalls === 1 || providerCalls === 3) {
+          return {
+            content: "",
+            toolCalls: [
+              {
+                id: `presentation-call-${providerCalls}`,
+                type: "function" as const,
+                function: {
+                  name: "presentation",
+                  arguments: JSON.stringify({ sourceItemKey: "ITEM-1" }),
+                },
+              },
+            ],
+          };
+        }
+        if (providerCalls === 2) {
+          return {
+            content: "抱歉，按工具限制本轮不能重复调用 presentation。",
+          };
+        }
+        return { content: "PPT 已生成。" };
+      },
+    };
+
+    try {
+      await runtime.executeNonStreamingToolLoop({
+        provider,
+        currentMessages: session.messages,
+        assistantMessage,
+        pdfWasAttached: false,
+        summaryTriggered: false,
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "presentation",
+              description: "Create a presentation",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
+        sendingSession: session,
+      });
+
+      assert.equal(providerCalls, 4);
+      assert.equal(presentationExecutions, 2);
+      assert.notInclude(assistantMessage.content, "不能重复调用");
+      assert.equal(
+        assistantMessage.content,
+        "<presentation /><presentation />PPT 已生成。",
+      );
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
+  });
+
+  it("ends with a clean synthesis after three failed presentation attempts", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    const session = createSession();
+    const assistantMessage: ChatMessage = {
+      id: "assistant-presentation-attempt-budget",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+    };
+    session.messages.push(assistantMessage);
+    let providerCalls = 0;
+    let presentationExecutions = 0;
+    const toolChoices: string[] = [];
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        saveSession: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => false,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "<presentation />",
+        generateId: (() => {
+          let id = 0;
+          return () => `presentation-budget-${++id}`;
+        })(),
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async (requests: any[]) => {
+          presentationExecutions += 1;
+          return [
+            {
+              toolCall: requests[0].toolCall,
+              status: "failed",
+              content: [
+                "Error: Presentation generation failed.",
+                "Category: execution_failed",
+                "Retryable: yes",
+                `Cause: Visual attempt ${presentationExecutions} failed.`,
+                "Fix hint: Retry the presentation request.",
+              ].join("\n"),
+            },
+          ];
+        },
+      },
+    ) as any;
+    runtime.getMaxIterations = () => 6;
+    const provider = {
+      config: {
+        id: "paperchat",
+        type: "paperchat",
+        defaultModel: "gpt-5.6-terra",
+      },
+      chatCompletionWithTools: async (
+        _messages: ChatMessage[],
+        _tools: unknown[],
+        _signal: AbortSignal | undefined,
+        options: { toolChoice?: string },
+      ) => {
+        providerCalls += 1;
+        toolChoices.push(options.toolChoice || "");
+        if (options.toolChoice === "none") {
+          return {
+            content: "三次生成均未通过质量校验，本轮未写出 PPTX。",
+          };
+        }
+        return {
+          content: "",
+          toolCalls: [
+            {
+              id: `presentation-budget-call-${providerCalls}`,
+              type: "function" as const,
+              function: {
+                name: "presentation",
+                arguments: JSON.stringify({ sourceItemKey: "ITEM-1" }),
+              },
+            },
+          ],
+        };
+      },
+    };
+
+    try {
+      await runtime.executeNonStreamingToolLoop({
+        provider,
+        currentMessages: session.messages,
+        assistantMessage,
+        pdfWasAttached: false,
+        summaryTriggered: false,
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "presentation",
+              description: "Create a presentation",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
+        sendingSession: session,
+      });
+
+      assert.equal(providerCalls, 4);
+      assert.equal(presentationExecutions, 3);
+      assert.deepEqual(toolChoices, ["auto", "auto", "auto", "none"]);
+      assert.equal(
+        assistantMessage.content,
+        "<presentation /><presentation /><presentation />三次生成均未通过质量校验，本轮未写出 PPTX。",
+      );
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
+  });
+
   it("keeps dynamic runtime context separable from the stable paper prompt", function () {
     const stablePrompt = generatePaperContextPrompt(
       undefined,
@@ -3870,5 +4342,218 @@ describe("agent runtime plan semantics", function () {
 
     assert.deepEqual(assistantMessage.sourceItemKeys, ["ITEM0001", "PAPER002"]);
     assert.deepEqual(checkpointSources, ["ITEM0001", "PAPER002"]);
+  });
+
+  it("runs presentation planning as an isolated model job with paper evidence", async function () {
+    const runtime = new AgentRuntime(
+      { updateSessionMeta: async () => undefined } as any,
+      {
+        isSessionActive: () => false,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "",
+        generateId: () => `presentation-${Math.random()}`,
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async () => [],
+      },
+    ) as any;
+    let capturedMessages: ChatMessage[] = [];
+    let capturedOptions: Record<string, unknown> | undefined;
+    const provider = {
+      chatCompletionWithTools: async (
+        messages: ChatMessage[],
+        _tools: unknown,
+        _signal: AbortSignal | undefined,
+        options: Record<string, unknown>,
+      ) => {
+        capturedMessages = messages;
+        capturedOptions = options;
+        return {
+          content: JSON.stringify({
+            title: "Evidence-first deck",
+            sourceItemKey: "SBZ2M99R",
+            slides: [
+              {
+                title: "The benchmark changes",
+                metrics: [{ value: "1", label: "result" }],
+              },
+            ],
+          }),
+        };
+      },
+    };
+    const planner = runtime.createPresentationPlanner(
+      provider,
+      async (operation: () => Promise<unknown>) => operation(),
+    );
+
+    const result = await planner({
+      intent: { sourceItemKey: "SBZ2M99R", language: "zh-CN" },
+      paper: {
+        metadata: { title: "ImageNet classification", year: 2012 },
+        sections: [],
+        fullText: "Figure 1 evidence",
+        pages: [
+          {
+            pageNumber: 1,
+            startIndex: 0,
+            endIndex: 17,
+            content: "Fig. 1. Network architecture and benchmark evidence.",
+          },
+        ],
+        pageCount: 1,
+      },
+    });
+
+    assert.equal(result.title, "Evidence-first deck");
+    assert.deepEqual(capturedOptions, {
+      toolChoice: "none",
+      stateless: true,
+    });
+    assert.lengthOf(capturedMessages, 2);
+    assert.include(capturedMessages[1].content, "SBZ2M99R");
+    assert.include(capturedMessages[1].content, "Fig. 1. Network architecture");
+    assert.include(capturedMessages[1].content, "Internal output JSON schema");
+  });
+
+  it("repairs an invalid planner protocol once inside the presentation job", async function () {
+    const runtime = new AgentRuntime(
+      { updateSessionMeta: async () => undefined } as any,
+      {
+        isSessionActive: () => false,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "",
+        generateId: () => `planner-repair-${Math.random()}`,
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async () => [],
+      },
+    ) as any;
+    const capturedPrompts: string[] = [];
+    let callCount = 0;
+    const provider = {
+      chatCompletionWithTools: async (messages: ChatMessage[]) => {
+        callCount += 1;
+        capturedPrompts.push(messages[1].content);
+        return callCount === 1
+          ? { content: "not-json" }
+          : {
+              content: JSON.stringify({
+                title: "Repaired deck",
+                sourceItemKey: "SBZ2M99R",
+                slides: [{ title: "Evidence" }],
+              }),
+            };
+      },
+    };
+    const planner = runtime.createPresentationPlanner(
+      provider,
+      async (operation: () => Promise<unknown>) => operation(),
+    );
+
+    const result = await planner({
+      intent: { sourceItemKey: "SBZ2M99R" },
+      paper: {
+        metadata: { title: "ImageNet classification" },
+        sections: [],
+        fullText: "Evidence",
+        pages: [],
+        pageCount: 0,
+      },
+    });
+
+    assert.equal(callCount, 2);
+    assert.equal(result.title, "Repaired deck");
+    assert.include(capturedPrompts[1], "Repair the previous internal");
+    assert.include(capturedPrompts[1], "not-json");
+  });
+
+  it("runs visual review statelessly and rejects suppressed tool protocol", async function () {
+    const runtime = new AgentRuntime(
+      { updateSessionMeta: async () => undefined } as any,
+      {
+        isSessionActive: () => false,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "",
+        generateId: () => `review-${Math.random()}`,
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async () => [],
+      },
+    ) as any;
+    let capturedOptions: Record<string, unknown> | undefined;
+    let capturedMessages: ChatMessage[] = [];
+    let callCount = 0;
+    const provider = {
+      chatCompletionWithTools: async (
+        messages: ChatMessage[],
+        _tools: unknown,
+        _signal: AbortSignal | undefined,
+        options: Record<string, unknown>,
+      ) => {
+        callCount += 1;
+        capturedMessages = messages;
+        capturedOptions = options;
+        return { content: "", suppressedToolCall: true };
+      },
+    };
+    const reviewer = runtime.createPresentationVisualReviewer(
+      provider,
+      async (operation: () => Promise<unknown>) => operation(),
+    );
+
+    let rejected: unknown;
+    try {
+      await reviewer({
+        stage: "draft",
+        title: "Deck",
+        outline: "Six slides",
+        previewSlides: ["data:image/png;base64,AAAA"],
+      });
+    } catch (error) {
+      rejected = error;
+    }
+    assert.instanceOf(rejected, Error);
+    assert.match((rejected as Error).message, /tool call instead of JSON/);
+    assert.equal(callCount, 2);
+    assert.deepEqual(capturedOptions, {
+      toolChoice: "none",
+      stateless: true,
+    });
+    assert.include(
+      capturedMessages[0].content,
+      "quoted Figure/Table captions are source evidence",
+    );
+    assert.include(
+      capturedMessages[0].content,
+      "must not be treated as language mixing",
+    );
+    assert.include(
+      capturedMessages[0].content,
+      "bibliographic year in the outline as authoritative Zotero metadata",
+    );
+    assert.include(
+      capturedMessages[0].content,
+      "pass means the deck is genuinely presentation-ready",
+    );
+    assert.include(
+      capturedMessages[0].content,
+      "Never revise or reject only for subjective preference or micro-polish",
+    );
+    assert.include(
+      capturedMessages[0].content,
+      "editorial verdicts are warnings and the best rendered deck is still exported",
+    );
+    assert.include(
+      capturedMessages[0].content,
+      "only render_safety can block writing",
+    );
+    assert.include(
+      capturedMessages[0].content,
+      "one category label correctly names a cluster",
+    );
   });
 });

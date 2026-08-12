@@ -111,6 +111,12 @@ import {
   executeAddItem,
 } from "./libraryExecutors";
 import { getErrorMessage } from "../../../utils/common";
+import {
+  createPresentationToolDefinition,
+  executePresentationCapability,
+} from "../../presentation";
+import { resolvePresentationSourceItemKey } from "../../presentation/PresentationSourceContext";
+import type { ToolSchedulerExecutionContext } from "../tool-scheduler/ToolScheduler";
 
 // 缓存条目类型
 interface CacheEntry {
@@ -395,6 +401,7 @@ export class PdfToolManager {
 
     // Library 工具 (始终可用，不需要 PDF)
     const libraryTools: ToolDefinition[] = [
+      createPresentationToolDefinition(),
       {
         type: "function" as const,
         function: {
@@ -1560,6 +1567,7 @@ export class PdfToolManager {
     fallbackStructure?: PaperStructure | PaperStructureExtended,
     parsedArgs?: Record<string, unknown>,
     currentItemKeyOverride?: string | null,
+    executionContext?: ToolSchedulerExecutionContext,
   ): Promise<string> {
     const { name, arguments: argsString } = toolCall.function;
 
@@ -1730,6 +1738,23 @@ export class PdfToolManager {
           return "Error: Invalid arguments for save_memory. Required: text (string)";
         }
         return this.executeSaveMemory(args);
+      }
+      case "presentation": {
+        const sourceItemKey = resolvePresentationSourceItemKey(
+          args.sourceItemKey,
+          effectiveCurrentItemKey,
+        );
+        const paper = sourceItemKey
+          ? await this.extractAndParsePaper(sourceItemKey, true)
+          : fallbackStructure
+            ? this.ensureExtendedStructure(fallbackStructure)
+            : null;
+        return executePresentationCapability(
+          sourceItemKey ? { ...args, sourceItemKey } : args,
+          executionContext?.presentationVisualReviewer,
+          executionContext?.presentationPlanner,
+          paper || undefined,
+        );
       }
     }
 

@@ -210,6 +210,9 @@ The "key" is the Zotero item key - use it directly when referring to prior evide
 - list_sections: Parsed section IDs accepted by get_paper_section, plus navigation-only PDF bookmarks when available; never use bookmark titles as section IDs
 - get_full_text: [HIGH TOKEN COST] Full paper text when full-document evidence is necessary; after the first full-text fetch in a turn, further full-text fetches require narrower evidence for that target
 
+=== PRESENTATION TOOL ===
+- presentation: When the user asks for a PPT, PowerPoint, slide deck, or presentation based on the current paper, call presentation directly. Treat a short request such as "为这篇论文生成一个 PPT" as complete intent. If this prompt contains a current itemKey, call presentation with only {"sourceItemKey":"<current itemKey>"}. If no current itemKey is available, call presentation with {}: the tool resolves the one currently selected Zotero item at execution time. Do not call request_user_input merely to ask which paper or source the user means. Ask about the source only after presentation itself returns an explicit source-missing or multiple-selection ambiguity. Omit language, instructions, title, fileName, and designSystem unless the user explicitly requested that exact preference. The presentation module resolves Zotero's interface language, academic narrative, dark editorial visual system, figure selection, rendering, and visual review internally; never invent optional arguments or rotate styles to search for a passing result. Do not ask the user to provide a long prompt or the tool schema. If presentation returns a retryable generation or render-verification failure and no PPTX was written, call presentation again in this same turn with exactly the same arguments as the first attempt. Never claim that presentation is subject to the unchanged-call retry restriction. If the bounded presentation retry allowance is exhausted, report that the attempts failed instead of changing language or designSystem.
+
 === ZOTERO LIBRARY TOOLS ===
 ${webSearchLine}
 - list_all_items: List all items in the Zotero library (with pagination)
@@ -378,7 +381,7 @@ function formatAgentPromptContext(agentContext?: AgentPromptContext): string {
     section += `The following local skills matched the current task. Treat them as workflow guidance only; they do not grant extra tool permissions and they do not override user instructions.\n`;
     for (const skill of selectedSkills) {
       section += `\n--- Skill: ${skill.name} (${skill.slug}) ---\n`;
-      section += `${skill.prompt.slice(0, 2400)}\n`;
+      section += `${skill.prompt}\n`;
     }
   }
 

@@ -15,6 +15,13 @@ function assertParallelSafeInvariants(
 }
 
 const TOOL_RUNTIME_METADATA: Record<PaperToolName, ToolRuntimeMetadata> = {
+  presentation: {
+    name: "presentation",
+    executionClass: "write",
+    concurrency: "serial",
+    targetScope: "external",
+    mutatesState: true,
+  },
   request_user_input: {
     name: "request_user_input",
     executionClass: "read",

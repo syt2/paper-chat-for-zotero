@@ -65,6 +65,7 @@ interface ResponsesRequestResult {
   response: Response;
   plan: ResponsesRequestPlan;
   forceStateless: boolean;
+  isolatedStateless: boolean;
 }
 
 export interface OpenAIResponsesRuntimeOptions {
@@ -1195,7 +1196,12 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     options?: ToolCallingOptions,
     pdfAttachment?: PdfAttachment,
   ): Promise<ResponsesRequestResult> {
-    let plan = this.buildRequestPlan(messages, pdfAttachment, false);
+    const isolatedStateless = options?.stateless === true;
+    let plan = this.buildRequestPlan(
+      messages,
+      pdfAttachment,
+      isolatedStateless,
+    );
     let body = this.buildRequestBody(plan, tools, stream, options);
     let forceStateless = false;
     const send = () =>
@@ -1223,7 +1229,7 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
       response = await send();
       await this.validateResponse(response);
     }
-    return { response, plan, forceStateless };
+    return { response, plan, forceStateless, isolatedStateless };
   }
 
   private commitResponseState(
@@ -1349,13 +1355,8 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     if (!this.isReady()) {
       throw new Error("Provider is not configured");
     }
-    const { response, plan, forceStateless } = await this.request(
-      messages,
-      tools,
-      false,
-      signal,
-      options,
-    );
+    const { response, plan, forceStateless, isolatedStateless } =
+      await this.request(messages, tools, false, signal, options);
     const completed = (await response.json()) as ResponsesApiResponse;
     const error = responseError(completed);
     if (error) {
@@ -1364,7 +1365,9 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     const toolCalls = extractToolCalls(completed);
     const hostedWebSearches = extractHostedWebSearchCalls(completed);
     const allowToolCalls = options?.toolChoice !== "none";
-    if (!allowToolCalls && toolCalls.length > 0) {
+    if (isolatedStateless) {
+      // Internal isolated jobs must not replace or clear the main chat state.
+    } else if (!allowToolCalls && toolCalls.length > 0) {
       this.clearConversationState();
     } else {
       this.commitResponseState(plan, completed, forceStateless);
@@ -1391,13 +1394,8 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
       return;
     }
     try {
-      const { response, plan, forceStateless } = await this.request(
-        messages,
-        tools,
-        true,
-        signal,
-        options,
-      );
+      const { response, plan, forceStateless, isolatedStateless } =
+        await this.request(messages, tools, true, signal, options);
       const completed = await parseResponsesSSEStream(
         this.getResponseReader(response),
         {
@@ -1415,7 +1413,9 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
       const toolCalls = extractToolCalls(completed);
       const hostedWebSearches = extractHostedWebSearchCalls(completed);
       const allowToolCalls = options?.toolChoice !== "none";
-      if (!allowToolCalls && toolCalls.length > 0) {
+      if (isolatedStateless) {
+        // Internal isolated jobs must not replace or clear the main chat state.
+      } else if (!allowToolCalls && toolCalls.length > 0) {
         this.clearConversationState();
       } else {
         this.commitResponseState(plan, completed, forceStateless);

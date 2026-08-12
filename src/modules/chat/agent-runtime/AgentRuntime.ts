@@ -25,6 +25,7 @@ import type {
   ToolSchedulerExecutionHooks,
   ToolSchedulerRequest,
 } from "../tool-scheduler";
+import type { ToolSchedulerExecutionContext } from "../tool-scheduler/ToolScheduler";
 import { ExecutionPlanManager } from "./ExecutionPlanManager";
 import {
   createReusedCompletedToolResult,
@@ -56,6 +57,7 @@ import {
   createBlockedRetryResult,
   findBlockedRetryMatch,
   fingerprintToolCall,
+  MAX_PRESENTATION_ATTEMPTS_PER_TURN,
 } from "../tool-retry/ToolRetryPolicy";
 import {
   UserInputRequestCoordinator,
@@ -89,6 +91,17 @@ import {
   type SearchScopeGateConfig,
   type SelectedSearchScope,
 } from "./SearchScopeGate";
+import {
+  parsePresentationVisualReviewResponse,
+  type PresentationVisualReviewer,
+} from "../../presentation/PresentationVisualReview";
+import {
+  buildPresentationPlannerSystemPrompt,
+  buildPresentationPlannerUserPrompt,
+  parsePresentationPlannerResponse,
+  type PresentationPlanner,
+} from "../../presentation/PresentationPlanner";
+import { normalizePresentationToolCall } from "../../presentation/PresentationToolCallPolicy";
 
 interface AgentRuntimeCallbacks {
   isSessionActive: (session: ChatSession) => boolean;
@@ -194,6 +207,8 @@ interface ToolIterationParams {
   allowedToolNames: Set<string>;
   selectedSearchScope?: SelectedSearchScope;
   noteSummaryContext?: NoteSummaryContext;
+  abortSignal?: AbortSignal;
+  executeProviderRequest: ProviderRequestExecutor;
 }
 
 function rewriteToolCallItemKey(
@@ -230,8 +245,20 @@ function rewriteToolCallItemKey(
 // Hard stop for a single assistant turn. Keeps malformed tool loops bounded
 // while still allowing a few replan / retry pivots inside one response.
 const MAX_ITERATIONS_ERROR = "Maximum tool-calling iterations reached.";
+const MAX_PRESENTATION_RECOVERY_EXTENSIONS = 2;
+const MAX_PRESENTATION_RECOVERY_NUDGES = 2;
 const AGENT_TRACE_LOG_PREF =
   "extensions.zotero.paperchat.devEnableAgentTraceLogs";
+
+class PresentationProtocolError extends Error {
+  constructor(
+    message: string,
+    readonly previousDraft?: unknown,
+  ) {
+    super(message);
+    this.name = "PresentationProtocolError";
+  }
+}
 
 type RuntimeToolIterationEntry =
   | ToolExecutionBatchEntry
@@ -386,6 +413,10 @@ export class AgentRuntime {
     const logPrefix = "Streaming Tool Calling";
     const configuredMaxIterations = this.getMaxIterations();
     let maxIterations = configuredMaxIterations;
+    let presentationRecoveryExtensions = 0;
+    let presentationRecoveryNudges = 0;
+    let pendingRetryablePresentationFailure = false;
+    let presentationFailureAttempts = 0;
     let budgetLimits = getToolBudgetLimits(configuredMaxIterations);
     let iteration = 0;
     let accumulatedDisplay = assistantMessage.content;
@@ -396,6 +427,9 @@ export class AgentRuntime {
       currentMessages,
       true,
       preserveToolExecutionState,
+    );
+    presentationFailureAttempts = countRetryablePresentationFailures(
+      sendingSession.toolExecutionState?.results || [],
     );
     let selectedSearchScope = searchScopeGate
       ? findCompletedSearchScope(
@@ -514,8 +548,41 @@ export class AgentRuntime {
             ),
             selectedSearchScope,
             noteSummaryContext,
+            abortSignal,
+            executeProviderRequest,
           });
           accumulatedDisplay = toolIteration.accumulatedDisplay;
+          presentationFailureAttempts +=
+            toolIteration.retryablePresentationFailures;
+          const presentationRetryBudgetRemaining =
+            presentationFailureAttempts < MAX_PRESENTATION_ATTEMPTS_PER_TURN;
+          if (toolIteration.completedPresentationCalls > 0) {
+            pendingRetryablePresentationFailure = false;
+          } else if (toolIteration.retryablePresentationFailures > 0) {
+            pendingRetryablePresentationFailure =
+              presentationRetryBudgetRemaining;
+          }
+          if (
+            toolIteration.retryablePresentationFailures > 0 &&
+            !presentationRetryBudgetRemaining
+          ) {
+            currentMessages.push(
+              createPresentationAttemptsExhaustedSystemMessage(
+                this.callbacks.generateId(),
+              ),
+            );
+            maxIterations = iteration + 1;
+            budgetLimits = getToolBudgetLimits(maxIterations);
+          } else if (
+            toolIteration.retryablePresentationFailures > 0 &&
+            presentationRecoveryExtensions <
+              MAX_PRESENTATION_RECOVERY_EXTENSIONS &&
+            maxIterations < iteration + 2
+          ) {
+            maxIterations = iteration + 2;
+            presentationRecoveryExtensions += 1;
+            budgetLimits = getToolBudgetLimits(maxIterations);
+          }
           if (
             toolIteration.selectedSearchScope &&
             toolIteration.selectedSearchScope !== selectedSearchScope
@@ -534,6 +601,25 @@ export class AgentRuntime {
             selectedSearchScope = nextSearchScope;
             searchScopeGate?.onScopeSelected(selectedSearchScope);
           }
+          continue;
+        }
+
+        if (
+          !iterationControl.forceFinalAnswer &&
+          pendingRetryablePresentationFailure &&
+          presentationRecoveryNudges < MAX_PRESENTATION_RECOVERY_NUDGES
+        ) {
+          currentMessages.push(
+            createPresentationRetryRequiredSystemMessage(
+              this.callbacks.generateId(),
+            ),
+          );
+          presentationRecoveryNudges += 1;
+          maxIterations = Math.max(maxIterations, iteration + 2);
+          budgetLimits = getToolBudgetLimits(maxIterations);
+          ztoolkit.log(
+            `[${logPrefix}] Ignoring a terminal response after a retryable presentation failure; keeping presentation available for recovery`,
+          );
           continue;
         }
 
@@ -632,6 +718,10 @@ export class AgentRuntime {
     const logPrefix = "Tool Calling";
     const configuredMaxIterations = this.getMaxIterations();
     let maxIterations = configuredMaxIterations;
+    let presentationRecoveryExtensions = 0;
+    let presentationRecoveryNudges = 0;
+    let pendingRetryablePresentationFailure = false;
+    let presentationFailureAttempts = 0;
     let budgetLimits = getToolBudgetLimits(configuredMaxIterations);
     let iteration = 0;
     let accumulatedDisplay = assistantMessage.content;
@@ -642,6 +732,9 @@ export class AgentRuntime {
       currentMessages,
       false,
       preserveToolExecutionState,
+    );
+    presentationFailureAttempts = countRetryablePresentationFailures(
+      sendingSession.toolExecutionState?.results || [],
     );
     let selectedSearchScope = searchScopeGate
       ? findCompletedSearchScope(
@@ -754,8 +847,41 @@ export class AgentRuntime {
             ),
             selectedSearchScope,
             noteSummaryContext,
+            abortSignal,
+            executeProviderRequest,
           });
           accumulatedDisplay = toolIteration.accumulatedDisplay;
+          presentationFailureAttempts +=
+            toolIteration.retryablePresentationFailures;
+          const presentationRetryBudgetRemaining =
+            presentationFailureAttempts < MAX_PRESENTATION_ATTEMPTS_PER_TURN;
+          if (toolIteration.completedPresentationCalls > 0) {
+            pendingRetryablePresentationFailure = false;
+          } else if (toolIteration.retryablePresentationFailures > 0) {
+            pendingRetryablePresentationFailure =
+              presentationRetryBudgetRemaining;
+          }
+          if (
+            toolIteration.retryablePresentationFailures > 0 &&
+            !presentationRetryBudgetRemaining
+          ) {
+            currentMessages.push(
+              createPresentationAttemptsExhaustedSystemMessage(
+                this.callbacks.generateId(),
+              ),
+            );
+            maxIterations = iteration + 1;
+            budgetLimits = getToolBudgetLimits(maxIterations);
+          } else if (
+            toolIteration.retryablePresentationFailures > 0 &&
+            presentationRecoveryExtensions <
+              MAX_PRESENTATION_RECOVERY_EXTENSIONS &&
+            maxIterations < iteration + 2
+          ) {
+            maxIterations = iteration + 2;
+            presentationRecoveryExtensions += 1;
+            budgetLimits = getToolBudgetLimits(maxIterations);
+          }
           if (
             toolIteration.selectedSearchScope &&
             toolIteration.selectedSearchScope !== selectedSearchScope
@@ -774,6 +900,25 @@ export class AgentRuntime {
             selectedSearchScope = nextSearchScope;
             searchScopeGate?.onScopeSelected(selectedSearchScope);
           }
+          continue;
+        }
+
+        if (
+          !iterationControl.forceFinalAnswer &&
+          pendingRetryablePresentationFailure &&
+          presentationRecoveryNudges < MAX_PRESENTATION_RECOVERY_NUDGES
+        ) {
+          currentMessages.push(
+            createPresentationRetryRequiredSystemMessage(
+              this.callbacks.generateId(),
+            ),
+          );
+          presentationRecoveryNudges += 1;
+          maxIterations = Math.max(maxIterations, iteration + 2);
+          budgetLimits = getToolBudgetLimits(maxIterations);
+          ztoolkit.log(
+            `[${logPrefix}] Ignoring a terminal response after a retryable presentation failure; keeping presentation available for recovery`,
+          );
           continue;
         }
 
@@ -1198,6 +1343,8 @@ export class AgentRuntime {
   private async runToolIteration(params: ToolIterationParams): Promise<{
     accumulatedDisplay: string;
     selectedSearchScope?: SelectedSearchScope;
+    retryablePresentationFailures: number;
+    completedPresentationCalls: number;
   }> {
     const {
       sendingSession,
@@ -1218,11 +1365,41 @@ export class AgentRuntime {
       allowedToolNames,
       selectedSearchScope,
       noteSummaryContext,
+      abortSignal,
+      executeProviderRequest,
     } = params;
     const contextStrategy = getToolContextStrategy(provider);
+    const executionContext: ToolSchedulerExecutionContext | undefined =
+      toolCalls.some((toolCall) => toolCall.function.name === "presentation")
+        ? {
+            presentationPlanner: this.createPresentationPlanner(
+              provider,
+              executeProviderRequest,
+              abortSignal,
+            ),
+            presentationVisualReviewer: this.createPresentationVisualReviewer(
+              provider,
+              executeProviderRequest,
+              abortSignal,
+            ),
+          }
+        : undefined;
+
+    const latestUserRequest = [...currentMessages]
+      .reverse()
+      .find((message) => message.role === "user" && !message.apiOnly)?.content;
+    const previousToolResults =
+      sendingSession.toolExecutionState?.results || [];
+    const normalizedToolCalls = toolCalls.map((toolCall) =>
+      normalizePresentationToolCall(
+        toolCall,
+        latestUserRequest || "",
+        previousToolResults,
+      ),
+    );
 
     const invalidSummaryCreateNoteCallIds = new Set<string>();
-    const protectedToolCalls = toolCalls.map((toolCall) => {
+    const protectedToolCalls = normalizedToolCalls.map((toolCall) => {
       toolCall = rewriteToolCallItemKey(toolCall, lockedToolItemKey);
       if (!noteSummaryContext) {
         return toolCall;
@@ -1276,6 +1453,7 @@ export class AgentRuntime {
       allowedToolNames,
       noteSummaryContext,
       invalidSummaryCreateNoteCallIds,
+      executionContext,
     );
 
     // Reused exchanges already live in the previous turn's retained apiOnly
@@ -1314,6 +1492,8 @@ export class AgentRuntime {
 
     let accumulatedDisplay = params.accumulatedDisplay;
     let resolvedSearchScope = selectedSearchScope;
+    let retryablePresentationFailures = 0;
+    let completedPresentationCalls = 0;
     if (roundContent) {
       accumulatedDisplay += roundContent;
     }
@@ -1590,6 +1770,15 @@ export class AgentRuntime {
           this.emitPlanUpdate(sendingSession, sessionRunId);
         }
 
+        retryablePresentationFailures += batchResults.filter(
+          isRetryablePresentationFailure,
+        ).length;
+        completedPresentationCalls += batchResults.filter(
+          (result) =>
+            result.toolCall.function.name === "presentation" &&
+            result.status === "completed",
+        ).length;
+
         this.appendRecoveryGuidanceMessage(currentMessages, batchResults);
       } finally {
         releaseMutatingToolEntry?.();
@@ -1622,6 +1811,8 @@ export class AgentRuntime {
     return {
       accumulatedDisplay,
       selectedSearchScope: resolvedSearchScope,
+      retryablePresentationFailures,
+      completedPresentationCalls,
     };
   }
 
@@ -1633,6 +1824,7 @@ export class AgentRuntime {
     paperStructure?: PaperStructure | PaperStructureExtended | null,
     reuseCompletedResults: boolean = false,
     currentItemKey?: string | null,
+    executionContext?: ToolSchedulerExecutionContext,
   ): ToolExecutionBatchEntry[] {
     return planToolExecutionEntries({
       sessionId: session.id,
@@ -1645,6 +1837,7 @@ export class AgentRuntime {
       budgetLimits,
       reuseCompletedResults,
       currentItemKey,
+      executionContext,
     });
   }
 
@@ -1659,6 +1852,7 @@ export class AgentRuntime {
     allowedToolNames?: Set<string>,
     noteSummaryContext?: NoteSummaryContext,
     invalidSummaryCreateNoteCallIds: ReadonlySet<string> = new Set(),
+    executionContext?: ToolSchedulerExecutionContext,
   ): RuntimeToolIterationEntry[] {
     const entries: RuntimeToolIterationEntry[] = [];
     let runnableSegment: ToolCall[] = [];
@@ -1680,6 +1874,7 @@ export class AgentRuntime {
           noteSummaryContext?.destination.status === "resolved"
             ? noteSummaryContext.destination.itemKey
             : currentItemKey,
+          executionContext,
         ),
       );
       runnableSegment = [];
@@ -1898,6 +2093,175 @@ export class AgentRuntime {
 
     flushRunnableSegment();
     return entries;
+  }
+
+  private createPresentationVisualReviewer(
+    provider: ToolCallingProvider,
+    executeProviderRequest: ProviderRequestExecutor,
+    abortSignal?: AbortSignal,
+  ): PresentationVisualReviewer {
+    return async (request) => {
+      const images = request.previewSlides.map((dataUrl, index) => {
+        const match = dataUrl.match(/^data:(image\/[^;]+);base64,(.+)$/s);
+        if (!match) {
+          throw new Error(
+            `Presentation preview slide ${index + 1} is not a base64 image.`,
+          );
+        }
+        return {
+          type: "base64" as const,
+          mimeType: match[1],
+          data: match[2],
+          name: `presentation-slide-${index + 1}.png`,
+        };
+      });
+      const finalStage = request.stage === "final";
+      const runReview = async (repair?: PresentationProtocolError) => {
+        const messages: ChatMessage[] = [
+          {
+            id: this.callbacks.generateId(),
+            role: "system",
+            content: [
+              "You are the visual quality gate for PaperChat academic presentations.",
+              "Inspect every supplied slide image at full size and judge the deck as a premium public research presentation, not as a merely valid file.",
+              "Reject large-text statement pages, tiny evidence thumbnails, dashboard or card-grid styling, weak hierarchy, awkward wrapping, crowded process nodes, sparse unused canvas, illegible captions, and repeated silhouettes.",
+              "Compare the whole deck as a sequence. Reject any repeated paper image across the cover and content slides or across two content slides unless the outline proves they are explicit non-overlapping subfigure crops. Reject a deck that changes its model-authored audience-facing language between slides. The outline includes the required deck locale. Original-language paper titles, acronyms, equations, and quoted Figure/Table captions are source evidence and must not be treated as language mixing.",
+              "Treat the bibliographic year in the outline as authoritative Zotero metadata. Do not replace it with or reject it in favor of a preprint, conference, competition, dataset, or experiment year mentioned in the paper unless the rendered slide contradicts the outline itself.",
+              "The default teal-green-academic-defense reference standard is a precise white scholarly system rather than a poster or dashboard: the cover needs a measured title hierarchy and a substantial paper-derived hero; the research-gap slide needs a real comparison matrix or aligned evidence rows; the method slide needs one readable editable pipeline with a dominant architecture figure; evidence slides need figures, charts, or tables large enough to present from a distance; and the conclusion needs three findings, at least two open questions or limitations, and a visible next step. Apply the cinematic full-bleed standard only when the outline explicitly says dark-editorial.",
+              "Apply measurable composition checks. Content-slide claim titles should normally read at roughly 24-30 pt. A primary figure, chart, table, matrix, or pipeline should own roughly 55-70% of the usable canvas through an asymmetric split or a full-width evidence stage. Reject any planned region that is mostly empty, any small table stranded in one corner, and any gallery whose two images are visibly the same paper crop.",
+              "Prefer evidence-first academic composition: white or near-white staging, black or deep-blue typography, restrained teal or cyan accents, thin precise rules, direct data labels, one real paper figure or editable data object owning each canvas, quiet footers, and deliberate variation in page rhythm. Reject dark poster styling when the outline specifies the academic design system, and reject a deck that merely recolors one repeated layout.",
+              "Never change scientific numbers, chart data, source figures, page references, or claims. You may shorten audience-facing text, switch to a compatible existing layout, enlarge existing evidence, reorder existing figures, or drop redundant narrative modules.",
+              "Review the cover as carefully as the content slides. An unstructured title page, a tiny ultra-wide architecture diagram, weak image staging, or a method figure reused as the cover hero is not presentation-ready. A designed white academic cover is valid when its title hierarchy and evidence image are substantial. If its hierarchy or image composition is weak, use deckPatch instead of passing it.",
+              "Audit source-figure completeness, not only figure size. Reject any architecture diagram, plot, table, or qualitative panel whose boxes, arrows, axes, labels, panels, or plotted content are visibly cut at an image boundary. An architecture figure must retain both its input side and final classifier/output stages; a crop that ends mid-box or mid-arrow is a release-blocking defect even when the remaining portion is large and readable.",
+              "Use verdicts to guide internal development and repair, not to decide whether a production PPTX may be written. pass means the deck is genuinely presentation-ready and may still include minor optional polish in the summary. revise means one bounded draft repair can resolve a visible problem. reject means a material defect still harms readability, evidence scale, hierarchy, consistency, or audience trust. In production, editorial verdicts are warnings and the best rendered deck is still exported; only render_safety can block writing. Never revise or reject only for subjective preference or micro-polish.",
+              "Classify every non-pass verdict with failureClass. Use editorial for evidence-module count, visual density, image count, cover styling, composition variety, hierarchy, empty canvas, or other presentation-quality judgment. Use render_safety only for catastrophic source cropping, severe text clipping or overflow that makes content unreadable, or another defect that makes the exported deck unsafe to use. Never label a merely sparse or less-polished slide as render_safety.",
+              "Audit editable charts against the chart structure included in the outline, not by counting visible bars alone. In a grouped bar chart, one category label correctly names a cluster containing one bar per legend series; do not demand a separate category label for every bar. Reject only when the outline itself shows missing or mismatched labels/values, or the rendered legend and category labels are actually unreadable.",
+              finalStage
+                ? "This is the final internal review. Return only pass or reject: pass when all slides are genuinely presentation-ready, reject when a material defect remains. A production editorial rejection is reported as a warning and must not imply that no PPTX was written; only render_safety is release-blocking. Never return revise at the final gate."
+                : "This is the draft gate. If the deck is close but needs one repair pass, return concise slide patches. Reject it if the fixed layout system cannot make it presentation-ready.",
+              "Return JSON only with: verdict (pass, revise, or reject), summary, failureClass (editorial or render_safety for every non-pass verdict), optional deckPatch, and optional patches. deckPatch may contain coverLayout (single-hero or editorial-collage), coverTitleScale (compact, standard, or large), swapCoverFigureOrder, or dropCoverEvidenceLine. Each slide patch uses exported slideNumber 2-6 and may contain layout, title, subtitle, eyebrow, keyMessage, bullets, figureEmphasis (standard or dominant), swapFigureOrder, or dropFields. Allowed dropFields: subtitle, keyMessage, bullets, groups, metrics, callouts, figure, figures, chart, table, equation, matrix, timeline, process, comparison.",
+              repair
+                ? "The previous reviewer response violated the JSON protocol. Correct that protocol error now; do not change the supplied slide evidence and do not call tools."
+                : "",
+            ]
+              .filter(Boolean)
+              .join("\n"),
+            timestamp: Date.now(),
+          },
+          {
+            id: this.callbacks.generateId(),
+            role: "user",
+            content: [
+              `Review stage: ${request.stage}`,
+              `Deck outline:\n${request.outline}`,
+              repair ? `Protocol issue: ${repair.message}` : "",
+              repair?.previousDraft === undefined
+                ? ""
+                : `Previous invalid response:\n${JSON.stringify(repair.previousDraft)}`,
+            ]
+              .filter(Boolean)
+              .join("\n\n"),
+            images,
+            timestamp: Date.now(),
+          },
+        ];
+        const result = await executeProviderRequest(() =>
+          provider.chatCompletionWithTools(messages, undefined, abortSignal, {
+            toolChoice: "none",
+            stateless: true,
+          }),
+        );
+        if (result.suppressedToolCall || result.toolCalls?.length) {
+          throw new PresentationProtocolError(
+            "Presentation visual reviewer returned a tool call instead of JSON.",
+            {
+              suppressedToolCall: result.suppressedToolCall,
+              toolCalls: result.toolCalls,
+              content: result.content,
+            },
+          );
+        }
+        try {
+          return parsePresentationVisualReviewResponse(result.content || "");
+        } catch (error) {
+          throw new PresentationProtocolError(
+            getErrorMessage(error),
+            result.content || "",
+          );
+        }
+      };
+      try {
+        return await runReview();
+      } catch (error) {
+        if (!(error instanceof PresentationProtocolError)) throw error;
+        return runReview(error);
+      }
+    };
+  }
+
+  private createPresentationPlanner(
+    provider: ToolCallingProvider,
+    executeProviderRequest: ProviderRequestExecutor,
+    abortSignal?: AbortSignal,
+  ): PresentationPlanner {
+    return async (request) => {
+      const runPlanner = async (
+        planningRequest: Parameters<PresentationPlanner>[0],
+      ) => {
+        const messages: ChatMessage[] = [
+          {
+            id: this.callbacks.generateId(),
+            role: "system",
+            content: buildPresentationPlannerSystemPrompt(),
+            timestamp: Date.now(),
+          },
+          {
+            id: this.callbacks.generateId(),
+            role: "user",
+            content: buildPresentationPlannerUserPrompt(planningRequest),
+            timestamp: Date.now(),
+          },
+        ];
+        const result = await executeProviderRequest(() =>
+          provider.chatCompletionWithTools(messages, undefined, abortSignal, {
+            toolChoice: "none",
+            stateless: true,
+          }),
+        );
+        if (result.suppressedToolCall || result.toolCalls?.length) {
+          throw new PresentationProtocolError(
+            "Presentation planner returned a tool call instead of JSON.",
+            {
+              suppressedToolCall: result.suppressedToolCall,
+              toolCalls: result.toolCalls,
+              content: result.content,
+            },
+          );
+        }
+        try {
+          return parsePresentationPlannerResponse(result.content || "");
+        } catch (error) {
+          throw new PresentationProtocolError(
+            getErrorMessage(error),
+            result.content || "",
+          );
+        }
+      };
+      try {
+        return await runPlanner(request);
+      } catch (error) {
+        if (!(error instanceof PresentationProtocolError) || request.repair) {
+          throw error;
+        }
+        return runPlanner({
+          ...request,
+          repair: {
+            issues: [error.message],
+            previousDraft: error.previousDraft,
+          },
+        });
+      }
+    };
   }
 
   private async executeBatchWithRuntimeEvents(
@@ -2431,6 +2795,14 @@ export class AgentRuntime {
     currentMessages: ChatMessage[],
     results: ToolExecutionResult[],
   ): void {
+    const completedPresentationMessage =
+      createPresentationExportCompletedSystemMessage(
+        this.callbacks.generateId(),
+        results,
+      );
+    if (completedPresentationMessage) {
+      currentMessages.push(completedPresentationMessage);
+    }
     const systemMessage = createRecoveryGuidanceSystemMessage(
       results,
       this.callbacks.generateId,
@@ -2684,6 +3056,110 @@ function createDuplicateUserInputRequestResult(
     }),
     error: cause,
   };
+}
+
+function createPresentationRetryRequiredSystemMessage(id: string): ChatMessage {
+  return {
+    id,
+    role: "system",
+    content: [
+      "The previous presentation call failed before writing a PPTX and is retryable.",
+      "Do not end the turn with an apology or claim that the tool cannot be called again.",
+      "Call presentation again now with exactly the same arguments as the first attempt. Do not add or change language, instructions, title, fileName, or designSystem; PaperChat will start a fresh isolated planning, rendering, verification, and export attempt.",
+    ].join(" "),
+    timestamp: Date.now(),
+  };
+}
+
+function createPresentationAttemptsExhaustedSystemMessage(
+  id: string,
+): ChatMessage {
+  return {
+    id,
+    role: "system",
+    content: [
+      `The bounded presentation budget of ${MAX_PRESENTATION_ATTEMPTS_PER_TURN} full attempts is exhausted for this turn.`,
+      "Do not call presentation or any other tool again in this turn.",
+      "Give a concise final response stating that no PPTX was written and summarize the latest presentation failure.",
+      "Do not describe this as an unchanged-call restriction or claim that the tool is generally unavailable.",
+    ].join(" "),
+    timestamp: Date.now(),
+  };
+}
+
+function createPresentationExportCompletedSystemMessage(
+  id: string,
+  results: ToolExecutionResult[],
+): ChatMessage | undefined {
+  const completed = [...results]
+    .reverse()
+    .find(
+      (result) =>
+        result.toolCall.function.name === "presentation" &&
+        result.status === "completed",
+    );
+  if (!completed) return undefined;
+
+  let payload:
+    | {
+        status?: unknown;
+        path?: unknown;
+        fileName?: unknown;
+        slideCount?: unknown;
+      }
+    | undefined;
+  try {
+    const parsed = JSON.parse(completed.content);
+    if (parsed && typeof parsed === "object") {
+      payload = parsed;
+    }
+  } catch {
+    return undefined;
+  }
+  if (
+    (payload?.status !== "completed" &&
+      payload?.status !== "completed_with_warnings") ||
+    typeof payload.path !== "string"
+  ) {
+    return undefined;
+  }
+
+  return {
+    id,
+    role: "system",
+    content: [
+      "The presentation tool successfully wrote a PPTX file.",
+      `Status: ${payload.status}.`,
+      `Path: ${payload.path}.`,
+      typeof payload.fileName === "string"
+        ? `File name: ${payload.fileName}.`
+        : "",
+      typeof payload.slideCount === "number"
+        ? `Slide count: ${payload.slideCount}.`
+        : "",
+      "Your final answer must state that the PPTX was exported successfully and name the file or path.",
+      "Never claim that no file was written, that a quality gate blocked export, or that another presentation attempt is required. Treat completed_with_warnings as a successful export with advisory warnings.",
+    ]
+      .filter(Boolean)
+      .join(" "),
+    timestamp: Date.now(),
+  };
+}
+
+function isRetryablePresentationFailure(result: ToolExecutionResult): boolean {
+  if (
+    result.toolCall.function.name !== "presentation" ||
+    result.status !== "failed"
+  ) {
+    return false;
+  }
+  return parseToolError(result.content)?.retryable === true;
+}
+
+function countRetryablePresentationFailures(
+  results: ToolExecutionResult[],
+): number {
+  return results.filter(isRetryablePresentationFailure).length;
 }
 
 function truncateToolDetail(text: string): string {

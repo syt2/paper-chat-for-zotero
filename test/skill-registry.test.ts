@@ -123,6 +123,18 @@ describe("paper workflow skills", function () {
     assert.include(skill?.body || "", "Read the claim");
   });
 
+  it("preserves skill bodies longer than the former 2400-character limit", function () {
+    const body = `# Long Skill\n\n${"完整技能正文。".repeat(600)}`;
+    const skill = parseSkillMarkdown(
+      "long-skill",
+      "/skills/long-skill/SKILL.md",
+      body,
+    );
+
+    assert.equal(skill?.body, body);
+    assert.isAbove(skill?.body.length || 0, 2_400);
+  });
+
   it("selects matching local skills deterministically", async function () {
     const restore = installSkillFileSystem({
       "related-work-map": [
@@ -183,15 +195,15 @@ describe("paper workflow skills", function () {
     }
   });
 
-  it("injects selected skills as bounded workflow guidance", function () {
+  it("injects complete selected skills as workflow guidance", function () {
+    const longTail = "不得截断的完整说明。".repeat(400);
     const prompt = generateAgentRuntimeContextPrompt(undefined, {
       selectedSkills: [
         {
           slug: "paper-deep-reading",
           name: "Paper Deep Reading",
           description: "Read one paper deeply.",
-          prompt:
-            "Skill: Paper Deep Reading\nInstructions:\nTrace claims to evidence.",
+          prompt: `Skill: Paper Deep Reading\nInstructions:\nTrace claims to evidence.\n${longTail}`,
         },
       ],
     });
@@ -200,5 +212,6 @@ describe("paper workflow skills", function () {
     assert.include(prompt, "Paper Deep Reading");
     assert.include(prompt, "do not grant extra tool permissions");
     assert.include(prompt, "Trace claims to evidence");
+    assert.include(prompt, longTail);
   });
 });

@@ -20,6 +20,14 @@ const onlineReleaseUpgradeStage =
 const isOnlineReleaseUpgradeTest =
   onlineReleaseUpgradeStage === "upgrade" ||
   onlineReleaseUpgradeStage === "idempotency";
+const isPresentationProbe = process.env.PAPERCHAT_PRESENTATION_PROBE === "1";
+const presentationProbeOutputPath = resolve(
+  ".scaffold/presentation-probe/paperchat-presentation-probe.pptx",
+);
+const presentationMediaProbeItemKey =
+  process.env.PAPERCHAT_PRESENTATION_MEDIA_PROBE_ITEM_KEY;
+const presentationMediaProbeOutputPath =
+  process.env.PAPERCHAT_PRESENTATION_MEDIA_PROBE_OUTPUT;
 
 const onlineReleaseFixturePath = resolve(
   "test/fixtures/storage-v2.6.1-online.sqlite.gz.base64",
@@ -142,6 +150,21 @@ export default defineConfig({
         target: "firefox115",
         outfile: `.scaffold/build/addon/content/scripts/${pkg.config.addonRef}.js`,
       },
+      {
+        entryPoints: [
+          "src/modules/presentation/renderer/presentation-renderer-entry.ts",
+        ],
+        bundle: true,
+        format: "iife",
+        globalName: "PaperChatPresentationRendererBundle",
+        platform: "browser",
+        target: "firefox115",
+        inject: [
+          "src/modules/presentation/renderer/set-immediate-browser-shim.ts",
+        ],
+        outfile:
+          ".scaffold/build/addon/content/scripts/paperchat-ppt-renderer.js",
+      },
     ],
   },
 
@@ -160,7 +183,29 @@ export default defineConfig({
             "test:init": prepareOnlineReleaseUpgradeData,
           },
         }
-      : {}),
+      : isPresentationProbe
+        ? {
+            entries: "test-presentation-probe",
+            startupDelay: 2000,
+            mocha: { timeout: 30000 },
+            prefs: {
+              "extensions.zotero.paperchat.presentationProbeOutputPath":
+                presentationProbeOutputPath,
+              ...(presentationMediaProbeItemKey
+                ? {
+                    "extensions.zotero.paperchat.presentationMediaProbeItemKey":
+                      presentationMediaProbeItemKey,
+                  }
+                : {}),
+              ...(presentationMediaProbeOutputPath
+                ? {
+                    "extensions.zotero.paperchat.presentationMediaProbeOutputPath":
+                      presentationMediaProbeOutputPath,
+                  }
+                : {}),
+            },
+          }
+        : {}),
   },
 
   release: {

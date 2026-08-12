@@ -54,6 +54,11 @@ const TOOL_PERMISSION_DESCRIPTORS: Record<
   PaperToolName,
   ToolPermissionDescriptor
 > = {
+  presentation: createDescriptor(
+    "presentation",
+    "write",
+    "Create an editable PPTX file in PaperChat's Zotero data folder.",
+  ),
   request_user_input: createDescriptor(
     "request_user_input",
     "read",

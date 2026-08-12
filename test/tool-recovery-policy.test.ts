@@ -162,6 +162,57 @@ describe("tool recovery policy", function () {
     ]);
   });
 
+  it("allows presentation execution failures to rerun unchanged", async function () {
+    const { formatRecoveryNotice, getRecoveryDirective } =
+      await import("../src/modules/chat/tool-recovery/ToolRecoveryPolicy.ts");
+
+    const failedResult = {
+      toolCall: {
+        id: "presentation-1",
+        type: "function",
+        function: {
+          name: "presentation",
+          arguments: JSON.stringify({ sourceItemKey: "ITEM-1" }),
+        },
+      },
+      args: { sourceItemKey: "ITEM-1" },
+      status: "failed",
+      content: [
+        "Error: Presentation generation failed.",
+        "Category: execution_failed",
+        "Retryable: yes",
+        "Fix hint: Retry the presentation request to rerun rendering and export.",
+      ].join("\n"),
+    } satisfies ToolExecutionResult;
+    const directive = getRecoveryDirective(failedResult);
+    const notice = formatRecoveryNotice([failedResult]);
+
+    assert.equal(directive.category, "execution_failed");
+    assert.include(directive.immediateAction, "Retry the presentation request");
+    assert.include(
+      directive.planningInstruction,
+      "exempt from the unchanged-call retry block",
+    );
+    assert.include(
+      directive.planningInstruction,
+      "Call presentation again in the current turn",
+    );
+    assert.include(
+      directive.planningInstruction,
+      "Never claim that the runtime forbids unchanged presentation retries",
+    );
+    assert.include(
+      directive.planningInstruction,
+      "report that the attempts failed instead of describing a duplicate-call restriction",
+    );
+    assert.include(notice || "", "Call presentation again in the current turn");
+    assert.include(
+      notice || "",
+      "Never claim that the runtime forbids unchanged presentation retries",
+    );
+    assert.notInclude(directive.planningInstruction, "avoid repeating");
+  });
+
   it("falls back from failed scholarly search only when general web evidence is acceptable", async function () {
     const { getRecoveryDirective } =
       await import("../src/modules/chat/tool-recovery/ToolRecoveryPolicy.ts");

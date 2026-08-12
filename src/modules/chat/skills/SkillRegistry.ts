@@ -4,7 +4,6 @@ import { BUILT_IN_PAPER_SKILL_MARKDOWN } from "./BuiltInPaperSkills";
 const LOCAL_SKILLS_ROOT = "skills";
 const SKILL_FILE = "SKILL.md";
 const MAX_SKILLS = 2;
-const MAX_SKILL_CHARS = 2_400;
 const CACHE_TTL_MS = 30_000;
 const BUILT_IN_SKILL_PATH_PREFIX = "builtin://paper-chat/skills";
 
@@ -140,7 +139,7 @@ export function parseSkillMarkdown(
     name: name.slice(0, 80),
     description: description.slice(0, 240),
     triggers: meta.triggers.map((trigger) => trigger.slice(0, 120)),
-    body: body.slice(0, MAX_SKILL_CHARS),
+    body,
     path,
   };
 }

@@ -236,6 +236,15 @@ function getDirectiveTemplate(
     case "execution_failed":
     case "unspecified":
     default:
+      if (toolName === "presentation") {
+        return {
+          immediateAction:
+            parsed?.suggestedFix ||
+            "Call presentation again now in this same turn, with the same request if appropriate. PaperChat will start a fresh planning, rendering, verification, and export job.",
+          planningInstruction:
+            "Presentation generation failures are exempt from the unchanged-call retry block. Call presentation again in the current turn when no PPTX was written, even with unchanged arguments. Never claim that the runtime forbids unchanged presentation retries. If the overall agent iteration limit is eventually exhausted after repeated attempts, report that the attempts failed instead of describing a duplicate-call restriction. Permission denials remain blocked, and the agent iteration limit remains the outer safety bound.",
+        };
+      }
       if (toolName === "search_scholarly_sources") {
         return {
           immediateAction:

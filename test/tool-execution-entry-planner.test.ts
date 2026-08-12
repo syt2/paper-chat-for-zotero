@@ -127,6 +127,46 @@ describe("tool execution entry planner", function () {
     }
   });
 
+  it("keeps unchanged presentation failures executable", async function () {
+    const { planToolExecutionEntries } =
+      await import("../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts");
+    const createPresentationCall = (id: string): ToolCall => ({
+      id,
+      type: "function",
+      function: {
+        name: "presentation",
+        arguments: JSON.stringify({ sourceItemKey: "ITEM-1" }),
+      },
+    });
+    const previousResults: ToolExecutionResult[] = [
+      {
+        toolCall: createPresentationCall("presentation-1"),
+        args: { sourceItemKey: "ITEM-1" },
+        status: "failed",
+        content: [
+          "Error: Presentation generation failed.",
+          "Category: execution_failed",
+          "Retryable: yes",
+          "Fix hint: Retry the presentation request.",
+        ].join("\n"),
+      },
+    ];
+
+    const entries = planToolExecutionEntries({
+      sessionId: "session-1",
+      assistantMessage,
+      toolCalls: [createPresentationCall("presentation-2")],
+      previousResults,
+      createExecutionBatches: (requests) => [requests],
+    });
+
+    assert.lengthOf(entries, 1);
+    assert.equal(entries[0].kind, "execute");
+    if (entries[0].kind === "execute") {
+      assert.equal(entries[0].requests[0].toolCall.id, "presentation-2");
+    }
+  });
+
   it("reuses a completed result only for failed-turn recovery", async function () {
     const { planToolExecutionEntries } =
       await import("../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts");

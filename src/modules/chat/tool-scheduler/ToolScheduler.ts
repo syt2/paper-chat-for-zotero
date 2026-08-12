@@ -29,6 +29,13 @@ import {
 import { deriveToolSourceReferences } from "./SourceReferenceExtractor";
 import { getToolRuntimeMetadata } from "./ToolMetadataRegistry";
 import { deriveToolEvidenceRecords } from "../evidence";
+import type { PresentationVisualReviewer } from "../../presentation/PresentationVisualReview";
+import type { PresentationPlanner } from "../../presentation/PresentationPlanner";
+
+export interface ToolSchedulerExecutionContext {
+  presentationVisualReviewer?: PresentationVisualReviewer;
+  presentationPlanner?: PresentationPlanner;
+}
 
 export interface ToolSchedulerRequest {
   toolCall: ToolCall;
@@ -36,6 +43,7 @@ export interface ToolSchedulerRequest {
   assistantMessageId?: string;
   fallbackStructure?: PaperStructure | PaperStructureExtended;
   currentItemKey?: string | null;
+  executionContext?: ToolSchedulerExecutionContext;
 }
 
 export interface ToolSchedulerExecutionHooks {
@@ -52,6 +60,7 @@ export type ToolExecutor = (
   fallbackStructure: PaperStructure | PaperStructureExtended | undefined,
   args: Record<string, unknown>,
   currentItemKey?: string | null,
+  executionContext?: ToolSchedulerExecutionContext,
 ) => Promise<string>;
 
 interface PreparedToolExecution {
@@ -98,12 +107,13 @@ export class ToolScheduler {
   constructor(executor?: ToolExecutor) {
     this.executor =
       executor ??
-      ((toolCall, fallbackStructure, args, currentItemKey) =>
+      ((toolCall, fallbackStructure, args, currentItemKey, executionContext) =>
         getPdfToolManager().executeToolCall(
           toolCall,
           fallbackStructure,
           args,
           currentItemKey,
+          executionContext,
         ));
   }
 
@@ -582,6 +592,7 @@ export class ToolScheduler {
               prepared.request.fallbackStructure,
               prepared.args,
               prepared.request.currentItemKey,
+              prepared.request.executionContext,
             );
       const normalizedError = content.trimStart().startsWith("Error:")
         ? normalizeToolErrorContent(

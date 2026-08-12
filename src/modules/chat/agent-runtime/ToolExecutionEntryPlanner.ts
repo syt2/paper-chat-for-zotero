@@ -5,7 +5,10 @@ import type {
   ToolCall,
   ToolExecutionResult,
 } from "../../../types/tool";
-import type { ToolSchedulerRequest } from "../tool-scheduler/ToolScheduler";
+import type {
+  ToolSchedulerExecutionContext,
+  ToolSchedulerRequest,
+} from "../tool-scheduler/ToolScheduler";
 import {
   applyToolBudgetPolicy,
   createToolBudgetState,
@@ -81,6 +84,7 @@ export function planToolExecutionEntries(params: {
   budgetLimits?: ToolBudgetLimits;
   reuseCompletedResults?: boolean;
   currentItemKey?: string | null;
+  executionContext?: ToolSchedulerExecutionContext;
 }): ToolExecutionBatchEntry[] {
   const {
     sessionId,
@@ -92,6 +96,7 @@ export function planToolExecutionEntries(params: {
     budgetLimits,
     reuseCompletedResults = false,
     currentItemKey,
+    executionContext,
   } = params;
   const entries: ToolExecutionBatchEntry[] = [];
   let runnableSegment: ToolSchedulerRequest[] = [];
@@ -157,6 +162,7 @@ export function planToolExecutionEntries(params: {
       assistantMessageId: assistantMessage.id,
       fallbackStructure: paperStructure || undefined,
       currentItemKey,
+      executionContext,
     });
   }
 

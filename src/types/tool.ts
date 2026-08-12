@@ -309,6 +309,7 @@ export interface NativeOutlineItem {
 
 // 工具名称枚举
 export type PaperToolName =
+  | "presentation"
   | "request_user_input"
   | "read_artifact"
   | "web_search"

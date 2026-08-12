@@ -314,6 +314,12 @@ export interface ToolCallingProvider extends AIProvider {
 
 export interface ToolCallingOptions {
   toolChoice?: "auto" | "none";
+  /**
+   * Run this request without reading or mutating the provider's persistent
+   * conversation state. Used by isolated internal model jobs such as
+   * presentation planning and visual review.
+   */
+  stateless?: boolean;
 }
 
 /**

@@ -361,6 +361,42 @@ describe("OpenAIResponsesProvider", function () {
     ]);
   });
 
+  it("keeps isolated stateless model jobs out of the main Responses chain", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    const responses = [
+      completedResponse("resp_main_1", "main answer"),
+      completedResponse("resp_isolated", '{"verdict":"pass"}'),
+      completedResponse("resp_main_2", "continued answer"),
+    ];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse(responses.shift()!);
+    }) as typeof fetch;
+
+    const provider = createProvider({ sessionId: "session-isolated-job" });
+    await provider.chatCompletion([message("u1", "user", "main request")]);
+    await provider.chatCompletionWithTools(
+      [message("review", "user", "inspect slide images")],
+      undefined,
+      undefined,
+      { toolChoice: "none", stateless: true },
+    );
+    await provider.chatCompletion([
+      message("u1", "user", "main request"),
+      message("a1", "assistant", "main answer"),
+      message("u2", "user", "continue"),
+    ]);
+
+    assert.notProperty(requestBodies[1], "previous_response_id");
+    assert.deepEqual(requestBodies[1].input, [
+      { role: "user", content: "inspect slide images" },
+    ]);
+    assert.equal(requestBodies[2].previous_response_id, "resp_main_1");
+    assert.deepEqual(requestBodies[2].input, [
+      { role: "user", content: "continue" },
+    ]);
+  });
+
   it("isolates two Responses model chains and invalidates A after B answers", async function () {
     const requestBodies: Array<Record<string, any>> = [];
     const responses = [

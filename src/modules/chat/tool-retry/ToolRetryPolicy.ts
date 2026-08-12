@@ -10,6 +10,8 @@ export interface BlockedRetryMatch {
   previousResult: ToolExecutionResult;
 }
 
+export const MAX_PRESENTATION_ATTEMPTS_PER_TURN = 3;
+
 export function fingerprintToolCall(toolCall: ToolCall): string {
   return buildFingerprint(
     toolCall.function.name,
@@ -37,6 +39,7 @@ export function findBlockedRetryMatch(
 ): BlockedRetryMatch | null {
   const fingerprint = fingerprintToolCall(toolCall);
   let previousResult: ToolExecutionResult | null = null;
+  let matchingPresentationFailures = 0;
 
   for (const result of previousResults) {
     if (result.status !== "failed" && result.status !== "denied") {
@@ -44,6 +47,20 @@ export function findBlockedRetryMatch(
     }
     if (fingerprintToolExecutionResult(result) !== fingerprint) {
       continue;
+    }
+    // Presentation rendering is isolated and may legitimately recover on an
+    // unchanged rerun after planner, preview, verifier, or export failures.
+    // Bound the allowance so one short request cannot rotate through an
+    // unbounded sequence of expensive full-deck attempts. Permission denials
+    // are still blocked immediately.
+    if (
+      toolCall.function.name === "presentation" &&
+      result.status === "failed"
+    ) {
+      matchingPresentationFailures += 1;
+      if (matchingPresentationFailures < MAX_PRESENTATION_ATTEMPTS_PER_TURN) {
+        continue;
+      }
     }
     previousResult = result;
   }
@@ -117,7 +134,12 @@ export function summarizeRetryBlockedCalls(
 ): string[] {
   return results
     .filter(
-      (result) => result.status === "failed" || result.status === "denied",
+      (result) =>
+        (result.status === "failed" || result.status === "denied") &&
+        !(
+          result.toolCall.function.name === "presentation" &&
+          result.status === "failed"
+        ),
     )
     .slice(-limit)
     .map((result) => {
