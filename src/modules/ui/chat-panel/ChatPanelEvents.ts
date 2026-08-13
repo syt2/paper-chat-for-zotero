@@ -1409,43 +1409,6 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
     );
   }
 
-  const reasoningSelectorBtn = container.querySelector(
-    "#chat-reasoning-selector-btn",
-  ) as HTMLButtonElement | null;
-  const reasoningDropdown = container.querySelector(
-    "#chat-reasoning-dropdown",
-  ) as HTMLElement | null;
-  if (reasoningSelectorBtn && reasoningDropdown) {
-    updateReasoningSelectorDisplay(container);
-    reasoningSelectorBtn.addEventListener("click", () => {
-      const isVisible = reasoningDropdown.style.display === "block";
-      if (isVisible) {
-        reasoningDropdown.style.display = "none";
-        return;
-      }
-      populateReasoningDropdown(container, reasoningDropdown);
-      reasoningDropdown.style.display = "block";
-    });
-
-    const ownerDoc = container.ownerDocument;
-    const closeReasoningDropdownOnOutsideClick = (event: Event): void => {
-      const target = event.target as HTMLElement;
-      if (
-        !reasoningSelectorBtn.contains(target) &&
-        !reasoningDropdown.contains(target)
-      ) {
-        reasoningDropdown.style.display = "none";
-      }
-    };
-    ownerDoc?.addEventListener("click", closeReasoningDropdownOnOutsideClick);
-    disposers.push(() =>
-      ownerDoc?.removeEventListener(
-        "click",
-        closeReasoningDropdownOnOutsideClick,
-      ),
-    );
-  }
-
   // Settings button - open preferences
   const settingsBtn = container.querySelector(
     "#chat-settings-btn",
@@ -2378,22 +2341,11 @@ function getReasoningEffortLabel(effort: ReasoningEffortPreference): string {
   return getString(REASONING_LABEL_KEYS[effort] as any);
 }
 
-export function updateReasoningSelectorDisplay(container: HTMLElement): void {
-  const text = container.querySelector(
-    "#chat-reasoning-selector-text",
-  ) as HTMLElement | null;
-  if (!text) {
-    return;
-  }
-  const effort = normalizeReasoningEffortPreference(getPref("reasoningEffort"));
-  text.textContent = `${getString("chat-reasoning-label")}: ${getReasoningEffortLabel(effort)}`;
-}
-
 function populateReasoningDropdown(
-  container: HTMLElement,
   dropdown: HTMLElement,
+  onSelected: (effort: ReasoningEffortPreference) => void,
 ): void {
-  const doc = container.ownerDocument!;
+  const doc = dropdown.ownerDocument!;
   const theme = getCurrentTheme();
   const selected = normalizeReasoningEffortPreference(
     getPref("reasoningEffort"),
@@ -2450,7 +2402,7 @@ function populateReasoningDropdown(
           provider.updateConfig({ reasoningEffort: effort });
         }
       }
-      updateReasoningSelectorDisplay(container);
+      onSelected(effort);
       dropdown.style.display = "none";
     });
     dropdown.appendChild(item);
@@ -2476,6 +2428,10 @@ function populateModelDropdown(
   const activeProviderId = providerManager.getActiveProviderId();
 
   for (const provider of providers) {
+    const config = provider.config;
+    const models = config.availableModels || [];
+    const isActiveProvider = config.id === activeProviderId;
+
     // Provider section header
     const sectionHeader = createElement(doc, "div", {
       padding: "8px 12px",
@@ -2487,13 +2443,105 @@ function populateModelDropdown(
       textTransform: "uppercase",
       letterSpacing: "0.5px",
     });
-    sectionHeader.textContent = provider.getName();
-    dropdown.appendChild(sectionHeader);
+    if (config.id === "paperchat") {
+      sectionHeader.style.display = "flex";
+      sectionHeader.style.alignItems = "center";
+      sectionHeader.style.justifyContent = "space-between";
+      sectionHeader.style.gap = "8px";
+      sectionHeader.style.position = "relative";
 
-    // Get models for this provider
-    const config = provider.config;
-    const models = config.availableModels || [];
-    const isActiveProvider = config.id === activeProviderId;
+      const sectionTitle = createElement(doc, "span", {
+        minWidth: "0",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+      });
+      sectionTitle.textContent = provider.getName();
+      sectionHeader.appendChild(sectionTitle);
+
+      const reasoningControl = createElement(doc, "div", {
+        position: "relative",
+        flexShrink: "0",
+        textTransform: "none",
+        letterSpacing: "0",
+        fontWeight: "400",
+      });
+      const reasoningButton = createElement(
+        doc,
+        "button",
+        {
+          display: "flex",
+          alignItems: "center",
+          gap: "5px",
+          padding: "3px 6px",
+          border: `1px solid ${theme.inputBorderColor}`,
+          borderRadius: "6px",
+          background: theme.dropdownBg,
+          color: theme.textSecondary,
+          cursor: "pointer",
+          fontSize: "11px",
+          lineHeight: "15px",
+          whiteSpace: "nowrap",
+        },
+        {
+          type: "button",
+          "aria-haspopup": "menu",
+          "aria-expanded": "false",
+        },
+      );
+      const reasoningText = createElement(doc, "span", {});
+      const updateReasoningText = (effort: ReasoningEffortPreference) => {
+        reasoningText.textContent = `${getString("chat-reasoning-label")}: ${getReasoningEffortLabel(effort)}`;
+      };
+      updateReasoningText(
+        normalizeReasoningEffortPreference(getPref("reasoningEffort")),
+      );
+      const reasoningArrow = createElement(doc, "span", {
+        fontSize: "9px",
+        opacity: "0.65",
+      });
+      reasoningArrow.textContent = "▼";
+      reasoningButton.appendChild(reasoningText);
+      reasoningButton.appendChild(reasoningArrow);
+
+      const reasoningDropdown = createElement(
+        doc,
+        "div",
+        {
+          display: "none",
+          position: "absolute",
+          top: "calc(100% + 4px)",
+          right: "0",
+          minWidth: "116px",
+          padding: "4px 0",
+          background: theme.dropdownBg,
+          border: `1px solid ${theme.borderColor}`,
+          borderRadius: "8px",
+          boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+          zIndex: "2",
+        },
+        { role: "menu" },
+      );
+      reasoningButton.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const shouldOpen = reasoningDropdown.style.display !== "block";
+        if (shouldOpen) {
+          populateReasoningDropdown(reasoningDropdown, (effort) => {
+            updateReasoningText(effort);
+            reasoningButton.setAttribute("aria-expanded", "false");
+          });
+        }
+        reasoningDropdown.style.display = shouldOpen ? "block" : "none";
+        reasoningButton.setAttribute("aria-expanded", String(shouldOpen));
+      });
+      reasoningControl.appendChild(reasoningButton);
+      reasoningControl.appendChild(reasoningDropdown);
+      sectionHeader.appendChild(reasoningControl);
+    } else {
+      sectionHeader.textContent = provider.getName();
+    }
+    dropdown.appendChild(sectionHeader);
 
     if (config.id === "paperchat") {
       const tierState = parseTierState(

@@ -85,7 +85,6 @@ import {
   setTogglePanelModeFn,
   updatePanelModeButtonIcon,
   updateModelSelectorDisplay,
-  updateReasoningSelectorDisplay,
   refreshCheckinDisplay,
   syncSendButtonState,
   updateConversationNoteSummaryButton,
@@ -1878,7 +1877,6 @@ function showSidebarPanel(): boolean {
   }
 
   chatContainer.style.display = "block";
-  updateReasoningSelectorDisplay(chatContainer);
 
   // Update toolbar button state
   updateToolbarButtonState(true);

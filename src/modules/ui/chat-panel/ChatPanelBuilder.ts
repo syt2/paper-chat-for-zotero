@@ -861,79 +861,6 @@ export function createChatContainer(
   modelSelectorContainer.appendChild(modelSelectorBtn);
   modelSelectorContainer.appendChild(modelDropdown);
 
-  const reasoningSelectorContainer = createElement(doc, "div", {
-    position: "relative",
-    flex: "0 1 auto",
-    minWidth: "84px",
-    maxWidth: "112px",
-  });
-
-  const reasoningSelectorBtn = createElement(
-    doc,
-    "button",
-    {
-      display: "flex",
-      alignItems: "center",
-      gap: "5px",
-      padding: "6px 9px",
-      background: theme.buttonBg,
-      border: `1px solid ${theme.inputBorderColor}`,
-      borderRadius: "8px",
-      cursor: "pointer",
-      fontSize: "12px",
-      color: theme.textSecondary,
-      whiteSpace: "nowrap",
-      maxWidth: "100%",
-      minWidth: "0",
-      overflow: "hidden",
-    },
-    { id: "chat-reasoning-selector-btn", type: "button" },
-  );
-
-  const reasoningSelectorText = createElement(
-    doc,
-    "span",
-    {
-      minWidth: "0",
-      overflow: "hidden",
-      textOverflow: "ellipsis",
-      whiteSpace: "nowrap",
-    },
-    { id: "chat-reasoning-selector-text" },
-  );
-  reasoningSelectorText.textContent = `${getString("chat-reasoning-label")}: ${getString("chat-reasoning-default")}`;
-
-  const reasoningSelectorArrow = createElement(doc, "span", {
-    fontSize: "10px",
-    opacity: "0.6",
-  });
-  reasoningSelectorArrow.textContent = "▼";
-  reasoningSelectorBtn.appendChild(reasoningSelectorText);
-  reasoningSelectorBtn.appendChild(reasoningSelectorArrow);
-
-  const reasoningDropdown = createElement(
-    doc,
-    "div",
-    {
-      display: "none",
-      position: "absolute",
-      bottom: "100%",
-      right: "0",
-      marginBottom: "4px",
-      minWidth: "116px",
-      padding: "4px 0",
-      background: theme.dropdownBg,
-      border: `1px solid ${theme.borderColor}`,
-      borderRadius: "8px",
-      boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
-      zIndex: "10002",
-    },
-    { id: "chat-reasoning-dropdown" },
-  );
-
-  reasoningSelectorContainer.appendChild(reasoningSelectorBtn);
-  reasoningSelectorContainer.appendChild(reasoningDropdown);
-
   // Settings button (gear icon)
   const settingsBtn = createElement(
     doc,
@@ -1002,7 +929,6 @@ export function createChatContainer(
 
   leftContainer.appendChild(modelSelectorLabel);
   leftContainer.appendChild(modelSelectorContainer);
-  leftContainer.appendChild(reasoningSelectorContainer);
   leftContainer.appendChild(settingsBtn);
   leftContainer.appendChild(panelModeBtn);
 
