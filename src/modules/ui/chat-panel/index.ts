@@ -5,6 +5,7 @@
 // Main panel lifecycle functions
 export {
   showPanel,
+  showPanelForItem,
   hidePanel,
   togglePanel,
   isPanelShown,

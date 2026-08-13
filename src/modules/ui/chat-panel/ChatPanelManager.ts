@@ -114,6 +114,7 @@ export type ChatPanelOpenSource =
   | "reader_selection"
   | "reader_annotation"
   | "library_scope"
+  | "ai_summary"
   | "unknown";
 
 const APPROVAL_RESOLVED_ANIMATION_MS = 260;
@@ -935,6 +936,7 @@ let tabNotifierID: string | null = null;
 let globalTabNotifierID: string | null = null; // Persistent notifier for sidebar sync
 let contentInitialized = false;
 let moduleCurrentItem: Zotero.Item | null = null;
+let pendingPanelItem: Zotero.Item | null = null;
 let themeCleanup: (() => void) | null = null;
 
 // Panel mode state
@@ -1291,6 +1293,8 @@ async function initializeChatContentCommon(
 ): Promise<void> {
   const authManager = getAuthManager();
   const context = createContext(container);
+  const requestedItem = pendingPanelItem;
+  pendingPanelItem = null;
 
   // Load cached model ratios for PaperChat
   loadCachedRatios();
@@ -1336,7 +1340,7 @@ async function initializeChatContentCommon(
   await manager.init();
 
   // Get current item from reader
-  const activeItem = getActiveReaderItem();
+  const activeItem = requestedItem || getActiveReaderItem();
   if (activeItem) {
     moduleCurrentItem = activeItem;
     manager.setCurrentItemKey(activeItem.key);
@@ -1637,7 +1641,8 @@ function getReadingLoopAccent(state: ReadingLoopState): string {
  * Note: This updates the current item tracking but does NOT switch sessions
  */
 async function refreshChatForContainer(container: HTMLElement): Promise<void> {
-  const activeItem = getActiveReaderItem();
+  const activeItem = pendingPanelItem || getActiveReaderItem();
+  pendingPanelItem = null;
   const manager = getChatManager();
 
   // Update current item tracking (session remains the same)
@@ -2115,6 +2120,48 @@ export function showPanel(source: ChatPanelOpenSource = "unknown"): void {
     panel_mode: currentPanelMode,
     open_source: source,
   });
+}
+
+/**
+ * Open the panel and bind its follow-up-message context to a specific paper.
+ * The deferred refresh also covers a newly created floating window.
+ */
+export function showPanelForItem(
+  item: Zotero.Item,
+  source: ChatPanelOpenSource = "unknown",
+): void {
+  pendingPanelItem = item;
+  moduleCurrentItem = item;
+  const manager = getChatManager();
+  manager.setCurrentItemKey(item.key);
+  getReadingLoopService().setCurrentItem(item);
+  showPanel(source);
+
+  const syncContainer = async (container: HTMLElement | null) => {
+    if (!container) return;
+    if (pendingPanelItem === item) {
+      pendingPanelItem = null;
+    }
+    moduleCurrentItem = item;
+    manager.setCurrentItemKey(item.key);
+    await updatePdfCheckboxVisibilityForItem(container, item, manager);
+    const session = manager.getActiveSession();
+    if (session) {
+      const context = createContext(container);
+      context.renderMessages(session.messages);
+      context.renderExecutionPlan(session.executionPlan);
+      updateModelSelectorDisplay(container);
+    }
+  };
+
+  void syncContainer(
+    currentPanelMode === "sidebar" ? chatContainer : floatingContainer,
+  );
+  Zotero.getMainWindow().setTimeout(() => {
+    void syncContainer(
+      currentPanelMode === "sidebar" ? chatContainer : floatingContainer,
+    );
+  }, 0);
 }
 
 /**
@@ -3055,6 +3102,7 @@ export async function unregisterAll(): Promise<void> {
   pendingSelectedText = null;
   pendingQuotedMessages = [];
   moduleCurrentItem = null;
+  pendingPanelItem = null;
 }
 
 /**

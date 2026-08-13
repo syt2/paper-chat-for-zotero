@@ -121,6 +121,37 @@ describe("tool scheduler execution hooks", function () {
     assert.equal(receivedItemKey, "SESSION-PAPER-A");
   });
 
+  it("keeps the request-scoped item key after unrelated UI context changes", async function () {
+    const { ToolScheduler } =
+      await import("../src/modules/chat/tool-scheduler/ToolScheduler.ts");
+    const receivedItemKeys: Array<string | null | undefined> = [];
+    let uiItemKey = "SESSION-PAPER-A";
+    const scheduler = new ToolScheduler(
+      async (_toolCall, _fallback, _args, currentItemKey) => {
+        receivedItemKeys.push(currentItemKey);
+        return "ok";
+      },
+    );
+    const request = {
+      toolCall: {
+        id: "tool-stable-item-context",
+        type: "function" as const,
+        function: {
+          name: "get_outline",
+          arguments: "{}",
+        },
+      },
+      sessionId: "deep-summary-session",
+      currentItemKey: uiItemKey,
+    };
+
+    uiItemKey = "OTHER-READER-PAPER";
+    await scheduler.execute(request);
+
+    assert.equal(uiItemKey, "OTHER-READER-PAPER");
+    assert.deepEqual(receivedItemKeys, ["SESSION-PAPER-A"]);
+  });
+
   it("stores large completed tool results as session artifacts and reads them back", async function () {
     const files = new Map<string, string>();
     const dirs = new Set<string>();

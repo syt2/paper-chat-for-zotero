@@ -578,6 +578,9 @@ describe("paperchat storage and chat manager", function () {
         },
       ],
       lastActiveItemKey: "ITEM-1",
+      title: "Deep Summary: Paper",
+      titleSource: "user",
+      titleEditedAt: 99,
       selectedTier: "paperchat-pro",
       resolvedModelId: "model-pro-9",
       activate: false,
@@ -585,6 +588,9 @@ describe("paperchat storage and chat manager", function () {
 
     assert.equal(session.lastActiveItemKey, "ITEM-1");
     assert.equal(session.id, "fork-session-1");
+    assert.equal(session.title, "Deep Summary: Paper");
+    assert.equal(session.titleSource, "user");
+    assert.equal(session.titleEditedAt, 99);
     assert.equal(session.selectedTier, "paperchat-pro");
     assert.equal(session.resolvedModelId, "model-pro-9");
     assert.deepEqual(
@@ -602,6 +608,12 @@ describe("paperchat storage and chat manager", function () {
       entry.sql.startsWith("INSERT INTO messages"),
     );
     assert.equal(sessionUpsert?.params?.[3], "ITEM-1");
+    assert.deepEqual(sessionUpsert?.params?.slice(6, 10), [
+      "Deep Summary: Paper",
+      "user",
+      null,
+      99,
+    ]);
     assert.deepEqual(companionUpsert?.params?.slice(1, 3), [
       "paperchat-pro",
       "model-pro-9",
@@ -2421,6 +2433,82 @@ describe("paperchat storage and chat manager", function () {
     assert.strictEqual(nextSession, draftSession);
     assert.strictEqual(manager.currentSession, draftSession);
     assert.equal(cleanupCalls, 1);
+  });
+
+  it("always creates a fresh titled item session even from a draft", async function () {
+    const draftSession: ChatSession = {
+      id: "draft-session",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      messages: [],
+    };
+    const createdSessions: Array<Record<string, unknown>> = [];
+    const activatedSessionIds: string[] = [];
+    let cleanupCalls = 0;
+    let sessionListUpdates = 0;
+    const manager = Object.create(ChatManager.prototype) as any;
+
+    manager.currentSession = draftSession;
+    manager.init = async () => undefined;
+    manager.sessionNavigationQueue = Promise.resolve();
+    manager.memoryManager = {
+      onBeforeSessionSwitch: () => undefined,
+    };
+    manager.maybeGenerateSessionTitle = () => undefined;
+    manager.applySessionItemContext = (session: ChatSession) => {
+      manager.currentItemKey = session.lastActiveItemKey;
+    };
+    manager.reconcileApprovalState = () => undefined;
+    manager.reconcileUserInputRequestState = () => undefined;
+    manager.notifySessionListUpdated = () => {
+      sessionListUpdates += 1;
+    };
+    manager.sessionStorage = {
+      createSession: async (options: Record<string, unknown>) => {
+        createdSessions.push(options);
+        return {
+          id: String(options.sessionId),
+          createdAt: 2,
+          updatedAt: 2,
+          lastActiveItemKey: String(options.lastActiveItemKey),
+          messages: [],
+          title: String(options.title),
+          titleSource: options.titleSource,
+          titleEditedAt: options.titleEditedAt,
+        } satisfies ChatSession;
+      },
+      setActiveSession: async (sessionId: string) => {
+        activatedSessionIds.push(sessionId);
+      },
+      cleanupAbandonedDraftSessions: async () => {
+        cleanupCalls += 1;
+        return 0;
+      },
+      deleteSession: async () => undefined,
+    };
+
+    const session = await manager.createItemSession(
+      "ITEM-DEEP",
+      "Deep Summary: Paper",
+    );
+
+    assert.notStrictEqual(session, draftSession);
+    assert.equal(session.lastActiveItemKey, "ITEM-DEEP");
+    assert.equal(session.title, "Deep Summary: Paper");
+    assert.equal(session.titleSource, "user");
+    assert.isNumber(session.titleEditedAt);
+    assert.equal(manager.currentItemKey, "ITEM-DEEP");
+    assert.deepEqual(activatedSessionIds, [session.id]);
+    assert.equal(cleanupCalls, 1);
+    assert.equal(sessionListUpdates, 1);
+    assert.lengthOf(createdSessions, 1);
+    assert.deepInclude(createdSessions[0], {
+      lastActiveItemKey: "ITEM-DEEP",
+      title: "Deep Summary: Paper",
+      titleSource: "user",
+      activate: false,
+    });
   });
 
   it("cleans abandoned drafts after creating a new session from a started session", async function () {

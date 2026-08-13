@@ -151,6 +151,7 @@ interface RuntimeExecutionOptions {
   abortSignal?: AbortSignal;
   executeProviderRequest?: ProviderRequestExecutor;
   preserveToolExecutionState?: boolean;
+  lockedToolItemKey?: string;
   noteSummaryContext?: NoteSummaryContext;
   searchScopeGate?: SearchScopeGateConfig;
   refreshSystemPrompt?: (
@@ -189,9 +190,41 @@ interface ToolIterationParams {
   budgetLimits: ToolBudgetLimits;
   reuseCompletedResults: boolean;
   currentItemKey?: string | null;
+  lockedToolItemKey?: string;
   allowedToolNames: Set<string>;
   selectedSearchScope?: SelectedSearchScope;
   noteSummaryContext?: NoteSummaryContext;
+}
+
+function rewriteToolCallItemKey(
+  toolCall: ToolCall,
+  lockedItemKey?: string,
+): ToolCall {
+  if (!lockedItemKey) {
+    return toolCall;
+  }
+  try {
+    const parsedArgs = JSON.parse(toolCall.function.arguments || "{}");
+    if (
+      typeof parsedArgs !== "object" ||
+      parsedArgs === null ||
+      Array.isArray(parsedArgs)
+    ) {
+      return toolCall;
+    }
+    return {
+      ...toolCall,
+      function: {
+        ...toolCall.function,
+        arguments: JSON.stringify({
+          ...parsedArgs,
+          itemKey: lockedItemKey,
+        }),
+      },
+    };
+  } catch {
+    return toolCall;
+  }
 }
 
 // Hard stop for a single assistant turn. Keeps malformed tool loops bounded
@@ -345,6 +378,7 @@ export class AgentRuntime {
       abortSignal,
       executeProviderRequest = (operation) => operation(),
       preserveToolExecutionState = false,
+      lockedToolItemKey,
       noteSummaryContext,
       searchScopeGate,
       refreshSystemPrompt,
@@ -474,6 +508,7 @@ export class AgentRuntime {
             budgetLimits,
             reuseCompletedResults: preserveToolExecutionState,
             currentItemKey,
+            lockedToolItemKey,
             allowedToolNames: new Set(
               iterationControl.toolsForRound.map((tool) => tool.function.name),
             ),
@@ -589,6 +624,7 @@ export class AgentRuntime {
       abortSignal,
       executeProviderRequest = (operation) => operation(),
       preserveToolExecutionState = false,
+      lockedToolItemKey,
       noteSummaryContext,
       searchScopeGate,
       refreshSystemPrompt,
@@ -712,6 +748,7 @@ export class AgentRuntime {
             budgetLimits,
             reuseCompletedResults: preserveToolExecutionState,
             currentItemKey,
+            lockedToolItemKey,
             allowedToolNames: new Set(
               iterationControl.toolsForRound.map((tool) => tool.function.name),
             ),
@@ -1177,6 +1214,7 @@ export class AgentRuntime {
       budgetLimits,
       reuseCompletedResults,
       currentItemKey,
+      lockedToolItemKey,
       allowedToolNames,
       selectedSearchScope,
       noteSummaryContext,
@@ -1185,6 +1223,7 @@ export class AgentRuntime {
 
     const invalidSummaryCreateNoteCallIds = new Set<string>();
     const protectedToolCalls = toolCalls.map((toolCall) => {
+      toolCall = rewriteToolCallItemKey(toolCall, lockedToolItemKey);
       if (!noteSummaryContext) {
         return toolCall;
       }

@@ -101,6 +101,10 @@ export interface CreateSessionOptions {
   sessionId?: string;
   messages?: ChatMessage[];
   lastActiveItemKey?: string | null;
+  title?: string;
+  titleSource?: ChatSession["titleSource"];
+  titleGeneratedAt?: number;
+  titleEditedAt?: number;
   selectedTier?: ChatSession["selectedTier"];
   resolvedModelId?: string;
   activate?: boolean;
@@ -958,6 +962,10 @@ export class SessionStorageService {
       updatedAt: now,
       lastActiveItemKey: options.lastActiveItemKey ?? null,
       messages: options.messages ?? [],
+      title: options.title,
+      titleSource: options.titleSource,
+      titleGeneratedAt: options.titleGeneratedAt,
+      titleEditedAt: options.titleEditedAt,
       selectedTier: options.selectedTier,
       resolvedModelId: options.resolvedModelId,
     };

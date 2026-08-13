@@ -52,6 +52,104 @@ function createToolDefinition(name: string): ToolDefinition {
 }
 
 describe("agent runtime plan semantics", function () {
+  it("rewrites tool item keys when a request locks paper context", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    const session = createSession();
+    session.lastActiveItemKey = "LOCKED-PAPER";
+    const assistantMessage: ChatMessage = {
+      id: "assistant-locked-paper",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+    };
+    session.messages.push(assistantMessage);
+    const executedToolCalls: ToolCall[] = [];
+    let providerCalls = 0;
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        saveSession: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => false,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "",
+        generateId: (() => {
+          let id = 0;
+          return () => `locked-paper-${++id}`;
+        })(),
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async (requests: any[]) => {
+          executedToolCalls.push(
+            ...requests.map((request) => request.toolCall),
+          );
+          return requests.map((request) => ({
+            toolCall: request.toolCall,
+            args: JSON.parse(request.toolCall.function.arguments),
+            status: "completed" as const,
+            content: "locked paper result",
+          }));
+        },
+      },
+    ) as any;
+    runtime.getMaxIterations = () => 2;
+
+    try {
+      await runtime.executeNonStreamingToolLoop({
+        provider: {
+          config: { id: "openai", type: "openai", defaultModel: "gpt" },
+          chatCompletionWithTools: async () => {
+            providerCalls += 1;
+            return providerCalls === 1
+              ? {
+                  content: "",
+                  toolCalls: [
+                    {
+                      id: "wrong-paper-call",
+                      type: "function" as const,
+                      function: {
+                        name: "get_outline",
+                        arguments: JSON.stringify({
+                          itemKey: "OTHER-PAPER",
+                        }),
+                      },
+                    },
+                  ],
+                }
+              : { content: "final summary" };
+          },
+        },
+        currentMessages: session.messages,
+        assistantMessage,
+        pdfWasAttached: false,
+        summaryTriggered: false,
+        tools: [createToolDefinition("get_outline")],
+        sendingSession: session,
+        currentItemKey: session.lastActiveItemKey,
+        lockedToolItemKey: session.lastActiveItemKey,
+      });
+
+      assert.lengthOf(executedToolCalls, 1);
+      assert.deepEqual(JSON.parse(executedToolCalls[0].function.arguments), {
+        itemKey: "LOCKED-PAPER",
+      });
+      assert.deepEqual(
+        session.messages
+          .find((message) => message.apiOnly && message.role === "assistant")
+          ?.tool_calls?.map((call) => JSON.parse(call.function.arguments)),
+        [{ itemKey: "LOCKED-PAPER" }],
+      );
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
+  });
+
   it("allows a scholarly query to fall back once through the local web tool", async function () {
     const { applyToolBudgetPolicy, createToolBudgetState } =
       await import("../src/modules/chat/tool-budget/ToolBudgetPolicy.ts");

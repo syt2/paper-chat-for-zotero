@@ -161,6 +161,7 @@ type InternalSendMessageOptions = SendMessageOptions & {
   targetSession?: ChatSession;
   requireTargetSessionActive?: boolean;
   allowedToolNames?: readonly string[];
+  lockedToolItemKey?: string;
   modelRequestContent?: string;
   allowPaperChatRetry?: boolean;
   trustedSourceItemKeys?: readonly string[];
@@ -985,6 +986,63 @@ export class ChatManager {
   async createNewSession(): Promise<ChatSession> {
     await this.init();
     return this.enqueueSessionNavigation(() => this.createNewSessionLocked());
+  }
+
+  /**
+   * Create and activate a fresh, user-visible conversation for one paper.
+   * Unlike createNewSession(), this never reuses the current draft.
+   */
+  async createItemSession(
+    itemKey: string,
+    title: string,
+  ): Promise<ChatSession> {
+    await this.init();
+    return this.enqueueSessionNavigation(async () => {
+      const normalizedItemKey = itemKey.trim();
+      const normalizedTitle = title.trim();
+      if (!normalizedItemKey) {
+        throw new Error("Cannot create a paper chat without an item key.");
+      }
+      if (!normalizedTitle) {
+        throw new Error("Cannot create a paper chat without a title.");
+      }
+
+      const previousSession = this.currentSession;
+      const sessionId = generateTimestampId();
+      const now = Date.now();
+      let session: ChatSession | null = null;
+
+      try {
+        session = await this.sessionStorage.createSession({
+          sessionId,
+          lastActiveItemKey: normalizedItemKey,
+          title: normalizedTitle,
+          titleSource: "user",
+          titleEditedAt: now,
+          activate: false,
+        });
+        await this.sessionStorage.setActiveSession(session.id);
+      } catch (error) {
+        if (session) {
+          await this.sessionStorage
+            .deleteSession(session.id)
+            .catch(() => undefined);
+        }
+        throw error;
+      }
+
+      this.memoryManager.onBeforeSessionSwitch(previousSession, session.id);
+      this.maybeGenerateSessionTitle(previousSession, session.id);
+      this.currentSession = session;
+      await this.sessionStorage.cleanupAbandonedDraftSessions();
+      this.applySessionItemContext(session);
+      this.reconcileApprovalState(session);
+      this.reconcileUserInputRequestState(session);
+      this.onMessageUpdate?.(session.messages);
+      this.onExecutionPlanUpdate?.(session.executionPlan);
+      this.notifySessionListUpdated();
+      return session;
+    });
   }
 
   private async createNewSessionLocked(): Promise<ChatSession> {
@@ -2040,6 +2098,7 @@ export class ChatManager {
           options.allowedToolNames,
           options.allowPaperChatRetry !== false,
           options.noteSummaryContext,
+          options.lockedToolItemKey,
         );
         if (toolCallingResult !== null) {
           trackChatCompleted(toolCallingResult);
@@ -2386,6 +2445,7 @@ export class ChatManager {
     allowedToolNames?: readonly string[],
     allowPaperChatRetry: boolean = true,
     noteSummaryContext?: NoteSummaryContext,
+    lockedToolItemKey?: string,
   ): Promise<boolean | null> {
     const pdfToolManager = getPdfToolManager();
     const providerManager = getProviderManager();
@@ -2768,6 +2828,7 @@ export class ChatManager {
           runtimePromptBuilder,
           executeProviderRequest,
           preserveToolExecutionState,
+          lockedToolItemKey,
           noteSummaryContext,
           searchScopeGate,
           abortSignal,
@@ -2789,6 +2850,7 @@ export class ChatManager {
           runtimePromptBuilder,
           executeProviderRequest,
           preserveToolExecutionState,
+          lockedToolItemKey,
           noteSummaryContext,
           searchScopeGate,
           abortSignal,
@@ -2978,6 +3040,7 @@ export class ChatManager {
       onProviderRerouted?: () => void,
     ) => Promise<T>,
     preserveToolExecutionState: boolean,
+    lockedToolItemKey?: string,
     noteSummaryContext?: NoteSummaryContext,
     searchScopeGate?: SearchScopeGateConfig,
     abortSignal?: AbortSignal,
@@ -2996,6 +3059,7 @@ export class ChatManager {
       abortSignal,
       executeProviderRequest,
       preserveToolExecutionState,
+      lockedToolItemKey,
       noteSummaryContext,
       searchScopeGate,
       refreshSystemPrompt: buildSystemPrompt,
@@ -3037,6 +3101,7 @@ export class ChatManager {
       onProviderRerouted?: () => void,
     ) => Promise<T>,
     preserveToolExecutionState: boolean,
+    lockedToolItemKey?: string,
     noteSummaryContext?: NoteSummaryContext,
     searchScopeGate?: SearchScopeGateConfig,
     abortSignal?: AbortSignal,
@@ -3055,6 +3120,7 @@ export class ChatManager {
       abortSignal,
       executeProviderRequest,
       preserveToolExecutionState,
+      lockedToolItemKey,
       noteSummaryContext,
       searchScopeGate,
       refreshSystemPrompt: buildSystemPrompt,

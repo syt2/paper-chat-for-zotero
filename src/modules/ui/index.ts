@@ -9,6 +9,7 @@ export {
   unregisterToolbarButton,
   togglePanel,
   showPanel,
+  showPanelForItem,
   hidePanel,
   unregisterAll as unregisterChatPanel,
   getChatManager,
