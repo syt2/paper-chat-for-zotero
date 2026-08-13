@@ -1,4 +1,5 @@
 import { assert } from "chai";
+import { createPresentationLaunchAuthorization } from "../src/modules/presentation/PresentationLaunchAuthorization.ts";
 import {
   AgentRuntime,
   retainCompletedApiOnlyModelContextMessagesForTurn,
@@ -4662,6 +4663,10 @@ describe("agent runtime plan semantics", function () {
         sendingSession: session,
         currentItemKey: "ITEM-1",
         currentItemLibraryID: 5,
+        presentationAuthorization: createPresentationLaunchAuthorization({
+          itemKey: "ITEM-1",
+          libraryID: 5,
+        }),
       });
 
       assert.isTrue(
@@ -4704,7 +4709,7 @@ describe("agent runtime plan semantics", function () {
     }
   });
 
-  it("keeps duplicate provider presentation IDs distinct in local UI state without rewriting protocol IDs", async function () {
+  it("executes only the first presentation call in one model response", async function () {
     const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
     (globalThis as { ztoolkit?: unknown }).ztoolkit = {
       log: () => undefined,
@@ -4764,24 +4769,19 @@ describe("agent runtime plan semantics", function () {
       {
         createExecutionBatches: (requests: any[]) => [requests],
         executeBatch: async (requests: any[]) => {
+          assert.lengthOf(requests, 1);
           await requests[0].executionContext.presentationProgress({
             phase: "rendering",
             message: "first draft",
             pptxPath: "/safe/first.pptx",
             isDraft: true,
           });
-          await requests[1].executionContext.presentationProgress({
-            phase: "rendering",
-            message: "second draft",
-            pptxPath: "/safe/second.pptx",
-            isDraft: true,
-          });
-          return requests.map((request: any, index: number) => ({
+          return requests.map((request: any) => ({
             toolCall: request.toolCall,
             status: "completed",
             content: JSON.stringify({
               status: "completed",
-              path: `/safe/final-${index + 1}.pptx`,
+              path: "/safe/final-1.pptx",
             }),
           }));
         },
@@ -4806,7 +4806,7 @@ describe("agent runtime plan semantics", function () {
                 },
               })),
             }
-          : { content: "Both PPT files were generated." };
+          : { content: "The PPT file was generated." };
       },
     };
 
@@ -4828,6 +4828,12 @@ describe("agent runtime plan semantics", function () {
           },
         ],
         sendingSession: session,
+        currentItemKey: "ITEM-1",
+        currentItemLibraryID: 5,
+        presentationAuthorization: createPresentationLaunchAuthorization({
+          itemKey: "ITEM-1",
+          libraryID: 5,
+        }),
       });
 
       assert.isTrue(
@@ -4838,7 +4844,7 @@ describe("agent runtime plan semantics", function () {
             artifact.path === "/safe/first.pptx",
         ),
       );
-      assert.isTrue(
+      assert.isFalse(
         renderedArtifacts.some(
           (artifact) =>
             artifact.result === "second draft" &&
@@ -4846,29 +4852,29 @@ describe("agent runtime plan semantics", function () {
             artifact.path === "/safe/second.pptx",
         ),
       );
-      assert.lengthOf(assistantMessage.presentationArtifacts || [], 2);
+      assert.lengthOf(assistantMessage.presentationArtifacts || [], 1);
       assert.deepEqual(
         assistantMessage.presentationArtifacts?.map(
           (artifact) => artifact.toolCallId,
         ),
-        ["duplicate-presentation-call", "duplicate-presentation-call"],
+        ["duplicate-presentation-call"],
       );
       assert.deepEqual(
         assistantMessage.presentationArtifacts?.map(
           (artifact) => artifact.path,
         ),
-        ["/safe/final-1.pptx", "/safe/final-2.pptx"],
+        ["/safe/final-1.pptx"],
       );
       const localIds = assistantMessage.presentationArtifacts?.map(
         (artifact) => artifact.localId,
       );
-      assert.lengthOf(new Set(localIds), 2);
+      assert.lengthOf(new Set(localIds), 1);
       assert.isTrue(localIds?.every(Boolean));
       assert.deepEqual(
         session.executionPlan?.steps
           .filter((step) => localIds?.includes(step.id))
           .map((step) => step.status),
-        ["completed", "completed"],
+        ["completed"],
       );
       assert.sameMembers(
         renderedArtifacts
@@ -4906,6 +4912,25 @@ describe("agent runtime plan semantics", function () {
           (message) => message.tool_call_id === "duplicate-presentation-call",
         ),
       );
+      const deniedResults = session.toolExecutionState?.results.filter(
+        (result) =>
+          result.toolCall.function.name === "presentation" &&
+          result.status === "denied",
+      );
+      assert.lengthOf(deniedResults || [], 1);
+      assert.include(
+        deniedResults?.[0].content || "",
+        "Additional presentation generation was blocked",
+      );
+      assert.isFalse(
+        session.executionPlan?.steps.some(
+          (step) => step.title === "Revise plan after blocked tool call",
+        ),
+      );
+      const providerPrompt = secondProviderMessages
+        .map((message) => message.content)
+        .join("\n");
+      assert.notInclude(providerPrompt, "Tool recovery notice");
     } finally {
       (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
     }

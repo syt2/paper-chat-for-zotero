@@ -4,13 +4,15 @@ import {
   formatToolError,
   parseToolError,
 } from "../tool-errors/ToolErrorFormatter";
+import { MAX_PRESENTATION_ATTEMPTS_PER_AUTHORIZATION } from "../../presentation/PresentationLaunchAuthorization";
 
 export interface BlockedRetryMatch {
   fingerprint: string;
   previousResult: ToolExecutionResult;
 }
 
-export const MAX_PRESENTATION_ATTEMPTS_PER_TURN = 3;
+export const MAX_PRESENTATION_ATTEMPTS_PER_TURN =
+  MAX_PRESENTATION_ATTEMPTS_PER_AUTHORIZATION;
 
 export function fingerprintToolCall(toolCall: ToolCall): string {
   return buildFingerprint(
@@ -43,6 +45,15 @@ export function findBlockedRetryMatch(
 
   for (const result of previousResults) {
     if (result.status !== "failed" && result.status !== "denied") {
+      continue;
+    }
+    if (
+      result.policyTrace?.some(
+        (trace) => trace.policy === "presentation_response_limit",
+      )
+    ) {
+      // This synthetic result represents an extra call that never reached the
+      // executor. It must not consume or poison the first call's retry budget.
       continue;
     }
     if (fingerprintToolExecutionResult(result) !== fingerprint) {

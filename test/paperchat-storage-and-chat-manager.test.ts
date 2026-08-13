@@ -4,6 +4,7 @@ import {
   getAuthManager,
 } from "../src/modules/auth/index.ts";
 import { ChatManager } from "../src/modules/chat/ChatManager.ts";
+import { createPresentationLaunchAuthorization } from "../src/modules/presentation/PresentationLaunchAuthorization.ts";
 import { PaperChatRetryOrchestrator } from "../src/modules/chat/PaperChatRetryOrchestrator.ts";
 import { filterSearchToolsForScope } from "../src/modules/chat/agent-runtime/SearchScopeGate.ts";
 import {
@@ -632,7 +633,7 @@ describe("paperchat storage and chat manager", function () {
     );
     assert.equal(sessionUpsert?.params?.[3], "ITEM-1");
     assert.equal(sessionUpsert?.params?.[4], 23);
-    assert.deepEqual(sessionUpsert?.params?.slice(6, 10), [
+    assert.deepEqual(sessionUpsert?.params?.slice(7, 11), [
       "Deep Summary: Paper",
       "user",
       null,
@@ -2662,6 +2663,118 @@ describe("paperchat storage and chat manager", function () {
       );
     } finally {
       providerManager.getActiveProviderId = originalGetActiveProviderId;
+    }
+  });
+
+  it("rejects a provider-locked presentation turn before mutating the chat", async function () {
+    const providerManager = getProviderManager() as any;
+    const originalGetActiveProviderId = providerManager.getActiveProviderId;
+    const session: ChatSession = {
+      id: "session-provider-locked-presentation",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      messages: [],
+    };
+    providerManager.getActiveProviderId = () => "openai";
+
+    try {
+      const manager = Object.create(ChatManager.prototype) as any;
+      manager.currentSession = session;
+      manager.init = async () => undefined;
+
+      assert.isFalse(
+        await manager.sendMessage("generate a presentation", {
+          requiredProviderId: "paperchat",
+          allowedToolNames: ["presentation"],
+        }),
+      );
+      assert.lengthOf(session.messages, 0);
+    } finally {
+      providerManager.getActiveProviderId = originalGetActiveProviderId;
+    }
+  });
+
+  it("rejects a presentation authorization that is not bound to the sent paper", async function () {
+    const providerManager = getProviderManager() as any;
+    const originalGetActiveProviderId = providerManager.getActiveProviderId;
+    const session: ChatSession = {
+      id: "session-source-locked-presentation",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      messages: [],
+    };
+    const paper = { id: 7, key: "PAPER-A", libraryID: 1 } as Zotero.Item;
+    providerManager.getActiveProviderId = () => "paperchat";
+
+    try {
+      const manager = Object.create(ChatManager.prototype) as any;
+      manager.currentSession = session;
+      manager.init = async () => undefined;
+
+      assert.isFalse(
+        await manager.sendMessage("generate a presentation", {
+          item: paper,
+          requiredProviderId: "paperchat",
+          allowedToolNames: ["presentation"],
+          presentationAuthorization: createPresentationLaunchAuthorization({
+            itemKey: "PAPER-B",
+            libraryID: 1,
+          }),
+        }),
+      );
+      assert.lengthOf(session.messages, 0);
+    } finally {
+      providerManager.getActiveProviderId = originalGetActiveProviderId;
+    }
+  });
+
+  it("rejects a forged presentation authorization even when its fields match", async function () {
+    const providerManager = getProviderManager() as any;
+    const originalGetActiveProviderId = providerManager.getActiveProviderId;
+    const originalGetProvider = providerManager.getProvider;
+    const session: ChatSession = {
+      id: "session-forged-presentation",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      messages: [],
+    };
+    const paper = { id: 8, key: "PAPER-A", libraryID: 1 } as Zotero.Item;
+    providerManager.getActiveProviderId = () => "paperchat";
+    providerManager.getProvider = () => ({
+      config: { id: "paperchat", type: "paperchat" },
+      isReady: () => true,
+    });
+
+    try {
+      const manager = Object.create(ChatManager.prototype) as any;
+      manager.currentSession = session;
+      manager.init = async () => undefined;
+
+      assert.isFalse(
+        await manager.sendMessage("generate a presentation", {
+          item: paper,
+          requiredProviderId: "paperchat",
+          allowedToolNames: ["presentation"],
+          presentationAuthorization: {
+            providerId: "paperchat",
+            source: { itemKey: paper.key, libraryID: paper.libraryID },
+          },
+        }),
+      );
+      assert.lengthOf(session.messages, 0);
+      assert.deepEqual(
+        createPresentationLaunchAuthorization({
+          itemKey: paper.key,
+          libraryID: paper.libraryID,
+        }).source,
+        { itemKey: paper.key, libraryID: paper.libraryID },
+      );
+    } finally {
+      providerManager.getActiveProviderId = originalGetActiveProviderId;
+      providerManager.getProvider = originalGetProvider;
     }
   });
 
@@ -5040,6 +5153,28 @@ describe("paperchat storage and chat manager", function () {
       olderArtifact,
       latestArtifact,
     ]);
+  });
+
+  it("clears stale presentation artifacts when reusing an interrupted assistant for retry", function () {
+    const assistantMessage = {
+      id: "assistant-retry-presentation",
+      role: "assistant",
+      content: "partial",
+      timestamp: 1,
+      presentationArtifacts: [
+        {
+          toolCallId: "presentation-old",
+          path: "/tmp/paperchat/old.pptx",
+          isDraft: true,
+        },
+      ],
+    } as ChatMessage;
+    const manager = Object.create(ChatManager.prototype) as any;
+
+    manager.resetAssistantForRetry(assistantMessage);
+
+    assert.isUndefined(assistantMessage.presentationArtifacts);
+    assert.equal(assistantMessage.streamingState, "in_progress");
   });
 
   it("persists completed tool context when the final provider attempt fails", async function () {

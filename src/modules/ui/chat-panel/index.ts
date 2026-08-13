@@ -15,6 +15,7 @@ export {
   getChatManager,
   stopChatSearchBackfillForShutdown,
   addSelectedTextAttachment,
+  openPresentationForItem,
 } from "./ChatPanelManager";
 
 // Theme utilities

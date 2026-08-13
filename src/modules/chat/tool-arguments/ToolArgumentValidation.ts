@@ -89,7 +89,9 @@ function getToolParameters(
       string,
       ToolDefinition["function"]["parameters"]
     >();
-    for (const definition of getPdfToolManager().getToolDefinitions(true)) {
+    for (const definition of getPdfToolManager().getToolDefinitions(true, {
+      includePresentation: true,
+    })) {
       toolDefinitions.set(
         definition.function.name,
         definition.function.parameters,

@@ -13,11 +13,11 @@ export function resolvePresentationSourceItemKey(
   requestedItemKey: unknown,
   sessionItemKey?: string | null,
 ): string | undefined {
-  const explicit = normalizeItemKey(requestedItemKey);
-  if (explicit) return explicit;
-
   const session = normalizeItemKey(sessionItemKey);
   if (session) return session;
+
+  const explicit = normalizeItemKey(requestedItemKey);
+  if (explicit) return explicit;
 
   try {
     const selected = Array.from(

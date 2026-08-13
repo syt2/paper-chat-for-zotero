@@ -116,13 +116,55 @@ import {
   executePresentationCapability,
 } from "../../presentation";
 import { resolvePresentationSourceItemKey } from "../../presentation/PresentationSourceContext";
+import {
+  beginPresentationAuthorizationAttempt,
+  finishPresentationAuthorizationAttempt,
+  isIssuedPresentationLaunchAuthorization,
+  type PresentationAuthorizationBlockReason,
+} from "../../presentation/PresentationLaunchAuthorization";
 import type { ToolSchedulerExecutionContext } from "../tool-scheduler/ToolScheduler";
+import {
+  formatToolError,
+  parseToolError,
+} from "../tool-errors/ToolErrorFormatter";
 
 // 缓存条目类型
 interface CacheEntry {
   structure: PaperStructureExtended;
   timestamp: number;
   attachmentItemID: number;
+}
+
+function classifyPresentationAttemptResult(
+  result: string,
+): "completed" | "retryable_failure" | "terminal_failure" {
+  const error = parseToolError(result);
+  if (!error) return "completed";
+  return error.retryable === true ? "retryable_failure" : "terminal_failure";
+}
+
+function formatPresentationAuthorizationBlock(
+  reason: PresentationAuthorizationBlockReason,
+): string {
+  const causes: Record<PresentationAuthorizationBlockReason, string> = {
+    not_issued: "The guarded PaperChat launch authorization is unavailable.",
+    already_running:
+      "A presentation is already being generated with this authorization.",
+    already_completed:
+      "This launch authorization has already exported a presentation.",
+    terminal_failure:
+      "This launch authorization ended after a non-retryable failure.",
+    attempts_exhausted:
+      "This launch authorization has exhausted its bounded retry allowance.",
+  };
+  return formatToolError({
+    summary: "Presentation launch authorization cannot start another deck.",
+    category: "permission_denied",
+    retryable: false,
+    cause: causes[reason],
+    suggestedFix:
+      "Finish this turn without another presentation call. A new user launch requires a fresh balance check and confirmation.",
+  });
 }
 
 export class PdfToolManager {
@@ -417,12 +459,17 @@ export class PdfToolManager {
    * 获取可用工具定义
    * @param hasCurrentItem 是否有当前选中的 item，用于动态调整工具列表
    */
-  getToolDefinitions(hasCurrentItem: boolean = true): ToolDefinition[] {
+  getToolDefinitions(
+    hasCurrentItem: boolean = true,
+    options: { includePresentation?: boolean } = {},
+  ): ToolDefinition[] {
     const itemKeyProp = this.getItemKeyProperty();
 
     // Library 工具 (始终可用，不需要 PDF)
     const libraryTools: ToolDefinition[] = [
-      createPresentationToolDefinition(),
+      ...(options.includePresentation
+        ? [createPresentationToolDefinition()]
+        : []),
       {
         type: "function" as const,
         function: {
@@ -1644,7 +1691,11 @@ export class PdfToolManager {
         if (!this.isGetItemNotesArgs(args)) {
           return "Error: Invalid arguments for get_item_notes";
         }
-        return executeGetItemNotes(args, effectiveCurrentItemKey);
+        return executeGetItemNotes(
+          args,
+          effectiveCurrentItemKey,
+          currentPaperLibraryID,
+        );
       case "get_note_content":
         if (!this.isGetNoteContentArgs(args)) {
           return "Error: Invalid arguments for get_note_content. Required: noteKey (string)";
@@ -1656,7 +1707,11 @@ export class PdfToolManager {
         if (!this.isGetAnnotationsArgs(args)) {
           return "Error: Invalid arguments for get_annotations";
         }
-        return executeGetAnnotations(args, effectiveCurrentItemKey);
+        return executeGetAnnotations(
+          args,
+          effectiveCurrentItemKey,
+          currentPaperLibraryID,
+        );
 
       case "get_pdf_selection":
         return executeGetPdfSelection();
@@ -1765,42 +1820,67 @@ export class PdfToolManager {
         return this.executeSaveMemory(args);
       }
       case "presentation": {
+        const presentationAuthorization =
+          executionContext?.presentationAuthorization;
+        if (
+          !isIssuedPresentationLaunchAuthorization(presentationAuthorization) ||
+          !presentationAuthorization.source.itemKey ||
+          !Number.isSafeInteger(presentationAuthorization.source.libraryID)
+        ) {
+          return "Error: Presentation generation must be started from a PaperChat PPT entry after its balance check and confirmation.";
+        }
+        const requestedSourceItemKey =
+          typeof args.sourceItemKey === "string" && args.sourceItemKey.trim()
+            ? args.sourceItemKey.trim()
+            : undefined;
+        if (
+          requestedSourceItemKey &&
+          requestedSourceItemKey !== presentationAuthorization.source.itemKey
+        ) {
+          return "Error: The presentation source does not match the paper authorized by the user.";
+        }
         const sourceItemKey = resolvePresentationSourceItemKey(
           args.sourceItemKey,
-          effectiveCurrentItemKey,
+          presentationAuthorization.source.itemKey,
         );
-        const boundSourceContext =
-          sourceItemKey &&
-          executionContext?.paperSource?.itemKey === sourceItemKey
-            ? executionContext.paperSource
-            : undefined;
-        const resolvedSourceItem = sourceItemKey
-          ? this.getItemByKey(sourceItemKey, boundSourceContext?.libraryID)
-          : null;
-        const sourceContext = sourceItemKey
-          ? {
-              itemKey: sourceItemKey,
-              libraryID: resolvedSourceItem?.libraryID,
-            }
-          : undefined;
-        const paper = sourceItemKey
-          ? await this.extractAndParsePaper(
-              sourceItemKey,
-              true,
-              sourceContext?.libraryID,
-            )
-          : fallbackStructure
-            ? this.ensureExtendedStructure(fallbackStructure)
-            : null;
-        return executePresentationCapability(
-          sourceItemKey ? { ...args, sourceItemKey } : args,
-          executionContext?.presentationVisualReviewer,
-          executionContext?.presentationPlanner,
-          paper || undefined,
-          executionContext?.presentationProgress,
-          undefined,
-          sourceContext,
+        const sourceContext = presentationAuthorization.source;
+        const attempt = beginPresentationAuthorizationAttempt(
+          presentationAuthorization,
         );
+        if (!attempt.allowed) {
+          return formatPresentationAuthorizationBlock(attempt.reason);
+        }
+        try {
+          const paper = sourceItemKey
+            ? await this.extractAndParsePaper(
+                sourceItemKey,
+                true,
+                sourceContext?.libraryID,
+              )
+            : fallbackStructure
+              ? this.ensureExtendedStructure(fallbackStructure)
+              : null;
+          const result = await executePresentationCapability(
+            sourceItemKey ? { ...args, sourceItemKey } : args,
+            executionContext?.presentationVisualReviewer,
+            executionContext?.presentationPlanner,
+            paper || undefined,
+            executionContext?.presentationProgress,
+            undefined,
+            sourceContext,
+          );
+          finishPresentationAuthorizationAttempt(
+            presentationAuthorization,
+            classifyPresentationAttemptResult(result),
+          );
+          return result;
+        } catch (error) {
+          finishPresentationAuthorizationAttempt(
+            presentationAuthorization,
+            "retryable_failure",
+          );
+          throw error;
+        }
       }
     }
 

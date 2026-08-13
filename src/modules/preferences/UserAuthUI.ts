@@ -283,6 +283,12 @@ export function openPaperChatSettingsForTopup(): void {
   });
 }
 
+/** Open the existing PaperChat purchase flow without requiring Preferences. */
+export async function openPaperChatPurchaseDialog(): Promise<void> {
+  const prefsDoc = addon.data.prefs?.window?.document;
+  await showRedeemCodeDialog(prefsDoc, getAuthManager());
+}
+
 export function openPaperChatPreferences(): void {
   Zotero.Utilities.Internal.openPreferences("paperchat-prefpane");
   schedulePrefsRefresh({
@@ -561,7 +567,7 @@ let redeemDialogWindow: Window | null = null;
  * Show dialog with QR code for getting redemption code
  */
 async function showRedeemCodeDialog(
-  prefsDoc: Document,
+  prefsDoc: Document | undefined,
   authManager: AuthManagerType,
 ): Promise<void> {
   // If dialog already open, focus it
@@ -653,7 +659,7 @@ async function showRedeemCodeDialog(
 
 function bindRedeemDialogWhenReady(options: {
   dialogHelper: { window?: Window | null };
-  prefsDoc: Document;
+  prefsDoc: Document | undefined;
   authManager: AuthManagerType;
   products: PaperChatProduct[];
   showProducts: boolean;
@@ -1283,7 +1289,7 @@ function formatProductPrice(product: PaperChatProduct): string {
 function bindProductPurchaseEvents(
   doc: Document,
   dialogWin: Window,
-  prefsDoc: Document,
+  prefsDoc: Document | undefined,
   authManager: AuthManagerType,
   products: PaperChatProduct[],
 ): void {
@@ -1539,7 +1545,9 @@ function bindProductPurchaseEvents(
             error,
           );
         });
-        updateUserDisplay(prefsDoc, authManager);
+        if (prefsDoc) {
+          updateUserDisplay(prefsDoc, authManager);
+        }
       }
     }, PURCHASE_POLL_INTERVAL_MS);
   };

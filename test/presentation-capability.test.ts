@@ -150,13 +150,18 @@ describe("presentation capability", function () {
     assert.equal(merged.sourceItemKey, "SBZ2M99R");
 
     const authored = mergePresentationPlanMetadata(
-      { ...merged, author: "论文团队" },
-      { language: "zh-CN" },
+      {
+        ...merged,
+        sourceItemKey: "PLANNER-HALLUCINATION",
+        author: "论文团队",
+      },
+      { sourceItemKey: "SBZ2M99R", language: "zh-CN" },
       {
         metadata: { authors: ["Different Author"] },
       } as any,
     );
     assert.equal(authored.author, "论文团队");
+    assert.equal(authored.sourceItemKey, "SBZ2M99R");
   });
 
   it("preserves the resolved locale in the internal presentation schema", function () {

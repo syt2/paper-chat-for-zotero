@@ -622,6 +622,9 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
   const uploadFileBtn = container.querySelector(
     "#chat-upload-file",
   ) as HTMLButtonElement;
+  const presentationBtn = container.querySelector(
+    "#chat-generate-presentation",
+  ) as HTMLButtonElement | null;
   const historyBtn = container.querySelector(
     "#chat-history-btn",
   ) as HTMLButtonElement;
@@ -1142,6 +1145,24 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
     updateModelSelectorDisplay(container);
 
     ztoolkit.log("New session created:", newSession.id);
+  });
+
+  presentationBtn?.addEventListener("click", async () => {
+    if (presentationBtn.disabled) return;
+
+    presentationBtn.disabled = true;
+    presentationBtn.setAttribute("aria-busy", "true");
+    try {
+      await context.launchPresentation();
+    } catch (error) {
+      ztoolkit.log("[Chat] Failed to launch presentation:", error);
+      context.appendError(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      presentationBtn.disabled = false;
+      presentationBtn.removeAttribute("aria-busy");
+    }
   });
 
   summarizeConversationBtn?.addEventListener("click", async () => {

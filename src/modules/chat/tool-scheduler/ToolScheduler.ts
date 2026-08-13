@@ -35,6 +35,7 @@ import type {
   PresentationProgressCallback,
   PresentationSourceContext,
 } from "../../presentation/contracts";
+import type { PresentationLaunchAuthorization } from "../../presentation/PresentationLaunchAuthorization";
 
 export interface ToolSchedulerExecutionContext {
   presentationVisualReviewer?: PresentationVisualReviewer;
@@ -43,6 +44,11 @@ export interface ToolSchedulerExecutionContext {
   presentationProgress?: PresentationProgressCallback;
   /** Trusted Zotero identity captured from the paper bound to this chat turn. */
   paperSource?: PresentationSourceContext;
+  /**
+   * App-owned authorization created only by the guarded PPT entry points.
+   * The model cannot populate this context through tool arguments.
+   */
+  presentationAuthorization?: PresentationLaunchAuthorization;
 }
 
 export interface ToolSchedulerRequest {

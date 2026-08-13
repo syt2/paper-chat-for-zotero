@@ -110,6 +110,11 @@ export interface AuthCallbacks {
   onError?: (error: Error) => void;
 }
 
+export interface UserInfoRefreshResult {
+  userInfo: boolean;
+  subscriptionInfo: boolean;
+}
+
 // 多回调监听器管理
 type CallbackListeners = {
   onLoginStatusChange: Array<(isLoggedIn: boolean) => void>;
@@ -1044,7 +1049,7 @@ export class AuthManager {
    */
   async refreshUserInfo(
     expectedGeneration: number = this.environmentGeneration,
-  ): Promise<void> {
+  ): Promise<UserInfoRefreshResult> {
     const result = await this.withSessionRetry(
       () => this.authService.getUserInfo(),
       "getUserInfo",
@@ -1052,15 +1057,16 @@ export class AuthManager {
     );
 
     if (expectedGeneration !== this.environmentGeneration) {
-      return;
+      return { userInfo: false, subscriptionInfo: false };
     }
 
     if (result.success && result.data) {
       this.state.user = result.data;
       this.state.isLoggedIn = true;
-      await this.refreshSubscriptionInfo(expectedGeneration);
+      const subscriptionRefreshed =
+        await this.refreshSubscriptionInfo(expectedGeneration);
       if (expectedGeneration !== this.environmentGeneration) {
-        return;
+        return { userInfo: false, subscriptionInfo: false };
       }
       // 保存用户信息到本地，以便重启后恢复
       // quota 值可能超过 32 位整数，存为 JSON 字符串
@@ -1081,6 +1087,7 @@ export class AuthManager {
       );
       this.notifyUserInfoUpdate(result.data);
       this.notifyBalanceUpdate(result.data.quota, result.data.used_quota);
+      return { userInfo: true, subscriptionInfo: subscriptionRefreshed };
     } else {
       // 保留本地状态，不清除登录状态
       const errorMsg = result.message || "";
@@ -1088,6 +1095,7 @@ export class AuthManager {
         "[AuthManager] refreshUserInfo failed, keeping local state:",
         errorMsg,
       );
+      return { userInfo: false, subscriptionInfo: false };
     }
   }
 
@@ -1100,7 +1108,7 @@ export class AuthManager {
 
   async refreshSubscriptionInfo(
     expectedGeneration: number = this.environmentGeneration,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const result = await this.withSessionRetry(
       () => this.authService.getSubscriptionSelf(),
       "getSubscriptionSelf",
@@ -1108,7 +1116,7 @@ export class AuthManager {
     );
 
     if (expectedGeneration !== this.environmentGeneration) {
-      return;
+      return false;
     }
 
     if (result.success) {
@@ -1120,11 +1128,13 @@ export class AuthManager {
         "userSubscriptionJson",
         cachedSubscription ? JSON.stringify(cachedSubscription) : "",
       );
+      return true;
     } else {
       ztoolkit.log(
         "[AuthManager] refreshSubscriptionInfo failed:",
         result.message || "",
       );
+      return false;
     }
   }
 

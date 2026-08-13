@@ -388,6 +388,33 @@ describe("native PDF outline", function () {
       );
       assert.include(result, "Group-library body");
       assert.notInclude(result, "Personal-library body");
+
+      const groupNote = {
+        id: 305,
+        key: "NOTE0005",
+        isNote: () => true,
+        getNote: () => "Group note body",
+        dateModified: "2026-08-14",
+      };
+      (parents.get(5) as any).getNotes = () => [groupNote.id];
+      (parents.get(5) as any).getField = () => "Group paper";
+      const originalGet = (globalThis as any).Zotero.Items.get;
+      (globalThis as any).Zotero.Items.get = (id: number) =>
+        id === groupNote.id ? groupNote : originalGet(id);
+      const notesResult = await manager.executeToolCall(
+        {
+          id: "group-notes",
+          type: "function",
+          function: { name: "get_item_notes", arguments: "{}" },
+        },
+        undefined,
+        {},
+        "SHARED01",
+        {
+          paperSource: { itemKey: "SHARED01", libraryID: 5 },
+        },
+      );
+      assert.include(notesResult, "Group note");
     });
 
     it("enriches fallback content when attachment text extraction rejects", async function () {

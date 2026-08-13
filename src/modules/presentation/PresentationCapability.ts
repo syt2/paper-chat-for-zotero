@@ -309,7 +309,10 @@ export function mergePresentationPlanMetadata(
 ): PresentationRequest {
   return {
     ...planned,
-    sourceItemKey: intent.sourceItemKey || planned.sourceItemKey,
+    // The app-bound intent identifies the paper the user authorized. Never let
+    // an internal planner response redirect export or attachment to another
+    // Zotero item.
+    sourceItemKey: intent.sourceItemKey,
     language: intent.language || planned.language,
     title: intent.title || planned.title,
     author:

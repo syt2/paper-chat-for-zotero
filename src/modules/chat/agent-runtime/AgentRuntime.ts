@@ -27,6 +27,7 @@ import type {
   ToolSchedulerRequest,
 } from "../tool-scheduler";
 import type { ToolSchedulerExecutionContext } from "../tool-scheduler/ToolScheduler";
+import type { PresentationLaunchAuthorization } from "../../presentation/PresentationLaunchAuthorization";
 import { ExecutionPlanManager } from "./ExecutionPlanManager";
 import {
   createReusedCompletedToolResult,
@@ -181,6 +182,7 @@ interface RuntimeExecutionOptions {
       forceFinalAnswer: boolean;
     },
   ) => string | null;
+  presentationAuthorization?: PresentationLaunchAuthorization;
 }
 
 interface StreamingRuntimeExecutionOptions extends RuntimeExecutionOptions {
@@ -214,6 +216,7 @@ interface ToolIterationParams {
   noteSummaryContext?: NoteSummaryContext;
   abortSignal?: AbortSignal;
   executeProviderRequest: ProviderRequestExecutor;
+  presentationAuthorization?: PresentationLaunchAuthorization;
 }
 
 function rewriteToolCallItemKey(
@@ -416,6 +419,7 @@ export class AgentRuntime {
       noteSummaryContext,
       searchScopeGate,
       refreshSystemPrompt,
+      presentationAuthorization,
     } = options;
     const logPrefix = "Streaming Tool Calling";
     const configuredMaxIterations = this.getMaxIterations();
@@ -558,6 +562,7 @@ export class AgentRuntime {
             noteSummaryContext,
             abortSignal,
             executeProviderRequest,
+            presentationAuthorization,
           });
           accumulatedDisplay = toolIteration.accumulatedDisplay;
           presentationFailureAttempts +=
@@ -723,6 +728,7 @@ export class AgentRuntime {
       noteSummaryContext,
       searchScopeGate,
       refreshSystemPrompt,
+      presentationAuthorization,
     } = options;
     const logPrefix = "Tool Calling";
     const configuredMaxIterations = this.getMaxIterations();
@@ -859,6 +865,7 @@ export class AgentRuntime {
             noteSummaryContext,
             abortSignal,
             executeProviderRequest,
+            presentationAuthorization,
           });
           accumulatedDisplay = toolIteration.accumulatedDisplay;
           presentationFailureAttempts +=
@@ -1378,6 +1385,7 @@ export class AgentRuntime {
       noteSummaryContext,
       abortSignal,
       executeProviderRequest,
+      presentationAuthorization,
     } = params;
     const contextStrategy = getToolContextStrategy(provider);
 
@@ -1442,6 +1450,7 @@ export class AgentRuntime {
               itemKey: currentItemKey || undefined,
               libraryID: currentItemLibraryID,
             },
+            ...(presentationAuthorization ? { presentationAuthorization } : {}),
             ...(normalizedToolCalls.some(
               (toolCall) => toolCall.function.name === "presentation",
             )
@@ -1970,13 +1979,17 @@ export class AgentRuntime {
         }
 
         const needsRecovery = batchResults.some(
-          (result) => result.status === "denied" || result.status === "failed",
+          (result) =>
+            (result.status === "denied" || result.status === "failed") &&
+            !isDuplicatePresentationAttemptBlock(result),
         );
         if (needsRecovery) {
           this.executionPlanManager.recordRecoveryStep(
             sendingSession,
             currentMessages,
-            batchResults,
+            batchResults.filter(
+              (result) => !isDuplicatePresentationAttemptBlock(result),
+            ),
           );
           await this.sessionStorage.updateSessionMeta(sendingSession);
           this.emitPlanUpdate(sendingSession, sessionRunId);
@@ -2070,6 +2083,7 @@ export class AgentRuntime {
     const entries: RuntimeToolIterationEntry[] = [];
     let runnableSegment: ToolCall[] = [];
     let noteCreationReserved = noteSummaryContext?.noteCreated === true;
+    let presentationAttemptReserved = false;
     const seenUserInputFingerprints = new Set<string>();
 
     const flushRunnableSegment = () => {
@@ -2121,6 +2135,17 @@ export class AgentRuntime {
         flushRunnableSegment();
         entries.push({ kind: "search_scope", toolCall });
         continue;
+      }
+      if (toolCall.function.name === "presentation") {
+        if (presentationAttemptReserved) {
+          flushRunnableSegment();
+          entries.push({
+            kind: "synthetic",
+            results: [createDuplicatePresentationAttemptResult(toolCall)],
+          });
+          continue;
+        }
+        presentationAttemptReserved = true;
       }
       if (toolCall.function.name === "request_user_input") {
         flushRunnableSegment();
@@ -3008,16 +3033,19 @@ export class AgentRuntime {
     currentMessages: ChatMessage[],
     results: ToolExecutionResult[],
   ): void {
+    const actionableResults = results.filter(
+      (result) => !isDuplicatePresentationAttemptBlock(result),
+    );
     const completedPresentationMessage =
       createPresentationExportCompletedSystemMessage(
         this.callbacks.generateId(),
-        results,
+        actionableResults,
       );
     if (completedPresentationMessage) {
       currentMessages.push(completedPresentationMessage);
     }
     const systemMessage = createRecoveryGuidanceSystemMessage(
-      results,
+      actionableResults,
       this.callbacks.generateId,
     );
     if (!systemMessage) {
@@ -3269,6 +3297,47 @@ function createDuplicateUserInputRequestResult(
     }),
     error: cause,
   };
+}
+
+function createDuplicatePresentationAttemptResult(
+  toolCall: ToolCall,
+): ToolExecutionResult {
+  const cause =
+    "The same model response requested more than one full presentation generation attempt.";
+  return {
+    toolCall,
+    args: undefined,
+    policyTrace: [
+      {
+        stage: "planner",
+        policy: "presentation_response_limit",
+        outcome: "blocked",
+        summary:
+          "Blocked an additional presentation call in the same model response.",
+        detail: cause,
+      },
+    ],
+    status: "denied",
+    content: formatToolError({
+      summary: "Additional presentation generation was blocked.",
+      category: "permission_denied",
+      retryable: false,
+      cause,
+      suggestedFix:
+        "Use the result of the first presentation call. Only a retryable failure may be retried in a later model response.",
+    }),
+    error: cause,
+  };
+}
+
+function isDuplicatePresentationAttemptBlock(
+  result: ToolExecutionResult,
+): boolean {
+  return (
+    result.policyTrace?.some(
+      (trace) => trace.policy === "presentation_response_limit",
+    ) === true
+  );
 }
 
 function createPresentationRetryRequiredSystemMessage(id: string): ChatMessage {

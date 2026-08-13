@@ -8,7 +8,7 @@ import { formatMarkdownForMessageCopy } from "../src/modules/ui/chat-panel/Markd
 import type { ChatMessage, ChatSession } from "../src/types/chat";
 
 function createItem(key: string = "ITEM-DEEP"): Zotero.Item {
-  return { id: 1, key } as Zotero.Item;
+  return { id: 1, key, libraryID: 5 } as Zotero.Item;
 }
 
 function createSession(overrides: Partial<ChatSession> = {}): ChatSession {
@@ -26,14 +26,18 @@ describe("deep summary chat orchestration", function () {
   it("uses a fresh item session, exact tool allowlist, and visible answer only", async function () {
     const item = createItem();
     const session = createSession();
-    const created: Array<{ itemKey: string; title: string }> = [];
+    const created: Array<{
+      itemKey: string;
+      title: string;
+      libraryID?: number;
+    }> = [];
     const panels: Zotero.Item[] = [];
     let sentOptions:
       | Parameters<DeepSummaryChatManager["sendMessage"]>[1]
       | null = null;
     const manager: DeepSummaryChatManager = {
-      createItemSession: async (itemKey, title) => {
-        created.push({ itemKey, title });
+      createItemSession: async (itemKey, title, libraryID) => {
+        created.push({ itemKey, title, libraryID });
         return session;
       },
       sendMessage: async (_content, options) => {
@@ -71,7 +75,7 @@ describe("deep summary chat orchestration", function () {
     );
 
     assert.deepEqual(created, [
-      { itemKey: "ITEM-DEEP", title: "Deep Summary: Paper" },
+      { itemKey: "ITEM-DEEP", title: "Deep Summary: Paper", libraryID: 5 },
     ]);
     assert.deepEqual(panels, [item]);
     assert.strictEqual(sentOptions?.item, item);

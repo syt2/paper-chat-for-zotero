@@ -14,7 +14,11 @@ export const DEEP_SUMMARY_TOOL_NAMES = [
 ] as const;
 
 export interface DeepSummaryChatManager {
-  createItemSession(itemKey: string, title: string): Promise<ChatSession>;
+  createItemSession(
+    itemKey: string,
+    title: string,
+    libraryID?: number,
+  ): Promise<ChatSession>;
   sendMessage(
     content: string,
     options: {
@@ -64,7 +68,11 @@ export async function runDeepSummaryChat(
     throw new Error("Processing cancelled");
   }
 
-  const session = await chatManager.createItemSession(item.key, sessionTitle);
+  const session = await chatManager.createItemSession(
+    item.key,
+    sessionTitle,
+    item.libraryID,
+  );
   if (signal?.aborted) {
     throw new Error("Processing cancelled");
   }

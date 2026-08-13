@@ -28,6 +28,16 @@ import {
 } from "../../chat/note-summary-destination";
 import { normalizeSourceItemKeys } from "../../chat/note-source-provenance";
 import { isPathInsidePresentationRoot } from "../../presentation";
+import {
+  getSingleSelectedPresentationPaper,
+  launchPresentationForItem,
+  resolvePresentationPaperFromCandidates,
+} from "../../presentation/PresentationEntry";
+import {
+  isPresentationSessionCompatibleWithPaper,
+  selectPresentationSession,
+} from "../../presentation/PresentationSessionPolicy";
+import { createPresentationLaunchAuthorization } from "../../presentation/PresentationLaunchAuthorization";
 
 import { HTML_NS, type AttachmentState, type ChatPanelContext } from "./types";
 import { chatColors } from "../../../utils/colors";
@@ -117,6 +127,8 @@ export type ChatPanelOpenSource =
   | "reader_annotation"
   | "library_scope"
   | "ai_summary"
+  | "presentation_menu"
+  | "presentation_button"
   | "unknown";
 
 const APPROVAL_RESOLVED_ANIMATION_MS = 260;
@@ -2230,7 +2242,7 @@ export function showPanelForItem(
   pendingPanelItem = item;
   moduleCurrentItem = item;
   const manager = getChatManager();
-  manager.setCurrentItemKey(item.key);
+  manager.setCurrentItemKey(item.key, item.libraryID);
   getReadingLoopService().setCurrentItem(item);
   showPanel(source);
 
@@ -2240,7 +2252,7 @@ export function showPanelForItem(
       pendingPanelItem = null;
     }
     moduleCurrentItem = item;
-    manager.setCurrentItemKey(item.key);
+    manager.setCurrentItemKey(item.key, item.libraryID);
     await updatePdfCheckboxVisibilityForItem(container, item, manager);
     const session = manager.getActiveSession();
     if (session) {
@@ -2259,6 +2271,92 @@ export function showPanelForItem(
       currentPanelMode === "sidebar" ? chatContainer : floatingContainer,
     );
   }, 0);
+}
+
+/**
+ * Bind the chat to one paper and start the dedicated presentation turn. This
+ * is the only cross-module surface used by the library and panel PPT entries.
+ */
+export async function openPresentationForItem(
+  item: Zotero.Item,
+  prompt: string,
+  source: Extract<
+    ChatPanelOpenSource,
+    "presentation_menu" | "presentation_button"
+  >,
+  expectedActiveSession: ChatSession | null = null,
+): Promise<boolean> {
+  const manager = getChatManager();
+  await manager.init();
+  if (getProviderManager().getActiveProviderId() !== "paperchat") {
+    return false;
+  }
+  const selection = await selectPresentationSession(
+    manager,
+    source,
+    expectedActiveSession,
+    {
+      itemKey: item.key,
+      title: String(item.getField?.("title") || "PaperChat PPT"),
+      libraryID: item.libraryID,
+    },
+  );
+  if (!selection) {
+    return false;
+  }
+  const { session } = selection;
+  if (
+    source === "presentation_button" &&
+    !isPresentationSessionCompatibleWithPaper(
+      session,
+      { itemKey: item.key, libraryID: item.libraryID },
+      Zotero.Libraries.userLibraryID,
+    )
+  ) {
+    Services.prompt.alert(
+      Zotero.getMainWindow() as unknown as mozIDOMWindowProxy,
+      getString("presentation-chat-context-mismatch-title"),
+      getString("presentation-chat-context-mismatch-message"),
+    );
+    return false;
+  }
+
+  moduleCurrentItem = item;
+  manager.setCurrentItemKey(item.key, item.libraryID);
+  getReadingLoopService().setCurrentItem(item);
+
+  showPanel(source);
+
+  const activeContainer =
+    currentPanelMode === "floating" ? floatingContainer : chatContainer;
+  if (activeContainer?.isConnected) {
+    const context = createContext(activeContainer);
+    context.setCurrentItem(item);
+    await context.updatePdfCheckboxVisibility(item);
+    context.renderMessages(session.messages);
+    context.renderExecutionPlan(session.executionPlan);
+    context.clearAttachments();
+    context.updateAttachmentsPreview();
+    updateModelSelectorDisplay(activeContainer);
+  }
+
+  if (getProviderManager().getActiveProviderId() !== "paperchat") {
+    return false;
+  }
+
+  return manager.sendMessage(prompt, {
+    item,
+    attachPdf: true,
+    targetSession: session,
+    requireTargetSessionActive: true,
+    allowedToolNames: ["presentation"],
+    allowPaperChatRetry: true,
+    requiredProviderId: "paperchat",
+    presentationAuthorization: createPresentationLaunchAuthorization({
+      itemKey: item.key,
+      libraryID: item.libraryID,
+    }),
+  });
 }
 
 /**
@@ -2976,6 +3074,35 @@ function createContext(container: HTMLElement): ChatPanelContext {
       }
     },
     summarizeConversationToNote: () => summarizeConversationToNote(context),
+    launchPresentation: async () => {
+      const session = manager.getActiveSession();
+      const sessionItem = session?.lastActiveItemKey
+        ? getItemByLibraryKey(
+            session.lastActiveItemKey,
+            session.lastActiveItemLibraryID,
+          )
+        : null;
+      const item = resolvePresentationPaperFromCandidates(
+        sessionItem,
+        moduleCurrentItem,
+        getActiveReaderItem(),
+        getSingleSelectedPresentationPaper(),
+      );
+      if (!item) {
+        Services.prompt.alert(
+          Zotero.getMainWindow() as unknown as mozIDOMWindowProxy,
+          getString("presentation-source-unavailable-title"),
+          getString("presentation-source-unavailable-message"),
+        );
+        return false;
+      }
+      return launchPresentationForItem(
+        item,
+        "chat_button",
+        (launchItem, prompt, source) =>
+          openPresentationForItem(launchItem, prompt, source, session),
+      );
+    },
     renderMessages: (
       messages: ChatMessage[],
       onRenderComplete?: () => void,

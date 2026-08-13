@@ -130,6 +130,7 @@ export type ToolPolicyStage = "planner" | "scheduler" | "executor";
 
 export type ToolPolicyName =
   | "retry_block"
+  | "presentation_response_limit"
   | "budget_block"
   | "permission_decision"
   | "argument_parse"

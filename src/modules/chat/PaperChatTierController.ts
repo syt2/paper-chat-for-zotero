@@ -533,6 +533,10 @@ export class PaperChatTierController {
     delete assistantMessage.reasoning;
     delete assistantMessage.evidence;
     delete assistantMessage.tool_calls;
+    // A reused interrupted message represents a new attempt. Keep any previous
+    // PPTX in the captured failure snapshot, but do not show it as output from
+    // the retry before the new attempt emits its own artifact checkpoint.
+    delete assistantMessage.presentationArtifacts;
     assistantMessage.streamingState = "in_progress";
   }
 

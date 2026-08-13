@@ -295,3 +295,23 @@ paperchat-chat-user-input-too-few = Select at least { $count } options.
 paperchat-chat-presentation-open = Open PPTX
 paperchat-chat-presentation-open-draft = Open current draft
 paperchat-chat-presentation-open-failed = Could not open this PPTX
+
+# Presentation entry and launch gate
+paperchat-presentation-generate = Generate PPT
+paperchat-presentation-paperchat-required-title = PaperChat Required
+paperchat-presentation-paperchat-required-message = Presentation generation is available only with the PaperChat service. Switch to PaperChat now?
+paperchat-presentation-switch-paperchat = Switch to PaperChat
+paperchat-presentation-balance-refresh-failed-title = Could Not Check Token Balance
+paperchat-presentation-balance-refresh-failed-message = PaperChat could not retrieve your latest token and subscription balances. To avoid unexpected usage, the task was not started. Please try again later.
+paperchat-presentation-insufficient-balance-title = Insufficient Token Balance
+paperchat-presentation-insufficient-balance-message = Presentation generation uses many tokens. Your currently available balance is { $current }; the task can start only when the remaining balance is strictly greater than { $required }. You can buy more credits and try again.
+paperchat-presentation-cost-warning-title = Before Generating the PPT
+paperchat-presentation-cost-warning-message = PaperChat will analyze the paper, plan slides, process figures, and run several render checks. This may consume many tokens and take some time. Start now?
+paperchat-presentation-start = Start Generating
+paperchat-presentation-dont-remind = Don't remind me again
+paperchat-presentation-source-unavailable-title = Cannot Generate PPT
+paperchat-presentation-source-unavailable-message = Open or select exactly one paper that has a PDF attachment first.
+paperchat-presentation-chat-context-mismatch-title = This Chat Belongs to Another Paper
+paperchat-presentation-chat-context-mismatch-message = To avoid generating a presentation from the wrong paper context, start a new chat and try again.
+paperchat-presentation-launch-failed-title = Could Not Start Presentation
+paperchat-presentation-launch-failed-message = PaperChat could not start the presentation task. No PPT generation request was sent. Please try again.

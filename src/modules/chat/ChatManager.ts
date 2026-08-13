@@ -145,6 +145,8 @@ import {
   resolveScopedPapers,
   type SessionScope,
 } from "./session-scope";
+import type { PresentationLaunchAuthorization } from "../presentation/PresentationLaunchAuthorization";
+import { isIssuedPresentationLaunchAuthorization } from "../presentation/PresentationLaunchAuthorization";
 // V1 migration now handled by migrateToSQLite.ts at startup
 
 const SUPPRESS_AUTOMATIC_RETRY = "paperChatSuppressAutomaticRetry";
@@ -167,7 +169,22 @@ type InternalSendMessageOptions = SendMessageOptions & {
   allowPaperChatRetry?: boolean;
   trustedSourceItemKeys?: readonly string[];
   noteSummaryContext?: NoteSummaryContext;
+  requiredProviderId?: "paperchat";
+  presentationAuthorization?: PresentationLaunchAuthorization;
 };
+
+function hasValidPresentationAuthorization(
+  authorization: InternalSendMessageOptions["presentationAuthorization"],
+  item: Zotero.Item | null | undefined,
+): boolean {
+  return (
+    isIssuedPresentationLaunchAuthorization(authorization) &&
+    !!item?.key &&
+    Number.isSafeInteger(item.libraryID) &&
+    authorization.source.itemKey === item.key &&
+    authorization.source.libraryID === item.libraryID
+  );
+}
 
 /**
  * Type guard: check if provider supports streaming tool calling
@@ -372,11 +389,12 @@ export class ChatManager {
     provider: AIProvider | null | undefined,
     hasCurrentItem: boolean,
     searchScope?: SelectedSearchScope,
+    options: { includePresentation?: boolean } = {},
   ): ToolDefinition[] {
     const supportsHostedWebSearch =
       provider?.supportsHostedWebSearch?.() === true;
     return filterSearchToolsForScope({
-      tools: getPdfToolManager().getToolDefinitions(hasCurrentItem),
+      tools: getPdfToolManager().getToolDefinitions(hasCurrentItem, options),
       supportsHostedWebSearch,
       scope: searchScope,
     })
@@ -1008,6 +1026,7 @@ export class ChatManager {
   async createItemSession(
     itemKey: string,
     title: string,
+    libraryID?: number,
   ): Promise<ChatSession> {
     await this.init();
     return this.enqueueSessionNavigation(async () => {
@@ -1029,6 +1048,9 @@ export class ChatManager {
         session = await this.sessionStorage.createSession({
           sessionId,
           lastActiveItemKey: normalizedItemKey,
+          lastActiveItemLibraryID: Number.isSafeInteger(libraryID)
+            ? libraryID
+            : undefined,
           title: normalizedTitle,
           titleSource: "user",
           titleEditedAt: now,
@@ -1622,6 +1644,37 @@ export class ChatManager {
   ): Promise<boolean> {
     await this.init();
 
+    const requiredProviderManager = options.requiredProviderId
+      ? getProviderManager()
+      : null;
+    const requiredProvider = options.requiredProviderId
+      ? requiredProviderManager?.getProvider(options.requiredProviderId)
+      : null;
+
+    if (
+      options.requiredProviderId &&
+      (requiredProviderManager?.getActiveProviderId() !==
+        options.requiredProviderId ||
+        requiredProvider?.config.id !== options.requiredProviderId ||
+        !requiredProvider.isReady())
+    ) {
+      return false;
+    }
+
+    if (
+      options.presentationAuthorization &&
+      (!hasValidPresentationAuthorization(
+        options.presentationAuthorization,
+        options.item,
+      ) ||
+        options.requiredProviderId !== "paperchat" ||
+        !options.allowedToolNames ||
+        options.allowedToolNames.length !== 1 ||
+        options.allowedToolNames[0] !== "presentation")
+    ) {
+      return false;
+    }
+
     const item = options.item;
     const hasCurrentItem = item !== null && item !== undefined && item.id !== 0;
     const itemKey = hasCurrentItem ? item!.key : null;
@@ -1794,8 +1847,23 @@ export class ChatManager {
 
       // 获取活动的 AI 提供商
       const providerManager = getProviderManager();
-      let provider = this.getActiveProvider();
+      if (
+        options.requiredProviderId &&
+        providerManager.getActiveProviderId() !== options.requiredProviderId
+      ) {
+        trackChatCompleted(false);
+        return false;
+      }
+      let provider = requiredProvider || this.getActiveProvider();
       chatProviderId = providerManager.getActiveProviderId();
+      if (
+        options.requiredProviderId &&
+        (provider !== requiredProvider ||
+          provider?.config.id !== options.requiredProviderId)
+      ) {
+        trackChatCompleted(false);
+        return false;
+      }
       ztoolkit.log(
         "[ChatManager] provider:",
         provider?.getName(),
@@ -2060,12 +2128,18 @@ export class ChatManager {
       if (reusedAssistantMessage) {
         assistantMessage.streamingState = "in_progress";
         assistantMessage.timestamp = Date.now();
+        this.resetAssistantForRetry(assistantMessage);
+        assistantMessage.content = initialAssistantContent;
+        assistantMessage.reasoning = initialAssistantReasoning;
         await this.sessionStorage.updateMessageContent(
           sendingSession.id,
           assistantMessage.id,
           assistantMessage.content,
           assistantMessage.reasoning,
-          { streamingState: "in_progress" },
+          {
+            streamingState: "in_progress",
+            presentationArtifacts: [],
+          },
         );
       } else {
         sendingSession.messages.push(assistantMessage);
@@ -2136,6 +2210,7 @@ export class ChatManager {
           options.allowPaperChatRetry !== false,
           options.noteSummaryContext,
           options.lockedToolItemKey,
+          options.presentationAuthorization,
         );
         if (toolCallingResult !== null) {
           trackChatCompleted(toolCallingResult);
@@ -2483,6 +2558,7 @@ export class ChatManager {
     allowPaperChatRetry: boolean = true,
     noteSummaryContext?: NoteSummaryContext,
     lockedToolItemKey?: string,
+    presentationAuthorization?: PresentationLaunchAuthorization,
   ): Promise<boolean | null> {
     const pdfToolManager = getPdfToolManager();
     const providerManager = getProviderManager();
@@ -2511,6 +2587,7 @@ export class ChatManager {
         provider,
         hasCurrentItem,
         selectedSearchScope,
+        { includePresentation: !!presentationAuthorization },
       );
       const allowedTools = allowedToolNameSet
         ? scopedTools.filter((tool) =>
@@ -2874,6 +2951,7 @@ export class ChatManager {
           noteSummaryContext,
           searchScopeGate,
           abortSignal,
+          presentationAuthorization,
         );
       } else {
         ztoolkit.log(
@@ -2897,6 +2975,7 @@ export class ChatManager {
           noteSummaryContext,
           searchScopeGate,
           abortSignal,
+          presentationAuthorization,
         );
       }
 
@@ -3123,6 +3202,7 @@ export class ChatManager {
     noteSummaryContext?: NoteSummaryContext,
     searchScopeGate?: SearchScopeGateConfig,
     abortSignal?: AbortSignal,
+    presentationAuthorization?: PresentationLaunchAuthorization,
   ): Promise<void> {
     await this.agentRuntime.executeStreamingToolLoop({
       provider,
@@ -3143,6 +3223,7 @@ export class ChatManager {
       noteSummaryContext,
       searchScopeGate,
       refreshSystemPrompt: buildSystemPrompt,
+      presentationAuthorization,
     });
     clearPaperChatRetryableState(sendingSession);
     await this.sessionStorage.updateSessionMeta(sendingSession);
@@ -3186,6 +3267,7 @@ export class ChatManager {
     noteSummaryContext?: NoteSummaryContext,
     searchScopeGate?: SearchScopeGateConfig,
     abortSignal?: AbortSignal,
+    presentationAuthorization?: PresentationLaunchAuthorization,
   ): Promise<void> {
     await this.agentRuntime.executeNonStreamingToolLoop({
       provider,
@@ -3206,6 +3288,7 @@ export class ChatManager {
       noteSummaryContext,
       searchScopeGate,
       refreshSystemPrompt: buildSystemPrompt,
+      presentationAuthorization,
     });
     clearPaperChatRetryableState(sendingSession);
     await this.sessionStorage.updateSessionMeta(sendingSession);

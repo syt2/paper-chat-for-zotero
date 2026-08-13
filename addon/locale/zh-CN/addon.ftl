@@ -295,3 +295,23 @@ paperchat-chat-user-input-too-few = 至少选择 { $count } 项。
 paperchat-chat-presentation-open = 打开 PPTX
 paperchat-chat-presentation-open-draft = 打开当前草稿
 paperchat-chat-presentation-open-failed = 无法打开这个 PPTX
+
+# Presentation entry and launch gate
+paperchat-presentation-generate = 生成 PPT
+paperchat-presentation-paperchat-required-title = 需要使用 PaperChat
+paperchat-presentation-paperchat-required-message = PPT 制作仅支持 PaperChat 服务。是否现在切换到 PaperChat？
+paperchat-presentation-switch-paperchat = 切换到 PaperChat
+paperchat-presentation-balance-refresh-failed-title = 无法检查 Token 余额
+paperchat-presentation-balance-refresh-failed-message = 未能从 PaperChat 获取最新 Token 与订阅余额。为避免意外消耗，本次任务没有开始，请稍后重试。
+paperchat-presentation-insufficient-balance-title = Token 余额不足
+paperchat-presentation-insufficient-balance-message = 制作 PPT 需要较多 Token。当前可用余额为 { $current }，仅当剩余 Token 严格大于 { $required } 时才能开始。你可以先购买额度后再试。
+paperchat-presentation-cost-warning-title = 制作 PPT 前请确认
+paperchat-presentation-cost-warning-message = PaperChat 将分析论文、规划页面、处理图表并多次渲染检查，可能消耗大量 Token，且耗时较长。是否现在开始？
+paperchat-presentation-start = 开始制作
+paperchat-presentation-dont-remind = 不再提醒
+paperchat-presentation-source-unavailable-title = 无法生成 PPT
+paperchat-presentation-source-unavailable-message = 请先打开或仅选中一篇带有 PDF 附件的论文。
+paperchat-presentation-chat-context-mismatch-title = 当前对话属于另一篇论文
+paperchat-presentation-chat-context-mismatch-message = 为避免把 PPT 生成到错误的论文上下文，请先新建一个对话后再试。
+paperchat-presentation-launch-failed-title = 无法开始制作 PPT
+paperchat-presentation-launch-failed-message = PaperChat 未能启动 PPT 制作任务，本次没有发送生成请求，请稍后重试。

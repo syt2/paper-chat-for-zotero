@@ -38,8 +38,8 @@ const PAPERCHAT_NOTES_TITLE = "PaperChat Notes";
 /**
  * 根据 itemKey 获取 Zotero Item
  */
-function getItemByKey(itemKey: string): Zotero.Item | null {
-  const libraryID = Zotero.Libraries.userLibraryID;
+function getItemByKey(itemKey: string, libraryID?: number): Zotero.Item | null {
+  libraryID ??= Zotero.Libraries.userLibraryID;
   const item = Zotero.Items.getByLibraryAndKey(libraryID, itemKey);
   return item || null;
 }
@@ -168,6 +168,7 @@ async function getSelectedAnnotationKeys(): Promise<string[]> {
 export async function executeGetAnnotations(
   args: GetAnnotationsArgs,
   currentItemKey: string | null,
+  currentItemLibraryID?: number,
 ): Promise<string> {
   const targetItemKey = args.itemKey ?? currentItemKey;
   const annotationType = args.annotationType ?? "all";
@@ -179,7 +180,10 @@ export async function executeGetAnnotations(
     return `Error: No item specified. Please provide an itemKey or ensure a paper is currently open.`;
   }
 
-  let item = getItemByKey(targetItemKey);
+  let item = getItemByKey(
+    targetItemKey,
+    targetItemKey === currentItemKey ? currentItemLibraryID : undefined,
+  );
   if (!item) {
     return `Error: Item with key "${targetItemKey}" not found.`;
   }

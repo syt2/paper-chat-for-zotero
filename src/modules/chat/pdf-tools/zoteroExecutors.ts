@@ -14,8 +14,8 @@ import { getErrorMessage } from "../../../utils/common";
 /**
  * 根据 itemKey 获取 Zotero Item
  */
-function getItemByKey(itemKey: string): Zotero.Item | null {
-  const libraryID = Zotero.Libraries.userLibraryID;
+function getItemByKey(itemKey: string, libraryID?: number): Zotero.Item | null {
+  libraryID ??= Zotero.Libraries.userLibraryID;
   const item = Zotero.Items.getByLibraryAndKey(libraryID, itemKey);
   return item || null;
 }
@@ -228,6 +228,7 @@ export function executeGetItemMetadata(args: GetItemMetadataArgs): string {
 export function executeGetItemNotes(
   args: GetItemNotesArgs,
   currentItemKey: string | null,
+  currentItemLibraryID?: number,
 ): string {
   const targetItemKey = args.itemKey ?? currentItemKey;
 
@@ -235,7 +236,10 @@ export function executeGetItemNotes(
     return `Error: No item specified. Please provide an itemKey.`;
   }
 
-  let item = getItemByKey(targetItemKey);
+  let item = getItemByKey(
+    targetItemKey,
+    targetItemKey === currentItemKey ? currentItemLibraryID : undefined,
+  );
   if (!item) {
     return `Error: Item with key "${targetItemKey}" not found.`;
   }

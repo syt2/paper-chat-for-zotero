@@ -15,4 +15,5 @@ export {
   getChatManager,
   stopChatSearchBackfillForShutdown,
   addSelectedTextAttachment,
+  openPresentationForItem,
 } from "./chat-panel";

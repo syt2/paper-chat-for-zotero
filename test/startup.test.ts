@@ -525,7 +525,13 @@ describe("chat agent safeguards", function () {
     assert.include(toolNames, "get_full_text");
     assert.include(toolNames, "get_paper_section");
     assert.include(toolNames, "search_paper_content");
-    assert.include(toolNames, "presentation");
+    assert.notInclude(toolNames, "presentation");
+    assert.include(
+      manager
+        .getToolDefinitions(false, { includePresentation: true })
+        .map((tool) => tool.function.name),
+      "presentation",
+    );
   });
 
   it("clears persisted plan and tool state when recovering interrupted messages", async function () {

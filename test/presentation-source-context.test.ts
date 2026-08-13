@@ -3,6 +3,11 @@ import { PdfToolManager } from "../src/modules/chat/pdf-tools/PdfToolManager.ts"
 import { resetPresentationRendererForTests } from "../src/modules/presentation/PresentationRendererLoader.ts";
 import { PRESENTATION_RENDERER_GLOBAL } from "../src/modules/presentation/contracts.ts";
 import { resolvePresentationSourceItemKey } from "../src/modules/presentation/PresentationSourceContext.ts";
+import {
+  beginPresentationAuthorizationAttempt,
+  createPresentationLaunchAuthorization,
+  finishPresentationAuthorizationAttempt,
+} from "../src/modules/presentation/PresentationLaunchAuthorization.ts";
 
 describe("presentation source context", function () {
   let originalZotero: unknown;
@@ -15,7 +20,7 @@ describe("presentation source context", function () {
     (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
   });
 
-  it("keeps explicit and session-bound papers ahead of the library selection", function () {
+  it("keeps the session-bound paper ahead of model arguments and library selection", function () {
     (globalThis as { Zotero?: unknown }).Zotero = {
       getActiveZoteroPane: () => ({
         getSelectedItems: () => [{ key: "SELECTED1" }],
@@ -24,7 +29,7 @@ describe("presentation source context", function () {
 
     assert.equal(
       resolvePresentationSourceItemKey("EXPLICIT1", "SESSION01"),
-      "EXPLICIT1",
+      "SESSION01",
     );
     assert.equal(
       resolvePresentationSourceItemKey(undefined, "SESSION01"),
@@ -52,7 +57,7 @@ describe("presentation source context", function () {
     assert.isUndefined(resolvePresentationSourceItemKey(undefined, null));
   });
 
-  it("rebinds an explicit cross-library source to its resolved Zotero item", async function () {
+  it("rejects a model attempt to replace the authorized paper", async function () {
     const runtime = globalThis as any;
     const previousServices = runtime.Services;
     const previousIOUtils = runtime.IOUtils;
@@ -166,6 +171,10 @@ describe("presentation source context", function () {
             itemKey: currentPaper.key,
             libraryID: currentPaper.libraryID,
           },
+          presentationAuthorization: createPresentationLaunchAuthorization({
+            itemKey: currentPaper.key,
+            libraryID: currentPaper.libraryID,
+          }),
           presentationPlanner: async ({ paper }) => {
             plannerPaperText = paper.fullText;
             return {
@@ -181,20 +190,136 @@ describe("presentation source context", function () {
           },
         },
       );
-      const payload = JSON.parse(result);
-
-      assert.oneOf(payload.status, ["completed", "completed_with_warnings"]);
-      assert.include(plannerPaperText, "Explicit group-library evidence");
-      assert.deepInclude(importOptions[0], {
-        parentItemID: explicitPaper.id,
-        title: "Explicit group-library paper - PaperChat PPT",
-      });
-      assert.notProperty(importOptions[0], "libraryID");
+      assert.equal(
+        result,
+        "Error: The presentation source does not match the paper authorized by the user.",
+      );
+      assert.equal(plannerPaperText, "");
+      assert.lengthOf(importOptions, 0);
     } finally {
       resetPresentationRendererForTests();
       runtime.Services = previousServices;
       runtime.IOUtils = previousIOUtils;
       runtime.PathUtils = previousPathUtils;
+      runtime.ztoolkit = previousZtoolkit;
+    }
+  });
+
+  it("refuses direct presentation execution without a guarded launch authorization", async function () {
+    const runtime = globalThis as any;
+    const previousZtoolkit = runtime.ztoolkit;
+    runtime.ztoolkit = { log: () => undefined };
+    try {
+      const manager = new PdfToolManager();
+      const result = await manager.executeToolCall(
+        {
+          id: "unguarded-presentation",
+          type: "function",
+          function: {
+            name: "presentation",
+            arguments: JSON.stringify({ sourceItemKey: "CURRENT1" }),
+          },
+        },
+        undefined,
+        { sourceItemKey: "CURRENT1" },
+        "CURRENT1",
+        {
+          paperSource: { itemKey: "CURRENT1", libraryID: 1 },
+        },
+      );
+
+      assert.equal(
+        result,
+        "Error: Presentation generation must be started from a PaperChat PPT entry after its balance check and confirmation.",
+      );
+    } finally {
+      runtime.ztoolkit = previousZtoolkit;
+    }
+  });
+
+  it("consumes one authorization after a successful full-deck attempt", function () {
+    const authorization = createPresentationLaunchAuthorization({
+      itemKey: "CURRENT1",
+      libraryID: 1,
+    });
+
+    assert.deepEqual(beginPresentationAuthorizationAttempt(authorization), {
+      allowed: true,
+      attempt: 1,
+    });
+    finishPresentationAuthorizationAttempt(authorization, "completed");
+    assert.deepEqual(beginPresentationAuthorizationAttempt(authorization), {
+      allowed: false,
+      reason: "already_completed",
+    });
+  });
+
+  it("bounds retryable presentation attempts at the executor boundary", async function () {
+    const runtime = globalThis as any;
+    const previousZtoolkit = runtime.ztoolkit;
+    runtime.ztoolkit = { log: () => undefined };
+    const manager = new PdfToolManager() as any;
+    let extractionCalls = 0;
+    let plannerCalls = 0;
+    manager.extractAndParsePaper = async () => {
+      extractionCalls += 1;
+      return {
+        metadata: { title: "Paper" },
+        sections: [],
+        fullText: "Evidence",
+        pages: [],
+        pageCount: 1,
+      };
+    };
+    const authorization = createPresentationLaunchAuthorization({
+      itemKey: "CURRENT1",
+      libraryID: 1,
+    });
+    const executionContext = {
+      paperSource: { itemKey: "CURRENT1", libraryID: 1 },
+      presentationAuthorization: authorization,
+      presentationPlanner: async () => {
+        plannerCalls += 1;
+        throw new Error(`planner failure ${plannerCalls}`);
+      },
+    };
+    const toolCall = {
+      id: "retryable-presentation",
+      type: "function" as const,
+      function: {
+        name: "presentation",
+        arguments: JSON.stringify({ sourceItemKey: "CURRENT1" }),
+      },
+    };
+
+    try {
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        const result = await manager.executeToolCall(
+          toolCall,
+          undefined,
+          { sourceItemKey: "CURRENT1" },
+          "CURRENT1",
+          executionContext,
+        );
+        assert.include(result, "Presentation internal planning failed");
+        assert.include(result, "Retryable: yes");
+      }
+      const blocked = await manager.executeToolCall(
+        toolCall,
+        undefined,
+        { sourceItemKey: "CURRENT1" },
+        "CURRENT1",
+        executionContext,
+      );
+
+      assert.include(
+        blocked,
+        "Presentation launch authorization cannot start another deck",
+      );
+      assert.include(blocked, "Retryable: no");
+      assert.equal(extractionCalls, 3);
+      assert.equal(plannerCalls, 3);
+    } finally {
       runtime.ztoolkit = previousZtoolkit;
     }
   });
