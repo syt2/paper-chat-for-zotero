@@ -5,6 +5,7 @@ export {
 } from "./ToolMetadataRegistry";
 export type {
   ToolExecutor,
+  ToolSchedulerExecutionContext,
   ToolSchedulerExecutionHooks,
   ToolSchedulerRequest,
 } from "./ToolScheduler";

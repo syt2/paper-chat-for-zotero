@@ -11,7 +11,7 @@ import { getErrorMessage } from "../../../utils/common";
 
 const DB_DIR = "paper-chat";
 const DB_FILE = "storage";
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = 15;
 
 /** Build absolute DB path so Zotero.DBConnection doesn't parse subdirectory names */
 function getDBPath(): string {
@@ -153,6 +153,7 @@ export class StorageDatabase {
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         last_active_item_key TEXT,
+        last_active_item_library_id INTEGER,
         scope_item_keys TEXT,
         scope_label TEXT,
         context_summary TEXT,
@@ -250,6 +251,7 @@ export class StorageDatabase {
         tool_call_id TEXT,
         evidence TEXT,
         source_item_keys TEXT,
+        presentation_artifacts TEXT,
         streaming_state TEXT,
         api_only INTEGER,
         is_system_notice INTEGER,
@@ -440,10 +442,17 @@ export class StorageDatabase {
         (column: any) => String(column.name),
       ),
     );
+    const sessionColumns = new Set(
+      ((await db.queryAsync("PRAGMA table_info(sessions)")) || []).map(
+        (column: any) => String(column.name),
+      ),
+    );
     return (
       messageColumns.has("evidence") &&
       messageColumns.has("quoted_messages") &&
-      messageColumns.has("source_item_keys")
+      messageColumns.has("source_item_keys") &&
+      messageColumns.has("presentation_artifacts") &&
+      sessionColumns.has("last_active_item_library_id")
     );
   }
 
@@ -526,6 +535,14 @@ export class StorageDatabase {
         await this.upgradeToV13(db);
         currentVersion = 13;
       }
+      if (currentVersion < 14) {
+        await this.upgradeToV14(db);
+        currentVersion = 14;
+      }
+      if (currentVersion < 15) {
+        await this.upgradeToV15(db);
+        currentVersion = 15;
+      }
       if (
         currentVersion === SCHEMA_VERSION &&
         !(await this.hasCurrentSchemaColumns(db))
@@ -536,6 +553,8 @@ export class StorageDatabase {
         await this.upgradeToV10(db);
         await this.upgradeToV12(db);
         await this.upgradeToV13(db);
+        await this.upgradeToV14(db);
+        await this.upgradeToV15(db);
       }
     }
   }
@@ -1337,6 +1356,78 @@ export class StorageDatabase {
       }
       ztoolkit.log(
         "[StorageDatabase] Failed to upgrade to v13:",
+        getErrorMessage(error),
+      );
+      throw error;
+    }
+  }
+
+  /** Upgrade schema v13 -> v14: persist app-owned presentation artifacts. */
+  private async upgradeToV14(db: ZoteroDBConnection): Promise<void> {
+    ztoolkit.log("[StorageDatabase] Upgrading schema v13 -> v14...");
+
+    await db.queryAsync("BEGIN TRANSACTION");
+    try {
+      const messageColumns = new Set(
+        ((await db.queryAsync("PRAGMA table_info(messages)")) || []).map(
+          (column: any) => String(column.name),
+        ),
+      );
+      if (!messageColumns.has("presentation_artifacts")) {
+        await db.queryAsync(
+          "ALTER TABLE messages ADD COLUMN presentation_artifacts TEXT",
+        );
+      }
+      await db.queryAsync(
+        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
+        [14, Date.now()],
+      );
+      await db.queryAsync("COMMIT");
+      ztoolkit.log("[StorageDatabase] Schema upgraded to v14");
+    } catch (error) {
+      try {
+        await db.queryAsync("ROLLBACK");
+      } catch {
+        /* ignore */
+      }
+      ztoolkit.log(
+        "[StorageDatabase] Failed to upgrade to v14:",
+        getErrorMessage(error),
+      );
+      throw error;
+    }
+  }
+
+  /** Upgrade schema v14 -> v15: preserve the Zotero library owning a paper. */
+  private async upgradeToV15(db: ZoteroDBConnection): Promise<void> {
+    ztoolkit.log("[StorageDatabase] Upgrading schema v14 -> v15...");
+
+    await db.queryAsync("BEGIN TRANSACTION");
+    try {
+      const sessionColumns = new Set(
+        ((await db.queryAsync("PRAGMA table_info(sessions)")) || []).map(
+          (column: any) => String(column.name),
+        ),
+      );
+      if (!sessionColumns.has("last_active_item_library_id")) {
+        await db.queryAsync(
+          "ALTER TABLE sessions ADD COLUMN last_active_item_library_id INTEGER",
+        );
+      }
+      await db.queryAsync(
+        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
+        [15, Date.now()],
+      );
+      await db.queryAsync("COMMIT");
+      ztoolkit.log("[StorageDatabase] Schema upgraded to v15");
+    } catch (error) {
+      try {
+        await db.queryAsync("ROLLBACK");
+      } catch {
+        /* ignore */
+      }
+      ztoolkit.log(
+        "[StorageDatabase] Failed to upgrade to v15:",
         getErrorMessage(error),
       );
       throw error;

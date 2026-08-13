@@ -76,6 +76,12 @@ function cloneMessage(
     sourceItemKeys: message.sourceItemKeys
       ? [...message.sourceItemKeys]
       : undefined,
+    presentationArtifacts: message.presentationArtifacts?.map((artifact) => ({
+      ...artifact,
+      previewPaths: artifact.previewPaths
+        ? [...artifact.previewPaths]
+        : undefined,
+    })),
   };
 }
 

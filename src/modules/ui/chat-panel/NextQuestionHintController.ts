@@ -501,12 +501,17 @@ function buildReadingContext(
 ): NextQuestionHintReadingContext | undefined {
   const activeReaderContext = readActiveReaderContext();
   const item =
-    getItemByLibraryKey(session.lastActiveItemKey) ||
+    getItemByLibraryKey(
+      session.lastActiveItemKey,
+      session.lastActiveItemLibraryID,
+    ) ||
     resolveTopLevelItem(context.getCurrentItem()) ||
     activeReaderContext.item;
   const canUseActiveReaderContext =
     !!activeReaderContext.item &&
-    (!item?.key || activeReaderContext.item.key === item.key);
+    (!item?.key ||
+      (activeReaderContext.item.key === item.key &&
+        activeReaderContext.item.libraryID === item.libraryID));
   const readerProgress = canUseActiveReaderContext
     ? activeReaderContext.progress
     : undefined;
@@ -551,12 +556,12 @@ function buildItemReadingContext(
 
 function getItemByLibraryKey(
   itemKey: string | null | undefined,
+  libraryID: number = Zotero.Libraries.userLibraryID,
 ): Zotero.Item | null {
   if (!itemKey) {
     return null;
   }
   try {
-    const libraryID = Zotero.Libraries.userLibraryID;
     const item = Zotero.Items.getByLibraryAndKey(libraryID, itemKey) as
       | Zotero.Item
       | false;

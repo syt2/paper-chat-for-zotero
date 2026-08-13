@@ -6,12 +6,80 @@ import {
 } from "../src/modules/presentation/PresentationVisualReview.ts";
 import {
   executePresentationCapability,
+  isPathInsidePresentationRoot,
   resetPresentationRendererForTests,
 } from "../src/modules/presentation/index.ts";
+import { isTrustedPresentationPreviewPath } from "../src/modules/presentation/PresentationCapability.ts";
 import { PRESENTATION_RENDERER_GLOBAL } from "../src/modules/presentation/contracts.ts";
 import { validatePresentationQuality } from "../src/modules/presentation/PresentationQualityGate.ts";
 
 describe("presentation visual review", function () {
+  it("accepts preview images only below the PaperChat presentations root across platforms", function () {
+    assert.isTrue(
+      isTrustedPresentationPreviewPath(
+        "/zotero-data/paper-chat/presentations/deck-previews/generation-01-slide-01.png",
+        "/zotero-data/paper-chat/presentations",
+      ),
+    );
+    assert.isFalse(
+      isTrustedPresentationPreviewPath(
+        "/zotero-data/paper-chat/presentations-elsewhere/slide-01.png",
+        "/zotero-data/paper-chat/presentations",
+      ),
+    );
+    assert.isFalse(
+      isTrustedPresentationPreviewPath(
+        "/zotero-data/paper-chat/presentations/deck-previews/../../outside.png",
+        "/zotero-data/paper-chat/presentations",
+      ),
+    );
+    assert.isTrue(
+      isTrustedPresentationPreviewPath(
+        "c:\\Zotero\\paper-chat\\presentations\\deck-previews\\generation-02-slide-01.PNG",
+        "C:\\Zotero\\paper-chat\\presentations",
+      ),
+    );
+    assert.isFalse(
+      isTrustedPresentationPreviewPath(
+        "C:\\Zotero\\paper-chat\\presentations-old\\slide-01.png",
+        "C:\\Zotero\\paper-chat\\presentations",
+      ),
+    );
+    assert.isTrue(
+      isTrustedPresentationPreviewPath(
+        "\\\\Server\\Zotero\\paper-chat\\presentations\\deck-previews\\generation-03-slide-01.png",
+        "\\\\server\\zotero\\paper-chat\\presentations",
+      ),
+    );
+  });
+
+  it("authorizes PPTX paths without prefix, traversal, or Windows case bypasses", function () {
+    assert.isTrue(
+      isPathInsidePresentationRoot(
+        "/zotero-data/paper-chat/presentations/deck.pptx",
+        "/zotero-data/paper-chat/presentations",
+      ),
+    );
+    assert.isFalse(
+      isPathInsidePresentationRoot(
+        "/zotero-data/paper-chat/presentations-old/deck.pptx",
+        "/zotero-data/paper-chat/presentations",
+      ),
+    );
+    assert.isFalse(
+      isPathInsidePresentationRoot(
+        "/zotero-data/paper-chat/presentations/../../deck.pptx",
+        "/zotero-data/paper-chat/presentations",
+      ),
+    );
+    assert.isTrue(
+      isPathInsidePresentationRoot(
+        "\\\\SERVER\\Zotero\\Storage\\ABCD\\deck.pptx",
+        "\\\\server\\zotero\\storage",
+      ),
+    );
+  });
+
   it("parses a fenced review and applies only bounded presentation patches", function () {
     const review = parsePresentationVisualReviewResponse(`\n\`\`\`json\n{
       "verdict": "revise",
@@ -200,7 +268,9 @@ describe("presentation visual review", function () {
     const previousPathUtils = runtime.PathUtils;
     const target: Record<string, unknown> = {};
     const renderedTitles: string[] = [];
-    const writes: Uint8Array[] = [];
+    const writes: Array<{ path: string; bytes: Uint8Array }> = [];
+    const removedPaths: string[] = [];
+    const progressUpdates: any[] = [];
     let renderCount = 0;
     runtime.Zotero = {
       DataDirectory: { dir: "/zotero-data" },
@@ -232,7 +302,12 @@ describe("presentation visual review", function () {
     };
     runtime.IOUtils = {
       makeDirectory: async () => undefined,
-      write: async (_path: string, bytes: Uint8Array) => writes.push(bytes),
+      write: async (path: string, bytes: Uint8Array) => {
+        writes.push({ path, bytes });
+      },
+      remove: async (path: string) => {
+        removedPaths.push(path);
+      },
     };
     runtime.PathUtils = {
       join: (...parts: string[]) => parts.join("/"),
@@ -272,6 +347,9 @@ describe("presentation visual review", function () {
               }
             : { verdict: "pass", summary: "Presentation-ready." };
         },
+        undefined,
+        undefined,
+        async (update) => progressUpdates.push(update),
       );
 
       assert.equal(reviewRound, 2);
@@ -280,10 +358,259 @@ describe("presentation visual review", function () {
         "The original claim",
         "The evidence is decisive",
       ]);
-      assert.lengthOf(writes, 1);
-      assert.equal(writes[0][3], 2);
+      const pptxWrites = writes.filter(({ path }) => path.endsWith(".pptx"));
+      const pngWrites = writes.filter(({ path }) => path.endsWith(".png"));
+      assert.lengthOf(pptxWrites, 2);
+      assert.equal(pptxWrites[0].bytes[3], 1);
+      assert.equal(pptxWrites[1].bytes[3], 2);
+      assert.equal(pptxWrites[0].path, pptxWrites[1].path);
+      assert.lengthOf(pngWrites, 4);
+      assert.equal(new Set(pngWrites.map(({ path }) => path)).size, 4);
+      assert.match(
+        pngWrites[0].path,
+        /-previews\/generation-01-slide-01\.png$/,
+      );
+      assert.match(
+        pngWrites[2].path,
+        /-previews\/generation-02-slide-01\.png$/,
+      );
+      assert.deepEqual(
+        progressUpdates.slice(0, 4).map(({ phase }) => phase),
+        ["analyzing", "planning", "resolving_media", "rendering"],
+      );
+      assert.includeMembers(
+        progressUpdates.map(({ phase }) => phase),
+        ["reviewing", "repairing", "exporting", "attaching", "completed"],
+      );
+      const draftReady = progressUpdates.find(
+        ({ pptxPath, previewPaths, isDraft }) =>
+          pptxPath && previewPaths?.length === 2 && isDraft === true,
+      );
+      assert.match(draftReady.pptxPath, /\/presentations\/.*\.pptx$/);
+      assert.match(
+        draftReady.previewPaths[0],
+        /-previews\/generation-01-slide-01\.png$/,
+      );
+      assert.notMatch(
+        JSON.stringify(progressUpdates),
+        /data:image\/png;base64/,
+      );
+      const payload = JSON.parse(result);
+      assert.equal(payload.draftPath, payload.path);
+      assert.lengthOf(payload.previewPaths, 2);
+      assert.match(
+        payload.previewPaths[0],
+        /-previews\/generation-02-slide-01\.png$/,
+      );
+      assert.lengthOf(removedPaths, 2);
+      assert.isTrue(
+        removedPaths.every((path) => path.includes("generation-01-slide-")),
+      );
+      assert.isFalse(
+        removedPaths.some((path) => path.includes("generation-02-slide-")),
+      );
       assert.include(result, '"visualReview":"passed"');
       assert.include(result, '"visualReviewRounds":2');
+    } finally {
+      resetPresentationRendererForTests();
+      runtime.Zotero = previousZotero;
+      runtime.Services = previousServices;
+      runtime.IOUtils = previousIOUtils;
+      runtime.PathUtils = previousPathUtils;
+    }
+  });
+
+  it("exports without previews when preview rendering transport fails in advisory mode", async function () {
+    const runtime = globalThis as any;
+    const previousZotero = runtime.Zotero;
+    const previousServices = runtime.Services;
+    const previousIOUtils = runtime.IOUtils;
+    const previousPathUtils = runtime.PathUtils;
+    const target: Record<string, unknown> = {};
+    const pptxWrites: Uint8Array[] = [];
+    let fallbackRenderCount = 0;
+    runtime.Zotero = {
+      DataDirectory: { dir: "/zotero-data" },
+      getMainWindow: () => target,
+    };
+    runtime.Services = {
+      scriptloader: {
+        loadSubScript: () => {
+          target[PRESENTATION_RENDERER_GLOBAL] = {
+            renderPresentation: async () => {
+              fallbackRenderCount += 1;
+              return new Uint8Array([0x50, 0x4b, 3, 9]);
+            },
+            renderPresentationWithPreview: async () => {
+              throw new Error("preview transport unavailable");
+            },
+          };
+        },
+      },
+    };
+    runtime.IOUtils = {
+      makeDirectory: async () => undefined,
+      write: async (path: string, bytes: Uint8Array) => {
+        if (path.endsWith(".pptx")) pptxWrites.push(bytes);
+      },
+    };
+    runtime.PathUtils = {
+      join: (...parts: string[]) => parts.join("/"),
+      filename: (path: string) => path.split("/").pop(),
+    };
+    try {
+      resetPresentationRendererForTests();
+      const result = await executePresentationCapability(
+        {
+          title: "Preview transport fallback",
+          slides: [
+            {
+              title: "The evidence remains editable",
+              metrics: [{ value: "24%", label: "relative improvement" }],
+            },
+          ],
+        },
+        async ({ previewSlides }) => {
+          assert.deepEqual(previewSlides, []);
+          return { verdict: "pass", summary: "PPTX fallback is usable." };
+        },
+      );
+
+      const payload = JSON.parse(result);
+      assert.equal(payload.status, "completed_with_warnings");
+      assert.equal(payload.visualReview, "warnings");
+      assert.include(
+        payload.visualReviewSummary,
+        "preview transport unavailable",
+      );
+      assert.deepEqual(payload.previewPaths, []);
+      assert.equal(fallbackRenderCount, 1);
+      assert.lengthOf(pptxWrites, 1);
+      assert.equal(pptxWrites[0][3], 9);
+
+      const strictResult = await executePresentationCapability(
+        {
+          title: "Strict preview transport failure",
+          slides: [
+            {
+              title: "The evidence remains editable",
+              metrics: [{ value: "24%", label: "relative improvement" }],
+            },
+          ],
+        },
+        async () => ({ verdict: "pass", summary: "Not reached." }),
+        undefined,
+        undefined,
+        undefined,
+        { strictQualityGate: true },
+      );
+
+      assert.match(strictResult, /^Error: Presentation generation failed/);
+      assert.include(strictResult, "preview transport unavailable");
+      assert.equal(fallbackRenderCount, 1);
+      assert.lengthOf(pptxWrites, 1);
+    } finally {
+      resetPresentationRendererForTests();
+      runtime.Zotero = previousZotero;
+      runtime.Services = previousServices;
+      runtime.IOUtils = previousIOUtils;
+      runtime.PathUtils = previousPathUtils;
+    }
+  });
+
+  it("exports PPTX bytes but omits an incomplete preview set in advisory mode", async function () {
+    const runtime = globalThis as any;
+    const previousZotero = runtime.Zotero;
+    const previousServices = runtime.Services;
+    const previousIOUtils = runtime.IOUtils;
+    const previousPathUtils = runtime.PathUtils;
+    const target: Record<string, unknown> = {};
+    const writes: Array<{ path: string; bytes: Uint8Array }> = [];
+    runtime.Zotero = {
+      DataDirectory: { dir: "/zotero-data" },
+      getMainWindow: () => target,
+    };
+    runtime.Services = {
+      scriptloader: {
+        loadSubScript: () => {
+          target[PRESENTATION_RENDERER_GLOBAL] = {
+            renderPresentation: async () => new Uint8Array([0x50, 0x4b, 3, 8]),
+            renderPresentationWithPreview: async () => ({
+              bytes: new Uint8Array([0x50, 0x4b, 3, 7]),
+              previewSlides: ["data:image/png;base64,AAAA"],
+            }),
+          };
+        },
+      },
+    };
+    runtime.IOUtils = {
+      makeDirectory: async () => undefined,
+      write: async (path: string, bytes: Uint8Array) => {
+        writes.push({ path, bytes });
+      },
+    };
+    runtime.PathUtils = {
+      join: (...parts: string[]) => parts.join("/"),
+      filename: (path: string) => path.split("/").pop(),
+    };
+    try {
+      resetPresentationRendererForTests();
+      const result = await executePresentationCapability(
+        {
+          title: "Incomplete preview fallback",
+          slides: [
+            {
+              title: "The evidence remains editable",
+              metrics: [{ value: "24%", label: "relative improvement" }],
+            },
+          ],
+        },
+        async ({ previewSlides }) => {
+          assert.deepEqual(previewSlides, []);
+          return { verdict: "pass", summary: "PPTX bytes are usable." };
+        },
+      );
+
+      const payload = JSON.parse(result);
+      assert.equal(payload.status, "completed_with_warnings");
+      assert.equal(payload.visualReview, "warnings");
+      assert.include(
+        payload.visualReviewSummary,
+        "visual preview produced 1 slides; expected 2",
+      );
+      assert.deepEqual(payload.previewPaths, []);
+      const pptxWrites = writes.filter(({ path }) => path.endsWith(".pptx"));
+      const pngWrites = writes.filter(({ path }) => path.endsWith(".png"));
+      assert.lengthOf(pptxWrites, 1);
+      assert.equal(pptxWrites[0].bytes[3], 7);
+      assert.lengthOf(pngWrites, 0);
+
+      const strictResult = await executePresentationCapability(
+        {
+          title: "Strict incomplete preview",
+          slides: [
+            {
+              title: "The evidence remains editable",
+              metrics: [{ value: "24%", label: "relative improvement" }],
+            },
+          ],
+        },
+        async () => ({ verdict: "pass", summary: "Not reached." }),
+        undefined,
+        undefined,
+        undefined,
+        { strictQualityGate: true },
+      );
+
+      assert.match(strictResult, /^Error: Presentation generation failed/);
+      assert.include(
+        strictResult,
+        "visual preview produced 1 slides; expected 2",
+      );
+      assert.lengthOf(
+        writes.filter(({ path }) => path.endsWith(".pptx")),
+        1,
+      );
     } finally {
       resetPresentationRendererForTests();
       runtime.Zotero = previousZotero;
@@ -330,7 +657,7 @@ describe("presentation visual review", function () {
     );
   });
 
-  it("does not write a deck when visual review rejects and no full replan is available", async function () {
+  it("keeps recoverable drafts when the explicit strict seam rejects visual review", async function () {
     const runtime = globalThis as any;
     const previousZotero = runtime.Zotero;
     const previousServices = runtime.Services;
@@ -360,8 +687,8 @@ describe("presentation visual review", function () {
     };
     runtime.IOUtils = {
       makeDirectory: async () => undefined,
-      write: async () => {
-        writeCount += 1;
+      write: async (path: string) => {
+        if (path.endsWith(".pptx")) writeCount += 1;
       },
     };
     runtime.PathUtils = {
@@ -391,6 +718,10 @@ describe("presentation visual review", function () {
                 verdict: "reject",
                 summary: "The evidence is still too small.",
               },
+        undefined,
+        undefined,
+        undefined,
+        { strictQualityGate: true },
       );
 
       assert.match(result, /^Error: Presentation generation failed/);
@@ -398,7 +729,7 @@ describe("presentation visual review", function () {
         result,
         "no full structural replan was available: Final visual review did not approve the deck: The evidence is still too small.",
       );
-      assert.equal(writeCount, 0);
+      assert.equal(writeCount, 2);
 
       const draftRejectedResult = await executePresentationCapability(
         {
@@ -414,6 +745,10 @@ describe("presentation visual review", function () {
           verdict: "reject",
           summary: "The composition is too repetitive.",
         }),
+        undefined,
+        undefined,
+        undefined,
+        { strictQualityGate: true },
       );
 
       assert.match(
@@ -424,7 +759,7 @@ describe("presentation visual review", function () {
         draftRejectedResult,
         "no full structural replan was available: Draft visual review rejected the deck: The composition is too repetitive.",
       );
-      assert.equal(writeCount, 0);
+      assert.equal(writeCount, 3);
     } finally {
       resetPresentationRendererForTests();
       runtime.Zotero = previousZotero;
@@ -467,8 +802,8 @@ describe("presentation visual review", function () {
     };
     runtime.IOUtils = {
       makeDirectory: async () => undefined,
-      write: async () => {
-        writeCount += 1;
+      write: async (path: string) => {
+        if (path.endsWith(".pptx")) writeCount += 1;
       },
     };
     runtime.PathUtils = {
@@ -545,8 +880,8 @@ describe("presentation visual review", function () {
     };
     runtime.IOUtils = {
       makeDirectory: async () => undefined,
-      write: async () => {
-        writeCount += 1;
+      write: async (path: string) => {
+        if (path.endsWith(".pptx")) writeCount += 1;
       },
     };
     runtime.PathUtils = {
@@ -624,8 +959,8 @@ describe("presentation visual review", function () {
     };
     runtime.IOUtils = {
       makeDirectory: async () => undefined,
-      write: async () => {
-        writeCount += 1;
+      write: async (path: string) => {
+        if (path.endsWith(".pptx")) writeCount += 1;
       },
     };
     runtime.PathUtils = {
@@ -722,8 +1057,8 @@ describe("presentation visual review", function () {
     };
     runtime.IOUtils = {
       makeDirectory: async () => undefined,
-      write: async () => {
-        writeCount += 1;
+      write: async (path: string) => {
+        if (path.endsWith(".pptx")) writeCount += 1;
       },
     };
     runtime.PathUtils = {
@@ -777,6 +1112,7 @@ describe("presentation visual review", function () {
     const previousPathUtils = runtime.PathUtils;
     const target: Record<string, unknown> = {};
     const writes: Uint8Array[] = [];
+    const attemptedPreviewRemovals: string[] = [];
     let renderCount = 0;
     runtime.__env__ = "production";
     runtime.Zotero = {
@@ -787,7 +1123,10 @@ describe("presentation visual review", function () {
       scriptloader: {
         loadSubScript: () => {
           target[PRESENTATION_RENDERER_GLOBAL] = {
-            renderPresentation: async () => new Uint8Array([0x50, 0x4b, 3, 1]),
+            renderPresentation: async () => {
+              if (renderCount > 1) throw new Error("repair renderer failed");
+              return new Uint8Array([0x50, 0x4b, 3, 1]);
+            },
             renderPresentationWithPreview: async () => {
               renderCount += 1;
               if (renderCount > 1) throw new Error("repair renderer failed");
@@ -805,9 +1144,13 @@ describe("presentation visual review", function () {
     };
     runtime.IOUtils = {
       makeDirectory: async () => undefined,
-      write: async (_path: string, bytes: Uint8Array) => {
-        writes.push(bytes);
+      write: async (path: string, bytes: Uint8Array) => {
+        if (path.endsWith(".pptx")) writes.push(bytes);
         return bytes.length;
+      },
+      remove: async (path: string) => {
+        attemptedPreviewRemovals.push(path);
+        throw new Error("preview cleanup unavailable");
       },
     };
     runtime.PathUtils = {
@@ -839,6 +1182,228 @@ describe("presentation visual review", function () {
       assert.include(payload.visualReviewSummary, "repair renderer failed");
       assert.lengthOf(writes, 1);
       assert.equal(writes[0][3], 1);
+      assert.deepEqual(attemptedPreviewRemovals, []);
+    } finally {
+      resetPresentationRendererForTests();
+      runtime.Zotero = previousZotero;
+      runtime.Services = previousServices;
+      runtime.IOUtils = previousIOUtils;
+      runtime.PathUtils = previousPathUtils;
+      if (hadEnv) runtime.__env__ = previousEnv;
+      else delete runtime.__env__;
+    }
+  });
+
+  it("restores the last usable production deck when a visual revision fails final review", async function () {
+    const runtime = globalThis as any;
+    const previousEnv = runtime.__env__;
+    const hadEnv = Object.prototype.hasOwnProperty.call(runtime, "__env__");
+    const previousZotero = runtime.Zotero;
+    const previousServices = runtime.Services;
+    const previousIOUtils = runtime.IOUtils;
+    const previousPathUtils = runtime.PathUtils;
+    const target: Record<string, unknown> = {};
+    const diskWrites = new Map<string, Uint8Array>();
+    const pptxWrites: Uint8Array[] = [];
+    const attemptedPreviewRemovals: string[] = [];
+    let renderCount = 0;
+    runtime.__env__ = "production";
+    runtime.Zotero = {
+      DataDirectory: { dir: "/zotero-data" },
+      getMainWindow: () => target,
+    };
+    runtime.Services = {
+      scriptloader: {
+        loadSubScript: () => {
+          target[PRESENTATION_RENDERER_GLOBAL] = {
+            renderPresentation: async () =>
+              new Uint8Array([0x50, 0x4b, 3, renderCount || 1]),
+            renderPresentationWithPreview: async () => {
+              renderCount += 1;
+              return {
+                bytes: new Uint8Array([0x50, 0x4b, 3, renderCount]),
+                previewSlides: [
+                  "data:image/png;base64,AAAA",
+                  "data:image/png;base64,BBBB",
+                ],
+              };
+            },
+          };
+        },
+      },
+    };
+    runtime.IOUtils = {
+      makeDirectory: async () => undefined,
+      write: async (path: string, bytes: Uint8Array) => {
+        const snapshot = new Uint8Array(bytes);
+        diskWrites.set(path, snapshot);
+        if (path.endsWith(".pptx")) pptxWrites.push(snapshot);
+        return bytes.length;
+      },
+      remove: async (path: string) => {
+        attemptedPreviewRemovals.push(path);
+        throw new Error("preview cleanup unavailable");
+      },
+    };
+    runtime.PathUtils = {
+      join: (...parts: string[]) => parts.join("/"),
+      filename: (path: string) => path.split("/").pop(),
+    };
+    let reviewRound = 0;
+    try {
+      resetPresentationRendererForTests();
+      const result = await executePresentationCapability(
+        {
+          title: "Final-review fallback deck",
+          slides: [
+            {
+              title: "The usable original claim",
+              metrics: [{ value: "24%", label: "relative improvement" }],
+            },
+          ],
+        },
+        async ({ stage }) => {
+          reviewRound += 1;
+          if (reviewRound === 1) {
+            assert.equal(stage, "draft");
+            return {
+              verdict: "revise",
+              summary: "Try one bounded title repair.",
+              patches: [{ slideNumber: 2, title: "Revised claim" }],
+            };
+          }
+          assert.equal(stage, "final");
+          return {
+            verdict: "reject",
+            summary: "The revision made the evidence harder to read.",
+          };
+        },
+      );
+
+      if (result.startsWith("Error:")) throw new Error(result);
+      const payload = JSON.parse(result);
+      assert.equal(payload.status, "completed_with_warnings");
+      assert.include(
+        payload.visualReviewSummary,
+        "The revision made the evidence harder to read",
+      );
+      assert.match(
+        payload.previewPaths[0],
+        /-previews\/generation-01-slide-01\.png$/,
+      );
+      assert.equal(diskWrites.get(payload.path)?.[3], 1);
+      assert.deepEqual(
+        pptxWrites.map((bytes) => bytes[3]),
+        [1, 2, 1],
+      );
+      assert.lengthOf(attemptedPreviewRemovals, 2);
+      assert.isTrue(
+        attemptedPreviewRemovals.every((path) =>
+          path.includes("generation-02-slide-"),
+        ),
+      );
+    } finally {
+      resetPresentationRendererForTests();
+      runtime.Zotero = previousZotero;
+      runtime.Services = previousServices;
+      runtime.IOUtils = previousIOUtils;
+      runtime.PathUtils = previousPathUtils;
+      if (hadEnv) runtime.__env__ = previousEnv;
+      else delete runtime.__env__;
+    }
+  });
+
+  it("restores the last usable production deck when final visual review throws", async function () {
+    const runtime = globalThis as any;
+    const previousEnv = runtime.__env__;
+    const hadEnv = Object.prototype.hasOwnProperty.call(runtime, "__env__");
+    const previousZotero = runtime.Zotero;
+    const previousServices = runtime.Services;
+    const previousIOUtils = runtime.IOUtils;
+    const previousPathUtils = runtime.PathUtils;
+    const target: Record<string, unknown> = {};
+    const diskWrites = new Map<string, Uint8Array>();
+    const pptxWrites: number[] = [];
+    let renderCount = 0;
+    runtime.__env__ = "production";
+    runtime.Zotero = {
+      DataDirectory: { dir: "/zotero-data" },
+      getMainWindow: () => target,
+    };
+    runtime.Services = {
+      scriptloader: {
+        loadSubScript: () => {
+          target[PRESENTATION_RENDERER_GLOBAL] = {
+            renderPresentation: async () =>
+              new Uint8Array([0x50, 0x4b, 3, renderCount || 1]),
+            renderPresentationWithPreview: async () => {
+              renderCount += 1;
+              return {
+                bytes: new Uint8Array([0x50, 0x4b, 3, renderCount]),
+                previewSlides: [
+                  "data:image/png;base64,AAAA",
+                  "data:image/png;base64,BBBB",
+                ],
+              };
+            },
+          };
+        },
+      },
+    };
+    runtime.IOUtils = {
+      makeDirectory: async () => undefined,
+      write: async (path: string, bytes: Uint8Array) => {
+        const snapshot = new Uint8Array(bytes);
+        diskWrites.set(path, snapshot);
+        if (path.endsWith(".pptx")) pptxWrites.push(snapshot[3]);
+        return bytes.length;
+      },
+    };
+    runtime.PathUtils = {
+      join: (...parts: string[]) => parts.join("/"),
+      filename: (path: string) => path.split("/").pop(),
+    };
+    let reviewRound = 0;
+    try {
+      resetPresentationRendererForTests();
+      const result = await executePresentationCapability(
+        {
+          title: "Final-review exception fallback deck",
+          slides: [
+            {
+              title: "The usable original claim",
+              metrics: [{ value: "24%", label: "relative improvement" }],
+            },
+          ],
+        },
+        async ({ stage }) => {
+          reviewRound += 1;
+          if (reviewRound === 1) {
+            assert.equal(stage, "draft");
+            return {
+              verdict: "revise",
+              summary: "Try one bounded title repair.",
+              patches: [{ slideNumber: 2, title: "Revised claim" }],
+            };
+          }
+          assert.equal(stage, "final");
+          throw new Error("visual reviewer transport stopped");
+        },
+      );
+
+      if (result.startsWith("Error:")) throw new Error(result);
+      const payload = JSON.parse(result);
+      assert.equal(payload.status, "completed_with_warnings");
+      assert.include(
+        payload.visualReviewSummary,
+        "visual reviewer transport stopped",
+      );
+      assert.match(
+        payload.previewPaths[0],
+        /-previews\/generation-01-slide-01\.png$/,
+      );
+      assert.equal(diskWrites.get(payload.path)?.[3], 1);
+      assert.deepEqual(pptxWrites, [1, 2, 1]);
     } finally {
       resetPresentationRendererForTests();
       runtime.Zotero = previousZotero;
@@ -884,8 +1449,8 @@ describe("presentation visual review", function () {
     };
     runtime.IOUtils = {
       makeDirectory: async () => undefined,
-      write: async () => {
-        writeCount += 1;
+      write: async (path: string) => {
+        if (path.endsWith(".pptx")) writeCount += 1;
       },
     };
     runtime.PathUtils = {
@@ -947,7 +1512,7 @@ describe("presentation visual review", function () {
     }
   });
 
-  it("does not write a deck when required visual review cannot complete", async function () {
+  it("keeps the first draft when the explicit strict seam requires visual review", async function () {
     const runtime = globalThis as any;
     const previousZotero = runtime.Zotero;
     const previousServices = runtime.Services;
@@ -977,8 +1542,8 @@ describe("presentation visual review", function () {
     };
     runtime.IOUtils = {
       makeDirectory: async () => undefined,
-      write: async () => {
-        writeCount += 1;
+      write: async (path: string) => {
+        if (path.endsWith(".pptx")) writeCount += 1;
       },
     };
     runtime.PathUtils = {
@@ -1000,6 +1565,10 @@ describe("presentation visual review", function () {
         async () => {
           throw new Error("review transport unavailable");
         },
+        undefined,
+        undefined,
+        undefined,
+        { strictQualityGate: true },
       );
 
       assert.match(result, /^Error: Presentation generation failed/);
@@ -1008,7 +1577,7 @@ describe("presentation visual review", function () {
         "Presentation visual quality review failed before export",
       );
       assert.include(result, "review transport unavailable");
-      assert.equal(writeCount, 0);
+      assert.equal(writeCount, 1);
     } finally {
       resetPresentationRendererForTests();
       runtime.Zotero = previousZotero;
@@ -1060,8 +1629,8 @@ describe("presentation visual review", function () {
     };
     runtime.IOUtils = {
       makeDirectory: async () => undefined,
-      write: async () => {
-        writeCount += 1;
+      write: async (path: string) => {
+        if (path.endsWith(".pptx")) writeCount += 1;
       },
     };
     runtime.PathUtils = {
@@ -1099,6 +1668,8 @@ describe("presentation visual review", function () {
           pages: [],
           pageCount: 0,
         } as any,
+        undefined,
+        { strictQualityGate: true },
       );
 
       assert.lengthOf(plannerRequests, 3);
@@ -1113,7 +1684,7 @@ describe("presentation visual review", function () {
       assert.include(result, '"visualReview":"passed"');
       assert.include(result, '"visualReviewRounds":2');
       assert.include(result, '"planningRounds":3');
-      assert.equal(writeCount, 1);
+      assert.equal(writeCount, 2);
     } finally {
       resetPresentationRendererForTests();
       runtime.Zotero = previousZotero;
@@ -1159,8 +1730,8 @@ describe("presentation visual review", function () {
     };
     runtime.IOUtils = {
       makeDirectory: async () => undefined,
-      write: async () => {
-        writeCount += 1;
+      write: async (path: string) => {
+        if (path.endsWith(".pptx")) writeCount += 1;
       },
     };
     runtime.PathUtils = {
@@ -1207,6 +1778,8 @@ describe("presentation visual review", function () {
           pages: [],
           pageCount: 0,
         } as any,
+        undefined,
+        { strictQualityGate: true },
       );
 
       assert.match(result, /^Error: Presentation generation failed/);
@@ -1221,7 +1794,7 @@ describe("presentation visual review", function () {
         plannerRequests[1].repair.issues.join("\n"),
         "evidence table is too small",
       );
-      assert.equal(writeCount, 0);
+      assert.equal(writeCount, 2);
     } finally {
       resetPresentationRendererForTests();
       runtime.Zotero = previousZotero;
@@ -1268,8 +1841,8 @@ describe("presentation visual review", function () {
     };
     runtime.IOUtils = {
       makeDirectory: async () => undefined,
-      write: async () => {
-        writeCount += 1;
+      write: async (path: string) => {
+        if (path.endsWith(".pptx")) writeCount += 1;
       },
     };
     runtime.PathUtils = {
@@ -1336,7 +1909,7 @@ describe("presentation visual review", function () {
       assert.deepEqual(reviewStages, ["draft", "draft", "final"]);
       assert.deepEqual(renderedTitles, ["初始", "重规划", "最终修复"]);
       assert.lengthOf(plannerRequests, 2);
-      assert.equal(writeCount, 1);
+      assert.equal(writeCount, 3);
     } finally {
       resetPresentationRendererForTests();
       runtime.Zotero = previousZotero;

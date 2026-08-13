@@ -14,6 +14,7 @@ import type {
   ChatMessageStreamingState,
   ChatSession,
   ExecutionPlan,
+  PresentationToolCardArtifact,
   SendMessageOptions,
   StreamCallbacks,
   SessionMeta,
@@ -227,6 +228,7 @@ export class ChatManager {
   private pdfExtractor: PdfExtractor;
   private currentSession: ChatSession | null = null;
   private currentItemKey: string | null = null;
+  private currentItemLibraryID: number | null = null;
   private initialized: boolean = false;
   private sessionNavigationQueue: Promise<void> = Promise.resolve();
 
@@ -634,7 +636,8 @@ export class ChatManager {
       return null;
     }
 
-    const libraryID = Zotero.Libraries.userLibraryID;
+    const libraryID =
+      session.lastActiveItemLibraryID ?? Zotero.Libraries.userLibraryID;
     return (
       (Zotero.Items.getByLibraryAndKey(libraryID, itemKey) as
         | Zotero.Item
@@ -766,8 +769,14 @@ export class ChatManager {
   /**
    * 设置当前活动的 Item Key (单文档模式，向后兼容)
    */
-  setCurrentItemKey(itemKey: string | null): void {
+  setCurrentItemKey(itemKey: string | null, libraryID?: number | null): void {
     this.currentItemKey = itemKey;
+    this.currentItemLibraryID =
+      itemKey && Number.isSafeInteger(libraryID)
+        ? libraryID!
+        : itemKey
+          ? (Zotero.Libraries?.userLibraryID ?? null)
+          : null;
     getPdfToolManager().setCurrentItemKey(itemKey);
   }
 
@@ -854,7 +863,11 @@ export class ChatManager {
         toolDefinitions = createPendingSearchScopeTools(toolDefinitions);
       }
       const paperStructure = hasCurrentItem
-        ? await pdfToolManager.extractAndParsePaper(item.key)
+        ? await pdfToolManager.extractAndParsePaper(
+            item.key,
+            false,
+            item.libraryID,
+          )
         : undefined;
       const lastUserMessage = messagesForApi
         .filter((message) => message.role === "user")
@@ -1104,6 +1117,9 @@ export class ChatManager {
           sessionId: forkedSessionId,
           messages: forkedMessages,
           lastActiveItemKey,
+          lastActiveItemLibraryID: lastActiveItemKey
+            ? sourceSession.lastActiveItemLibraryID
+            : undefined,
           selectedTier: sourceSession.selectedTier,
           resolvedModelId: sourceSession.resolvedModelId,
           activate: false,
@@ -1573,6 +1589,7 @@ export class ChatManager {
   private async insertItemSwitchNotice(
     newItemKey: string,
     newItemTitle: string,
+    newItemLibraryID: number | undefined,
     session?: ChatSession,
   ): Promise<void> {
     const target = session ?? this.currentSession;
@@ -1589,6 +1606,9 @@ export class ChatManager {
     target.messages.push(notice);
     await this.sessionStorage.insertMessage(target.id, notice);
     target.lastActiveItemKey = newItemKey;
+    target.lastActiveItemLibraryID = Number.isSafeInteger(newItemLibraryID)
+      ? newItemLibraryID
+      : undefined;
   }
 
   /**
@@ -1725,13 +1745,28 @@ export class ChatManager {
     });
 
     try {
-      // 检查是否需要插入 item 切换通知
-      if (itemKey !== sendingSession.lastActiveItemKey) {
+      const itemLibraryID = hasCurrentItem
+        ? Number.isSafeInteger(item!.libraryID)
+          ? item!.libraryID
+          : Zotero.Libraries.userLibraryID
+        : null;
+      const sessionItemLibraryID = sendingSession.lastActiveItemKey
+        ? (sendingSession.lastActiveItemLibraryID ??
+          Zotero.Libraries.userLibraryID)
+        : null;
+      const itemContextChanged =
+        itemKey !== sendingSession.lastActiveItemKey ||
+        (itemKey !== null && itemLibraryID !== sessionItemLibraryID);
+
+      // 检查是否需要插入 item 切换通知。Zotero item key 只在单个
+      // library 内唯一，因此同 key 跨个人库/群组库也必须视为切换。
+      if (itemContextChanged) {
         if (hasCurrentItem) {
           // 切换到新 item
           await this.insertItemSwitchNotice(
             itemKey!,
             itemTitle!,
+            itemLibraryID ?? undefined,
             sendingSession,
           );
         } else if (sendingSession.lastActiveItemKey !== null) {
@@ -1746,6 +1781,7 @@ export class ChatManager {
           sendingSession.messages.push(notice);
           await this.sessionStorage.insertMessage(sendingSession.id, notice);
           sendingSession.lastActiveItemKey = null;
+          sendingSession.lastActiveItemLibraryID = undefined;
         }
       }
 
@@ -1753,6 +1789,7 @@ export class ChatManager {
       // send to its explicit item so retrying an older failed turn cannot run
       // tools against the newly opened paper.
       this.currentItemKey = itemKey;
+      this.currentItemLibraryID = itemLibraryID;
       getPdfToolManager().setCurrentItemKey(itemKey);
 
       // 获取活动的 AI 提供商
@@ -2492,7 +2529,11 @@ export class ChatManager {
 
     // 实时提取论文结构
     const paperStructure = hasPromptPaperContext
-      ? await pdfToolManager.extractAndParsePaper(item.key)
+      ? await pdfToolManager.extractAndParsePaper(
+          item.key,
+          false,
+          item.libraryID,
+        )
       : undefined;
     ensureSendingSessionTracked();
 
@@ -2823,6 +2864,7 @@ export class ChatManager {
           summaryTriggered,
           tools,
           paperStructure,
+          item?.libraryID ?? this.currentItemLibraryID ?? undefined,
           sendingSession,
           sessionRunId,
           runtimePromptBuilder,
@@ -2845,6 +2887,7 @@ export class ChatManager {
           summaryTriggered,
           tools,
           paperStructure,
+          item?.libraryID ?? this.currentItemLibraryID ?? undefined,
           sendingSession,
           sessionRunId,
           runtimePromptBuilder,
@@ -2935,6 +2978,7 @@ export class ChatManager {
       expandStateId?: string;
       resultPreviewMaxLength?: number;
       showResultWhileCalling?: boolean;
+      presentationArtifact?: PresentationToolCardArtifact;
     },
   ): string {
     const statusIcon =
@@ -2974,6 +3018,24 @@ export class ChatManager {
             : resultPreview,
         )
       : "";
+    const artifact = options?.presentationArtifact;
+    const escapedArtifactPath = artifact?.path
+      ? this.escapeXml(artifact.path)
+      : "";
+    const escapedPreviewPaths = (artifact?.previewPaths || [])
+      .filter(
+        (path): path is string => typeof path === "string" && path.length > 0,
+      )
+      .slice(0, 6)
+      .map((path) => this.escapeXml(path));
+    const escapedAttachmentItemID = Number.isSafeInteger(
+      artifact?.attachmentItemID,
+    )
+      ? String(artifact?.attachmentItemID)
+      : "";
+    const escapedArtifactToolCallId = artifact?.toolCallId
+      ? this.escapeXml(artifact.toolCallId)
+      : "";
 
     // 使用特殊标记格式，便于 MessageRenderer 识别和渲染
     let card = `\n<tool-call status="${status}"${
@@ -2989,6 +3051,22 @@ export class ChatManager {
       (status !== "calling" || options?.showResultWhileCalling)
     ) {
       card += `<tool-result>${escapedResult}</tool-result>\n`;
+    }
+    if (
+      escapedArtifactToolCallId &&
+      (escapedArtifactPath || escapedPreviewPaths.length > 0)
+    ) {
+      card += `<presentation-artifact${` tool-call-id="${escapedArtifactToolCallId}"`}${
+        escapedArtifactPath ? ` path="${escapedArtifactPath}"` : ""
+      }${
+        escapedAttachmentItemID
+          ? ` attachment-item-id="${escapedAttachmentItemID}"`
+          : ""
+      } draft="${artifact?.isDraft ? "true" : "false"}">\n`;
+      for (const previewPath of escapedPreviewPaths) {
+        card += `<presentation-preview path="${previewPath}"/>\n`;
+      }
+      card += `</presentation-artifact>\n`;
     }
     card += `</tool-call>\n`;
 
@@ -3021,6 +3099,7 @@ export class ChatManager {
     paperStructure: Awaited<
       ReturnType<typeof getPdfToolManager.prototype.extractAndParsePaper>
     >,
+    currentItemLibraryID: number | undefined,
     sendingSession: ChatSession,
     sessionRunId: number,
     buildSystemPrompt:
@@ -3055,6 +3134,7 @@ export class ChatManager {
       paperStructure,
       sendingSession,
       currentItemKey: sendingSession.lastActiveItemKey,
+      currentItemLibraryID,
       sessionRunId,
       abortSignal,
       executeProviderRequest,
@@ -3082,6 +3162,7 @@ export class ChatManager {
     paperStructure: Awaited<
       ReturnType<typeof getPdfToolManager.prototype.extractAndParsePaper>
     >,
+    currentItemLibraryID: number | undefined,
     sendingSession: ChatSession,
     sessionRunId: number,
     buildSystemPrompt:
@@ -3116,6 +3197,7 @@ export class ChatManager {
       paperStructure,
       sendingSession,
       currentItemKey: sendingSession.lastActiveItemKey,
+      currentItemLibraryID,
       sessionRunId,
       abortSignal,
       executeProviderRequest,
@@ -3220,7 +3302,14 @@ export class ChatManager {
         cleanedContent,
         message.evidence || [],
       );
-      if (!sanitizedEvidence.content && !message.reasoning?.trim()) {
+      const hasPresentationArtifacts = Boolean(
+        message.presentationArtifacts?.length,
+      );
+      if (
+        !sanitizedEvidence.content &&
+        !message.reasoning?.trim() &&
+        !hasPresentationArtifacts
+      ) {
         // Mirror finalizeFailedAssistantMessage: drop an empty interrupted
         // placeholder instead of persisting UI text that would later be
         // projected into model context as fabricated assistant output.
@@ -3255,6 +3344,7 @@ export class ChatManager {
           streamingState: "interrupted",
           evidence: message.evidence || [],
           sourceItemKeys,
+          presentationArtifacts: message.presentationArtifacts || [],
         },
       );
     }
@@ -3394,6 +3484,7 @@ export class ChatManager {
       createdAt: session.createdAt,
       updatedAt: now,
       lastActiveItemKey: null,
+      lastActiveItemLibraryID: undefined,
       messages: [],
       contextSummary: undefined,
       contextState: undefined,
@@ -3419,6 +3510,9 @@ export class ChatManager {
 
   private applySessionItemContext(session: ChatSession | null): void {
     this.currentItemKey = session?.lastActiveItemKey ?? null;
+    this.currentItemLibraryID = this.currentItemKey
+      ? (session?.lastActiveItemLibraryID ?? Zotero.Libraries.userLibraryID)
+      : null;
     getPdfToolManager().setCurrentItemKey(this.currentItemKey);
   }
 
@@ -3442,6 +3536,7 @@ export class ChatManager {
     getToolPermissionManager().removeApprovalObserver(this.approvalObserver);
     this.currentSession = null;
     this.currentItemKey = null;
+    this.currentItemLibraryID = null;
     for (const abortController of this.activeSessionAbortControllers.values()) {
       abortController.abort();
     }

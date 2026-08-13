@@ -448,21 +448,37 @@ export function getMessageMarkdownRenderOptions(
   markdown: MarkdownRenderOptions | undefined,
   streamingState: ChatMessage["streamingState"],
   evidenceRecords?: ChatMessage["evidence"],
+  presentationArtifacts?: ChatMessage["presentationArtifacts"],
 ): MarkdownRenderOptions | undefined {
+  const artifactsByToolCallId = new Map(
+    (presentationArtifacts || []).map((artifact) => [
+      artifact.localId || artifact.toolCallId,
+      artifact,
+    ]),
+  );
   if (!markdown) {
-    return evidenceRecords?.length ? { evidenceRecords } : undefined;
+    return evidenceRecords?.length || artifactsByToolCallId.size
+      ? { evidenceRecords, presentationArtifacts: artifactsByToolCallId }
+      : undefined;
   }
   if (streamingState === undefined) {
-    return evidenceRecords?.length
-      ? { ...markdown, evidenceRecords }
+    return evidenceRecords?.length || artifactsByToolCallId.size
+      ? {
+          ...markdown,
+          evidenceRecords,
+          presentationArtifacts: artifactsByToolCallId,
+        }
       : markdown;
   }
   return {
     ...markdown,
     evidenceRecords,
+    presentationArtifacts: artifactsByToolCallId,
     blockquoteAction: undefined,
     sourceGroupAction: undefined,
     evidenceAction: undefined,
+    // Presentation artifacts are app-authored, local, and useful while a
+    // draft is still being generated. Keep their open action available.
   };
 }
 
@@ -890,6 +906,7 @@ export function createMessageElement(
       renderOptions.markdown,
       msg.streamingState,
       msg.evidence,
+      msg.presentationArtifacts,
     );
     const hasCanonicalMaxIterationsNotice =
       msg.role === "assistant" &&

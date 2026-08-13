@@ -92,6 +92,8 @@ type StandalonePdfPageRenderer = (
 
 interface PresentationMediaResolutionContext {
   standalonePageCache: Map<string, Promise<ReaderRealmRenderResult | null>>;
+  sourceItemKey?: string;
+  sourceLibraryID?: number;
 }
 
 // Visual repair may call the presentation tool several times in one turn.
@@ -433,18 +435,34 @@ export function resolvePresentationViewportTransform(
   ];
 }
 
-function resolveWithin<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+export function resolveWithin<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  onTimeout?: () => void | Promise<void>,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timeoutID = setTimeout(
-      () => reject(new Error(`PDF rendering timed out after ${timeoutMs}ms.`)),
-      timeoutMs,
-    );
+    let settled = false;
+    const timeoutID = setTimeout(async () => {
+      if (settled) return;
+      settled = true;
+      try {
+        await onTimeout?.();
+      } catch {
+        // Preserve the timeout as the actionable failure. Cancellation is
+        // best-effort because PDF.js may already be unwinding the task.
+      }
+      reject(new Error(`PDF rendering timed out after ${timeoutMs}ms.`));
+    }, timeoutMs);
     promise.then(
       (value) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timeoutID);
         resolve(value);
       },
       (error) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timeoutID);
         reject(error);
       },
@@ -456,7 +474,10 @@ function waitForReaderTick(timeoutMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, timeoutMs));
 }
 
-function getItemByKey(itemKey: string): Zotero.Item | null {
+function getItemByKey(itemKey: string, libraryID?: number): Zotero.Item | null {
+  if (Number.isSafeInteger(libraryID)) {
+    return Zotero.Items.getByLibraryAndKey(libraryID!, itemKey) || null;
+  }
   const libraryIDs = [
     Zotero.Libraries.userLibraryID,
     ...(Zotero.Libraries.getAll?.() || []).map((library) => library.libraryID),
@@ -470,9 +491,10 @@ function getItemByKey(itemKey: string): Zotero.Item | null {
 
 function resolvePresentationSourceItem(
   itemKey: string | undefined,
+  libraryID?: number,
 ): Zotero.Item | null {
   if (!itemKey || typeof Zotero === "undefined") return null;
-  const item = getItemByKey(itemKey);
+  const item = getItemByKey(itemKey, libraryID);
   if (!item) return null;
   return (item.isAttachment?.() || item.isNote?.()) && item.parentItemID
     ? Zotero.Items.get(item.parentItemID) || item
@@ -481,8 +503,9 @@ function resolvePresentationSourceItem(
 
 export function resolvePresentationSourceYear(
   itemKey: string | undefined,
+  libraryID?: number,
 ): string | undefined {
-  const sourceItem = resolvePresentationSourceItem(itemKey);
+  const sourceItem = resolvePresentationSourceItem(itemKey, libraryID);
   if (!sourceItem) return undefined;
   const rawYear =
     sourceItem.getField?.("year") || sourceItem.getField?.("date") || "";
@@ -492,8 +515,9 @@ export function resolvePresentationSourceYear(
 export function resolvePresentationSourceAuthor(
   itemKey: string | undefined,
   language: string | undefined,
+  libraryID?: number,
 ): string | undefined {
-  const sourceItem = resolvePresentationSourceItem(itemKey);
+  const sourceItem = resolvePresentationSourceItem(itemKey, libraryID);
   if (!sourceItem) return undefined;
   const creators = sourceItem.getCreators?.() || [];
   const names = creators.map(
@@ -504,8 +528,11 @@ export function resolvePresentationSourceAuthor(
   return formatPresentationAuthors(names, language);
 }
 
-async function resolvePdfAttachment(itemKey: string): Promise<Zotero.Item> {
-  const item = getItemByKey(itemKey);
+async function resolvePdfAttachment(
+  itemKey: string,
+  libraryID?: number,
+): Promise<Zotero.Item> {
+  const item = getItemByKey(itemKey, libraryID);
   if (!item) {
     throw new Error(`No Zotero item was found for key "${itemKey}".`);
   }
@@ -833,75 +860,95 @@ async function renderPageInReaderRealm(
 
   const createRenderer = FunctionConstructor(`
     "use strict";
-    return async function renderPaperChatPdfPage(pageNumber) {
+    return async function renderPaperChatPdfPage(pageNumber, timeoutMs) {
       let stage = "document";
       let canvas;
       let viewportDimensions = "no-viewport";
-      try {
-        const application = globalThis.PDFViewerApplication;
-        if (!application || !application.pdfDocument) {
-          throw new Error("PDFViewerApplication.pdfDocument is unavailable.");
-        }
-        const page = await application.pdfDocument.getPage(pageNumber);
-        stage = "viewport";
-        const baseViewport = page.getViewport({ scale: 1 });
-        const scale = Math.max(1, Math.min(3, ${TARGET_LONG_EDGE} / Math.max(baseViewport.width, baseViewport.height)));
-        const viewport = page.getViewport({ scale: scale });
-        viewportDimensions = String(viewport.width) + "x" + String(viewport.height);
-        stage = "canvas";
-        canvas = document.createElement("canvas");
-        canvas.width = Math.max(1, Math.round(viewport.width));
-        canvas.height = Math.max(1, Math.round(viewport.height));
-        const context = canvas.getContext("2d", { alpha: false });
-        if (!context) throw new Error("PaperChat could not create a reader-realm canvas context.");
-        context.fillStyle = "#FFFFFF";
-        context.fillRect(0, 0, canvas.width, canvas.height);
-        stage = "pdfjs-render";
-        const task = page.render({ canvas: canvas, canvasContext: context, viewport: viewport });
-        await (task && task.promise ? task.promise : task);
-
-        stage = "pixel-inspection";
-        const pixelData = context.getImageData(0, 0, canvas.width, canvas.height).data;
-        const step = Math.max(1, Math.floor(Math.sqrt((canvas.width * canvas.height) / 60000)));
-        let sampledPixels = 0;
-        let inkPixels = 0;
-        for (let y = 0; y < canvas.height; y += step) {
-          for (let x = 0; x < canvas.width; x += step) {
-            const offset = (y * canvas.width + x) * 4;
-            if (pixelData[offset + 3] > 8 &&
-                (pixelData[offset] < 246 || pixelData[offset + 1] < 246 || pixelData[offset + 2] < 246)) {
-              inkPixels += 1;
-            }
-            sampledPixels += 1;
+      let renderTask;
+      let timeoutID;
+      const work = (async function() {
+        try {
+          const application = globalThis.PDFViewerApplication;
+          if (!application || !application.pdfDocument) {
+            throw new Error("PDFViewerApplication.pdfDocument is unavailable.");
           }
+          const page = await application.pdfDocument.getPage(pageNumber);
+          stage = "viewport";
+          const baseViewport = page.getViewport({ scale: 1 });
+          const scale = Math.max(1, Math.min(3, ${TARGET_LONG_EDGE} / Math.max(baseViewport.width, baseViewport.height)));
+          const viewport = page.getViewport({ scale: scale });
+          viewportDimensions = String(viewport.width) + "x" + String(viewport.height);
+          stage = "canvas";
+          canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, Math.round(viewport.width));
+          canvas.height = Math.max(1, Math.round(viewport.height));
+          const context = canvas.getContext("2d", { alpha: false });
+          if (!context) throw new Error("PaperChat could not create a reader-realm canvas context.");
+          context.fillStyle = "#FFFFFF";
+          context.fillRect(0, 0, canvas.width, canvas.height);
+          stage = "pdfjs-render";
+          renderTask = page.render({ canvas: canvas, canvasContext: context, viewport: viewport });
+          await (renderTask && renderTask.promise ? renderTask.promise : renderTask);
+
+          stage = "pixel-inspection";
+          const pixelData = context.getImageData(0, 0, canvas.width, canvas.height).data;
+          const step = Math.max(1, Math.floor(Math.sqrt((canvas.width * canvas.height) / 60000)));
+          let sampledPixels = 0;
+          let inkPixels = 0;
+          for (let y = 0; y < canvas.height; y += step) {
+            for (let x = 0; x < canvas.width; x += step) {
+              const offset = (y * canvas.width + x) * 4;
+              if (pixelData[offset + 3] > 8 &&
+                  (pixelData[offset] < 246 || pixelData[offset + 1] < 246 || pixelData[offset + 2] < 246)) {
+                inkPixels += 1;
+              }
+              sampledPixels += 1;
+            }
+          }
+          stage = "encode";
+          return {
+            data: canvas.toDataURL("image/png"),
+            width: canvas.width,
+            height: canvas.height,
+            scale: scale,
+            transform: Array.from(viewport.transform || []),
+            inkRatio: sampledPixels ? inkPixels / sampledPixels : 0,
+            sampledPixels: sampledPixels
+          };
+        } catch (error) {
+          const dimensions = canvas ? canvas.width + "x" + canvas.height : "no-canvas";
+          const visibleCanvases = Array.from(document.querySelectorAll("canvas"))
+            .map(function(existing) {
+              return existing.width + "x" + existing.height + ":" + String(existing.className || "");
+            })
+            .filter(function(summary) { return !summary.startsWith("0x0:"); })
+            .slice(0, 8)
+            .join(",");
+          throw new Error("PaperChat reader-realm render failed at " + stage + " (viewport=" + viewportDimensions + ", canvas=" + dimensions + ", existing=" + visibleCanvases + "): " + String(error));
         }
-        stage = "encode";
-        return {
-          data: canvas.toDataURL("image/png"),
-          width: canvas.width,
-          height: canvas.height,
-          scale: scale,
-          transform: Array.from(viewport.transform || []),
-          inkRatio: sampledPixels ? inkPixels / sampledPixels : 0,
-          sampledPixels: sampledPixels
-        };
-      } catch (error) {
-        const dimensions = canvas ? canvas.width + "x" + canvas.height : "no-canvas";
-        const visibleCanvases = Array.from(document.querySelectorAll("canvas"))
-          .map(function(existing) {
-            return existing.width + "x" + existing.height + ":" + String(existing.className || "");
-          })
-          .filter(function(summary) { return !summary.startsWith("0x0:"); })
-          .slice(0, 8)
-          .join(",");
-        throw new Error("PaperChat reader-realm render failed at " + stage + " (viewport=" + viewportDimensions + ", canvas=" + dimensions + ", existing=" + visibleCanvases + "): " + String(error));
+      })();
+      const timeout = new Promise(function(_resolve, reject) {
+        timeoutID = setTimeout(function() {
+          try {
+            if (renderTask && typeof renderTask.cancel === "function") renderTask.cancel();
+          } catch (_) {}
+          reject(new Error("PDF rendering timed out after " + timeoutMs + "ms."));
+        }, timeoutMs);
+      });
+      try {
+        return await Promise.race([work, timeout]);
+      } finally {
+        if (timeoutID) clearTimeout(timeoutID);
       }
     };
-  `) as () => (pageNumber: number) => Promise<ReaderRealmRenderResult>;
+  `) as () => (
+    pageNumber: number,
+    timeoutMs: number,
+  ) => Promise<ReaderRealmRenderResult>;
   const render = createRenderer();
   const rawResult = await resolveWithin(
-    Promise.resolve(render(pageNumber)),
-    PDF_RENDER_TIMEOUT_MS,
+    Promise.resolve(render(pageNumber, PDF_RENDER_TIMEOUT_MS)),
+    PDF_RENDER_TIMEOUT_MS + READER_INIT_TIMEOUT_MS,
   );
   const result = unwrapCompartmentValue(rawResult);
   return {
@@ -932,77 +979,99 @@ async function renderPageWithStandalonePdfJs(
   if (typeof FunctionConstructor !== "function") return null;
   const createRenderer = FunctionConstructor(`
     "use strict";
-    return async function renderPaperChatStandalonePdfPage(pdfPath, pageNumber, targetLongEdge) {
+    return async function renderPaperChatStandalonePdfPage(pdfPath, pageNumber, targetLongEdge, timeoutMs) {
       let stage = "import PDF.js";
       let loadingTask;
-      try {
-        const pdfjs = await import("resource://zotero/reader/pdf/build/pdf.mjs");
-        pdfjs.GlobalWorkerOptions.workerSrc = "resource://zotero/reader/pdf/build/pdf.worker.mjs";
-        stage = "read PDF";
-        const bytes = await IOUtils.read(pdfPath);
-        stage = "load document";
-        loadingTask = pdfjs.getDocument({
-          data: bytes,
-          ownerDocument: document,
-          isOffscreenCanvasSupported: false,
-          isImageDecoderSupported: false,
-          useWorkerFetch: false
-        });
-        const pdfDocument = await loadingTask.promise;
-        stage = "load page";
-        const page = await pdfDocument.getPage(pageNumber);
-        const baseViewport = page.getViewport({ scale: 1 });
-        const scale = Math.max(1, Math.min(3, targetLongEdge / Math.max(baseViewport.width, baseViewport.height)));
-        const viewport = page.getViewport({ scale: scale });
-        stage = "render page";
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.max(1, Math.round(viewport.width));
-        canvas.height = Math.max(1, Math.round(viewport.height));
-        const context = canvas.getContext("2d", { alpha: false });
-        if (!context) throw new Error("Canvas 2D context is unavailable.");
-        context.fillStyle = "#FFFFFF";
-        context.fillRect(0, 0, canvas.width, canvas.height);
-        await page.render({ canvasContext: context, viewport: viewport }).promise;
-        stage = "inspect pixels";
-        const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
-        const step = Math.max(1, Math.floor(Math.sqrt((canvas.width * canvas.height) / 60000)));
-        let sampledPixels = 0;
-        let inkPixels = 0;
-        for (let y = 0; y < canvas.height; y += step) {
-          for (let x = 0; x < canvas.width; x += step) {
-            const offset = (y * canvas.width + x) * 4;
-            if (pixels[offset + 3] > 8 &&
-                (pixels[offset] < 246 || pixels[offset + 1] < 246 || pixels[offset + 2] < 246)) {
-              inkPixels += 1;
+      let renderTask;
+      let timeoutID;
+      const work = (async function() {
+        try {
+          const pdfjs = await import("resource://zotero/reader/pdf/build/pdf.mjs");
+          pdfjs.GlobalWorkerOptions.workerSrc = "resource://zotero/reader/pdf/build/pdf.worker.mjs";
+          stage = "read PDF";
+          const bytes = await IOUtils.read(pdfPath);
+          stage = "load document";
+          loadingTask = pdfjs.getDocument({
+            data: bytes,
+            ownerDocument: document,
+            isOffscreenCanvasSupported: false,
+            isImageDecoderSupported: false,
+            useWorkerFetch: false
+          });
+          const pdfDocument = await loadingTask.promise;
+          stage = "load page";
+          const page = await pdfDocument.getPage(pageNumber);
+          const baseViewport = page.getViewport({ scale: 1 });
+          const scale = Math.max(1, Math.min(3, targetLongEdge / Math.max(baseViewport.width, baseViewport.height)));
+          const viewport = page.getViewport({ scale: scale });
+          stage = "render page";
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, Math.round(viewport.width));
+          canvas.height = Math.max(1, Math.round(viewport.height));
+          const context = canvas.getContext("2d", { alpha: false });
+          if (!context) throw new Error("Canvas 2D context is unavailable.");
+          context.fillStyle = "#FFFFFF";
+          context.fillRect(0, 0, canvas.width, canvas.height);
+          renderTask = page.render({ canvasContext: context, viewport: viewport });
+          await (renderTask && renderTask.promise ? renderTask.promise : renderTask);
+          stage = "inspect pixels";
+          const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+          const step = Math.max(1, Math.floor(Math.sqrt((canvas.width * canvas.height) / 60000)));
+          let sampledPixels = 0;
+          let inkPixels = 0;
+          for (let y = 0; y < canvas.height; y += step) {
+            for (let x = 0; x < canvas.width; x += step) {
+              const offset = (y * canvas.width + x) * 4;
+              if (pixels[offset + 3] > 8 &&
+                  (pixels[offset] < 246 || pixels[offset + 1] < 246 || pixels[offset + 2] < 246)) {
+                inkPixels += 1;
+              }
+              sampledPixels += 1;
             }
-            sampledPixels += 1;
           }
+          stage = "encode page";
+          return JSON.stringify({
+            data: canvas.toDataURL("image/png"),
+            width: canvas.width,
+            height: canvas.height,
+            scale: scale,
+            transform: Array.from(viewport.transform || []),
+            inkRatio: sampledPixels ? inkPixels / sampledPixels : 0,
+            sampledPixels: sampledPixels
+          });
+        } catch (error) {
+          throw new Error("Standalone PDF.js render failed at " + stage + ": " + String(error));
         }
-        stage = "encode page";
-        return JSON.stringify({
-          data: canvas.toDataURL("image/png"),
-          width: canvas.width,
-          height: canvas.height,
-          scale: scale,
-          transform: Array.from(viewport.transform || []),
-          inkRatio: sampledPixels ? inkPixels / sampledPixels : 0,
-          sampledPixels: sampledPixels
-        });
-      } catch (error) {
-        throw new Error("Standalone PDF.js render failed at " + stage + ": " + String(error));
+      })();
+      const timeout = new Promise(function(_resolve, reject) {
+        timeoutID = setTimeout(function() {
+          try {
+            if (renderTask && typeof renderTask.cancel === "function") renderTask.cancel();
+          } catch (_) {}
+          reject(new Error("PDF rendering timed out after " + timeoutMs + "ms."));
+        }, timeoutMs);
+      });
+      try {
+        return await Promise.race([work, timeout]);
       } finally {
-        if (loadingTask && loadingTask.destroy) await loadingTask.destroy();
+        if (timeoutID) clearTimeout(timeoutID);
+        if (loadingTask && loadingTask.destroy) {
+          try { await loadingTask.destroy(); } catch (_) {}
+        }
       }
     };
   `) as () => (
     path: string,
     page: number,
     targetLongEdge: number,
+    timeoutMs: number,
   ) => Promise<string>;
   const render = createRenderer();
   const encoded = await resolveWithin(
-    Promise.resolve(render(pdfPath, pageNumber, TARGET_LONG_EDGE)),
-    PDF_RENDER_TIMEOUT_MS,
+    Promise.resolve(
+      render(pdfPath, pageNumber, TARGET_LONG_EDGE, PDF_RENDER_TIMEOUT_MS),
+    ),
+    PDF_RENDER_TIMEOUT_MS + READER_INIT_TIMEOUT_MS,
   );
   const parsed = JSON.parse(
     String(unwrapCompartmentValue(encoded)),
@@ -1952,7 +2021,9 @@ async function renderPaperFigure(
       `Paper figure on page ${figure.page} is missing itemKey/sourceItemKey.`,
     );
   }
-  const attachment = await resolvePdfAttachment(itemKey);
+  const sourceLibraryID =
+    itemKey === context.sourceItemKey ? context.sourceLibraryID : undefined;
+  const attachment = await resolvePdfAttachment(itemKey, sourceLibraryID);
   const reader = await resolveReader(attachment, figure.page);
   const {
     document: pdfDocument,
@@ -2129,7 +2200,10 @@ async function renderPaperFigure(
         ? unwrapCompartmentValue(renderTask.promise) || Promise.resolve()
         : Promise.resolve(renderTask);
     try {
-      await resolveWithin(renderPromise, PDF_RENDER_TIMEOUT_MS);
+      await resolveWithin(renderPromise, PDF_RENDER_TIMEOUT_MS, () => {
+        const cancel = (renderTask as { cancel?: () => void } | null)?.cancel;
+        cancel?.call(renderTask);
+      });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       throw new Error(
@@ -2338,9 +2412,12 @@ async function renderPaperFigure(
 
 export async function resolvePresentationMedia(
   request: PresentationRequest,
+  sourceLibraryID?: number,
 ): Promise<RenderablePresentationRequest> {
   const context: PresentationMediaResolutionContext = {
     standalonePageCache: sharedStandalonePageCache,
+    sourceItemKey: request.sourceItemKey,
+    sourceLibraryID,
   };
   const {
     author: requestedAuthor,
@@ -2360,10 +2437,16 @@ export async function resolvePresentationMedia(
   // The public presentation intent does not expose a year override. Treat the
   // Zotero item's bibliographic year as authoritative so a planner cannot
   // mistake a dataset year or benchmark name for the paper's publication year.
-  const year = resolvePresentationSourceYear(sourceItemKey) || requestedYear;
+  const year =
+    resolvePresentationSourceYear(sourceItemKey, sourceLibraryID) ||
+    requestedYear;
   const author =
     requestedAuthor?.trim() ||
-    resolvePresentationSourceAuthor(sourceItemKey, request.language);
+    resolvePresentationSourceAuthor(
+      sourceItemKey,
+      request.language,
+      sourceLibraryID,
+    );
   const coverFigure = requestedCoverFigure
     ? await renderPaperFigure(
         requestedCoverFigure,

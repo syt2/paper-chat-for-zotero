@@ -14,6 +14,7 @@ import type { EvidenceRecord } from "../../../types/evidence";
 import { normalizeEvidenceRecords } from "../evidence";
 import { normalizeSourceItemKeys } from "../note-source-provenance";
 import { normalizeQuotedMessageRefs } from "../quoted-messages";
+import { normalizePresentationArtifacts } from "../presentation-artifacts";
 
 export type QueryableDatabase = {
   queryAsync(sql: string, params?: unknown[]): Promise<any[] | undefined>;
@@ -34,6 +35,7 @@ export interface MessageStorageRow {
   tool_call_id?: string | null;
   evidence?: string | null;
   source_item_keys?: string | null;
+  presentation_artifacts?: string | null;
   streaming_state?: ChatMessageStreamingState | null;
   api_only?: number | null;
   is_system_notice?: number | null;
@@ -47,6 +49,7 @@ const MAX_STORED_EVIDENCE_JSON_CHARACTERS = 600_000;
 // (for example, a control character becomes `\\u0000`). Keep the raw guard
 // above the worst-case size of three normalized references.
 const MAX_STORED_QUOTED_MESSAGES_JSON_CHARACTERS = 128_000;
+const MAX_STORED_PRESENTATION_ARTIFACTS_JSON_CHARACTERS = 400_000;
 
 function parseStoredJsonArray<T extends unknown[]>(
   value: string | null | undefined,
@@ -95,6 +98,23 @@ function parseStoredSourceItemKeys(
   try {
     const keys = normalizeSourceItemKeys(JSON.parse(value));
     return keys.length > 0 ? keys : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseStoredPresentationArtifacts(
+  value: string | null | undefined,
+): NonNullable<ChatMessage["presentationArtifacts"]> | undefined {
+  if (
+    !value ||
+    value.length > MAX_STORED_PRESENTATION_ARTIFACTS_JSON_CHARACTERS
+  ) {
+    return undefined;
+  }
+  try {
+    const artifacts = normalizePresentationArtifacts(JSON.parse(value));
+    return artifacts.length > 0 ? artifacts : undefined;
   } catch {
     return undefined;
   }
@@ -153,6 +173,12 @@ export function mapMessageRowToChatMessage(
     readOptionalMessageColumn(row, "source_item_keys"),
   );
   if (sourceItemKeys) message.sourceItemKeys = sourceItemKeys;
+  const presentationArtifacts = parseStoredPresentationArtifacts(
+    readOptionalMessageColumn(row, "presentation_artifacts"),
+  );
+  if (presentationArtifacts) {
+    message.presentationArtifacts = presentationArtifacts;
+  }
   const streamingState = readOptionalMessageColumn(row, "streaming_state");
   if (streamingState) message.streamingState = streamingState;
   if (readOptionalMessageColumn(row, "api_only")) message.apiOnly = true;

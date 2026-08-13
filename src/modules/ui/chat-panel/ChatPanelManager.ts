@@ -27,6 +27,7 @@ import {
   type NoteSummarySourceItem,
 } from "../../chat/note-summary-destination";
 import { normalizeSourceItemKeys } from "../../chat/note-source-provenance";
+import { isPathInsidePresentationRoot } from "../../presentation";
 
 import { HTML_NS, type AttachmentState, type ChatPanelContext } from "./types";
 import { chatColors } from "../../../utils/colors";
@@ -39,6 +40,7 @@ import {
 import { createChatContainer } from "./ChatPanelBuilder";
 import {
   ensureStreamingTypingIndicator,
+  getMessageMarkdownRenderOptions,
   getStreamingContentSelector,
   getStreamingReasoningContainerSelector,
   getStreamingReasoningSelector,
@@ -59,6 +61,7 @@ import {
   renderMarkdownToElement,
   stripIncompleteTrailingToolCall,
 } from "./MarkdownRenderer";
+import { getDataPath } from "../../../utils/common";
 import {
   buildReplyNoteSummaryPrompt,
   canSummarizeAssistantReply,
@@ -139,10 +142,24 @@ type StreamingTextRenderState = {
   pendingContent: string;
   lastRenderedContent: string;
   lastMarkdownContent: string;
+  lastPresentationArtifactSignature: string;
   lastRenderAt: number;
   lastMarkdownRenderAt: number;
   timeoutId: ReturnType<typeof setTimeout> | null;
 };
+
+function getPresentationArtifactSignature(message: ChatMessage): string {
+  return JSON.stringify(
+    (message.presentationArtifacts || []).map((artifact) => ({
+      toolCallId: artifact.toolCallId,
+      localId: artifact.localId,
+      path: artifact.path,
+      previewPaths: artifact.previewPaths,
+      attachmentItemID: artifact.attachmentItemID,
+      isDraft: artifact.isDraft,
+    })),
+  );
+}
 
 const streamingTextRenderStates = new WeakMap<
   HTMLElement,
@@ -219,17 +236,33 @@ function renderStreamingTextNow(
   }
 
   const now = Date.now();
+  const presentationArtifactSignature =
+    getPresentationArtifactSignature(activeMessage);
   const shouldRenderMarkdown =
     contentReplacedAfterMarkdownRender ||
+    presentationArtifactSignature !== state.lastPresentationArtifactSignature ||
     shouldForceStreamingMarkdownRender(content, state) ||
     now - state.lastMarkdownRenderAt >= STREAMING_MARKDOWN_RENDER_INTERVAL_MS;
 
   if (shouldRenderMarkdown) {
-    renderMarkdownToElement(streamingEl, content, messageId, markdownOptions);
+    const activeMarkdownOptions =
+      getMessageMarkdownRenderOptions(
+        markdownOptions,
+        activeMessage.streamingState,
+        activeMessage.evidence,
+        activeMessage.presentationArtifacts,
+      ) || markdownOptions;
+    renderMarkdownToElement(
+      streamingEl,
+      content,
+      messageId,
+      activeMarkdownOptions,
+    );
     const tail = streamingEl.ownerDocument.createElement("span");
     tail.setAttribute(STREAMING_TEXT_TAIL_ATTR, "true");
     streamingEl.appendChild(tail);
     state.lastMarkdownContent = content;
+    state.lastPresentationArtifactSignature = presentationArtifactSignature;
     state.lastMarkdownRenderAt = now;
   } else if (state.lastMarkdownContent) {
     let tail = streamingEl.querySelector(
@@ -276,6 +309,7 @@ function scheduleStreamingTextRender(
       pendingContent: content,
       lastRenderedContent: "",
       lastMarkdownContent: "",
+      lastPresentationArtifactSignature: "",
       lastRenderAt: 0,
       lastMarkdownRenderAt: 0,
       timeoutId: null,
@@ -284,7 +318,17 @@ function scheduleStreamingTextRender(
   }
 
   state.pendingContent = content;
-  if (state.pendingContent === state.lastRenderedContent) {
+  const activeMessage = manager
+    .getActiveSession()
+    ?.messages.find((message) => message.id === messageId);
+  const presentationArtifactChanged =
+    activeMessage?.role === "assistant" &&
+    getPresentationArtifactSignature(activeMessage) !==
+      state.lastPresentationArtifactSignature;
+  if (
+    state.pendingContent === state.lastRenderedContent &&
+    !presentationArtifactChanged
+  ) {
     return;
   }
 
@@ -365,6 +409,34 @@ function createChatMarkdownRenderOptions(
   context: ChatMarkdownActionContext,
 ): MarkdownRenderOptions {
   return {
+    isTrustedPresentationPreviewPath,
+    presentationArtifactAction: {
+      openLabel: getString("chat-presentation-open"),
+      draftLabel: getString("chat-presentation-open-draft"),
+      onOpen: async (artifact) => {
+        let filePath = artifact.path || "";
+        if (artifact.attachmentItemID) {
+          const attachment = await Zotero.Items.getAsync(
+            artifact.attachmentItemID,
+          );
+          const attachmentPath = await attachment?.getFilePathAsync?.();
+          if (attachmentPath) filePath = attachmentPath;
+        }
+        if (!isTrustedPresentationPath(filePath)) {
+          throw new Error("PaperChat rejected an untrusted PPTX path.");
+        }
+        if (!(await IOUtils.exists(filePath))) {
+          throw new Error("The generated PPTX is no longer available.");
+        }
+        Zotero.launchFile(filePath);
+      },
+      onError: (error) => {
+        ztoolkit.log("[ChatPanel] Failed to open presentation:", error);
+        context.appendError?.(
+          `${getString("chat-presentation-open-failed")}: ${error.message}`,
+        );
+      },
+    },
     blockquoteAction: {
       label: getString("chat-jump-to-quote"),
       title: getString("chat-jump-to-quote-title"),
@@ -474,6 +546,30 @@ function createChatMarkdownRenderOptions(
   };
 }
 
+function isTrustedPresentationPath(filePath: string): boolean {
+  if (
+    !filePath ||
+    !PathUtils.isAbsolute(filePath) ||
+    !/\.pptx$/i.test(filePath)
+  ) {
+    return false;
+  }
+  const roots = [
+    getDataPath("presentations"),
+    PathUtils.join(Zotero.DataDirectory.dir, "storage"),
+  ];
+  return roots.some((root) => isPathInsidePresentationRoot(filePath, root));
+}
+
+function isTrustedPresentationPreviewPath(filePath: string): boolean {
+  return (
+    Boolean(filePath) &&
+    PathUtils.isAbsolute(filePath) &&
+    /\.png$/iu.test(filePath) &&
+    isPathInsidePresentationRoot(filePath, getDataPath("presentations"))
+  );
+}
+
 function getItemByLibraryKey(
   itemKey: string | null | undefined,
   libraryID: number = Zotero.Libraries.userLibraryID,
@@ -493,7 +589,10 @@ function getQuoteNavigationItem(
   currentItem: Zotero.Item | null,
 ): Zotero.Item | null {
   return (
-    getItemByLibraryKey(session?.lastActiveItemKey) ||
+    getItemByLibraryKey(
+      session?.lastActiveItemKey,
+      session?.lastActiveItemLibraryID,
+    ) ||
     currentItem ||
     getActiveReaderItem()
   );
@@ -1342,7 +1441,7 @@ async function initializeChatContentCommon(
   const activeItem = requestedItem || getActiveReaderItem();
   if (activeItem) {
     moduleCurrentItem = activeItem;
-    manager.setCurrentItemKey(activeItem.key);
+    manager.setCurrentItemKey(activeItem.key, activeItem.libraryID);
     getReadingLoopService().setCurrentItem(activeItem);
   } else {
     moduleCurrentItem = null;
@@ -1647,7 +1746,7 @@ async function refreshChatForContainer(container: HTMLElement): Promise<void> {
   // Update current item tracking (session remains the same)
   if (activeItem) {
     moduleCurrentItem = activeItem;
-    manager.setCurrentItemKey(activeItem.key);
+    manager.setCurrentItemKey(activeItem.key, activeItem.libraryID);
     getReadingLoopService().setCurrentItem(activeItem);
   } else {
     moduleCurrentItem = null;
@@ -2672,7 +2771,10 @@ async function navigateToQuotedMessage(
   if (manager.getActiveSession()?.id !== quote.sessionId) return;
 
   clearPendingQuotedMessages(context);
-  const item = getItemByLibraryKey(sourceSession.lastActiveItemKey);
+  const item = getItemByLibraryKey(
+    sourceSession.lastActiveItemKey,
+    sourceSession.lastActiveItemLibraryID,
+  );
   context.setCurrentItem(item);
   await context.updatePdfCheckboxVisibility(item);
   if (!isLatestNavigation()) return;
@@ -2785,7 +2887,10 @@ async function continueInNewChatFromMessage(
   try {
     const forkedSession =
       await context.chatManager.forkCurrentSessionAtMessage(assistantMessageId);
-    const item = getItemByLibraryKey(forkedSession.lastActiveItemKey);
+    const item = getItemByLibraryKey(
+      forkedSession.lastActiveItemKey,
+      forkedSession.lastActiveItemLibraryID,
+    );
     context.setCurrentItem(item);
 
     context.clearAttachments();

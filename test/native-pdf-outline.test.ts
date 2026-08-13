@@ -302,6 +302,94 @@ describe("native PDF outline", function () {
       assert.include(structure?.fullText, "Group-library body");
     });
 
+    it("keeps same-key PDF extraction and ordinary tool calls partitioned by library", async function () {
+      const createPdfAttachment = (
+        id: number,
+        libraryID: number,
+        body: string,
+      ) => ({
+        id,
+        key: `PDF-${libraryID}`,
+        libraryID,
+        isAttachment: () => true,
+        isPDFAttachment: () => true,
+        get attachmentText() {
+          return Promise.resolve(`Introduction\n\n${body}`);
+        },
+      });
+      const userPdf = createPdfAttachment(141, 1, "Personal-library body");
+      const groupPdf = createPdfAttachment(142, 5, "Group-library body");
+      const parents = new Map([
+        [
+          1,
+          {
+            id: 101,
+            key: "SHARED01",
+            libraryID: 1,
+            isAttachment: () => false,
+            getAttachments: () => [userPdf.id],
+          },
+        ],
+        [
+          5,
+          {
+            id: 105,
+            key: "SHARED01",
+            libraryID: 5,
+            isAttachment: () => false,
+            getAttachments: () => [groupPdf.id],
+          },
+        ],
+      ]);
+      (globalThis as any).Zotero = {
+        Libraries: {
+          userLibraryID: 1,
+          getAll: () => [{ libraryID: 1 }, { libraryID: 5 }],
+        },
+        Items: {
+          getByLibraryAndKey: (libraryID: number, key: string) =>
+            key === "SHARED01" ? parents.get(libraryID) || null : null,
+          get: (id: number) =>
+            id === userPdf.id ? userPdf : id === groupPdf.id ? groupPdf : null,
+        },
+      };
+      (globalThis as any).ztoolkit = { log: () => undefined };
+
+      const { PdfToolManager } =
+        await import("../src/modules/chat/pdf-tools/PdfToolManager.ts");
+      const manager = new PdfToolManager();
+      manager.setCurrentItemKey("SHARED01");
+
+      const personal = await manager.extractAndParsePaper("SHARED01", false, 1);
+      const group = await manager.extractAndParsePaper("SHARED01", false, 5);
+      assert.include(personal?.fullText, "Personal-library body");
+      assert.include(group?.fullText, "Group-library body");
+      assert.strictEqual(
+        await manager.extractAndParsePaper("SHARED01", false, 1),
+        personal,
+      );
+      assert.strictEqual(
+        await manager.extractAndParsePaper("SHARED01", false, 5),
+        group,
+      );
+
+      const result = await manager.executeToolCall(
+        {
+          id: "group-full-text",
+          type: "function",
+          function: { name: "get_full_text", arguments: "{}" },
+        },
+        undefined,
+        {},
+        "SHARED01",
+        {
+          paperSource: { itemKey: "SHARED01", libraryID: 5 },
+        },
+      );
+      assert.include(result, "Group-library body");
+      assert.notInclude(result, "Personal-library body");
+    });
+
     it("enriches fallback content when attachment text extraction rejects", async function () {
       const attachment = {
         id: 44,

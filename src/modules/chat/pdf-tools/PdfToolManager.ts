@@ -155,7 +155,13 @@ export class PdfToolManager {
   /**
    * 根据 itemKey 获取 Zotero Item
    */
-  private getItemByKey(itemKey: string): Zotero.Item | null {
+  private getItemByKey(
+    itemKey: string,
+    libraryID?: number,
+  ): Zotero.Item | null {
+    if (Number.isSafeInteger(libraryID)) {
+      return Zotero.Items.getByLibraryAndKey(libraryID!, itemKey) || null;
+    }
     const libraryIDs = [
       Zotero.Libraries.userLibraryID,
       ...(Zotero.Libraries.getAll?.() || []).map(
@@ -173,8 +179,11 @@ export class PdfToolManager {
    * 解析 itemKey 对应的 PDF 附件 ID（item 本身是 PDF 附件或其第一个 PDF 附件）。
    * 用于文本提取失败但 reader 可能仍打开着该附件的场景（原生大纲提取）。
    */
-  private findPdfAttachmentItemID(itemKey: string): number | null {
-    const item = this.getItemByKey(itemKey);
+  private findPdfAttachmentItemID(
+    itemKey: string,
+    libraryID?: number,
+  ): number | null {
+    const item = this.getItemByKey(itemKey, libraryID);
     if (!item) return null;
 
     if (item.isAttachment && item.isAttachment()) {
@@ -207,9 +216,13 @@ export class PdfToolManager {
   async extractAndParsePaper(
     itemKey: string,
     includeNativeOutline: boolean = false,
+    libraryID?: number,
   ): Promise<PaperStructureExtended | null> {
+    const cacheKey = Number.isSafeInteger(libraryID)
+      ? `${libraryID}:${itemKey}`
+      : itemKey;
     // 检查缓存
-    const cached = this.paperCache.get(itemKey);
+    const cached = this.paperCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
       ztoolkit.log(`[PdfToolManager] Cache hit for item: ${itemKey}`);
       if (includeNativeOutline) {
@@ -221,7 +234,7 @@ export class PdfToolManager {
       return cached.structure;
     }
 
-    const item = this.getItemByKey(itemKey);
+    const item = this.getItemByKey(itemKey, libraryID);
     if (!item) {
       return null;
     }
@@ -287,7 +300,7 @@ export class PdfToolManager {
       if (includeNativeOutline) {
         await this.enrichWithNativeOutline(structure, attachmentItemID);
       }
-      this.addToCache(itemKey, attachmentItemID, structure);
+      this.addToCache(cacheKey, attachmentItemID, structure);
     }
 
     return structure;
@@ -1600,6 +1613,10 @@ export class PdfToolManager {
       currentItemKeyOverride === undefined
         ? this.currentItemKey
         : currentItemKeyOverride;
+    const currentPaperLibraryID =
+      executionContext?.paperSource?.itemKey === effectiveCurrentItemKey
+        ? executionContext.paperSource.libraryID
+        : undefined;
 
     // === Zotero Library 工具（不需要 PDF）===
     switch (name) {
@@ -1752,8 +1769,26 @@ export class PdfToolManager {
           args.sourceItemKey,
           effectiveCurrentItemKey,
         );
+        const boundSourceContext =
+          sourceItemKey &&
+          executionContext?.paperSource?.itemKey === sourceItemKey
+            ? executionContext.paperSource
+            : undefined;
+        const resolvedSourceItem = sourceItemKey
+          ? this.getItemByKey(sourceItemKey, boundSourceContext?.libraryID)
+          : null;
+        const sourceContext = sourceItemKey
+          ? {
+              itemKey: sourceItemKey,
+              libraryID: resolvedSourceItem?.libraryID,
+            }
+          : undefined;
         const paper = sourceItemKey
-          ? await this.extractAndParsePaper(sourceItemKey, true)
+          ? await this.extractAndParsePaper(
+              sourceItemKey,
+              true,
+              sourceContext?.libraryID,
+            )
           : fallbackStructure
             ? this.ensureExtendedStructure(fallbackStructure)
             : null;
@@ -1762,6 +1797,9 @@ export class PdfToolManager {
           executionContext?.presentationVisualReviewer,
           executionContext?.presentationPlanner,
           paper || undefined,
+          executionContext?.presentationProgress,
+          undefined,
+          sourceContext,
         );
       }
     }
@@ -1780,6 +1818,9 @@ export class PdfToolManager {
       paperStructure = await this.extractAndParsePaper(
         targetItemKey,
         name === "get_outline" || name === "list_sections",
+        targetItemKey === effectiveCurrentItemKey
+          ? currentPaperLibraryID
+          : undefined,
       );
       if (paperStructure) {
         resolvedSourceItemKey = targetItemKey;
@@ -1801,6 +1842,7 @@ export class PdfToolManager {
         if (name === "get_outline" || name === "list_sections") {
           const attachmentItemID = this.findPdfAttachmentItemID(
             effectiveCurrentItemKey,
+            currentPaperLibraryID,
           );
           if (attachmentItemID !== null) {
             await this.enrichWithNativeOutline(

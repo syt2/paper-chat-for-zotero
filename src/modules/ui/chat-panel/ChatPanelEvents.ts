@@ -847,7 +847,9 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
       syncSendButtonState(sendButton, chatManager);
       const itemKey = loadedSession.lastActiveItemKey;
       if (itemKey) {
-        const libraryID = Zotero.Libraries.userLibraryID;
+        const libraryID =
+          loadedSession.lastActiveItemLibraryID ??
+          Zotero.Libraries.userLibraryID;
         const item = Zotero.Items.getByLibraryAndKey(libraryID, itemKey);
         if (item) {
           context.setCurrentItem(item as Zotero.Item);
@@ -1125,7 +1127,7 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
     const item = getActiveReaderItem();
     if (item) {
       context.setCurrentItem(item);
-      chatManager.setCurrentItemKey(item.key);
+      chatManager.setCurrentItemKey(item.key, item.libraryID);
     } else {
       context.setCurrentItem(null);
       chatManager.setCurrentItemKey(null);
@@ -1320,7 +1322,9 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
         const activeSession = chatManager.getActiveSession();
         const itemKey = activeSession?.lastActiveItemKey;
         if (itemKey) {
-          const libraryID = Zotero.Libraries.userLibraryID;
+          const libraryID =
+            activeSession?.lastActiveItemLibraryID ??
+            Zotero.Libraries.userLibraryID;
           const item = Zotero.Items.getByLibraryAndKey(libraryID, itemKey);
           if (item) {
             context.setCurrentItem(item as Zotero.Item);

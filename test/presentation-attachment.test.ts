@@ -127,6 +127,68 @@ describe("presentation Zotero attachment", function () {
     assert.notProperty(importOptions[0], "parentItemID");
   });
 
+  it("uses the trusted library when two libraries contain the same item key", async function () {
+    const userPaper = {
+      id: 11,
+      key: "SHARED01",
+      libraryID: 1,
+      isAttachment: () => false,
+      isNote: () => false,
+      getField: () => "Wrong user-library paper",
+    };
+    const groupPaper = {
+      id: 55,
+      key: "SHARED01",
+      libraryID: 5,
+      isAttachment: () => false,
+      isNote: () => false,
+      getField: () => "Correct group-library paper",
+    };
+    const importOptions: any[] = [];
+    runtime.Zotero = {
+      Libraries: {
+        userLibraryID: 1,
+        getAll: () => [{ libraryID: 1 }, { libraryID: 5 }],
+      },
+      Items: {
+        getByLibraryAndKey: (libraryID: number, key: string) => {
+          if (key !== "SHARED01") return false;
+          return libraryID === 1 ? userPaper : groupPaper;
+        },
+        get: () => false,
+      },
+      Attachments: {
+        importFromFile: async (options: unknown) => {
+          importOptions.push(options);
+          return {
+            id: 91,
+            key: "PPTX005",
+            libraryID: 5,
+            getFilePathAsync: async () => "/zotero/storage/PPTX005/deck.pptx",
+          };
+        },
+      },
+    };
+    runtime.IOUtils = {
+      exists: async () => false,
+      remove: async () => undefined,
+    };
+
+    const result = await attachPresentationToZotero({
+      outputPath: "/paper-chat/presentations/deck.pptx",
+      presentationTitle: "Generated deck",
+      sourceItemKey: "SHARED01",
+      sourceLibraryID: 5,
+    });
+
+    assert.equal(result.status, "attached");
+    assert.equal(result.parentItemID, 55);
+    assert.deepInclude(importOptions[0], {
+      parentItemID: 55,
+      title: "Correct group-library paper - PaperChat PPT",
+    });
+  });
+
   it("preserves the generated file when Zotero attachment import fails", async function () {
     runtime.Zotero = {
       Libraries: { userLibraryID: 1, getAll: () => [] },

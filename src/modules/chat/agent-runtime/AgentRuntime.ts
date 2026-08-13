@@ -5,6 +5,7 @@ import type {
   ChatSession,
   ExecutionPlan,
   HostedWebSearchCall,
+  PresentationToolCardArtifact,
   StreamToolCallingCallbacks,
 } from "../../../types/chat";
 import type {
@@ -102,6 +103,7 @@ import {
   type PresentationPlanner,
 } from "../../presentation/PresentationPlanner";
 import { normalizePresentationToolCall } from "../../presentation/PresentationToolCallPolicy";
+import type { PresentationProgressUpdate } from "../../presentation/contracts";
 
 interface AgentRuntimeCallbacks {
   isSessionActive: (session: ChatSession) => boolean;
@@ -122,6 +124,7 @@ interface AgentRuntimeCallbacks {
       expandStateId?: string;
       resultPreviewMaxLength?: number;
       showResultWhileCalling?: boolean;
+      presentationArtifact?: PresentationToolCardArtifact;
     },
   ) => string;
   generateId: () => string;
@@ -160,6 +163,7 @@ interface RuntimeExecutionOptions {
   paperStructure?: PaperStructure | PaperStructureExtended | null;
   sendingSession: ChatSession;
   currentItemKey?: string | null;
+  currentItemLibraryID?: number;
   sessionRunId?: number;
   abortSignal?: AbortSignal;
   executeProviderRequest?: ProviderRequestExecutor;
@@ -204,6 +208,7 @@ interface ToolIterationParams {
   reuseCompletedResults: boolean;
   currentItemKey?: string | null;
   lockedToolItemKey?: string;
+  currentItemLibraryID?: number;
   allowedToolNames: Set<string>;
   selectedSearchScope?: SelectedSearchScope;
   noteSummaryContext?: NoteSummaryContext;
@@ -330,6 +335,7 @@ export class AgentRuntime {
           streamingState,
           evidence: groundedDisplay.evidence || [],
           sourceItemKeys,
+          presentationArtifacts: message.presentationArtifacts || [],
         },
       );
     },
@@ -401,6 +407,7 @@ export class AgentRuntime {
       paperStructure,
       sendingSession,
       currentItemKey,
+      currentItemLibraryID,
       sessionRunId,
       abortSignal,
       executeProviderRequest = (operation) => operation(),
@@ -543,6 +550,7 @@ export class AgentRuntime {
             reuseCompletedResults: preserveToolExecutionState,
             currentItemKey,
             lockedToolItemKey,
+            currentItemLibraryID,
             allowedToolNames: new Set(
               iterationControl.toolsForRound.map((tool) => tool.function.name),
             ),
@@ -706,6 +714,7 @@ export class AgentRuntime {
       paperStructure,
       sendingSession,
       currentItemKey,
+      currentItemLibraryID,
       sessionRunId,
       abortSignal,
       executeProviderRequest = (operation) => operation(),
@@ -842,6 +851,7 @@ export class AgentRuntime {
             reuseCompletedResults: preserveToolExecutionState,
             currentItemKey,
             lockedToolItemKey,
+            currentItemLibraryID,
             allowedToolNames: new Set(
               iterationControl.toolsForRound.map((tool) => tool.function.name),
             ),
@@ -1362,6 +1372,7 @@ export class AgentRuntime {
       reuseCompletedResults,
       currentItemKey,
       lockedToolItemKey,
+      currentItemLibraryID,
       allowedToolNames,
       selectedSearchScope,
       noteSummaryContext,
@@ -1369,21 +1380,6 @@ export class AgentRuntime {
       executeProviderRequest,
     } = params;
     const contextStrategy = getToolContextStrategy(provider);
-    const executionContext: ToolSchedulerExecutionContext | undefined =
-      toolCalls.some((toolCall) => toolCall.function.name === "presentation")
-        ? {
-            presentationPlanner: this.createPresentationPlanner(
-              provider,
-              executeProviderRequest,
-              abortSignal,
-            ),
-            presentationVisualReviewer: this.createPresentationVisualReviewer(
-              provider,
-              executeProviderRequest,
-              abortSignal,
-            ),
-          }
-        : undefined;
 
     const latestUserRequest = [...currentMessages]
       .reverse()
@@ -1397,6 +1393,74 @@ export class AgentRuntime {
         previousToolResults,
       ),
     );
+    const presentationLocalIds = createPresentationLocalIds(
+      normalizedToolCalls,
+      iteration,
+    );
+    const createPresentationProgress =
+      (presentationCall: ToolCall, localId: string) =>
+      async (update: PresentationProgressUpdate): Promise<void> => {
+        if (!this.callbacks.isSessionTracked(sendingSession, sessionRunId)) {
+          return;
+        }
+        this.executionPlanManager.addOrUpdateToolStep(
+          sendingSession,
+          currentMessages,
+          localId,
+          presentationCall.function.name,
+          "in_progress",
+          truncateToolDetail(update.message),
+        );
+        this.emitPlanUpdate(sendingSession, sessionRunId);
+        this.emitRuntimeEvent<"tool_progress">(
+          sendingSession,
+          sessionRunId,
+          assistantMessage,
+          {
+            type: "tool_progress",
+            toolCallId: presentationCall.id,
+            toolName: presentationCall.function.name,
+            phase: update.phase,
+            message: update.message,
+            current: update.current,
+            total: update.total,
+            pptxPath: update.pptxPath,
+            previewPaths: update.previewPaths,
+            isDraft: update.isDraft,
+            localId,
+            iteration,
+          },
+        );
+      };
+    const executionContext: ToolSchedulerExecutionContext | undefined =
+      currentItemKey ||
+      normalizedToolCalls.some(
+        (toolCall) => toolCall.function.name === "presentation",
+      )
+        ? {
+            paperSource: {
+              itemKey: currentItemKey || undefined,
+              libraryID: currentItemLibraryID,
+            },
+            ...(normalizedToolCalls.some(
+              (toolCall) => toolCall.function.name === "presentation",
+            )
+              ? {
+                  presentationPlanner: this.createPresentationPlanner(
+                    provider,
+                    executeProviderRequest,
+                    abortSignal,
+                  ),
+                  presentationVisualReviewer:
+                    this.createPresentationVisualReviewer(
+                      provider,
+                      executeProviderRequest,
+                      abortSignal,
+                    ),
+                }
+              : {}),
+          }
+        : undefined;
 
     const invalidSummaryCreateNoteCallIds = new Set<string>();
     const protectedToolCalls = normalizedToolCalls.map((toolCall) => {
@@ -1500,14 +1564,117 @@ export class AgentRuntime {
 
     const formatCallingToolCards = (calls: ToolCall[]): string =>
       calls
-        .map((toolCall) =>
-          this.callbacks.formatToolCallCard(
+        .map((toolCall) => {
+          const localId = presentationLocalIds.get(toolCall);
+          return this.callbacks.formatToolCallCard(
             toolCall.function.name,
             toolCall.function.arguments,
             "calling",
-          ),
-        )
+            undefined,
+            localId ? { expandStateId: localId } : undefined,
+          );
+        })
         .join("");
+
+    let activeCallingDisplay = "";
+    let activePendingDisplayToolCalls = new Map<string, ToolCall>();
+    let activeProgressByToolCall = new Map<
+      string,
+      PresentationProgressUpdate
+    >();
+    const upsertPresentationArtifact = (
+      artifact: PresentationToolCardArtifact,
+    ): void => {
+      const artifacts = assistantMessage.presentationArtifacts || [];
+      const index = artifacts.findIndex(
+        (candidate) =>
+          (artifact.localId && candidate.localId === artifact.localId) ||
+          (!artifact.localId &&
+            !candidate.localId &&
+            candidate.toolCallId === artifact.toolCallId),
+      );
+      if (index >= 0) {
+        const previous = artifacts[index];
+        artifacts[index] = {
+          ...previous,
+          ...artifact,
+          path: artifact.path || previous.path,
+          previewPaths: artifact.previewPaths || previous.previewPaths,
+          attachmentItemID:
+            artifact.attachmentItemID || previous.attachmentItemID,
+        };
+      } else {
+        artifacts.push(artifact);
+      }
+      assistantMessage.presentationArtifacts = artifacts;
+    };
+    const findPresentationArtifact = (
+      localId: string,
+    ): PresentationToolCardArtifact | undefined =>
+      assistantMessage.presentationArtifacts?.find(
+        (artifact) => artifact.localId === localId,
+      );
+    const renderCallingProgress = async (
+      toolCall: ToolCall,
+      update: PresentationProgressUpdate,
+    ): Promise<void> => {
+      if (
+        toolCall.function.name !== "presentation" ||
+        !activePendingDisplayToolCalls.has(
+          presentationLocalIds.get(toolCall) || toolCall.id,
+        ) ||
+        !this.callbacks.isSessionTracked(sendingSession, sessionRunId)
+      ) {
+        return;
+      }
+      const localId = presentationLocalIds.get(toolCall) || toolCall.id;
+      activeProgressByToolCall.set(localId, update);
+      if (update.pptxPath || update.previewPaths?.length) {
+        upsertPresentationArtifact({
+          toolCallId: toolCall.id,
+          localId,
+          path: update.pptxPath,
+          previewPaths: update.previewPaths,
+          isDraft: update.isDraft,
+        });
+      }
+      const progressCards = [...activePendingDisplayToolCalls.values()]
+        .map((pendingToolCall) => {
+          const pendingLocalId =
+            presentationLocalIds.get(pendingToolCall) || pendingToolCall.id;
+          const progress = activeProgressByToolCall.get(pendingLocalId);
+          return this.callbacks.formatToolCallCard(
+            pendingToolCall.function.name,
+            pendingToolCall.function.arguments,
+            "calling",
+            progress?.message,
+            {
+              expandStateId: pendingLocalId,
+              showResultWhileCalling: Boolean(progress),
+              resultPreviewMaxLength: 320,
+              presentationArtifact: findPresentationArtifact(pendingLocalId),
+            },
+          );
+        })
+        .join("");
+      const display = activeCallingDisplay + progressCards;
+      assistantMessage.content = display;
+      assistantMessage.streamingState = "in_progress";
+      if (update.pptxPath || update.previewPaths?.length) {
+        // A presentation milestone points at a real file that already exists.
+        // Persist it before returning to the renderer so a Zotero crash cannot
+        // leave the PPTX on disk without its chat entry/open action.
+        await this.messageCheckpointer.flush(
+          sendingSession,
+          sessionRunId,
+          assistantMessage,
+          "in_progress",
+        );
+      }
+      if (this.callbacks.isSessionActive(sendingSession)) {
+        this.callbacks.onStreamingUpdate?.(display, assistantMessage.id);
+      }
+    };
 
     for (const entry of executionEntries) {
       let callingDisplay = accumulatedDisplay;
@@ -1523,15 +1690,37 @@ export class AgentRuntime {
           const toolArgs = toolCall.function.arguments;
           ztoolkit.log(`[${logPrefix}] Executing: ${toolName}`, toolArgs);
 
-          pendingDisplayToolCalls.set(toolCall.id, toolCall);
+          const localId = presentationLocalIds.get(toolCall) || toolCall.id;
+          pendingDisplayToolCalls.set(localId, toolCall);
           this.executionPlanManager.addOrUpdateToolStep(
             sendingSession,
             currentMessages,
-            toolCall.id,
+            localId,
             toolName,
             "in_progress",
             truncateToolDetail(toolArgs),
           );
+        }
+        activeCallingDisplay = accumulatedDisplay;
+        activePendingDisplayToolCalls = pendingDisplayToolCalls;
+        activeProgressByToolCall = new Map();
+        if (entry.kind === "execute") {
+          for (const request of entry.requests) {
+            if (request.toolCall.function.name !== "presentation") continue;
+            const localId =
+              presentationLocalIds.get(request.toolCall) || request.toolCall.id;
+            const eventProgress = createPresentationProgress(
+              request.toolCall,
+              localId,
+            );
+            request.executionContext = {
+              ...request.executionContext,
+              presentationProgress: async (update) => {
+                await eventProgress(update);
+                await renderCallingProgress(request.toolCall, update);
+              },
+            };
+          }
         }
         callingDisplay += formatCallingToolCards([
           ...pendingDisplayToolCalls.values(),
@@ -1696,13 +1885,36 @@ export class AgentRuntime {
               ? null
               : parseToolError(executionResult.content);
 
+          const presentationArtifact =
+            toolName === "presentation"
+              ? parsePresentationToolCardArtifact(
+                  toolResult,
+                  toolCall.id,
+                  presentationLocalIds.get(toolCall) || toolCall.id,
+                )
+              : undefined;
+          if (presentationArtifact) {
+            upsertPresentationArtifact(presentationArtifact);
+          }
+
           accumulatedDisplay += this.callbacks.formatToolCallCard(
             toolName,
             toolArgs,
             toolDisplayStatus,
             toolResult,
+            toolName === "presentation"
+              ? {
+                  expandStateId:
+                    presentationLocalIds.get(toolCall) || toolCall.id,
+                  presentationArtifact,
+                  resultPreviewMaxLength: 600,
+                }
+              : undefined,
           );
-          pendingDisplayToolCalls.delete(toolCall.id);
+          pendingDisplayToolCalls.delete(
+            presentationLocalIds.get(toolCall) || toolCall.id,
+          );
+          activePendingDisplayToolCalls = pendingDisplayToolCalls;
           const displayWithPendingTools =
             accumulatedDisplay +
             formatCallingToolCards([...pendingDisplayToolCalls.values()]);
@@ -1718,7 +1930,7 @@ export class AgentRuntime {
           this.executionPlanManager.addOrUpdateToolStep(
             sendingSession,
             currentMessages,
-            toolCall.id,
+            presentationLocalIds.get(toolCall) || toolCall.id,
             toolName,
             planStepStatus,
             truncateToolDetail(toolResult),
@@ -1781,6 +1993,7 @@ export class AgentRuntime {
 
         this.appendRecoveryGuidanceMessage(currentMessages, batchResults);
       } finally {
+        activePendingDisplayToolCalls = new Map();
         releaseMutatingToolEntry?.();
       }
     }
@@ -3169,6 +3382,59 @@ function truncateToolDetail(text: string): string {
   return text.slice(0, 157) + "...";
 }
 
+function parsePresentationToolCardArtifact(
+  content: string,
+  toolCallId: string,
+  localId: string,
+): PresentationToolCardArtifact | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return undefined;
+  }
+  const value = parsed as Record<string, unknown>;
+  const path = typeof value.path === "string" ? value.path : undefined;
+  const previewPaths = Array.isArray(value.previewPaths)
+    ? value.previewPaths.filter(
+        (candidate): candidate is string => typeof candidate === "string",
+      )
+    : undefined;
+  const attachmentItemID = Number.isSafeInteger(value.attachmentItemID)
+    ? (value.attachmentItemID as number)
+    : undefined;
+  if (!path && !previewPaths?.length) return undefined;
+  return {
+    toolCallId,
+    localId,
+    path,
+    previewPaths,
+    attachmentItemID,
+    isDraft: false,
+  };
+}
+
+function createPresentationLocalIds(
+  toolCalls: readonly ToolCall[],
+  iteration: number,
+): Map<ToolCall, string> {
+  const occurrences = new Map<string, number>();
+  const localIds = new Map<ToolCall, string>();
+  for (const toolCall of toolCalls) {
+    if (toolCall.function.name !== "presentation") continue;
+    const occurrence = (occurrences.get(toolCall.id) || 0) + 1;
+    occurrences.set(toolCall.id, occurrence);
+    localIds.set(
+      toolCall,
+      `${toolCall.id}:presentation:${iteration}:${occurrence}`,
+    );
+  }
+  return localIds;
+}
+
 const TOOL_RESULT_COMPACTED_PREFIX =
   "[Tool result compacted to preserve prompt cache and context budget]";
 const TOOL_RESULT_FULL_KEEP_COUNT = 6;
@@ -3321,34 +3587,36 @@ export function retainCompletedApiOnlyModelContextMessagesForTurn(
     }
 
     let nextIndex = index + 1;
-    const toolResults = new Map<string, ChatMessage>();
+    const toolResults = new Map<string, ChatMessage[]>();
     while (
       nextIndex < turnMessages.length &&
       turnMessages[nextIndex].role === "tool"
     ) {
       const toolResult = turnMessages[nextIndex];
-      if (
-        toolResult.tool_call_id &&
-        !toolResults.has(toolResult.tool_call_id)
-      ) {
-        toolResults.set(toolResult.tool_call_id, toolResult);
+      if (toolResult.tool_call_id) {
+        const matchingResults = toolResults.get(toolResult.tool_call_id) || [];
+        matchingResults.push(toolResult);
+        toolResults.set(toolResult.tool_call_id, matchingResults);
       }
       nextIndex += 1;
     }
 
-    const seenToolCallIds = new Set<string>();
+    const consumedResultCount = new Map<string, number>();
     const completedToolCalls = assistant.tool_calls.filter((toolCall) => {
       const id = toolCall.id;
-      if (!id || seenToolCallIds.has(id) || !toolResults.has(id)) {
-        return false;
-      }
-      seenToolCallIds.add(id);
-      return true;
+      if (!id) return false;
+      const resultIndex = consumedResultCount.get(id) || 0;
+      const completed = resultIndex < (toolResults.get(id)?.length || 0);
+      if (completed) consumedResultCount.set(id, resultIndex + 1);
+      return completed;
     });
     if (completedToolCalls.length > 0) {
       retained.push({ ...assistant, tool_calls: completedToolCalls });
+      const retainedResultCount = new Map<string, number>();
       for (const toolCall of completedToolCalls) {
-        retained.push(toolResults.get(toolCall.id)!);
+        const resultIndex = retainedResultCount.get(toolCall.id) || 0;
+        retained.push(toolResults.get(toolCall.id)![resultIndex]);
+        retainedResultCount.set(toolCall.id, resultIndex + 1);
       }
     }
     index = nextIndex;
@@ -3472,6 +3740,23 @@ function summarizeRuntimeEventForLog(
         iteration: event.iteration,
         toolCallId: event.toolCallId,
         toolName: event.toolName,
+      };
+    case "tool_progress":
+      return {
+        type: event.type,
+        sessionId: event.sessionId,
+        planId: event.planId,
+        assistantMessageId: event.assistantMessageId,
+        iteration: event.iteration,
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        phase: event.phase,
+        message: event.message,
+        current: event.current,
+        total: event.total,
+        hasPptx: Boolean(event.pptxPath),
+        previewCount: event.previewPaths?.length || 0,
+        isDraft: event.isDraft,
       };
     case "tool_completed":
       return {

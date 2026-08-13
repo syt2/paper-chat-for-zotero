@@ -170,6 +170,7 @@ class SemanticWriteFakeDatabase {
         is_system_notice: (params[18] as number | null) || null,
         search_text: String(params[19] || ""),
         search_index_version: Number(params[20]),
+        presentation_artifacts: (params[21] as string | null) || null,
       };
       this.messages.set(message.id, message);
       return [];
@@ -211,8 +212,8 @@ class SemanticWriteFakeDatabase {
       return [];
     }
     if (statement.startsWith("UPDATE messages SET content = ?")) {
-      const message = this.messages.get(String(params[8]));
-      if (message && message.session_id === params[9]) {
+      const message = this.messages.get(String(params[9]));
+      if (message && message.session_id === params[10]) {
         message.content = String(params[0] || "");
         message.reasoning = (params[1] as string | null) || null;
         message.timestamp = Number(params[2]);
@@ -222,6 +223,7 @@ class SemanticWriteFakeDatabase {
         message.source_item_keys = (params[5] as string | null) || null;
         message.search_text = String(params[6] || "");
         message.search_index_version = Number(params[7]);
+        message.presentation_artifacts = (params[8] as string | null) || null;
       }
       return [];
     }
@@ -590,6 +592,66 @@ describe("chat search semantic writes", function () {
     );
     assert.lengthOf(messageWriteGuards, 2);
     assert.isTrue(messageWriteGuards.every((query) => query.inTransaction));
+  });
+
+  it("persists presentation artifacts across streaming checkpoints", async function () {
+    const fake = new SemanticWriteFakeDatabase({
+      target_version: CURRENT_SEARCH_VERSION,
+      completed: 1,
+      revision_epoch: "epoch-presentation-artifacts",
+      search_revision: 2,
+      updated_at: 1,
+    });
+    fake.messages.set("assistant-presentation", {
+      id: "assistant-presentation",
+      session_id: "session-1",
+      seq: 0,
+      role: "assistant",
+      content: "",
+      timestamp: 1,
+      streaming_state: "in_progress",
+      search_text: "",
+      search_index_version: CURRENT_SEARCH_VERSION,
+    });
+    await installFakeDatabase(fake);
+    const service = new SessionStorageService();
+    const artifact = {
+      toolCallId: "presentation-call-1",
+      path: "/zotero-data/paper-chat/presentations/deck.pptx",
+      previewPaths: ["/zotero-data/paper-chat/presentations/deck/slide-01.png"],
+      isDraft: true,
+    };
+
+    await service.updateMessageContent(
+      "session-1",
+      "assistant-presentation",
+      "Draft is ready",
+      undefined,
+      {
+        streamingState: "in_progress",
+        presentationArtifacts: [artifact],
+      },
+    );
+    assert.deepEqual(
+      JSON.parse(
+        fake.messages.get("assistant-presentation")?.presentation_artifacts ||
+          "[]",
+      ),
+      [artifact],
+    );
+
+    await service.updateMessageContent(
+      "session-1",
+      "assistant-presentation",
+      "Final answer",
+    );
+    assert.deepEqual(
+      JSON.parse(
+        fake.messages.get("assistant-presentation")?.presentation_artifacts ||
+          "[]",
+      ),
+      [artifact],
+    );
   });
 
   it("covers full save, metadata, title, delete, clear, and session delete", async function () {

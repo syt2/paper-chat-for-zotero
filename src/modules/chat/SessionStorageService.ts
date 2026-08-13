@@ -15,6 +15,7 @@ import type {
   ChatMessage,
   ChatMessageStreamingState,
   ChatSession,
+  PresentationToolCardArtifact,
   SessionMeta,
   ToolExecutionState,
 } from "../../types/chat";
@@ -23,6 +24,10 @@ import { filterValidMessages, generateShortId } from "../../utils/common";
 import { normalizeEvidenceRecords } from "./evidence";
 import { normalizeSourceItemKeys } from "./note-source-provenance";
 import { serializeQuotedMessageRefs } from "./quoted-messages";
+import {
+  normalizePresentationArtifacts,
+  serializePresentationArtifacts,
+} from "./presentation-artifacts";
 import { stripPendingAndIncompleteToolCallContent } from "./interrupted-message";
 import { getStorageDatabase } from "./db/StorageDatabase";
 import {
@@ -61,6 +66,7 @@ type SessionRow = {
   created_at: number;
   updated_at: number;
   last_active_item_key: string | null;
+  last_active_item_library_id?: number | null;
   scope_item_keys?: string | null;
   scope_label?: string | null;
   context_summary: string | null;
@@ -101,6 +107,7 @@ export interface CreateSessionOptions {
   sessionId?: string;
   messages?: ChatMessage[];
   lastActiveItemKey?: string | null;
+  lastActiveItemLibraryID?: number;
   title?: string;
   titleSource?: ChatSession["titleSource"];
   titleGeneratedAt?: number;
@@ -168,14 +175,26 @@ export function mapSessionRowToChatSession(
   row: SessionRow,
   messages: ChatMessage[],
 ): ChatSession {
+  const generallyValidMessages = new Set(filterValidMessages(messages));
   return {
     id: row.id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lastActiveItemKey: row.last_active_item_key || null,
+    lastActiveItemLibraryID:
+      row.last_active_item_key &&
+      Number.isSafeInteger(row.last_active_item_library_id) &&
+      Number(row.last_active_item_library_id) > 0
+        ? Number(row.last_active_item_library_id)
+        : undefined,
     scopeItemKeys: parseScopeItemKeys(row.scope_item_keys),
     scopeLabel: row.scope_label || undefined,
-    messages: filterValidMessages(messages),
+    messages: messages.filter(
+      (message) =>
+        generallyValidMessages.has(message) ||
+        (message.role === "assistant" &&
+          Boolean(message.presentationArtifacts?.length)),
+    ),
     title: row.title || undefined,
     titleSource: toValidTitleSource(row.title_source),
     titleGeneratedAt:
@@ -461,8 +480,8 @@ export class SessionStorageService {
 
         await db.queryAsync(
           `INSERT INTO messages
-           (id, session_id, seq, role, content, reasoning, images, files, quoted_messages, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, source_item_keys, streaming_state, api_only, is_system_notice, search_text, search_index_version)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, session_id, seq, role, content, reasoning, images, files, quoted_messages, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, source_item_keys, streaming_state, api_only, is_system_notice, search_text, search_index_version, presentation_artifacts)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             message.id,
             sessionId,
@@ -485,6 +504,7 @@ export class SessionStorageService {
             message.isSystemNotice ? 1 : null,
             searchProjection.searchText,
             searchProjection.searchIndexVersion,
+            serializePresentationArtifacts(message.presentationArtifacts),
           ],
         );
 
@@ -609,6 +629,7 @@ export class SessionStorageService {
       streamingState?: ChatMessageStreamingState | null;
       evidence?: EvidenceRecord[];
       sourceItemKeys?: string[];
+      presentationArtifacts?: PresentationToolCardArtifact[];
     },
   ): Promise<void> {
     await this.init();
@@ -640,6 +661,14 @@ export class SessionStorageService {
         )
           ? normalizeSourceItemKeys(options?.sourceItemKeys)
           : previousMessage.sourceItemKeys;
+        const updatesPresentationArtifacts =
+          Object.prototype.hasOwnProperty.call(
+            options || {},
+            "presentationArtifacts",
+          );
+        const nextPresentationArtifacts = updatesPresentationArtifacts
+          ? normalizePresentationArtifacts(options?.presentationArtifacts)
+          : previousMessage.presentationArtifacts;
         const nextMessage: ChatMessage = {
           ...previousMessage,
           content,
@@ -650,6 +679,10 @@ export class SessionStorageService {
           sourceItemKeys:
             nextSourceItemKeys && nextSourceItemKeys.length > 0
               ? nextSourceItemKeys
+              : undefined,
+          presentationArtifacts:
+            nextPresentationArtifacts && nextPresentationArtifacts.length > 0
+              ? nextPresentationArtifacts
               : undefined,
         };
         const previousProjection =
@@ -665,7 +698,7 @@ export class SessionStorageService {
         await db.queryAsync(
           `UPDATE messages SET
             content = ?, reasoning = ?, timestamp = ?, streaming_state = ?, evidence = ?, source_item_keys = ?,
-            search_text = ?, search_index_version = ?
+            search_text = ?, search_index_version = ?, presentation_artifacts = ?
           WHERE id = ? AND session_id = ?`,
           [
             content,
@@ -676,6 +709,7 @@ export class SessionStorageService {
             serializeSourceItemKeys(nextSourceItemKeys),
             nextProjection.searchText,
             nextProjection.searchIndexVersion,
+            serializePresentationArtifacts(nextPresentationArtifacts),
             messageId,
             sessionId,
           ],
@@ -736,6 +770,7 @@ export class SessionStorageService {
           `UPDATE sessions SET
             updated_at = ?,
             last_active_item_key = ?,
+            last_active_item_library_id = ?,
             scope_item_keys = ?,
             scope_label = ?,
             title = ?,
@@ -752,6 +787,10 @@ export class SessionStorageService {
           [
             nextUpdatedAt,
             session.lastActiveItemKey || null,
+            session.lastActiveItemKey &&
+            Number.isSafeInteger(session.lastActiveItemLibraryID)
+              ? session.lastActiveItemLibraryID!
+              : null,
             session.scopeItemKeys?.length
               ? JSON.stringify(session.scopeItemKeys)
               : null,
@@ -961,6 +1000,11 @@ export class SessionStorageService {
       createdAt: now,
       updatedAt: now,
       lastActiveItemKey: options.lastActiveItemKey ?? null,
+      lastActiveItemLibraryID:
+        options.lastActiveItemKey &&
+        Number.isSafeInteger(options.lastActiveItemLibraryID)
+          ? options.lastActiveItemLibraryID
+          : undefined,
       messages: options.messages ?? [],
       title: options.title,
       titleSource: options.titleSource,
@@ -1008,12 +1052,13 @@ export class SessionStorageService {
         // Upsert session (no messages column)
         await db.queryAsync(
           `INSERT INTO sessions
-           (id, created_at, updated_at, last_active_item_key, scope_item_keys, scope_label, title, title_source, title_generated_at, title_edited_at, context_summary, context_state, execution_plan, tool_execution_state, tool_approval_state, user_input_request_state, memory_extracted_at, memory_extracted_msg_count)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           (id, created_at, updated_at, last_active_item_key, last_active_item_library_id, scope_item_keys, scope_label, title, title_source, title_generated_at, title_edited_at, context_summary, context_state, execution_plan, tool_execution_state, tool_approval_state, user_input_request_state, memory_extracted_at, memory_extracted_msg_count)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              created_at = excluded.created_at,
              updated_at = excluded.updated_at,
              last_active_item_key = excluded.last_active_item_key,
+             last_active_item_library_id = excluded.last_active_item_library_id,
              scope_item_keys = excluded.scope_item_keys,
              scope_label = excluded.scope_label,
              title = excluded.title,
@@ -1033,6 +1078,10 @@ export class SessionStorageService {
             session.createdAt,
             nextUpdatedAt,
             session.lastActiveItemKey || null,
+            session.lastActiveItemKey &&
+            Number.isSafeInteger(session.lastActiveItemLibraryID)
+              ? session.lastActiveItemLibraryID!
+              : null,
             session.scopeItemKeys?.length
               ? JSON.stringify(session.scopeItemKeys)
               : null,
@@ -1096,8 +1145,8 @@ export class SessionStorageService {
             } = messagesForStorage[seq];
             await db.queryAsync(
               `INSERT INTO messages
-               (id, session_id, seq, role, content, reasoning, images, files, quoted_messages, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, source_item_keys, streaming_state, api_only, is_system_notice, search_text, search_index_version)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               (id, session_id, seq, role, content, reasoning, images, files, quoted_messages, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, source_item_keys, streaming_state, api_only, is_system_notice, search_text, search_index_version, presentation_artifacts)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               [
                 msg.id,
                 session.id,
@@ -1120,6 +1169,7 @@ export class SessionStorageService {
                 msg.isSystemNotice ? 1 : null,
                 searchProjection.searchText,
                 searchProjection.searchIndexVersion,
+                serializePresentationArtifacts(msg.presentationArtifacts),
               ],
             );
           }
@@ -1189,6 +1239,10 @@ export class SessionStorageService {
         last_active_item_key:
           typeof baseRowRaw.last_active_item_key === "string"
             ? baseRowRaw.last_active_item_key
+            : null,
+        last_active_item_library_id:
+          typeof baseRowRaw.last_active_item_library_id === "number"
+            ? baseRowRaw.last_active_item_library_id
             : null,
         context_summary:
           typeof baseRowRaw.context_summary === "string"

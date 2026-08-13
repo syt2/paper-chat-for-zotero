@@ -34,8 +34,233 @@ import {
   type PresentationVisualReviewResponse,
   type PresentationVisualReviewer,
 } from "./PresentationVisualReview";
+import type {
+  PresentationCapabilityTestOptions,
+  PresentationProgressCallback,
+  PresentationProgressPhase,
+  PresentationSourceContext,
+  PresentationRenderWithPreviewResult,
+} from "./contracts";
 
 const PRESENTATIONS_FOLDER = "presentations";
+const PRESENTATION_PROGRESS_ORDER: PresentationProgressPhase[] = [
+  "analyzing",
+  "planning",
+  "resolving_media",
+  "rendering",
+  "reviewing",
+  "repairing",
+  "exporting",
+  "attaching",
+  "completed",
+];
+
+type PresentationProgressMessages = Record<
+  PresentationProgressPhase,
+  string
+> & {
+  draftReady: string;
+  renderingRevision: string;
+};
+
+function getPresentationProgressMessages(
+  language: string,
+): PresentationProgressMessages {
+  if (/^zh(?:-|$)/i.test(language)) {
+    return {
+      analyzing: "正在读取论文",
+      planning: "正在规划 6 页结构",
+      resolving_media: "正在提取论文证据图",
+      rendering: "正在生成首版 PPT",
+      reviewing: "正在进行视觉检查",
+      repairing: "正在改进版式与内容",
+      exporting: "正在保存可编辑 PPTX",
+      attaching: "正在挂载到 Zotero",
+      completed: "PPT 已生成",
+      draftReady: "已生成可打开的 PPTX 草稿",
+      renderingRevision: "正在生成改进版 PPT",
+    };
+  }
+  return {
+    analyzing: "Reading the paper",
+    planning: "Planning the six-page structure",
+    resolving_media: "Extracting evidence figures from the paper",
+    rendering: "Rendering the first editable draft",
+    reviewing: "Reviewing visual quality",
+    repairing: "Improving the content and layout",
+    exporting: "Saving the editable PPTX",
+    attaching: "Attaching the presentation to Zotero",
+    completed: "Presentation completed",
+    draftReady: "An openable PPTX draft is ready",
+    renderingRevision: "Rendering an improved draft",
+  };
+}
+
+async function atomicWritePresentationFile(
+  path: string,
+  bytes: Uint8Array,
+): Promise<void> {
+  await IOUtils.write(path, bytes, {
+    flush: true,
+    tmpPath: `${path}.tmp-${generateShortId()}`,
+  });
+}
+
+function decodePngDataUrl(dataUrl: string): Uint8Array {
+  const match = /^data:image\/png(?:;[^,]*)?;base64,([\s\S]+)$/iu.exec(dataUrl);
+  if (!match) {
+    throw new Error("Presentation preview was not a base64 PNG data URL.");
+  }
+  const binary = atob(match[1]);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+interface CanonicalPresentationPath {
+  comparisonKey: string;
+  style: "posix" | "windows";
+}
+
+function canonicalizePresentationPath(
+  value: string,
+): CanonicalPresentationPath | undefined {
+  if (!value || /[\0\r\n]/u.test(value)) return undefined;
+
+  const path = value.replace(/\\/g, "/");
+  let prefix: string;
+  let remainder: string;
+  let style: CanonicalPresentationPath["style"];
+  const driveMatch = /^([a-z]):\/(.*)$/iu.exec(path);
+  const uncMatch = /^\/{2,}([^/]+)\/([^/]+)(?:\/(.*))?$/u.exec(path);
+  if (driveMatch) {
+    prefix = `${driveMatch[1].toLowerCase()}:/`;
+    remainder = driveMatch[2];
+    style = "windows";
+  } else if (uncMatch) {
+    prefix = `//${uncMatch[1]}/${uncMatch[2]}`;
+    remainder = uncMatch[3] || "";
+    style = "windows";
+  } else if (path.startsWith("/")) {
+    prefix = "/";
+    remainder = path.slice(1);
+    style = "posix";
+  } else {
+    return undefined;
+  }
+
+  const components: string[] = [];
+  for (const component of remainder.split("/")) {
+    if (!component || component === ".") continue;
+    if (component === "..") {
+      if (!components.length) return undefined;
+      components.pop();
+      continue;
+    }
+    components.push(component);
+  }
+  const separator = prefix.endsWith("/") || !components.length ? "" : "/";
+  const normalized = `${prefix}${separator}${components.join("/")}`;
+  return {
+    comparisonKey: style === "windows" ? normalized.toLowerCase() : normalized,
+    style,
+  };
+}
+
+export function isTrustedPresentationPreviewPath(
+  previewPath: string,
+  presentationsRoot = getDataPath(PRESENTATIONS_FOLDER),
+): boolean {
+  if (!/\.png$/iu.test(previewPath)) return false;
+  const candidate = canonicalizePresentationPath(previewPath);
+  const root = canonicalizePresentationPath(presentationsRoot);
+  if (!candidate || !root || candidate.style !== root.style) return false;
+  const rootPrefix = `${root.comparisonKey.replace(/\/+$/u, "")}/`;
+  return candidate.comparisonKey.startsWith(rootPrefix);
+}
+
+export function isPathInsidePresentationRoot(
+  filePath: string,
+  rootPath: string,
+): boolean {
+  const candidate = canonicalizePresentationPath(filePath);
+  const root = canonicalizePresentationPath(rootPath);
+  if (!candidate || !root || candidate.style !== root.style) return false;
+  const normalizedRoot = root.comparisonKey.replace(/\/+$/u, "");
+  return (
+    candidate.comparisonKey === normalizedRoot ||
+    candidate.comparisonKey.startsWith(`${normalizedRoot}/`)
+  );
+}
+
+async function persistPresentationPreviewFiles(
+  previewFolder: string,
+  previewSlides: readonly string[],
+  renderGeneration: number,
+  presentationsRoot: string,
+  onPersisted?: (path: string) => void,
+): Promise<string[]> {
+  const generation = String(renderGeneration).padStart(2, "0");
+  const previewPaths = previewSlides.map((_previewSlide, index) =>
+    PathUtils.join(
+      previewFolder,
+      `generation-${generation}-slide-${String(index + 1).padStart(2, "0")}.png`,
+    ),
+  );
+  if (
+    previewPaths.some(
+      (path) => !isTrustedPresentationPreviewPath(path, presentationsRoot),
+    )
+  ) {
+    throw new Error(
+      "Presentation preview path escaped the PaperChat presentations directory.",
+    );
+  }
+  if (!previewPaths.length) return [];
+
+  await IOUtils.makeDirectory(previewFolder, { createAncestors: true });
+  for (const [index, previewSlide] of previewSlides.entries()) {
+    await atomicWritePresentationFile(
+      previewPaths[index],
+      decodePngDataUrl(previewSlide),
+    );
+    onPersisted?.(previewPaths[index]);
+  }
+  return previewPaths;
+}
+
+async function cleanupUnreferencedPresentationPreviews(
+  persistedPaths: ReadonlySet<string>,
+  retainedPaths: readonly string[],
+  presentationsRoot: string | undefined,
+): Promise<void> {
+  if (!presentationsRoot || typeof IOUtils.remove !== "function") return;
+  const retained = new Set(retainedPaths);
+  for (const path of persistedPaths) {
+    if (
+      retained.has(path) ||
+      !isTrustedPresentationPreviewPath(path, presentationsRoot)
+    ) {
+      continue;
+    }
+    try {
+      if (
+        typeof IOUtils.exists !== "function" ||
+        (await IOUtils.exists(path))
+      ) {
+        await IOUtils.remove(path);
+      }
+    } catch (error) {
+      if (typeof ztoolkit !== "undefined") {
+        ztoolkit.log(
+          `[presentation] Could not remove an unreferenced preview; export remains successful: ${path}: ${getErrorMessage(error)}`,
+        );
+      }
+    }
+  }
+}
 
 export function createPresentationToolDefinition(): ToolDefinition {
   return {
@@ -143,7 +368,10 @@ function formatPresentationError(options: {
   ].join("\n");
 }
 
-function validatePresentationCandidate(input: unknown): {
+function validatePresentationCandidate(
+  input: unknown,
+  strictQuality: boolean,
+): {
   request?: PresentationRequest;
   issues: string[];
   phase: "schema" | "quality" | "valid";
@@ -159,9 +387,6 @@ function validatePresentationCandidate(input: unknown): {
   }
   const request = normalized as PresentationRequest;
   const allQualityErrors = validatePresentationQuality(request);
-  const strictQuality = shouldUseStrictPresentationQualityGate(
-    typeof __env__ === "undefined" ? undefined : __env__,
-  );
   const qualityErrors = filterBlockingPresentationQualityIssues(
     allQualityErrors,
     strictQuality,
@@ -197,10 +422,41 @@ export async function executePresentationCapability(
   visualReviewer?: PresentationVisualReviewer,
   planner?: PresentationPlanner,
   paper?: Parameters<PresentationPlanner>[0]["paper"],
+  onProgress?: PresentationProgressCallback,
+  testOptions?: PresentationCapabilityTestOptions,
+  sourceContext?: PresentationSourceContext,
 ): Promise<string> {
-  const strictQuality = shouldUseStrictPresentationQualityGate(
-    typeof __env__ === "undefined" ? undefined : __env__,
-  );
+  const strictQuality = shouldUseStrictPresentationQualityGate(testOptions);
+  const mediaResolver = testOptions?.mediaResolver || resolvePresentationMedia;
+  const progressLanguage = resolvePresentationLanguage(args.language);
+  const progressMessages = getPresentationProgressMessages(progressLanguage);
+  const emitProgress = async (
+    phase: PresentationProgressPhase,
+    update: Omit<
+      Parameters<PresentationProgressCallback>[0],
+      "phase" | "message"
+    > = {},
+    message = progressMessages[phase],
+  ): Promise<void> => {
+    if (!onProgress) return;
+    try {
+      await onProgress({
+        phase,
+        message,
+        current: PRESENTATION_PROGRESS_ORDER.indexOf(phase) + 1,
+        total: PRESENTATION_PROGRESS_ORDER.length,
+        ...update,
+      });
+    } catch (error) {
+      if (typeof ztoolkit !== "undefined") {
+        ztoolkit.log(
+          `[presentation] Progress callback failed during ${phase}: ${getErrorMessage(error)}`,
+        );
+      }
+    }
+  };
+  await emitProgress("analyzing");
+  await emitProgress("planning");
   let requestInput: unknown = args;
   let planningRounds = 0;
   const planningQualityWarnings: string[] = [];
@@ -248,8 +504,12 @@ export async function executePresentationCapability(
       let planned = await planner({ intent, paper });
       planningRounds += 1;
       requestInput = mergeIntent(planned);
-      let validation = validatePresentationCandidate(requestInput);
+      let validation = validatePresentationCandidate(
+        requestInput,
+        strictQuality,
+      );
       if (!validation.request) {
+        await emitProgress("repairing");
         planned = await planner({
           intent,
           paper,
@@ -260,7 +520,7 @@ export async function executePresentationCapability(
         });
         planningRounds += 1;
         requestInput = mergeIntent(planned);
-        validation = validatePresentationCandidate(requestInput);
+        validation = validatePresentationCandidate(requestInput, strictQuality);
       }
       if (
         !strictQuality &&
@@ -270,6 +530,7 @@ export async function executePresentationCapability(
         const usableRequest = validation.request;
         const originalIssues = validation.issues;
         try {
+          await emitProgress("repairing");
           const improved = await planner({
             intent,
             paper,
@@ -280,8 +541,10 @@ export async function executePresentationCapability(
           });
           planningRounds += 1;
           const improvedInput = mergeIntent(improved);
-          const improvedValidation =
-            validatePresentationCandidate(improvedInput);
+          const improvedValidation = validatePresentationCandidate(
+            improvedInput,
+            strictQuality,
+          );
           if (
             improvedValidation.request &&
             improvedValidation.issues.length <= originalIssues.length
@@ -338,7 +601,7 @@ export async function executePresentationCapability(
     }
   }
 
-  const validation = validatePresentationCandidate(requestInput);
+  const validation = validatePresentationCandidate(requestInput, strictQuality);
   if (!validation.request) {
     const detail = validation.issues.join("; ");
     if (typeof ztoolkit !== "undefined") {
@@ -382,6 +645,7 @@ export async function executePresentationCapability(
     }
     if (kind === "media") mediaRepairUsed = true;
     else visualRepairUsed = true;
+    await emitProgress("repairing");
 
     const invariantIssues = [
       "Preserve the complete paper-deck contract while repairing the listed defect: exactly five content slides, at least three unique real paper-figure placements across at least two content slides, four composition silhouettes, and a complete conclusion slide.",
@@ -406,6 +670,7 @@ export async function executePresentationCapability(
     }
     let repairedValidation = validatePresentationCandidate(
       mergePlannedIntent(planned),
+      strictQuality,
     );
     if (!repairedValidation.request) {
       try {
@@ -429,6 +694,7 @@ export async function executePresentationCapability(
       }
       repairedValidation = validatePresentationCandidate(
         mergePlannedIntent(planned),
+        strictQuality,
       );
       if (!repairedValidation.request) {
         throw new Error(
@@ -439,53 +705,18 @@ export async function executePresentationCapability(
     return repairedValidation.request;
   };
 
+  let persistedPresentationPath: string | undefined;
+  let persistedPresentationPreviewPaths: string[] = [];
+  let persistedPresentationsRoot: string | undefined;
+  const persistedPresentationPreviewHistory = new Set<string>();
   try {
     const renderer = getPresentationRenderer();
-    const resolveCandidate = async (
-      candidate: PresentationRequest,
-    ): Promise<{
-      request: PresentationRequest;
-      renderableRequest: Awaited<ReturnType<typeof resolvePresentationMedia>>;
-    }> => {
-      try {
-        return {
-          request: candidate,
-          renderableRequest: await resolvePresentationMedia(candidate),
-        };
-      } catch (error) {
-        if (!(error instanceof PresentationResolvedMediaDuplicateError)) {
-          throw error;
-        }
-        const repaired = await runFullStructuralRepair(
-          "media",
-          error.issues,
-          candidate,
-        );
-        if (!repaired) throw error;
-        return {
-          request: repaired,
-          renderableRequest: await resolvePresentationMedia(repaired),
-        };
-      }
-    };
-    const renderPreview = async (
-      candidate: Awaited<ReturnType<typeof resolvePresentationMedia>>,
-      expectedContentSlides: number,
-    ) => {
-      const rendered = await renderer.renderPresentationWithPreview(candidate);
-      if (rendered.previewSlides.length !== expectedContentSlides + 1) {
-        throw new Error(
-          `Presentation visual preview produced ${rendered.previewSlides.length} slides; expected ${expectedContentSlides + 1}.`,
-        );
-      }
-      return rendered;
-    };
-
-    let resolved = await resolveCandidate(request);
-    request = resolved.request;
-    let renderableRequest = resolved.renderableRequest;
-    let bytes: Uint8Array;
-    let visualReviewRounds = 0;
+    let presentationsRoot: string | undefined;
+    let outputPath: string | undefined;
+    let previewFolder: string | undefined;
+    let previewPaths: string[] = [];
+    let hasPersistedDraft = false;
+    let renderGeneration = 0;
     let visualReviewStatus: "passed" | "warnings" | "not_requested" =
       visualReviewer ? "passed" : "not_requested";
     let visualReviewSummary: string | undefined;
@@ -515,6 +746,177 @@ export async function executePresentationCapability(
       visualReviewStatus = "passed";
       visualReviewSummary = summary;
     };
+
+    const ensureOutputPaths = async (): Promise<{
+      outputPath: string;
+      previewFolder: string;
+      presentationsRoot: string;
+    }> => {
+      if (!outputPath || !previewFolder || !presentationsRoot) {
+        presentationsRoot = getDataPath(PRESENTATIONS_FOLDER);
+        persistedPresentationsRoot = presentationsRoot;
+        await IOUtils.makeDirectory(presentationsRoot, {
+          createAncestors: true,
+        });
+        const requestedBase = request.fileName?.replace(/\.pptx$/i, "");
+        const fileBase = sanitizeFileBase(requestedBase || request.title);
+        const outputStem = `${fileBase}-${Date.now()}-${generateShortId()}`;
+        outputPath = PathUtils.join(presentationsRoot, `${outputStem}.pptx`);
+        previewFolder = PathUtils.join(
+          presentationsRoot,
+          `${outputStem}-previews`,
+        );
+      }
+      return { outputPath, previewFolder, presentationsRoot };
+    };
+
+    const persistRenderedDraft = async (
+      rendered: PresentationRenderWithPreviewResult,
+    ): Promise<void> => {
+      const paths = await ensureOutputPaths();
+      await emitProgress("exporting", {
+        pptxPath: hasPersistedDraft ? paths.outputPath : undefined,
+        previewPaths: previewPaths.length ? [...previewPaths] : undefined,
+        isDraft: true,
+      });
+      await atomicWritePresentationFile(paths.outputPath, rendered.bytes);
+      hasPersistedDraft = true;
+      persistedPresentationPath = paths.outputPath;
+      try {
+        previewPaths = await persistPresentationPreviewFiles(
+          paths.previewFolder,
+          rendered.previewSlides,
+          renderGeneration,
+          paths.presentationsRoot,
+          (path) => persistedPresentationPreviewHistory.add(path),
+        );
+      } catch (error) {
+        previewPaths = [];
+        if (typeof ztoolkit !== "undefined") {
+          ztoolkit.log(
+            `[presentation] PPTX draft was saved, but preview persistence failed: ${getErrorMessage(error)}`,
+          );
+        }
+      }
+      persistedPresentationPreviewPaths = [...previewPaths];
+      await emitProgress(
+        "rendering",
+        {
+          pptxPath: paths.outputPath,
+          previewPaths: [...previewPaths],
+          isDraft: true,
+        },
+        progressMessages.draftReady,
+      );
+    };
+
+    const restorePersistedDraft = async (snapshot: {
+      bytes: Uint8Array;
+      previewPaths: string[];
+    }): Promise<void> => {
+      if (!outputPath) {
+        throw new Error("Presentation draft path was unavailable for restore.");
+      }
+      await atomicWritePresentationFile(outputPath, snapshot.bytes);
+      bytes = snapshot.bytes;
+      previewPaths = [...snapshot.previewPaths];
+      persistedPresentationPreviewPaths = [...snapshot.previewPaths];
+      await emitProgress("rendering", {
+        pptxPath: outputPath,
+        previewPaths: [...previewPaths],
+        isDraft: true,
+      });
+    };
+
+    const resolveCandidate = async (
+      candidate: PresentationRequest,
+    ): Promise<{
+      request: PresentationRequest;
+      renderableRequest: Awaited<ReturnType<typeof resolvePresentationMedia>>;
+    }> => {
+      await emitProgress("resolving_media", {
+        pptxPath: hasPersistedDraft ? outputPath : undefined,
+        previewPaths: previewPaths.length ? [...previewPaths] : undefined,
+        isDraft: hasPersistedDraft || undefined,
+      });
+      try {
+        return {
+          request: candidate,
+          renderableRequest: await mediaResolver(
+            candidate,
+            sourceContext?.libraryID,
+          ),
+        };
+      } catch (error) {
+        if (!(error instanceof PresentationResolvedMediaDuplicateError)) {
+          throw error;
+        }
+        const repaired = await runFullStructuralRepair(
+          "media",
+          error.issues,
+          candidate,
+        );
+        if (!repaired) throw error;
+        return {
+          request: repaired,
+          renderableRequest: await mediaResolver(
+            repaired,
+            sourceContext?.libraryID,
+          ),
+        };
+      }
+    };
+    const renderPreview = async (
+      candidate: Awaited<ReturnType<typeof resolvePresentationMedia>>,
+      expectedContentSlides: number,
+    ) => {
+      renderGeneration += 1;
+      await emitProgress(
+        "rendering",
+        {
+          pptxPath: hasPersistedDraft ? outputPath : undefined,
+          previewPaths: previewPaths.length ? [...previewPaths] : undefined,
+          isDraft: hasPersistedDraft || undefined,
+        },
+        renderGeneration === 1
+          ? progressMessages.rendering
+          : progressMessages.renderingRevision,
+      );
+      let rendered: PresentationRenderWithPreviewResult;
+      try {
+        rendered = await renderer.renderPresentationWithPreview(candidate);
+      } catch (error) {
+        if (strictQuality) throw error;
+        const summary = `Presentation preview rendering failed; exported the editable PPTX without previews: ${getErrorMessage(error)}`;
+        acceptReleaseVisualWarning(summary);
+        rendered = {
+          bytes: await renderer.renderPresentation(candidate),
+          previewSlides: [],
+          visualWarnings: [summary],
+        };
+      }
+      const expectedPreviewSlides = expectedContentSlides + 1;
+      if (rendered.previewSlides.length !== expectedPreviewSlides) {
+        const summary = `Presentation visual preview produced ${rendered.previewSlides.length} slides; expected ${expectedPreviewSlides}.`;
+        if (strictQuality) throw new Error(summary);
+        acceptReleaseVisualWarning(
+          `${summary} Exported the editable PPTX and omitted the incomplete preview set.`,
+        );
+        rendered = {
+          ...rendered,
+          previewSlides: [],
+          visualWarnings: [...(rendered.visualWarnings || []), summary],
+        };
+      }
+      await persistRenderedDraft(rendered);
+      return rendered;
+    };
+
+    let resolved = await resolveCandidate(request);
+    request = resolved.request;
+    let renderableRequest = resolved.renderableRequest;
+    let bytes: Uint8Array;
+    let visualReviewRounds = 0;
     if (planningQualityWarnings.length > 0) {
       acceptReleaseVisualWarning(
         `Planning quality diagnostics remain after best-effort repair: ${planningQualityWarnings
@@ -533,6 +935,11 @@ export async function executePresentationCapability(
       bytes = draft.bytes;
       let draftReview: PresentationVisualReviewResponse | undefined;
       try {
+        await emitProgress("reviewing", {
+          pptxPath: outputPath,
+          previewPaths: [...previewPaths],
+          isDraft: true,
+        });
         draftReview = await visualReviewer({
           stage: "draft",
           title: request.title,
@@ -574,7 +981,17 @@ export async function executePresentationCapability(
             .slice(0, 8)
             .join("; ")}`;
         } else {
+          const lastUsableRenderableRequest = renderableRequest;
+          const lastUsableDraft = {
+            bytes,
+            previewPaths: [...previewPaths],
+          };
           try {
+            await emitProgress("repairing", {
+              pptxPath: outputPath,
+              previewPaths: [...previewPaths],
+              isDraft: true,
+            });
             const revised = await renderPreview(
               revisedRequest,
               request.slides.length,
@@ -583,6 +1000,11 @@ export async function executePresentationCapability(
             bytes = revised.bytes;
             let finalReview: PresentationVisualReviewResponse | undefined;
             try {
+              await emitProgress("reviewing", {
+                pptxPath: outputPath,
+                previewPaths: [...previewPaths],
+                isDraft: true,
+              });
               finalReview = await visualReviewer({
                 stage: "final",
                 title: request.title,
@@ -600,6 +1022,13 @@ export async function executePresentationCapability(
             }
             if (finalReview && finalReview.verdict !== "pass") {
               structuralRepairIssue = `Final visual review did not approve the deck: ${finalReview.summary}`;
+            }
+            if (!strictQuality && finalReview?.verdict !== "pass") {
+              await restorePersistedDraft(lastUsableDraft);
+              renderableRequest = lastUsableRenderableRequest;
+              acceptReleaseVisualWarning(
+                "Kept the previous usable deck because the bounded visual revision was not approved.",
+              );
             }
           } catch (revisionError) {
             const summary = `Presentation visual revision could not produce a replacement deck: ${getErrorMessage(revisionError)}`;
@@ -641,7 +1070,11 @@ export async function executePresentationCapability(
         } else {
           const lastUsableRequest = request;
           const lastUsableRenderableRequest = renderableRequest;
-          const lastUsableBytes = bytes;
+          const lastUsableDraft = {
+            bytes,
+            previewPaths: [...previewPaths],
+          };
+          let repairedDeckApproved = false;
           try {
             const repairedResolved = await resolveCandidate(repairedRequest);
             let repaired = await renderPreview(
@@ -654,6 +1087,11 @@ export async function executePresentationCapability(
             bytes = repaired.bytes;
             let repairedReview: PresentationVisualReviewResponse | undefined;
             try {
+              await emitProgress("reviewing", {
+                pptxPath: outputPath,
+                previewPaths: [...previewPaths],
+                isDraft: true,
+              });
               repairedReview = await visualReviewer({
                 stage: "draft",
                 title: request.title,
@@ -670,6 +1108,7 @@ export async function executePresentationCapability(
               acceptReleaseVisualWarning(summary);
             }
             if (repairedReview?.verdict === "pass") {
+              repairedDeckApproved = true;
               acceptVisualReviewSuccess(
                 `Full structural repair approved after visual rejection: ${repairedReview.summary}`,
               );
@@ -708,6 +1147,11 @@ export async function executePresentationCapability(
                   | PresentationVisualReviewResponse
                   | undefined;
                 try {
+                  await emitProgress("reviewing", {
+                    pptxPath: outputPath,
+                    previewPaths: [...previewPaths],
+                    isDraft: true,
+                  });
                   terminalReview = await visualReviewer({
                     stage: "final",
                     title: request.title,
@@ -724,6 +1168,7 @@ export async function executePresentationCapability(
                   acceptReleaseVisualWarning(summary);
                 }
                 if (terminalReview?.verdict === "pass") {
+                  repairedDeckApproved = true;
                   acceptVisualReviewSuccess(
                     `Full structural repair and one bounded visual patch approved: ${terminalReview.summary}`,
                   );
@@ -742,40 +1187,66 @@ export async function executePresentationCapability(
               }
               acceptReleaseVisualWarning(summary);
             }
+            if (!strictQuality && !repairedDeckApproved) {
+              await restorePersistedDraft(lastUsableDraft);
+              request = lastUsableRequest;
+              renderableRequest = lastUsableRenderableRequest;
+              acceptReleaseVisualWarning(
+                "Kept the previous usable deck because the visual repair was not approved.",
+              );
+            }
           } catch (repairRenderError) {
             if (strictQuality) throw repairRenderError;
             request = lastUsableRequest;
             renderableRequest = lastUsableRenderableRequest;
-            bytes = lastUsableBytes;
+            await restorePersistedDraft(lastUsableDraft);
             const summary = `Presentation visual repair could not replace the last usable deck: ${getErrorMessage(repairRenderError)}`;
             acceptReleaseVisualWarning(summary);
           }
         }
       }
     } else {
+      await emitProgress("rendering");
       bytes = await renderer.renderPresentation(renderableRequest);
+      const paths = await ensureOutputPaths();
+      await emitProgress("exporting", { isDraft: true });
+      await atomicWritePresentationFile(paths.outputPath, bytes);
+      hasPersistedDraft = true;
+      persistedPresentationPath = paths.outputPath;
+      await emitProgress(
+        "rendering",
+        { pptxPath: paths.outputPath, previewPaths: [], isDraft: true },
+        progressMessages.draftReady,
+      );
     }
-    const folder = getDataPath(PRESENTATIONS_FOLDER);
-    await IOUtils.makeDirectory(folder, { createAncestors: true });
-
-    const requestedBase = request.fileName?.replace(/\.pptx$/i, "");
-    const fileBase = sanitizeFileBase(requestedBase || request.title);
-    const outputPath = PathUtils.join(
-      folder,
-      `${fileBase}-${Date.now()}-${generateShortId()}.pptx`,
+    if (!hasPersistedDraft || !outputPath) {
+      throw new Error("Presentation renderer completed without a saved PPTX.");
+    }
+    await cleanupUnreferencedPresentationPreviews(
+      persistedPresentationPreviewHistory,
+      previewPaths,
+      persistedPresentationsRoot,
     );
-    await IOUtils.write(outputPath, bytes, {
-      flush: true,
-      tmpPath: `${outputPath}.tmp-${generateShortId()}`,
+    await emitProgress("attaching", {
+      pptxPath: outputPath,
+      previewPaths: [...previewPaths],
+      isDraft: true,
     });
     const attachment = await attachPresentationToZotero({
       outputPath,
       presentationTitle: request.title,
       sourceItemKey: request.sourceItemKey,
+      sourceLibraryID: sourceContext?.libraryID,
     });
     if (attachment.warning) {
       acceptReleaseVisualWarning(attachment.warning);
     }
+
+    await emitProgress("completed", {
+      pptxPath: attachment.path,
+      previewPaths: [...previewPaths],
+      isDraft: false,
+    });
 
     return JSON.stringify({
       status: visualReviewSummary?.startsWith(
@@ -784,6 +1255,8 @@ export async function executePresentationCapability(
         ? "completed_with_warnings"
         : "completed",
       path: attachment.path,
+      draftPath: attachment.path,
+      previewPaths,
       fileName: PathUtils.filename(outputPath),
       slideCount: request.slides.length + 1,
       bytes: bytes.length,
@@ -804,6 +1277,74 @@ export async function executePresentationCapability(
     const detail = getErrorMessage(error);
     if (typeof ztoolkit !== "undefined") {
       ztoolkit.log(`[presentation] Generation failed: ${detail}`);
+    }
+    if (!strictQuality && persistedPresentationPath) {
+      await cleanupUnreferencedPresentationPreviews(
+        persistedPresentationPreviewHistory,
+        persistedPresentationPreviewPaths,
+        persistedPresentationsRoot,
+      );
+      await emitProgress("attaching", {
+        pptxPath: persistedPresentationPath,
+        previewPaths: persistedPresentationPreviewPaths,
+        isDraft: true,
+      });
+      let recoveredAttachment;
+      try {
+        recoveredAttachment = await attachPresentationToZotero({
+          outputPath: persistedPresentationPath,
+          presentationTitle: request.title,
+          sourceItemKey: request.sourceItemKey,
+          sourceLibraryID: sourceContext?.libraryID,
+        });
+      } catch (attachmentError) {
+        const attachmentWarning = `PPTX was generated and remains available at ${persistedPresentationPath}, but Zotero could not attach the recovered draft: ${getErrorMessage(attachmentError)}`;
+        if (typeof ztoolkit !== "undefined") {
+          ztoolkit.log(`[presentation] ${attachmentWarning}`);
+        }
+        await emitProgress("completed", {
+          pptxPath: persistedPresentationPath,
+          previewPaths: persistedPresentationPreviewPaths,
+          isDraft: false,
+        });
+        return JSON.stringify({
+          status: "completed_with_warnings",
+          path: persistedPresentationPath,
+          draftPath: persistedPresentationPath,
+          previewPaths: persistedPresentationPreviewPaths,
+          fileName: PathUtils.filename(persistedPresentationPath),
+          slideCount: request.slides.length + 1,
+          editable: true,
+          runtime: "PaperChat XPI",
+          visualReview: "warnings",
+          visualReviewSummary: `Exported the last successfully rendered draft after a later generation step failed: ${detail}`,
+          attachmentStatus: "not_attached",
+          attachmentWarning,
+        });
+      }
+      await emitProgress("completed", {
+        pptxPath: recoveredAttachment.path,
+        previewPaths: persistedPresentationPreviewPaths,
+        isDraft: false,
+      });
+      return JSON.stringify({
+        status: "completed_with_warnings",
+        path: recoveredAttachment.path,
+        draftPath: recoveredAttachment.path,
+        previewPaths: persistedPresentationPreviewPaths,
+        fileName: PathUtils.filename(recoveredAttachment.path),
+        slideCount: request.slides.length + 1,
+        editable: true,
+        runtime: "PaperChat XPI",
+        visualReview: "warnings",
+        visualReviewSummary: `Exported the last successfully rendered draft after a later generation step failed: ${detail}`,
+        attachmentStatus: recoveredAttachment.status,
+        attachmentItemID: recoveredAttachment.itemID,
+        attachmentItemKey: recoveredAttachment.itemKey,
+        attachmentParentItemID: recoveredAttachment.parentItemID,
+        attachmentMode: recoveredAttachment.mode,
+        attachmentWarning: recoveredAttachment.warning,
+      });
     }
     return formatPresentationError({
       summary: "Presentation generation failed.",

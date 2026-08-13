@@ -292,3 +292,6 @@ paperchat-chat-user-input-auto = Auto in { $seconds }s
 paperchat-chat-user-input-required = Please answer all required questions.
 paperchat-chat-user-input-too-many = Select at most { $count } options.
 paperchat-chat-user-input-too-few = Select at least { $count } options.
+paperchat-chat-presentation-open = Open PPTX
+paperchat-chat-presentation-open-draft = Open current draft
+paperchat-chat-presentation-open-failed = Could not open this PPTX

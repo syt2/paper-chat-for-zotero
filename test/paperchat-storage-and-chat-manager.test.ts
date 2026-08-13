@@ -24,6 +24,7 @@ import {
   repairPaperChatSessionAfterHardFailureWithRollback,
   rerollPaperChatFailureAndReplay,
 } from "../src/modules/chat/paperchat-retry-orchestration.ts";
+import { selectMoreSubstantialSnapshot } from "../src/modules/chat/PaperChatTierController.ts";
 import { PaperChatProvider } from "../src/modules/providers/PaperChatProvider.ts";
 import { isPaperChatQuotaError } from "../src/modules/providers/paperchat-errors.ts";
 import {
@@ -93,6 +94,9 @@ function createPrefEnvironment() {
     },
     DataDirectory: {
       dir: "/tmp/zotero-test",
+    },
+    Libraries: {
+      userLibraryID: 1,
     },
   };
 
@@ -493,11 +497,12 @@ describe("paperchat storage and chat manager", function () {
       createdAt: 100,
       updatedAt: 100,
       lastActiveItemKey: "ITEM-1",
+      lastActiveItemLibraryID: 23,
       messages: [
         {
           id: "msg-1",
-          role: "user",
-          content: "hello",
+          role: "assistant",
+          content: "Presentation ready",
           quotedMessages: [
             {
               sessionId: "session-save-1",
@@ -506,6 +511,18 @@ describe("paperchat storage and chat manager", function () {
               preview: "Source answer",
               contentSnapshot: "Source answer",
               timestamp: 99,
+            },
+          ],
+          presentationArtifacts: [
+            {
+              toolCallId: "presentation-call-1",
+              localId: "presentation-call-1:presentation:1:1",
+              path: "/zotero-data/paper-chat/presentations/deck.pptx",
+              previewPaths: [
+                "/zotero-data/paper-chat/presentations/deck/slide-01.png",
+              ],
+              attachmentItemID: 42,
+              isDraft: false,
             },
           ],
           timestamp: 101,
@@ -534,6 +551,7 @@ describe("paperchat storage and chat manager", function () {
     assert.exists(companionUpsert);
     assert.notInclude(sessionUpsert!.sql, "selected_tier");
     assert.notInclude(sessionUpsert!.sql, "resolved_model_id");
+    assert.equal(sessionUpsert!.params?.[4], 23);
     assert.deepEqual(companionUpsert!.params, [
       "session-save-1",
       "paperchat-standard",
@@ -544,6 +562,9 @@ describe("paperchat storage and chat manager", function () {
     ]);
     assert.deepEqual(JSON.parse(String(messageInsert?.params?.[8])), [
       session.messages[0].quotedMessages![0],
+    ]);
+    assert.deepEqual(JSON.parse(String(messageInsert?.params?.[21])), [
+      session.messages[0].presentationArtifacts![0],
     ]);
   });
 
@@ -578,6 +599,7 @@ describe("paperchat storage and chat manager", function () {
         },
       ],
       lastActiveItemKey: "ITEM-1",
+      lastActiveItemLibraryID: 23,
       title: "Deep Summary: Paper",
       titleSource: "user",
       titleEditedAt: 99,
@@ -587,6 +609,7 @@ describe("paperchat storage and chat manager", function () {
     });
 
     assert.equal(session.lastActiveItemKey, "ITEM-1");
+    assert.equal(session.lastActiveItemLibraryID, 23);
     assert.equal(session.id, "fork-session-1");
     assert.equal(session.title, "Deep Summary: Paper");
     assert.equal(session.titleSource, "user");
@@ -608,6 +631,7 @@ describe("paperchat storage and chat manager", function () {
       entry.sql.startsWith("INSERT INTO messages"),
     );
     assert.equal(sessionUpsert?.params?.[3], "ITEM-1");
+    assert.equal(sessionUpsert?.params?.[4], 23);
     assert.deepEqual(sessionUpsert?.params?.slice(6, 10), [
       "Deep Summary: Paper",
       "user",
@@ -648,6 +672,7 @@ describe("paperchat storage and chat manager", function () {
               created_at: 100,
               updated_at: 200,
               last_active_item_key: "ITEM-1",
+              last_active_item_library_id: 23,
               context_summary: null,
               context_state: null,
             },
@@ -701,6 +726,7 @@ describe("paperchat storage and chat manager", function () {
     assert.exists(session);
     assert.equal(session?.id, "session-load-1");
     assert.equal(session?.lastActiveItemKey, "ITEM-1");
+    assert.equal(session?.lastActiveItemLibraryID, 23);
     assert.equal(session?.selectedTier, "paperchat-pro");
     assert.equal(session?.resolvedModelId, "model-pro-9");
     assert.equal(session?.lastRetryableUserMessageId, "user-1");
@@ -1940,6 +1966,112 @@ describe("paperchat storage and chat manager", function () {
     );
   });
 
+  it("restores an artifact-only presentation entry after an interrupted restart", async function () {
+    const storedArtifacts = JSON.stringify([
+      {
+        toolCallId: "presentation-restart-1",
+        path: "/tmp/paperchat/presentation-restart-1/draft.pptx",
+        previewPaths: [
+          "/tmp/paperchat/presentation-restart-1/generation-01-slide-01.png",
+        ],
+        attachmentItemID: undefined,
+        isDraft: true,
+      },
+    ]);
+    let recoveredContent = [
+      '<tool-call status="calling">',
+      "<tool-name>presentation</tool-name>",
+      "</tool-call>",
+    ].join("\n");
+    let recoveredState = "in_progress";
+
+    const fakeDb = {
+      async queryAsync(sql: string, params?: unknown[]) {
+        const normalized = normalizeSql(sql);
+        if (normalized === "SELECT value FROM settings WHERE key = ?") {
+          return [];
+        }
+        if (
+          normalized ===
+          "SELECT id, content FROM messages WHERE session_id = ? AND streaming_state = 'in_progress'"
+        ) {
+          return recoveredState === "in_progress"
+            ? [
+                {
+                  id: "assistant-presentation-restart",
+                  content: recoveredContent,
+                },
+              ]
+            : [];
+        }
+        if (
+          normalized ===
+          "UPDATE messages SET content = ?, streaming_state = 'interrupted', search_text = '', search_index_version = ? WHERE id = ? AND session_id = ? AND streaming_state = 'in_progress'"
+        ) {
+          recoveredContent = String(params?.[0] || "");
+          recoveredState = "interrupted";
+          return [];
+        }
+        if (normalized === "SELECT * FROM sessions WHERE id = ?") {
+          return [
+            {
+              id: "session-presentation-restart",
+              created_at: 100,
+              updated_at: 200,
+              last_active_item_key: null,
+              context_summary: null,
+              context_state: null,
+            },
+          ];
+        }
+        if (
+          normalized ===
+          "SELECT * FROM paperchat_session_state WHERE session_id = ?"
+        ) {
+          return [];
+        }
+        if (
+          normalized ===
+          "SELECT * FROM messages WHERE session_id = ? ORDER BY seq ASC"
+        ) {
+          return [
+            {
+              id: "assistant-presentation-restart",
+              role: "assistant",
+              content: recoveredContent,
+              timestamp: 201,
+              streaming_state: recoveredState,
+              presentation_artifacts: storedArtifacts,
+            },
+          ];
+        }
+        return [];
+      },
+    };
+
+    const storage = getStorageDatabase() as any;
+    storage.ensureInit = async () => fakeDb;
+
+    const session = await new SessionStorageService().loadSession(
+      "session-presentation-restart",
+    );
+
+    assert.equal(session?.messages.length, 1);
+    assert.equal(session?.messages[0].content, "");
+    assert.equal(session?.messages[0].streamingState, "interrupted");
+    assert.deepEqual(session?.messages[0].presentationArtifacts, [
+      {
+        toolCallId: "presentation-restart-1",
+        path: "/tmp/paperchat/presentation-restart-1/draft.pptx",
+        previewPaths: [
+          "/tmp/paperchat/presentation-restart-1/generation-01-slide-01.png",
+        ],
+        attachmentItemID: undefined,
+        isDraft: true,
+      },
+    ]);
+  });
+
   it("prefers the tier-resolved provider model over a stale paperchat default", function () {
     prefStore.set(
       `${PREFS_PREFIX}.paperchatTierState`,
@@ -2402,6 +2534,137 @@ describe("paperchat storage and chat manager", function () {
     assert.equal(session.lastActiveItemKey, "SESSION-ITEM");
   });
 
+  it("resolves retry and reroll papers from the persisted group library", async function () {
+    const providerManager = getProviderManager() as any;
+    const originalGetActiveProviderId = providerManager.getActiveProviderId;
+    providerManager.getActiveProviderId = () => "paperchat";
+    const userPaper = { id: 11, key: "SAMEKEY1", libraryID: 1 };
+    const groupPaper = { id: 55, key: "SAMEKEY1", libraryID: 5 };
+    (globalThis as any).Zotero.Items = {
+      getByLibraryAndKey: (libraryID: number, itemKey: string) =>
+        itemKey === "SAMEKEY1"
+          ? libraryID === 5
+            ? groupPaper
+            : userPaper
+          : false,
+    };
+    const session: ChatSession = {
+      id: "session-group-library-retry",
+      createdAt: 1,
+      updatedAt: 2,
+      lastActiveItemKey: "SAMEKEY1",
+      lastActiveItemLibraryID: 5,
+      resolvedModelId: "m3",
+      messages: [
+        { id: "user-1", role: "user", content: "retry this", timestamp: 1 },
+        { id: "error-1", role: "error", content: "failed", timestamp: 2 },
+      ],
+      lastRetryableUserMessageId: "user-1",
+      lastRetryableErrorMessageId: "error-1",
+      lastRetryableFailedModelId: "m3",
+    };
+    const sentItems: unknown[] = [];
+
+    try {
+      const manager = Object.create(ChatManager.prototype) as any;
+      manager.currentSession = session;
+      manager.activeSessionRunIds = new Map();
+      manager.paperChatRerollSessions = new Set();
+      manager.init = async () => undefined;
+      manager.rerollCurrentPaperChatTier = async () => ({
+        previousModel: "m3",
+        nextModel: "m4",
+        tier: "paperchat-standard",
+      });
+      manager.paperChatRetry = { buildReroutedNotice: () => "rerouted" };
+      manager.insertSystemNotice = async () => ({ id: "notice-1" });
+      manager.sessionStorage = {
+        updateSessionMeta: async () => undefined,
+        deleteMessage: async () => undefined,
+      };
+      manager.onMessageUpdate = () => undefined;
+      manager.sendMessage = async (
+        _content: string,
+        options: Record<string, unknown>,
+      ) => {
+        sentItems.push(options.item);
+        return true;
+      };
+
+      assert.isTrue(await manager.retryCurrentPaperChatFailure());
+      assert.deepEqual(await manager.rerollCurrentPaperChatFailureAndRetry(), {
+        previousModel: "m3",
+        nextModel: "m4",
+        tier: "paperchat-standard",
+      });
+      assert.deepEqual(sentItems, [groupPaper, groupPaper]);
+    } finally {
+      providerManager.getActiveProviderId = originalGetActiveProviderId;
+    }
+  });
+
+  it("treats the same item key in another library as a paper switch", async function () {
+    const providerManager = getProviderManager() as any;
+    const originalGetActiveProviderId = providerManager.getActiveProviderId;
+    providerManager.getActiveProviderId = () => "unready-provider";
+    const groupPaper = {
+      id: 55,
+      key: "SAMEKEY1",
+      libraryID: 5,
+      isAttachment: () => false,
+      getField: () => "Group paper",
+    } as unknown as Zotero.Item;
+    const session: ChatSession = {
+      id: "session-same-key-library-switch",
+      createdAt: 1,
+      updatedAt: 2,
+      lastActiveItemKey: "SAMEKEY1",
+      lastActiveItemLibraryID: 1,
+      messages: [],
+    };
+    const insertedMessages: ChatMessage[] = [];
+
+    try {
+      const manager = Object.create(ChatManager.prototype) as any;
+      manager.currentSession = session;
+      manager.activeSessionRunIds = new Map();
+      manager.sessionRunCounters = new Map();
+      manager.activeSessionAbortControllers = new Map();
+      manager.streamingSessions = new Map();
+      manager.currentItemKey = null;
+      manager.currentItemLibraryID = null;
+      manager.init = async () => undefined;
+      manager.getActiveProvider = () => ({
+        config: { id: "unready-provider", type: "custom" },
+        getName: () => "Unready provider",
+        isReady: () => false,
+      });
+      manager.isSessionActive = () => false;
+      manager.sessionStorage = {
+        insertMessage: async (_sessionId: string, message: ChatMessage) => {
+          insertedMessages.push(message);
+        },
+      };
+
+      assert.isFalse(
+        await manager.sendMessage("generate a presentation", {
+          item: groupPaper,
+        }),
+      );
+      assert.equal(session.lastActiveItemKey, "SAMEKEY1");
+      assert.equal(session.lastActiveItemLibraryID, 5);
+      assert.isTrue(
+        insertedMessages.some(
+          (message) =>
+            message.isSystemNotice &&
+            message.content === '--- Switched to paper: "Group paper" ---',
+        ),
+      );
+    } finally {
+      providerManager.getActiveProviderId = originalGetActiveProviderId;
+    }
+  });
+
   it("reuses the active draft session when creating a new session", async function () {
     const manager = Object.create(ChatManager.prototype) as ChatManager & {
       currentSession: ChatSession;
@@ -2696,7 +2959,7 @@ describe("paperchat storage and chat manager", function () {
 
     assert.deepEqual(sql.slice(transactionStart, transactionEnd + 1), [
       "BEGIN TRANSACTION",
-      "UPDATE sessions SET updated_at = ?, last_active_item_key = ?, scope_item_keys = ?, scope_label = ?, title = ?, title_source = ?, title_generated_at = ?, title_edited_at = ?, context_summary = ?, context_state = ?, execution_plan = ?, tool_execution_state = ?, tool_approval_state = ?, user_input_request_state = ? WHERE id = ?",
+      "UPDATE sessions SET updated_at = ?, last_active_item_key = ?, last_active_item_library_id = ?, scope_item_keys = ?, scope_label = ?, title = ?, title_source = ?, title_generated_at = ?, title_edited_at = ?, context_summary = ?, context_state = ?, execution_plan = ?, tool_execution_state = ?, tool_approval_state = ?, user_input_request_state = ? WHERE id = ?",
       "INSERT INTO paperchat_session_state (session_id, selected_tier, resolved_model_id, last_retryable_user_message_id, last_retryable_error_message_id, last_retryable_failed_model_id) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET selected_tier = excluded.selected_tier, resolved_model_id = excluded.resolved_model_id, last_retryable_user_message_id = excluded.last_retryable_user_message_id, last_retryable_error_message_id = excluded.last_retryable_error_message_id, last_retryable_failed_model_id = excluded.last_retryable_failed_model_id",
       "UPDATE session_meta SET search_index_version = ? WHERE id = ?",
       "UPDATE session_meta SET updated_at = ?, title = ?, title_source = ?, title_generated_at = ?, title_edited_at = ?, search_title = ?, search_index_version = ? WHERE id = ?",
@@ -4356,6 +4619,91 @@ describe("paperchat storage and chat manager", function () {
     assert.deepEqual(messageUpdates, []);
   });
 
+  it("keeps an artifact-only presentation message when cancelling the current turn", async function () {
+    const artifact = {
+      toolCallId: "presentation-call-1",
+      path: "/tmp/paperchat/presentation-call-1/draft.pptx",
+      previewPaths: [
+        "/tmp/paperchat/presentation-call-1/generation-01-slide-01.png",
+      ],
+      isDraft: true,
+    };
+    const updates: Array<{
+      content: string;
+      streamingState?: string | null;
+      presentationArtifacts?: (typeof artifact)[];
+    }> = [];
+    const deletedMessages: string[] = [];
+    const assistantMessage: ChatMessage = {
+      id: "assistant-presentation-cancel",
+      role: "assistant",
+      content: [
+        '<tool-call status="calling">',
+        "<tool-name>presentation</tool-name>",
+        '<presentation-artifact tool-call-id="presentation-call-1" path="/tmp/paperchat/presentation-call-1/draft.pptx">',
+        '<presentation-preview path="/tmp/paperchat/presentation-call-1/generation-01-slide-01.png"/>',
+        "</presentation-artifact>",
+        "</tool-call>",
+      ].join("\n"),
+      presentationArtifacts: [artifact],
+      streamingState: "in_progress",
+      timestamp: 2,
+    };
+    const session: ChatSession = {
+      id: "session-presentation-cancel",
+      createdAt: 1,
+      updatedAt: 2,
+      lastActiveItemKey: null,
+      messages: [assistantMessage],
+    };
+    const manager = Object.create(ChatManager.prototype) as any;
+    manager.currentSession = session;
+    manager.activeSessionRunIds = new Map([[session.id, 1]]);
+    manager.activeSessionAbortControllers = new Map();
+    manager.streamingSessions = new Map([[session.id, session]]);
+    manager.agentRuntime = {
+      waitForPendingMutatingToolExecutions: async () => undefined,
+    };
+    manager.sessionStorage = {
+      updateMessageContent: async (
+        _sessionId: string,
+        _messageId: string,
+        content: string,
+        _reasoning?: string,
+        options?: {
+          streamingState?: string | null;
+          presentationArtifacts?: (typeof artifact)[];
+        },
+      ) => {
+        updates.push({
+          content,
+          streamingState: options?.streamingState,
+          presentationArtifacts: options?.presentationArtifacts,
+        });
+      },
+      deleteMessage: async (_sessionId: string, messageId: string) => {
+        deletedMessages.push(messageId);
+      },
+      updateSessionMeta: async () => undefined,
+    };
+    manager.init = async () => undefined;
+    manager.isSessionActive = () => false;
+
+    assert.isTrue(await manager.cancelCurrentTurn());
+    assert.deepEqual(deletedMessages, []);
+    assert.deepEqual(session.messages, [assistantMessage]);
+    assert.equal(assistantMessage.content, "");
+    assert.equal(assistantMessage.streamingState, "interrupted");
+    assert.deepEqual(assistantMessage.presentationArtifacts, [artifact]);
+    assert.deepEqual(updates, [
+      {
+        content: "",
+        streamingState: "interrupted",
+        presentationArtifacts: [artifact],
+      },
+    ]);
+  });
+
   it("cleans calling tool cards during cancel even when the assistant message is no longer marked in_progress", async function () {
     const messageUpdates: Array<{
       sessionId: string;
@@ -4578,6 +4926,120 @@ describe("paperchat storage and chat manager", function () {
       longerCurrentAssistant.content,
       "The current provider produced the more complete partial.",
     );
+  });
+
+  it("keeps an artifact-only presentation message when the provider fails", async function () {
+    const artifact = {
+      toolCallId: "presentation-provider-failure",
+      path: "/tmp/paperchat/provider-failure/draft.pptx",
+      previewPaths: [
+        "/tmp/paperchat/provider-failure/generation-01-slide-01.png",
+      ],
+      isDraft: true,
+    };
+    const assistantMessage: ChatMessage = {
+      id: "assistant-presentation-provider-failure",
+      role: "assistant",
+      content: [
+        '<tool-call status="calling">',
+        "<tool-name>presentation</tool-name>",
+        "</tool-call>",
+      ].join("\n"),
+      presentationArtifacts: [artifact],
+      streamingState: "in_progress",
+      timestamp: 2,
+    };
+    const session: ChatSession = {
+      id: "session-presentation-provider-failure",
+      createdAt: 1,
+      updatedAt: 2,
+      lastActiveItemKey: null,
+      messages: [assistantMessage],
+    };
+    const updates: Array<{
+      content: string;
+      presentationArtifacts?: (typeof artifact)[];
+      streamingState?: string | null;
+    }> = [];
+    const deletedMessages: string[] = [];
+    const manager = Object.create(ChatManager.prototype) as any;
+    manager.sessionStorage = {
+      updateMessageContent: async (
+        _sessionId: string,
+        _messageId: string,
+        content: string,
+        _reasoning?: string,
+        options?: {
+          presentationArtifacts?: (typeof artifact)[];
+          streamingState?: string | null;
+        },
+      ) => {
+        updates.push({
+          content,
+          presentationArtifacts: options?.presentationArtifacts,
+          streamingState: options?.streamingState,
+        });
+      },
+      deleteMessage: async (_sessionId: string, messageId: string) => {
+        deletedMessages.push(messageId);
+      },
+    };
+
+    assert.isTrue(
+      await manager.finalizeFailedAssistantMessage(
+        session,
+        assistantMessage,
+        null,
+      ),
+    );
+    assert.equal(assistantMessage.content, "");
+    assert.equal(assistantMessage.streamingState, "interrupted");
+    assert.deepEqual(assistantMessage.presentationArtifacts, [artifact]);
+    assert.deepEqual(deletedMessages, []);
+    assert.deepEqual(updates, [
+      {
+        content: "",
+        presentationArtifacts: [artifact],
+        streamingState: "interrupted",
+      },
+    ]);
+  });
+
+  it("keeps newly generated presentation artifacts when an older failure snapshot has more text", function () {
+    const olderArtifact = {
+      toolCallId: "presentation-older",
+      localId: "presentation-older:presentation:1:1",
+      path: "/tmp/paperchat/older.pptx",
+      isDraft: true,
+    };
+    const latestArtifact = {
+      toolCallId: "presentation-latest",
+      localId: "presentation-latest:presentation:2:1",
+      path: "/tmp/paperchat/latest.pptx",
+      isDraft: true,
+    };
+
+    const selected = selectMoreSubstantialSnapshot(
+      {
+        content: "",
+        sourceItemKeys: ["GROUP001"],
+        presentationArtifacts: [latestArtifact],
+      },
+      {
+        content: "An earlier provider produced a much longer partial answer.",
+        sourceItemKeys: ["GROUP001"],
+        presentationArtifacts: [olderArtifact],
+      },
+    );
+
+    assert.equal(
+      selected?.content,
+      "An earlier provider produced a much longer partial answer.",
+    );
+    assert.deepEqual(selected?.presentationArtifacts, [
+      olderArtifact,
+      latestArtifact,
+    ]);
   });
 
   it("persists completed tool context when the final provider attempt fails", async function () {

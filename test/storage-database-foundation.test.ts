@@ -223,9 +223,13 @@ describe("StorageDatabase foundation", function () {
             { name: "evidence" },
             { name: "quoted_messages" },
             { name: "source_item_keys" },
+            { name: "presentation_artifacts" },
             { name: "search_text" },
             { name: "search_index_version" },
           ];
+        }
+        if (normalized === "PRAGMA table_info(sessions)") {
+          return [{ name: "last_active_item_library_id" }];
         }
         if (normalized === "SELECT version FROM schema_version WHERE id = 1") {
           return [];
@@ -368,6 +372,9 @@ describe("StorageDatabase foundation", function () {
             },
           ];
         }
+        if (normalized === "PRAGMA table_info(sessions)") {
+          return [{ name: "last_active_item_library_id" }];
+        }
         return [];
       },
     };
@@ -408,6 +415,7 @@ describe("StorageDatabase foundation", function () {
             { name: "evidence" },
             { name: "quoted_messages" },
             { name: "source_item_keys" },
+            { name: "presentation_artifacts" },
             { name: "search_text" },
             { name: "search_index_version" },
           ];
@@ -418,6 +426,9 @@ describe("StorageDatabase foundation", function () {
             { name: "search_title" },
             { name: "search_index_version" },
           ];
+        }
+        if (normalized === "PRAGMA table_info(sessions)") {
+          return [{ name: "last_active_item_library_id" }];
         }
         if (normalized === "SELECT version FROM schema_version WHERE id = 1") {
           return [{ version: SCHEMA_VERSION }];
@@ -661,6 +672,348 @@ describe("StorageDatabase foundation", function () {
       recorded.map((entry) => entry.sql),
       "COMMIT",
     );
+  });
+
+  it("adds app-owned presentation artifacts when upgrading schema v13 to v14", async function () {
+    const recorded: Array<{ sql: string; params?: unknown[] }> = [];
+    let presentationArtifactsAdded = false;
+    let itemLibraryIDAdded = false;
+    const fakeDb = {
+      async queryAsync(sql: string, params?: unknown[]) {
+        const normalized = normalizeSql(sql);
+        recorded.push({ sql: normalized, params });
+        if (
+          normalized ===
+          "ALTER TABLE messages ADD COLUMN presentation_artifacts TEXT"
+        ) {
+          presentationArtifactsAdded = true;
+        }
+        if (
+          normalized ===
+          "ALTER TABLE sessions ADD COLUMN last_active_item_library_id INTEGER"
+        ) {
+          itemLibraryIDAdded = true;
+        }
+        if (normalized === "SELECT version FROM schema_version WHERE id = 1") {
+          return [{ version: 13 }];
+        }
+        if (normalized === "PRAGMA table_info(messages)") {
+          return [
+            { name: "reasoning" },
+            { name: "evidence" },
+            { name: "quoted_messages" },
+            { name: "source_item_keys" },
+            { name: "search_text" },
+            { name: "search_index_version" },
+            ...(presentationArtifactsAdded
+              ? [{ name: "presentation_artifacts" }]
+              : []),
+          ];
+        }
+        if (normalized === "PRAGMA table_info(session_meta)") {
+          return [{ name: "search_title" }, { name: "search_index_version" }];
+        }
+        if (normalized === "PRAGMA table_info(sessions)") {
+          return itemLibraryIDAdded
+            ? [{ name: "last_active_item_library_id" }]
+            : [];
+        }
+        return [];
+      },
+    };
+
+    await (new StorageDatabase() as any).initSchemaVersion(fakeDb);
+
+    assert.include(
+      recorded.map((entry) => entry.sql),
+      "ALTER TABLE messages ADD COLUMN presentation_artifacts TEXT",
+    );
+    assert.include(
+      recorded.map((entry) => entry.sql),
+      "ALTER TABLE sessions ADD COLUMN last_active_item_library_id INTEGER",
+    );
+    assert.isTrue(
+      recorded.some(
+        (entry) =>
+          entry.sql ===
+            "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1" &&
+          entry.params?.[0] === 14 &&
+          typeof entry.params?.[1] === "number",
+      ),
+    );
+    assert.isTrue(
+      recorded.some(
+        (entry) =>
+          entry.sql ===
+            "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1" &&
+          entry.params?.[0] === 15 &&
+          typeof entry.params?.[1] === "number",
+      ),
+    );
+    assert.include(
+      recorded.map((entry) => entry.sql),
+      "COMMIT",
+    );
+  });
+
+  it("adds the owning Zotero library when upgrading schema v14 to v15", async function () {
+    const recorded: Array<{ sql: string; params?: unknown[] }> = [];
+    let itemLibraryIDAdded = false;
+    const fakeDb = {
+      async queryAsync(sql: string, params?: unknown[]) {
+        const normalized = normalizeSql(sql);
+        recorded.push({ sql: normalized, params });
+        if (
+          normalized ===
+          "ALTER TABLE sessions ADD COLUMN last_active_item_library_id INTEGER"
+        ) {
+          itemLibraryIDAdded = true;
+        }
+        if (normalized === "SELECT version FROM schema_version WHERE id = 1") {
+          return [{ version: 14 }];
+        }
+        if (normalized === "PRAGMA table_info(messages)") {
+          return [
+            { name: "reasoning" },
+            { name: "evidence" },
+            { name: "quoted_messages" },
+            { name: "source_item_keys" },
+            { name: "presentation_artifacts" },
+            { name: "search_text" },
+            { name: "search_index_version" },
+          ];
+        }
+        if (normalized === "PRAGMA table_info(session_meta)") {
+          return [{ name: "search_title" }, { name: "search_index_version" }];
+        }
+        if (normalized === "PRAGMA table_info(sessions)") {
+          return itemLibraryIDAdded
+            ? [{ name: "last_active_item_library_id" }]
+            : [];
+        }
+        return [];
+      },
+    };
+
+    await (new StorageDatabase() as any).initSchemaVersion(fakeDb);
+
+    assert.include(
+      recorded.map((entry) => entry.sql),
+      "ALTER TABLE sessions ADD COLUMN last_active_item_library_id INTEGER",
+    );
+    assert.isTrue(
+      recorded.some(
+        (entry) =>
+          entry.sql ===
+            "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1" &&
+          entry.params?.[0] === 15 &&
+          typeof entry.params?.[1] === "number",
+      ),
+    );
+    assert.include(
+      recorded.map((entry) => entry.sql),
+      "COMMIT",
+    );
+  });
+
+  it("rolls back and propagates a failed v14 presentation-artifact migration", async function () {
+    const recorded: string[] = [];
+    const fakeDb = {
+      async queryAsync(sql: string) {
+        const normalized = normalizeSql(sql);
+        recorded.push(normalized);
+        if (
+          normalized ===
+          "ALTER TABLE messages ADD COLUMN presentation_artifacts TEXT"
+        ) {
+          throw new Error("v14 alter failed");
+        }
+        return [];
+      },
+    };
+    let thrown: unknown;
+
+    try {
+      await (new StorageDatabase() as any).upgradeToV14(fakeDb);
+    } catch (error) {
+      thrown = error;
+    }
+
+    assert.instanceOf(thrown, Error);
+    assert.equal((thrown as Error).message, "v14 alter failed");
+    assert.include(recorded, "ROLLBACK");
+    assert.notInclude(recorded, "COMMIT");
+    assert.strictEqual(recorded.at(-1), "ROLLBACK");
+  });
+
+  it("rolls back and propagates a failed v15 library-identity migration", async function () {
+    const recorded: string[] = [];
+    const fakeDb = {
+      async queryAsync(sql: string) {
+        const normalized = normalizeSql(sql);
+        recorded.push(normalized);
+        if (
+          normalized ===
+          "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1"
+        ) {
+          throw new Error("v15 version write failed");
+        }
+        return [];
+      },
+    };
+    let thrown: unknown;
+
+    try {
+      await (new StorageDatabase() as any).upgradeToV15(fakeDb);
+    } catch (error) {
+      thrown = error;
+    }
+
+    assert.instanceOf(thrown, Error);
+    assert.equal((thrown as Error).message, "v15 version write failed");
+    assert.include(
+      recorded,
+      "ALTER TABLE sessions ADD COLUMN last_active_item_library_id INTEGER",
+    );
+    assert.include(recorded, "ROLLBACK");
+    assert.notInclude(recorded, "COMMIT");
+    assert.strictEqual(recorded.at(-1), "ROLLBACK");
+  });
+
+  it("repairs only a missing v14 artifact column at schema version 15", async function () {
+    const recorded: Array<{ sql: string; params?: unknown[] }> = [];
+    let presentationArtifactsAdded = false;
+    const fakeDb = {
+      async queryAsync(sql: string, params?: unknown[]) {
+        const normalized = normalizeSql(sql);
+        recorded.push({ sql: normalized, params });
+        if (
+          normalized ===
+          "ALTER TABLE messages ADD COLUMN presentation_artifacts TEXT"
+        ) {
+          presentationArtifactsAdded = true;
+        }
+        if (normalized === "SELECT version FROM schema_version WHERE id = 1") {
+          return [{ version: SCHEMA_VERSION }];
+        }
+        if (normalized === "PRAGMA table_info(messages)") {
+          return [
+            { name: "reasoning" },
+            { name: "evidence" },
+            { name: "quoted_messages" },
+            { name: "source_item_keys" },
+            ...(presentationArtifactsAdded
+              ? [{ name: "presentation_artifacts" }]
+              : []),
+            { name: "search_text" },
+            { name: "search_index_version" },
+          ];
+        }
+        if (normalized === "PRAGMA table_info(session_meta)") {
+          return [{ name: "search_title" }, { name: "search_index_version" }];
+        }
+        if (normalized === "PRAGMA table_info(sessions)") {
+          return [
+            { name: "scope_item_keys" },
+            { name: "scope_label" },
+            { name: "last_active_item_library_id" },
+          ];
+        }
+        return [];
+      },
+    };
+
+    await (new StorageDatabase() as any).initSchemaVersion(fakeDb);
+
+    assert.equal(
+      recorded.filter(
+        (entry) =>
+          entry.sql ===
+          "ALTER TABLE messages ADD COLUMN presentation_artifacts TEXT",
+      ).length,
+      1,
+    );
+    assert.isFalse(
+      recorded.some(
+        (entry) =>
+          entry.sql ===
+          "ALTER TABLE sessions ADD COLUMN last_active_item_library_id INTEGER",
+      ),
+    );
+    const versionWrites = recorded.filter(
+      (entry) =>
+        entry.sql ===
+        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
+    );
+    assert.equal(versionWrites.at(-1)?.params?.[0], SCHEMA_VERSION);
+  });
+
+  it("repairs only a missing v15 library column at schema version 15", async function () {
+    const recorded: Array<{ sql: string; params?: unknown[] }> = [];
+    let itemLibraryIDAdded = false;
+    const fakeDb = {
+      async queryAsync(sql: string, params?: unknown[]) {
+        const normalized = normalizeSql(sql);
+        recorded.push({ sql: normalized, params });
+        if (
+          normalized ===
+          "ALTER TABLE sessions ADD COLUMN last_active_item_library_id INTEGER"
+        ) {
+          itemLibraryIDAdded = true;
+        }
+        if (normalized === "SELECT version FROM schema_version WHERE id = 1") {
+          return [{ version: SCHEMA_VERSION }];
+        }
+        if (normalized === "PRAGMA table_info(messages)") {
+          return [
+            { name: "reasoning" },
+            { name: "evidence" },
+            { name: "quoted_messages" },
+            { name: "source_item_keys" },
+            { name: "presentation_artifacts" },
+            { name: "search_text" },
+            { name: "search_index_version" },
+          ];
+        }
+        if (normalized === "PRAGMA table_info(session_meta)") {
+          return [{ name: "search_title" }, { name: "search_index_version" }];
+        }
+        if (normalized === "PRAGMA table_info(sessions)") {
+          return [
+            { name: "scope_item_keys" },
+            { name: "scope_label" },
+            ...(itemLibraryIDAdded
+              ? [{ name: "last_active_item_library_id" }]
+              : []),
+          ];
+        }
+        return [];
+      },
+    };
+
+    await (new StorageDatabase() as any).initSchemaVersion(fakeDb);
+
+    assert.isFalse(
+      recorded.some(
+        (entry) =>
+          entry.sql ===
+          "ALTER TABLE messages ADD COLUMN presentation_artifacts TEXT",
+      ),
+    );
+    assert.equal(
+      recorded.filter(
+        (entry) =>
+          entry.sql ===
+          "ALTER TABLE sessions ADD COLUMN last_active_item_library_id INTEGER",
+      ).length,
+      1,
+    );
+    const versionWrites = recorded.filter(
+      (entry) =>
+        entry.sql ===
+        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
+    );
+    assert.equal(versionWrites.at(-1)?.params?.[0], SCHEMA_VERSION);
   });
 
   it("does not install v9 triggers against a V2.6.1 table shape", async function () {

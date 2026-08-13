@@ -9,6 +9,7 @@ import {
   measureCanvasInkRatio,
   normalizePresentationViewportPoint,
   resolvePresentationMedia,
+  resolveWithin,
   resolvePresentationSourceAuthor,
   resolvePresentationSourceYear,
   resolvePresentationViewportScale,
@@ -18,6 +19,23 @@ import {
 } from "../src/modules/presentation/PresentationMediaResolver.ts";
 
 describe("presentation media resolver", function () {
+  it("cancels a timed-out PDF render before rejecting", async function () {
+    let cancelled = false;
+    let thrown: unknown;
+
+    try {
+      await resolveWithin(new Promise<never>(() => undefined), 1, () => {
+        cancelled = true;
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    assert.isTrue(cancelled);
+    assert.instanceOf(thrown, Error);
+    assert.include((thrown as Error).message, "timed out after 1ms");
+  });
+
   it("rejects two different gallery anchors that resolve to identical pixels", function () {
     const sharedData = "data:image/png;base64,c2FtZS1jcm9w";
     const issues = validateResolvedPresentationMedia({
@@ -373,6 +391,51 @@ describe("presentation media resolver", function () {
       assert.equal(
         resolvePresentationSourceAuthor("GROUP001", "en-US"),
         "Group Author",
+      );
+    } finally {
+      runtime.Zotero = previousZotero;
+    }
+  });
+
+  it("uses the trusted library for presentation metadata when item keys collide", function () {
+    const runtime = globalThis as any;
+    const previousZotero = runtime.Zotero;
+    const papers = new Map([
+      [
+        1,
+        {
+          getField: () => "2019",
+          getCreators: () => [{ name: "Wrong Author" }],
+          isAttachment: () => false,
+          isNote: () => false,
+        },
+      ],
+      [
+        5,
+        {
+          getField: () => "2025",
+          getCreators: () => [{ name: "Correct Author" }],
+          isAttachment: () => false,
+          isNote: () => false,
+        },
+      ],
+    ]);
+    runtime.Zotero = {
+      Libraries: {
+        userLibraryID: 1,
+        getAll: () => [{ libraryID: 1 }, { libraryID: 5 }],
+      },
+      Items: {
+        getByLibraryAndKey: (libraryID: number, key: string) =>
+          key === "SHARED01" ? papers.get(libraryID) || null : null,
+      },
+    };
+
+    try {
+      assert.equal(resolvePresentationSourceYear("SHARED01", 5), "2025");
+      assert.equal(
+        resolvePresentationSourceAuthor("SHARED01", "en-US", 5),
+        "Correct Author",
       );
     } finally {
       runtime.Zotero = previousZotero;

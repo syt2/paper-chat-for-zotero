@@ -12,8 +12,15 @@ export interface PresentationAttachmentResult {
   warning?: string;
 }
 
-function getItemByKey(itemKey: string | undefined): Zotero.Item | null {
+function getItemByKey(
+  itemKey: string | undefined,
+  libraryID?: number,
+): Zotero.Item | null {
   if (!itemKey || typeof Zotero === "undefined") return null;
+
+  if (Number.isSafeInteger(libraryID)) {
+    return Zotero.Items.getByLibraryAndKey(libraryID!, itemKey) || null;
+  }
 
   const libraryIDs = [
     Zotero.Libraries.userLibraryID,
@@ -27,13 +34,16 @@ function getItemByKey(itemKey: string | undefined): Zotero.Item | null {
   return null;
 }
 
-function resolveAttachmentTarget(sourceItemKey: string | undefined): {
+function resolveAttachmentTarget(
+  sourceItemKey: string | undefined,
+  sourceLibraryID?: number,
+): {
   source?: Zotero.Item;
   parent?: Zotero.Item;
   libraryID: number;
   collections?: number[];
 } {
-  const source = getItemByKey(sourceItemKey) || undefined;
+  const source = getItemByKey(sourceItemKey, sourceLibraryID) || undefined;
   const parent =
     source &&
     (source.isAttachment?.() || source.isNote?.()) &&
@@ -69,6 +79,7 @@ export async function attachPresentationToZotero(options: {
   outputPath: string;
   presentationTitle: string;
   sourceItemKey?: string;
+  sourceLibraryID?: number;
 }): Promise<PresentationAttachmentResult> {
   if (typeof Zotero === "undefined" || !Zotero.Attachments?.importFromFile) {
     return {
@@ -79,7 +90,10 @@ export async function attachPresentationToZotero(options: {
 
   let imported: Zotero.Item | undefined;
   try {
-    const target = resolveAttachmentTarget(options.sourceItemKey);
+    const target = resolveAttachmentTarget(
+      options.sourceItemKey,
+      options.sourceLibraryID,
+    );
     imported = await Zotero.Attachments.importFromFile({
       file: options.outputPath,
       ...(target.parent

@@ -311,6 +311,7 @@ describe("chat session fork", function () {
         createdAt: 1,
         updatedAt: 10,
         lastActiveItemKey: "ITEM-1",
+        lastActiveItemLibraryID: 23,
         messages: [
           {
             id: "source-user",
@@ -365,6 +366,7 @@ describe("chat session fork", function () {
             createdAt: 20,
             updatedAt: 20,
             lastActiveItemKey: options.lastActiveItemKey,
+            lastActiveItemLibraryID: options.lastActiveItemLibraryID,
             messages: options.messages,
             selectedTier: options.selectedTier,
             resolvedModelId: options.resolvedModelId,
@@ -399,6 +401,8 @@ describe("chat session fork", function () {
         ["fork-message-1", "fork-message-2"],
       );
       assert.equal(createOptions?.lastActiveItemKey, "ITEM-1");
+      assert.equal(createOptions?.lastActiveItemLibraryID, 23);
+      assert.equal(forkedSession.lastActiveItemLibraryID, 23);
       assert.equal(createOptions?.selectedTier, "paperchat-pro");
       assert.equal(createOptions?.resolvedModelId, "model-pro");
       assert.equal(createOptions?.activate, false);

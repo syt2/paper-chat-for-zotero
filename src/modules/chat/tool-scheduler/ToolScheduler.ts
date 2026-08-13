@@ -31,10 +31,18 @@ import { getToolRuntimeMetadata } from "./ToolMetadataRegistry";
 import { deriveToolEvidenceRecords } from "../evidence";
 import type { PresentationVisualReviewer } from "../../presentation/PresentationVisualReview";
 import type { PresentationPlanner } from "../../presentation/PresentationPlanner";
+import type {
+  PresentationProgressCallback,
+  PresentationSourceContext,
+} from "../../presentation/contracts";
 
 export interface ToolSchedulerExecutionContext {
   presentationVisualReviewer?: PresentationVisualReviewer;
   presentationPlanner?: PresentationPlanner;
+  /** Presentation-only progress channel. Other tools never observe it. */
+  presentationProgress?: PresentationProgressCallback;
+  /** Trusted Zotero identity captured from the paper bound to this chat turn. */
+  paperSource?: PresentationSourceContext;
 }
 
 export interface ToolSchedulerRequest {

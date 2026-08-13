@@ -1,6 +1,8 @@
 export {
   createPresentationToolDefinition,
   executePresentationCapability,
+  isPathInsidePresentationRoot,
+  isTrustedPresentationPreviewPath,
 } from "./PresentationCapability";
 export {
   attachPresentationToZotero,
@@ -22,7 +24,14 @@ export {
   parsePresentationPlannerResponse,
 } from "./PresentationPlanner";
 export { normalizePresentationToolCall } from "./PresentationToolCallPolicy";
-export type { PresentationRendererApi } from "./contracts";
+export type {
+  PresentationCapabilityTestOptions,
+  PresentationProgressCallback,
+  PresentationProgressPhase,
+  PresentationProgressUpdate,
+  PresentationSourceContext,
+  PresentationRendererApi,
+} from "./contracts";
 export type {
   PresentationVisualReviewer,
   PresentationVisualReviewRequest,

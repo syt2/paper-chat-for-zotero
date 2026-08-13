@@ -40,7 +40,11 @@ import type { SessionStorageService } from "./SessionStorageService";
 
 export type FailedAssistantSnapshot = Pick<
   ChatMessage,
-  "content" | "reasoning" | "evidence" | "sourceItemKeys"
+  | "content"
+  | "reasoning"
+  | "evidence"
+  | "sourceItemKeys"
+  | "presentationArtifacts"
 >;
 
 export function selectMoreSubstantialSnapshot(
@@ -49,7 +53,44 @@ export function selectMoreSubstantialSnapshot(
 ): FailedAssistantSnapshot | null {
   if (!current) return previous;
   if (!previous) return current;
-  return current.content.length >= previous.content.length ? current : previous;
+  const preferred =
+    current.content.length >= previous.content.length ? current : previous;
+  const artifacts = mergePresentationArtifacts(
+    previous.presentationArtifacts,
+    current.presentationArtifacts,
+  );
+  return {
+    ...preferred,
+    presentationArtifacts: artifacts.length ? artifacts : undefined,
+  };
+}
+
+function mergePresentationArtifacts(
+  previous: ChatMessage["presentationArtifacts"],
+  current: ChatMessage["presentationArtifacts"],
+): NonNullable<ChatMessage["presentationArtifacts"]> {
+  const merged = new Map<
+    string,
+    NonNullable<ChatMessage["presentationArtifacts"]>[number]
+  >();
+  for (const artifact of [...(previous || []), ...(current || [])]) {
+    const key = artifact.localId || artifact.toolCallId;
+    const existing = merged.get(key);
+    merged.set(
+      key,
+      existing
+        ? {
+            ...existing,
+            ...artifact,
+            path: artifact.path || existing.path,
+            previewPaths: artifact.previewPaths || existing.previewPaths,
+            attachmentItemID:
+              artifact.attachmentItemID || existing.attachmentItemID,
+          }
+        : artifact,
+    );
+  }
+  return [...merged.values()];
 }
 
 export interface PaperChatTierRerollResult {
@@ -473,8 +514,17 @@ export class PaperChatTierController {
     const sourceItemKeys = assistantMessage.sourceItemKeys?.length
       ? assistantMessage.sourceItemKeys
       : undefined;
-    return content || reasoning || evidence
-      ? { content, reasoning, evidence, sourceItemKeys }
+    const presentationArtifacts = assistantMessage.presentationArtifacts?.length
+      ? assistantMessage.presentationArtifacts
+      : undefined;
+    return content || reasoning || evidence || presentationArtifacts
+      ? {
+          content,
+          reasoning,
+          evidence,
+          sourceItemKeys,
+          presentationArtifacts,
+        }
       : null;
   }
 
@@ -522,6 +572,7 @@ export class PaperChatTierController {
     assistantMessage.reasoning = snapshot.reasoning;
     assistantMessage.evidence = snapshot.evidence;
     assistantMessage.sourceItemKeys = snapshot.sourceItemKeys;
+    assistantMessage.presentationArtifacts = snapshot.presentationArtifacts;
     assistantMessage.streamingState = "interrupted";
     assistantMessage.timestamp = Date.now();
     delete assistantMessage.tool_calls;
@@ -536,6 +587,7 @@ export class PaperChatTierController {
           streamingState: "interrupted",
           evidence: snapshot.evidence || [],
           sourceItemKeys: snapshot.sourceItemKeys || [],
+          presentationArtifacts: snapshot.presentationArtifacts || [],
         },
       );
     if (toolContextChanged) {

@@ -8,7 +8,11 @@ import {
   generateAgentRuntimeContextPrompt,
   generatePaperContextPrompt,
 } from "../src/modules/chat/pdf-tools/promptGenerator.ts";
-import type { ChatMessage, ChatSession } from "../src/types/chat";
+import type {
+  AgentRuntimeEvent,
+  ChatMessage,
+  ChatSession,
+} from "../src/types/chat";
 import type {
   ToolCall,
   ToolDefinition,
@@ -1548,6 +1552,92 @@ describe("agent runtime plan semantics", function () {
     assert.equal(session.messages[2].content, "trusted completed result");
     assert.equal(session.messages[3].content, visibleContent);
     assert.equal(session.messages[3].streamingState, "interrupted");
+  });
+
+  it("retains every completed duplicate-ID pair after an interrupted turn", function () {
+    const duplicateId = "duplicate-presentation-call";
+    const session = createSession();
+    session.messages.push(
+      {
+        id: "assistant-duplicate-api-context-request",
+        role: "assistant",
+        content: "",
+        tool_calls: ["first", "second"].map((sourceItemKey) => ({
+          id: duplicateId,
+          type: "function" as const,
+          function: {
+            name: "presentation",
+            arguments: JSON.stringify({ sourceItemKey }),
+          },
+        })),
+        apiOnly: true,
+        timestamp: 2,
+      },
+      {
+        id: "assistant-duplicate-api-context-result-1",
+        role: "tool",
+        content: "first presentation result",
+        tool_call_id: duplicateId,
+        apiOnly: true,
+        timestamp: 3,
+      },
+      {
+        id: "assistant-duplicate-api-context-result-2",
+        role: "tool",
+        content: "second presentation result",
+        tool_call_id: duplicateId,
+        apiOnly: true,
+        timestamp: 4,
+      },
+      {
+        id: "assistant-duplicate",
+        role: "assistant",
+        content: "Two generated PPTX files remain available.",
+        streamingState: "interrupted",
+        timestamp: 5,
+      },
+    );
+
+    assert.isTrue(
+      retainCompletedApiOnlyModelContextMessagesForTurn(
+        session,
+        "assistant-duplicate",
+      ),
+    );
+    assert.deepEqual(
+      session.messages[1].tool_calls?.map((toolCall) => ({
+        id: toolCall.id,
+        args: toolCall.function.arguments,
+      })),
+      [
+        {
+          id: duplicateId,
+          args: JSON.stringify({ sourceItemKey: "first" }),
+        },
+        {
+          id: duplicateId,
+          args: JSON.stringify({ sourceItemKey: "second" }),
+        },
+      ],
+    );
+    assert.deepEqual(
+      session.messages
+        .filter((message) => message.role === "tool")
+        .map((message) => ({
+          toolCallId: message.tool_call_id,
+          content: message.content,
+        })),
+      [
+        {
+          toolCallId: duplicateId,
+          content: "first presentation result",
+        },
+        {
+          toolCallId: duplicateId,
+          content: "second presentation result",
+        },
+      ],
+    );
   });
 
   it("removes an entirely incomplete transcript and reports that storage changed", function () {
@@ -4415,6 +4505,410 @@ describe("agent runtime plan semantics", function () {
     assert.include(capturedMessages[1].content, "SBZ2M99R");
     assert.include(capturedMessages[1].content, "Fig. 1. Network architecture");
     assert.include(capturedMessages[1].content, "Internal output JSON schema");
+  });
+
+  it("streams presentation progress into the same calling card and execution plan", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    const session = createSession();
+    const assistantMessage: ChatMessage = {
+      id: "assistant-presentation-progress",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+    };
+    session.messages.push(assistantMessage);
+    const streamingUpdates: string[] = [];
+    const progressEvents: AgentRuntimeEvent[] = [];
+    let paperSource: { itemKey?: string; libraryID?: number } | undefined;
+    const persistedPresentationArtifacts: Array<
+      NonNullable<ChatMessage["presentationArtifacts"]>
+    > = [];
+    const formattedCards: Array<{
+      status: string;
+      result?: string;
+      path?: string;
+    }> = [];
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async (
+          _sessionId: string,
+          _messageId: string,
+          _content: string,
+          _reasoning?: string,
+          options?: {
+            presentationArtifacts?: ChatMessage["presentationArtifacts"];
+          },
+        ) => {
+          if (options?.presentationArtifacts?.length) {
+            persistedPresentationArtifacts.push(
+              structuredClone(options.presentationArtifacts),
+            );
+          }
+        },
+        updateSessionMeta: async () => undefined,
+        saveSession: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => true,
+        isSessionTracked: () => true,
+        onStreamingUpdate: (content: string) => streamingUpdates.push(content),
+        onRuntimeEvent: (event: AgentRuntimeEvent) =>
+          progressEvents.push(event),
+        formatToolCallCard: (
+          _name: string,
+          _args: string,
+          status: string,
+          result?: string,
+          options?: { presentationArtifact?: { path?: string } },
+        ) => {
+          formattedCards.push({
+            status,
+            result,
+            path: options?.presentationArtifact?.path,
+          });
+          return `<presentation status="${status}">${result || ""}</presentation>`;
+        },
+        generateId: () => `presentation-progress-${Math.random()}`,
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async (requests: any[]) => {
+          paperSource = requests[0].executionContext.paperSource;
+          await requests[0].executionContext.presentationProgress({
+            phase: "planning",
+            message: "正在规划 6 页结构",
+            current: 2,
+            total: 9,
+          });
+          await requests[0].executionContext.presentationProgress({
+            phase: "rendering",
+            message: "已生成可打开的 PPTX 草稿",
+            pptxPath: "/safe/presentation-draft.pptx",
+            previewPaths: ["/safe/slide-01.png"],
+            isDraft: true,
+          });
+          assert.deepInclude(
+            persistedPresentationArtifacts.flat(),
+            {
+              toolCallId: "presentation-progress-call",
+              localId: "presentation-progress-call:presentation:1:1",
+              path: "/safe/presentation-draft.pptx",
+              previewPaths: ["/safe/slide-01.png"],
+              isDraft: true,
+            },
+            "the file milestone must reach storage before the renderer continues",
+          );
+          return [
+            {
+              toolCall: requests[0].toolCall,
+              status: "completed",
+              content: JSON.stringify({
+                status: "completed",
+                path: "/safe/presentation-final.pptx",
+              }),
+            },
+          ];
+        },
+      },
+    ) as any;
+    runtime.getMaxIterations = () => 2;
+    let providerCalls = 0;
+    const provider = {
+      config: {
+        id: "paperchat",
+        type: "paperchat",
+        defaultModel: "gpt-5.6-terra",
+      },
+      chatCompletionWithTools: async () => {
+        providerCalls += 1;
+        return providerCalls === 1
+          ? {
+              content: "",
+              toolCalls: [
+                {
+                  id: "presentation-progress-call",
+                  type: "function" as const,
+                  function: {
+                    name: "presentation",
+                    arguments: JSON.stringify({ sourceItemKey: "ITEM-1" }),
+                  },
+                },
+              ],
+            }
+          : { content: "PPT 已生成。" };
+      },
+    };
+
+    try {
+      await runtime.executeNonStreamingToolLoop({
+        provider,
+        currentMessages: session.messages,
+        assistantMessage,
+        pdfWasAttached: false,
+        summaryTriggered: false,
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "presentation",
+              description: "Create a presentation",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
+        sendingSession: session,
+        currentItemKey: "ITEM-1",
+        currentItemLibraryID: 5,
+      });
+
+      assert.isTrue(
+        formattedCards.some(
+          (card) =>
+            card.status === "calling" && card.result === "正在规划 6 页结构",
+        ),
+      );
+      assert.isTrue(
+        formattedCards.some(
+          (card) => card.path === "/safe/presentation-draft.pptx",
+        ),
+      );
+      assert.isTrue(
+        streamingUpdates.some((content) =>
+          content.includes("已生成可打开的 PPTX 草稿"),
+        ),
+      );
+      const toolProgressEvents = progressEvents.filter(
+        (event) => event.type === "tool_progress",
+      );
+      assert.deepEqual(
+        toolProgressEvents.map((event) =>
+          event.type === "tool_progress" ? event.phase : "",
+        ),
+        ["planning", "rendering"],
+      );
+      assert.equal(
+        session.executionPlan?.steps.find(
+          (step) => step.id === "presentation-progress-call:presentation:1:1",
+        )?.status,
+        "completed",
+      );
+      assert.deepEqual(paperSource, {
+        itemKey: "ITEM-1",
+        libraryID: 5,
+      });
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
+  });
+
+  it("keeps duplicate provider presentation IDs distinct in local UI state without rewriting protocol IDs", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    const session = createSession();
+    const assistantMessage: ChatMessage = {
+      id: "assistant-presentation-multiple-progress",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+    };
+    session.messages.push(assistantMessage);
+    const renderedArtifacts: Array<{
+      status?: string;
+      expandStateId?: string;
+      toolCallId?: string;
+      localId?: string;
+      path?: string;
+      result?: string;
+    }> = [];
+    const providerMessageSnapshots: ChatMessage[][] = [];
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        saveSession: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => true,
+        isSessionTracked: () => true,
+        formatToolCallCard: (
+          _name: string,
+          _args: string,
+          status: string,
+          result?: string,
+          options?: {
+            expandStateId?: string;
+            presentationArtifact?: {
+              toolCallId: string;
+              localId?: string;
+              path?: string;
+            };
+          },
+        ) => {
+          renderedArtifacts.push({
+            status,
+            result,
+            expandStateId: options?.expandStateId,
+            toolCallId: options?.presentationArtifact?.toolCallId,
+            localId: options?.presentationArtifact?.localId,
+            path: options?.presentationArtifact?.path,
+          });
+          return "<presentation />";
+        },
+        generateId: () => `presentation-multiple-${Math.random()}`,
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async (requests: any[]) => {
+          await requests[0].executionContext.presentationProgress({
+            phase: "rendering",
+            message: "first draft",
+            pptxPath: "/safe/first.pptx",
+            isDraft: true,
+          });
+          await requests[1].executionContext.presentationProgress({
+            phase: "rendering",
+            message: "second draft",
+            pptxPath: "/safe/second.pptx",
+            isDraft: true,
+          });
+          return requests.map((request: any, index: number) => ({
+            toolCall: request.toolCall,
+            status: "completed",
+            content: JSON.stringify({
+              status: "completed",
+              path: `/safe/final-${index + 1}.pptx`,
+            }),
+          }));
+        },
+      },
+    ) as any;
+    runtime.getMaxIterations = () => 2;
+    let providerCalls = 0;
+    const provider = {
+      config: { id: "paperchat", type: "paperchat" },
+      chatCompletionWithTools: async (messages: ChatMessage[]) => {
+        providerCalls += 1;
+        providerMessageSnapshots.push(structuredClone(messages));
+        return providerCalls === 1
+          ? {
+              content: "",
+              toolCalls: ["first", "second"].map((sourceItemKey) => ({
+                id: "duplicate-presentation-call",
+                type: "function" as const,
+                function: {
+                  name: "presentation",
+                  arguments: JSON.stringify({ sourceItemKey }),
+                },
+              })),
+            }
+          : { content: "Both PPT files were generated." };
+      },
+    };
+
+    try {
+      await runtime.executeNonStreamingToolLoop({
+        provider,
+        currentMessages: session.messages,
+        assistantMessage,
+        pdfWasAttached: false,
+        summaryTriggered: false,
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "presentation",
+              description: "Create a presentation",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
+        sendingSession: session,
+      });
+
+      assert.isTrue(
+        renderedArtifacts.some(
+          (artifact) =>
+            artifact.result === "first draft" &&
+            artifact.toolCallId === "duplicate-presentation-call" &&
+            artifact.path === "/safe/first.pptx",
+        ),
+      );
+      assert.isTrue(
+        renderedArtifacts.some(
+          (artifact) =>
+            artifact.result === "second draft" &&
+            artifact.toolCallId === "duplicate-presentation-call" &&
+            artifact.path === "/safe/second.pptx",
+        ),
+      );
+      assert.lengthOf(assistantMessage.presentationArtifacts || [], 2);
+      assert.deepEqual(
+        assistantMessage.presentationArtifacts?.map(
+          (artifact) => artifact.toolCallId,
+        ),
+        ["duplicate-presentation-call", "duplicate-presentation-call"],
+      );
+      assert.deepEqual(
+        assistantMessage.presentationArtifacts?.map(
+          (artifact) => artifact.path,
+        ),
+        ["/safe/final-1.pptx", "/safe/final-2.pptx"],
+      );
+      const localIds = assistantMessage.presentationArtifacts?.map(
+        (artifact) => artifact.localId,
+      );
+      assert.lengthOf(new Set(localIds), 2);
+      assert.isTrue(localIds?.every(Boolean));
+      assert.deepEqual(
+        session.executionPlan?.steps
+          .filter((step) => localIds?.includes(step.id))
+          .map((step) => step.status),
+        ["completed", "completed"],
+      );
+      assert.sameMembers(
+        renderedArtifacts
+          .filter((card) => card.status === "completed")
+          .map((card) => card.expandStateId),
+        localIds || [],
+      );
+      assert.sameMembers(
+        [
+          ...new Set(
+            renderedArtifacts
+              .filter((card) => card.result?.includes("draft"))
+              .map((card) => card.localId),
+          ),
+        ],
+        localIds || [],
+      );
+
+      const secondProviderMessages = providerMessageSnapshots[1];
+      const protocolCalls = secondProviderMessages
+        .filter((message) => message.role === "assistant")
+        .flatMap((message) => message.tool_calls || []);
+      const protocolResults = secondProviderMessages.filter(
+        (message) => message.role === "tool",
+      );
+      assert.isAtLeast(protocolCalls.length, 2);
+      assert.isTrue(
+        protocolCalls.every(
+          (toolCall) => toolCall.id === "duplicate-presentation-call",
+        ),
+      );
+      assert.isAtLeast(protocolResults.length, 2);
+      assert.isTrue(
+        protocolResults.every(
+          (message) => message.tool_call_id === "duplicate-presentation-call",
+        ),
+      );
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
   });
 
   it("repairs an invalid planner protocol once inside the presentation job", async function () {

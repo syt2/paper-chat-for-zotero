@@ -12,6 +12,7 @@ import {
   resetPresentationRendererForTests,
 } from "../src/modules/presentation/PresentationRendererLoader.ts";
 import { PRESENTATION_RENDERER_GLOBAL } from "../src/modules/presentation/contracts.ts";
+import { PresentationResolvedMediaDuplicateError } from "../src/modules/presentation/PresentationMediaResolver.ts";
 import {
   filterBlockingPresentationQualityIssues,
   shouldUseStrictPresentationQualityGate,
@@ -30,7 +31,7 @@ const VALID_REQUEST = {
 };
 
 describe("presentation capability", function () {
-  it("keeps development builds strict but compiles release artifacts as production", function () {
+  it("does not couple presentation quality policy to build mode", function () {
     assert.notInclude(packageManifest.scripts.build, "NODE_ENV=production");
     assert.match(
       packageManifest.scripts["build:release"],
@@ -683,7 +684,7 @@ describe("presentation capability", function () {
     ]);
   });
 
-  it("keeps planning quality strict in development but advisory in production", function () {
+  it("keeps structural issues blocking while editorial quality is advisory by default", function () {
     const issues = [
       "/slides/0: evidence layout requires at least two evidence modules such as PDF figures, a chart, table, equation, matrix, or metrics.",
       "/slides/0: 940 visible characters exceed the 760-character budget for the evidence composition.",
@@ -699,10 +700,12 @@ describe("presentation capability", function () {
     ]);
   });
 
-  it("never blocks a production export on editorial density heuristics", function () {
-    assert.isFalse(shouldUseStrictPresentationQualityGate("production"));
-    assert.isTrue(shouldUseStrictPresentationQualityGate("development"));
-    assert.isTrue(shouldUseStrictPresentationQualityGate(undefined));
+  it("uses an explicit test-only seam for strict editorial quality", function () {
+    assert.isFalse(shouldUseStrictPresentationQualityGate());
+    assert.isFalse(shouldUseStrictPresentationQualityGate({}));
+    assert.isTrue(
+      shouldUseStrictPresentationQualityGate({ strictQualityGate: true }),
+    );
 
     const releaseIssues = [
       "/slides/0: evidence layout requires at least two evidence modules such as PDF figures, a chart, table, equation, matrix, or metrics.",
@@ -710,7 +713,7 @@ describe("presentation capability", function () {
     assert.deepEqual(
       filterBlockingPresentationQualityIssues(
         releaseIssues,
-        shouldUseStrictPresentationQualityGate("production"),
+        shouldUseStrictPresentationQualityGate(),
       ),
       [],
     );
@@ -724,23 +727,30 @@ describe("presentation capability", function () {
     assert.deepEqual(
       filterBlockingPresentationQualityIssues(
         futureDiagnostic,
-        shouldUseStrictPresentationQualityGate("production"),
+        shouldUseStrictPresentationQualityGate(),
       ),
       [],
     );
   });
 
-  it("keeps deterministic native-object contract failures blocking in production", function () {
+  it("blocks only deterministic native-object data-shape failures in production", function () {
     const structuralIssues = [
       "/slides/0/chart: labels and values must have the same length.",
       "/slides/1/figures/0/crop: x+width and y+height must stay within 1.",
       "/slides/2/matrix: every row must contain exactly one cell per column.",
+    ];
+    const layoutPreferences = [
       "/slides/3: process layout requires process steps.",
       "/slides/4: statement layout cannot hide supplied visual evidence. Use auto, figure, data, process, matrix, timeline, comparison, gallery, ablation, or conclusion.",
+      "/slides/5: gallery layout supports exactly two dominant paper figures. More figures create thumbnail grids instead of an editorial comparison.",
+      "/slides/6: conclusion uses a fixed editorial structure: three findings, two open questions or limitations, and a three-to-four-step roadmap.",
     ];
 
     assert.deepEqual(
-      filterBlockingPresentationQualityIssues(structuralIssues, false),
+      filterBlockingPresentationQualityIssues(
+        [...structuralIssues, ...layoutPreferences],
+        false,
+      ),
       structuralIssues,
     );
   });
@@ -882,19 +892,26 @@ describe("presentation capability", function () {
   });
 
   it("rejects text-wall decks and duplicate covers before rendering", async function () {
-    const result = await executePresentationCapability({
-      title: "CRA Module Presentation",
-      sourceItemKey: "VJLWMUKJ",
-      slides: [
-        {
-          title: "CRA Module Presentation",
-          bullets: ["Background", "Method", "Results"],
-        },
-        { title: "Method", bullets: ["A", "B"] },
-        { title: "Results", bullets: ["A", "B"] },
-        { title: "Conclusion", bullets: ["A", "B"] },
-      ],
-    });
+    const result = await executePresentationCapability(
+      {
+        title: "CRA Module Presentation",
+        sourceItemKey: "VJLWMUKJ",
+        slides: [
+          {
+            title: "CRA Module Presentation",
+            bullets: ["Background", "Method", "Results"],
+          },
+          { title: "Method", bullets: ["A", "B"] },
+          { title: "Results", bullets: ["A", "B"] },
+          { title: "Conclusion", bullets: ["A", "B"] },
+        ],
+      },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { strictQualityGate: true },
+    );
 
     assert.match(result, /^Error: Presentation quality gate rejected/);
     assert.include(result, "must not duplicate the automatic cover");
@@ -1912,6 +1929,208 @@ describe("presentation capability", function () {
       assert.match(result, /^Error: Presentation generation failed/);
       assert.include(result, "synthetic disk failure");
       assert.notInclude(result, '"status":"completed"');
+    } finally {
+      resetPresentationRendererForTests();
+      runtime.Zotero = previousZotero;
+      runtime.Services = previousServices;
+      runtime.IOUtils = previousIOUtils;
+      runtime.PathUtils = previousPathUtils;
+    }
+  });
+
+  it("continues exporting when a presentation progress callback fails", async function () {
+    const runtime = globalThis as any;
+    const previousZotero = runtime.Zotero;
+    const previousServices = runtime.Services;
+    const previousIOUtils = runtime.IOUtils;
+    const previousPathUtils = runtime.PathUtils;
+    const target: Record<string, unknown> = {};
+    const completedPhases: string[] = [];
+    runtime.Zotero = {
+      DataDirectory: { dir: "/zotero-data" },
+      getMainWindow: () => target,
+    };
+    runtime.Services = {
+      scriptloader: {
+        loadSubScript: () => {
+          target[PRESENTATION_RENDERER_GLOBAL] = {
+            renderPresentation: async () =>
+              new Uint8Array([0x50, 0x4b, 0x03, 0x04]),
+          };
+        },
+      },
+    };
+    runtime.IOUtils = {
+      makeDirectory: async () => undefined,
+      write: async () => undefined,
+    };
+    runtime.PathUtils = {
+      join: (...parts: string[]) => parts.join("/"),
+      filename: (path: string) => path.split("/").pop(),
+    };
+
+    try {
+      resetPresentationRendererForTests();
+      const result = await executePresentationCapability(
+        VALID_REQUEST,
+        undefined,
+        undefined,
+        undefined,
+        async (update) => {
+          if (update.pptxPath && update.isDraft) {
+            throw new Error("synthetic checkpoint failure");
+          }
+          completedPhases.push(update.phase);
+        },
+      );
+      const payload = JSON.parse(result);
+
+      assert.equal(payload.status, "completed");
+      assert.match(payload.path, /\.pptx$/u);
+      assert.include(completedPhases, "completed");
+    } finally {
+      resetPresentationRendererForTests();
+      runtime.Zotero = previousZotero;
+      runtime.Services = previousServices;
+      runtime.IOUtils = previousIOUtils;
+      runtime.PathUtils = previousPathUtils;
+    }
+  });
+
+  it("keeps the trusted library ID during duplicate-media repair", async function () {
+    const runtime = globalThis as any;
+    const previousZotero = runtime.Zotero;
+    const previousServices = runtime.Services;
+    const previousIOUtils = runtime.IOUtils;
+    const previousPathUtils = runtime.PathUtils;
+    const target: Record<string, unknown> = {};
+    const libraryIDs: Array<number | undefined> = [];
+    let resolveCalls = 0;
+    runtime.Zotero = {
+      DataDirectory: { dir: "/zotero-data" },
+      getMainWindow: () => target,
+    };
+    runtime.Services = {
+      scriptloader: {
+        loadSubScript: () => {
+          target[PRESENTATION_RENDERER_GLOBAL] = {
+            renderPresentation: async () =>
+              new Uint8Array([0x50, 0x4b, 0x03, 0x04]),
+          };
+        },
+      },
+    };
+    runtime.IOUtils = {
+      makeDirectory: async () => undefined,
+      write: async () => undefined,
+    };
+    runtime.PathUtils = {
+      join: (...parts: string[]) => parts.join("/"),
+      filename: (path: string) => path.split("/").pop(),
+    };
+
+    try {
+      resetPresentationRendererForTests();
+      const result = await executePresentationCapability(
+        { sourceItemKey: "SHARED01" },
+        undefined,
+        async () => VALID_REQUEST as any,
+        {
+          metadata: { title: "Shared-library paper", year: 2026 },
+          sections: [],
+          fullText: "Synthetic evidence",
+          pages: [],
+          pageCount: 0,
+        } as any,
+        undefined,
+        {
+          mediaResolver: async (request, sourceLibraryID) => {
+            libraryIDs.push(sourceLibraryID);
+            resolveCalls += 1;
+            if (resolveCalls === 1) {
+              throw new PresentationResolvedMediaDuplicateError([
+                "synthetic duplicate crop",
+              ]);
+            }
+            return request as any;
+          },
+        },
+        { itemKey: "SHARED01", libraryID: 5 },
+      );
+      const payload = JSON.parse(result);
+
+      assert.oneOf(payload.status, ["completed", "completed_with_warnings"]);
+      assert.deepEqual(libraryIDs, [5, 5]);
+    } finally {
+      resetPresentationRendererForTests();
+      runtime.Zotero = previousZotero;
+      runtime.Services = previousServices;
+      runtime.IOUtils = previousIOUtils;
+      runtime.PathUtils = previousPathUtils;
+    }
+  });
+
+  it("returns the persisted PPTX when recovery attachment attempts throw", async function () {
+    const runtime = globalThis as any;
+    const previousZotero = runtime.Zotero;
+    const previousServices = runtime.Services;
+    const previousIOUtils = runtime.IOUtils;
+    const previousPathUtils = runtime.PathUtils;
+    const target: Record<string, unknown> = {};
+    const writes: Array<{ path: string; bytes: Uint8Array }> = [];
+    let attachmentAttempts = 0;
+    const zotero = {
+      DataDirectory: { dir: "/zotero-data" },
+      getMainWindow: () => target,
+    };
+    Object.defineProperty(zotero, "Attachments", {
+      get: () => {
+        attachmentAttempts += 1;
+        throw new Error("synthetic recovery attachment failure");
+      },
+    });
+    runtime.Zotero = zotero;
+    runtime.Services = {
+      scriptloader: {
+        loadSubScript: () => {
+          target[PRESENTATION_RENDERER_GLOBAL] = {
+            renderPresentation: async () =>
+              new Uint8Array([0x50, 0x4b, 0x03, 0x04]),
+          };
+        },
+      },
+    };
+    runtime.IOUtils = {
+      makeDirectory: async () => undefined,
+      write: async (path: string, bytes: Uint8Array) => {
+        writes.push({ path, bytes });
+      },
+    };
+    runtime.PathUtils = {
+      join: (...parts: string[]) => parts.join("/"),
+      filename: (path: string) => path.split("/").pop(),
+    };
+
+    try {
+      resetPresentationRendererForTests();
+      const result = await executePresentationCapability(VALID_REQUEST);
+      const payload = JSON.parse(result);
+      const pptxWrite = writes.find(({ path }) => path.endsWith(".pptx"));
+
+      assert.exists(pptxWrite);
+      assert.equal(attachmentAttempts, 2);
+      assert.equal(payload.status, "completed_with_warnings");
+      assert.equal(payload.path, pptxWrite?.path);
+      assert.equal(payload.draftPath, pptxWrite?.path);
+      assert.equal(payload.attachmentStatus, "not_attached");
+      assert.include(
+        payload.attachmentWarning,
+        "PPTX was generated and remains available",
+      );
+      assert.include(
+        payload.attachmentWarning,
+        "synthetic recovery attachment failure",
+      );
     } finally {
       resetPresentationRendererForTests();
       runtime.Zotero = previousZotero;

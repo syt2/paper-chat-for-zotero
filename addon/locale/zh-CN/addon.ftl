@@ -292,3 +292,6 @@ paperchat-chat-user-input-auto = { $seconds } 秒后自动选择
 paperchat-chat-user-input-required = 请回答所有必填问题。
 paperchat-chat-user-input-too-many = 最多选择 { $count } 项。
 paperchat-chat-user-input-too-few = 至少选择 { $count } 项。
+paperchat-chat-presentation-open = 打开 PPTX
+paperchat-chat-presentation-open-draft = 打开当前草稿
+paperchat-chat-presentation-open-failed = 无法打开这个 PPTX

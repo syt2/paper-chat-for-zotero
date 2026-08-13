@@ -10,6 +10,7 @@ import { getString } from "../../../utils/locale";
 import { HTML_NS } from "./types";
 import { isDarkMode } from "./ChatPanelTheme";
 import type { EvidenceRecord } from "../../../types/evidence";
+import type { PresentationToolCardArtifact } from "../../../types/chat";
 import { normalizeEvidenceRecords } from "../../chat/evidence";
 import {
   getToolCallCardExpandKey,
@@ -394,6 +395,16 @@ function positionEvidencePopover(
 export interface MarkdownRenderOptions {
   /** Enable the trusted app-authored max-iterations settings action. */
   enableAgentMaxPlanningIterationsSettingsLink?: boolean;
+  presentationArtifactAction?: {
+    openLabel: string;
+    draftLabel: string;
+    onOpen: (artifact: PresentationToolCardArtifact) => void | Promise<void>;
+    onError?: (error: Error) => void;
+  };
+  /** Trusted app-owned artifacts keyed by the producing tool call ID. */
+  presentationArtifacts?: ReadonlyMap<string, PresentationToolCardArtifact>;
+  /** Restrict local preview images to app-owned presentation directories. */
+  isTrustedPresentationPreviewPath?: (path: string) => boolean;
   blockquoteAction?: {
     label: string;
     title: string;
@@ -492,7 +503,7 @@ export function stripIncompleteTrailingToolCall(content: string): string {
 function parseToolCallFragments(content: string): ToolCallFragment[] {
   const stableContent = stripIncompleteTrailingToolCall(content);
   const toolCallRegex =
-    /<tool-call status="(calling|completed|error)"(?: expand-key="([^"]*)")?>\s*<tool-name>([^<]*)<\/tool-name>\s*(?:<tool-args>([^<]*)<\/tool-args>\s*)?<tool-status>([^<]*)<\/tool-status>\s*(?:<tool-result>([^<]*)<\/tool-result>\s*)?<\/tool-call>/g;
+    /<tool-call status="(calling|completed|error)"(?: expand-key="([^"]*)")?>\s*<tool-name>([^<]*)<\/tool-name>\s*(?:<tool-args>([^<]*)<\/tool-args>\s*)?<tool-status>([^<]*)<\/tool-status>\s*(?:<tool-result>([^<]*)<\/tool-result>\s*)?(?:<presentation-artifact([^>]*)>\s*([\s\S]*?)<\/presentation-artifact>\s*)?<\/tool-call>/g;
 
   const fragments: ToolCallFragment[] = [];
   let lastIndex = 0;
@@ -557,9 +568,10 @@ function buildToolCallCardElement(
   const isCompleted = status === "completed";
   const canToggle =
     hasDetails && (isCompleted || isError || Boolean(toolResult));
-  const summaryText = isError
-    ? summarizeToolCardText(unescapeXml(toolResult || statusText || ""))
-    : "";
+  const summaryText =
+    isError || (status === "calling" && toolResult)
+      ? summarizeToolCardText(unescapeXml(toolResult || statusText || ""))
+      : "";
 
   const card = doc.createElementNS(HTML_NS, "div") as HTMLElement;
   card.style.margin = isError ? "6px 0" : "8px 0";
@@ -612,6 +624,9 @@ function buildToolCallCardElement(
 
   if (summaryText) {
     const summaryEl = doc.createElementNS(HTML_NS, "div") as HTMLElement;
+    if (status === "calling") {
+      summaryEl.setAttribute("data-tool-progress", "true");
+    }
     summaryEl.style.fontSize = "10px";
     summaryEl.style.color = colors.argsText;
     summaryEl.style.minWidth = "0";
@@ -701,6 +716,131 @@ function buildToolCallCardElement(
   }
 
   return card;
+}
+
+function buildPresentationArtifactElement(
+  doc: Document,
+  artifact: PresentationToolCardArtifact,
+  options: MarkdownRenderOptions,
+): HTMLElement {
+  const dark = isDarkMode();
+  const colors = dark ? toolCallStyles.dark : toolCallStyles.light;
+  const artifactContainer = doc.createElementNS(HTML_NS, "div") as HTMLElement;
+  artifactContainer.setAttribute("data-presentation-artifact", "true");
+  artifactContainer.setAttribute(
+    "data-presentation-artifact-tool-call-id",
+    artifact.toolCallId,
+  );
+  if (artifact.localId) {
+    artifactContainer.setAttribute(
+      "data-presentation-artifact-local-id",
+      artifact.localId,
+    );
+  }
+  Object.assign(artifactContainer.style, {
+    display: "flex",
+    flexDirection: "column",
+    gap: "8px",
+    margin: "8px 0",
+    padding: "9px 12px 10px",
+    border: `1px solid ${colors.cardBorder}`,
+    borderRadius: "8px",
+    background: colors.resultBg,
+    overflow: "hidden",
+  });
+
+  const trustedPreviewPaths = (artifact.previewPaths || [])
+    .filter(
+      (previewPath) =>
+        options.isTrustedPresentationPreviewPath?.(previewPath) === true,
+    )
+    .slice(0, 6);
+  if (trustedPreviewPaths.length > 0) {
+    const previewRail = doc.createElementNS(HTML_NS, "div") as HTMLElement;
+    Object.assign(previewRail.style, {
+      display: "flex",
+      gap: "6px",
+      overflowX: "auto",
+      paddingBottom: "2px",
+    });
+    for (const previewPath of trustedPreviewPaths) {
+      const image = doc.createElementNS(HTML_NS, "img") as HTMLImageElement;
+      image.setAttribute("src", PathUtils.toFileURI(previewPath));
+      image.setAttribute("alt", "Presentation slide preview");
+      image.setAttribute("data-presentation-preview", "true");
+      Object.assign(image.style, {
+        width: "112px",
+        aspectRatio: "16 / 9",
+        objectFit: "cover",
+        flex: "0 0 auto",
+        border: `1px solid ${colors.cardBorder}`,
+        borderRadius: "5px",
+        background: colors.cardBg,
+      });
+      previewRail.appendChild(image);
+    }
+    artifactContainer.appendChild(previewRail);
+  }
+
+  const action = options.presentationArtifactAction;
+  if (action && (artifact.path || artifact.attachmentItemID)) {
+    const button = doc.createElementNS(HTML_NS, "button") as HTMLElement;
+    button.setAttribute("type", "button");
+    button.setAttribute("data-presentation-open", "true");
+    button.textContent = artifact.isDraft
+      ? action.draftLabel
+      : action.openLabel;
+    Object.assign(button.style, {
+      alignSelf: "flex-start",
+      border: `1px solid ${colors.cardBorder}`,
+      borderRadius: "6px",
+      padding: "5px 10px",
+      cursor: "pointer",
+      color: colors.nameText,
+      background: colors.cardBg,
+      fontSize: "11px",
+      fontWeight: "600",
+    });
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      Promise.resolve(action.onOpen(artifact)).catch((error) => {
+        action.onError?.(
+          error instanceof Error ? error : new Error(String(error)),
+        );
+      });
+    });
+    artifactContainer.appendChild(button);
+  }
+
+  if (artifact.path) {
+    const pathEl = doc.createElementNS(HTML_NS, "div") as HTMLElement;
+    pathEl.setAttribute("data-presentation-path", "true");
+    pathEl.textContent = artifact.path;
+    Object.assign(pathEl.style, {
+      color: colors.argsText,
+      fontFamily: '"SF Mono", Monaco, Consolas, monospace',
+      fontSize: "10px",
+      lineHeight: "1.35",
+      overflowWrap: "anywhere",
+      userSelect: "text",
+    });
+    artifactContainer.appendChild(pathEl);
+  }
+
+  return artifactContainer;
+}
+
+function renderPresentationArtifacts(
+  doc: Document,
+  parent: HTMLElement,
+  options: MarkdownRenderOptions,
+): void {
+  for (const artifact of options.presentationArtifacts?.values() || []) {
+    parent.appendChild(
+      buildPresentationArtifactElement(doc, artifact, options),
+    );
+  }
 }
 
 /**
@@ -1440,6 +1580,11 @@ export function renderMarkdownToElement(
     messageId,
     options,
   );
+
+  // Presentation artifacts are a privileged, app-owned side channel. Render
+  // them independently of assistant-authored markup so copied or fabricated
+  // `<presentation-artifact>` tags cannot create or relocate file actions.
+  renderPresentationArtifacts(doc, element, options);
 
   if (!remainingContent) {
     return;

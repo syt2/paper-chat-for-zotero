@@ -67,6 +67,11 @@ export interface ChatMessage {
   evidence?: EvidenceRecord[];
   /** Trusted Zotero paper keys used to produce this assistant message. */
   sourceItemKeys?: string[];
+  /**
+   * App-owned local presentation artifacts produced by real presentation tool
+   * executions. These never come from assistant-authored markdown.
+   */
+  presentationArtifacts?: PresentationToolCardArtifact[];
 }
 
 // 上下文摘要
@@ -224,6 +229,7 @@ export type AgentRuntimeEventType =
   | "text_delta"
   | "reasoning_delta"
   | "tool_started"
+  | "tool_progress"
   | "tool_completed"
   | "approval_requested"
   | "approval_resolved"
@@ -231,6 +237,18 @@ export type AgentRuntimeEventType =
   | "user_input_resolved"
   | "turn_completed"
   | "turn_failed";
+
+/** Trusted, app-authored presentation files rendered inside a tool card. */
+export interface PresentationToolCardArtifact {
+  /** Tool call that produced this artifact; used to bind it to its card. */
+  toolCallId: string;
+  /** App-local identity; provider protocol still uses the original toolCallId. */
+  localId?: string;
+  path?: string;
+  previewPaths?: string[];
+  attachmentItemID?: number;
+  isDraft?: boolean;
+}
 
 interface AgentRuntimeEventBase {
   type: AgentRuntimeEventType;
@@ -264,6 +282,20 @@ export interface AgentRuntimeToolStartedEvent extends AgentRuntimeEventBase {
   toolCallId: string;
   toolName: string;
   args: string;
+}
+
+export interface AgentRuntimeToolProgressEvent extends AgentRuntimeEventBase {
+  type: "tool_progress";
+  toolCallId: string;
+  toolName: string;
+  phase: string;
+  message: string;
+  current?: number;
+  total?: number;
+  pptxPath?: string;
+  previewPaths?: string[];
+  isDraft?: boolean;
+  localId?: string;
 }
 
 export interface AgentRuntimeToolCompletedEvent extends AgentRuntimeEventBase {
@@ -342,6 +374,7 @@ export type AgentRuntimeEvent =
   | AgentRuntimeTextDeltaEvent
   | AgentRuntimeReasoningDeltaEvent
   | AgentRuntimeToolStartedEvent
+  | AgentRuntimeToolProgressEvent
   | AgentRuntimeToolCompletedEvent
   | AgentRuntimeApprovalRequestedEvent
   | AgentRuntimeApprovalResolvedEvent
@@ -376,6 +409,8 @@ export interface ChatSession {
   createdAt: number;
   updatedAt: number;
   lastActiveItemKey: string | null; // 上次活动的 item key (向后兼容)
+  /** Library owning lastActiveItemKey; required when group libraries reuse keys. */
+  lastActiveItemLibraryID?: number;
   // 会话作用域：一个分类或一组手选论文。为空表示沿用 lastActiveItemKey 单篇模式。
   scopeItemKeys?: string[];
   scopeLabel?: string;

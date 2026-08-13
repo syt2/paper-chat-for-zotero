@@ -488,6 +488,83 @@ describe("SessionStorageService grouped history search", function () {
     assert.deepEqual(message.sourceItemKeys, ["ITEM0001", "PAPER002"]);
   });
 
+  it("loads only bounded app-owned presentation artifacts", function () {
+    const message = mapMessageRowToChatMessage({
+      id: "presentation-artifacts",
+      role: "assistant",
+      content: "Presentation ready",
+      timestamp: 1,
+      presentation_artifacts: JSON.stringify([
+        {
+          toolCallId: "presentation-call-1",
+          path: "/zotero-data/paper-chat/presentations/deck.pptx",
+          previewPaths: [
+            "/zotero-data/paper-chat/presentations/deck/slide-01.png",
+            "relative/slide-02.png",
+          ],
+          attachmentItemID: 42,
+          isDraft: false,
+        },
+        {
+          toolCallId: "presentation-call-1",
+          path: "/duplicate-must-not-win.pptx",
+        },
+        {
+          toolCallId: "presentation-call-1",
+          localId: "presentation-call-1:presentation:1:2",
+          path: "/zotero-data/paper-chat/presentations/deck-2.pptx",
+        },
+        {
+          toolCallId: "missing-local-file",
+          path: "https://example.com/forged.pptx",
+        },
+      ]),
+    });
+
+    assert.deepEqual(message.presentationArtifacts, [
+      {
+        toolCallId: "presentation-call-1",
+        path: "/zotero-data/paper-chat/presentations/deck.pptx",
+        previewPaths: [
+          "/zotero-data/paper-chat/presentations/deck/slide-01.png",
+        ],
+        attachmentItemID: 42,
+        isDraft: false,
+      },
+      {
+        toolCallId: "presentation-call-1",
+        localId: "presentation-call-1:presentation:1:2",
+        path: "/zotero-data/paper-chat/presentations/deck-2.pptx",
+        previewPaths: undefined,
+        attachmentItemID: undefined,
+        isDraft: undefined,
+      },
+    ]);
+  });
+
+  it("ignores malformed presentation artifact storage", function () {
+    const malformed = mapMessageRowToChatMessage({
+      id: "malformed-presentation-artifacts",
+      role: "assistant",
+      content: "Readable answer",
+      timestamp: 1,
+      presentation_artifacts: "{broken",
+    });
+    const invalid = mapMessageRowToChatMessage({
+      id: "invalid-presentation-artifacts",
+      role: "assistant",
+      content: "Readable answer",
+      timestamp: 1,
+      presentation_artifacts: JSON.stringify([
+        { toolCallId: "", path: "/tmp/no-call.pptx" },
+        { toolCallId: "call-1", path: "relative/deck.pptx" },
+      ]),
+    });
+
+    assert.isUndefined(malformed.presentationArtifacts);
+    assert.isUndefined(invalid.presentationArtifacts);
+  });
+
   it("maps narrow Zotero DB projections without reading omitted columns", function () {
     const projectedRow = {
       id: "strict-projection",
