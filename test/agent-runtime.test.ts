@@ -4503,6 +4503,8 @@ describe("agent runtime plan semantics", function () {
       stateless: true,
     });
     assert.lengthOf(capturedMessages, 2);
+    assert.equal(capturedMessages[0].promptCacheBreakpoint, "explicit");
+    assert.notInclude(capturedMessages[0].content, "SBZ2M99R");
     assert.include(capturedMessages[1].content, "SBZ2M99R");
     assert.include(capturedMessages[1].content, "Fig. 1. Network architecture");
     assert.include(capturedMessages[1].content, "Internal output JSON schema");
@@ -5138,6 +5140,11 @@ describe("agent runtime plan semantics", function () {
       toolChoice: "none",
       stateless: true,
     });
+    assert.equal(capturedMessages[0].promptCacheBreakpoint, "explicit");
+    assert.notInclude(capturedMessages[0].content, "Review stage: draft");
+    assert.notInclude(capturedMessages[0].content, "slideNumber 2-1");
+    assert.include(capturedMessages[1].content, "Review stage: draft");
+    assert.include(capturedMessages[1].content, "slideNumber 2-2");
     assert.include(
       capturedMessages[0].content,
       "quoted Figure/Table captions are source evidence",

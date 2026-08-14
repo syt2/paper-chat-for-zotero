@@ -397,6 +397,45 @@ describe("OpenAIResponsesProvider", function () {
     ]);
   });
 
+  it("serializes an explicit reusable system prefix as a developer cache breakpoint", async function () {
+    let requestBody: Record<string, any> = {};
+    globalThis.fetch = (async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body));
+      return jsonResponse(completedResponse("resp_cache_breakpoint", "done"));
+    }) as typeof fetch;
+
+    const provider = createProvider({ sessionId: "presentation-cache" });
+    await provider.chatCompletionWithTools(
+      [
+        {
+          id: "planner-system",
+          role: "system",
+          content: "Long fixed planner instructions.",
+          promptCacheBreakpoint: "explicit",
+          timestamp: 1,
+        },
+        message("planner-input", "user", "Dynamic paper evidence and repair."),
+      ],
+      undefined,
+      undefined,
+      { toolChoice: "none", stateless: true },
+    );
+
+    assert.deepEqual(requestBody.input, [
+      {
+        role: "developer",
+        content: [
+          {
+            type: "input_text",
+            text: "Long fixed planner instructions.",
+            prompt_cache_breakpoint: { mode: "explicit" },
+          },
+        ],
+      },
+      { role: "user", content: "Dynamic paper evidence and repair." },
+    ]);
+  });
+
   it("isolates two Responses model chains and invalidates A after B answers", async function () {
     const requestBodies: Array<Record<string, any>> = [];
     const responses = [

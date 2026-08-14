@@ -334,13 +334,19 @@ function toInputContent(
   pdfAttachment: PdfAttachment | undefined,
 ): unknown {
   const hasImages = !!message.images?.length;
-  if (!hasImages && !pdfAttachment) {
+  if (!hasImages && !pdfAttachment && !message.promptCacheBreakpoint) {
     return message.content;
   }
 
   const content: ResponsesInputItem[] = [];
   if (message.content) {
-    content.push({ type: "input_text", text: message.content });
+    content.push({
+      type: "input_text",
+      text: message.content,
+      ...(message.promptCacheBreakpoint
+        ? { prompt_cache_breakpoint: { mode: message.promptCacheBreakpoint } }
+        : {}),
+    });
   }
   if (pdfAttachment) {
     content.push({
@@ -389,7 +395,10 @@ function convertMessagesToResponsesInput(
 
     if (message.content || message.images?.length) {
       input.push({
-        role: message.role,
+        role:
+          message.promptCacheBreakpoint && message.role === "system"
+            ? "developer"
+            : message.role,
         content: toInputContent(
           message,
           index === firstUserIndex ? pdfAttachment : undefined,

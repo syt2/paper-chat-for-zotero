@@ -59,8 +59,10 @@ describe("presentation planner", function () {
   it("keeps visual quality and evidence rules inside the planner", function () {
     const prompt = buildPresentationPlannerSystemPrompt();
 
-    assert.include(prompt, "exactly 5 content slides");
-    assert.include(prompt, "at least three real PDF figure placements");
+    assert.include(
+      prompt,
+      "count-specific narrative, evidence, and composition contract in the user message",
+    );
     assert.include(
       prompt,
       "Allocate every content-slide evidence figure before choosing the cover hero",
@@ -85,13 +87,6 @@ describe("presentation planner", function () {
       "Tiny or clipped axis labels are a release-blocking defect",
     );
     assert.include(prompt, "first content slide must make the research gap");
-    assert.include(prompt, "content slides 3 through 4");
-    assert.include(prompt, "structured experimental or ablation result");
-    assert.include(prompt, "pair it with a distinct non-table PDF figure");
-    assert.include(
-      prompt,
-      "Do not simplify a table-plus-figure result page into table-only",
-    );
     assert.include(prompt, "exactly three distinct evidence-backed findings");
     assert.include(prompt, "do not count as findings");
     assert.include(prompt, "Never switch one slide into another language");
@@ -132,30 +127,37 @@ describe("presentation planner", function () {
       [15, 14],
       [30, 29],
     ] as const) {
-      const systemPrompt = buildPresentationPlannerSystemPrompt(slideCount);
+      const systemPrompt = buildPresentationPlannerSystemPrompt();
       const userPrompt = buildPresentationPlannerUserPrompt({
         ...request,
         intent: { ...request.intent, slideCount },
       });
 
-      assert.include(
+      assert.notInclude(
         systemPrompt,
-        `exactly ${contentSlideCount} content slides`,
-      );
-      assert.include(
-        systemPrompt,
-        `Set request-level slideCount to ${slideCount}`,
+        `${slideCount}-page research presentation`,
       );
       assert.include(userPrompt, `Selected total slide count: ${slideCount}`);
       assert.include(
         userPrompt,
         `Required content slide count: exactly ${contentSlideCount}`,
       );
+      assert.include(
+        userPrompt,
+        `Create a premium, editable, evidence-first ${slideCount}-page research presentation`,
+      );
+      assert.include(
+        userPrompt,
+        `Set request-level slideCount to ${slideCount}`,
+      );
     }
   });
 
   it("uses a coherent compact evidence arc for a four-page deck", function () {
-    const prompt = buildPresentationPlannerSystemPrompt(4);
+    const prompt = buildPresentationPlannerUserPrompt({
+      ...request,
+      intent: { ...request.intent, slideCount: 4 },
+    });
 
     assert.include(prompt, "three content slides");
     assert.include(prompt, "On content slide 2");

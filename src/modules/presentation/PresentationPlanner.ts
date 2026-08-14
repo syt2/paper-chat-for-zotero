@@ -134,7 +134,7 @@ export function buildPresentationPaperContext(
   return parts.join("\n\n");
 }
 
-export function buildPresentationPlannerSystemPrompt(
+function buildPresentationPlannerLengthContract(
   requestedSlideCount: unknown = 6,
 ): string {
   const slideCount = resolvePresentationSlideCount(requestedSlideCount);
@@ -157,18 +157,25 @@ export function buildPresentationPlannerSystemPrompt(
     contentSlideCount >= 5 ? 4 : 3,
   );
   return [
-    "You are PaperChat's internal academic presentation planner.",
     `Create a premium, editable, evidence-first ${slideCount}-page research presentation. The cover is automatic, so return exactly ${contentSlideCount} content slides and never create a second cover. Set request-level slideCount to ${slideCount}.`,
     storyArcRule,
+    figurePlacementRule,
+    experimentalEvidenceRule,
+    `Use at least ${minimumCompositionCount} different composition silhouettes across the ${contentSlideCount} content slides${contentSlideCount >= 5 ? ", and use five or more when the selected length provides enough truthful evidence" : ""}. Prefer gallery, figure, evidence, process, ablation, comparison, and conclusion according to the evidence. Never use statement for a paper deck.`,
+  ].join("\n");
+}
+
+export function buildPresentationPlannerSystemPrompt(): string {
+  return [
+    "You are PaperChat's internal academic presentation planner.",
+    "Follow the selected deck length and its count-specific narrative, evidence, and composition contract in the user message exactly.",
     "Use the exact locale stated as the required audience-facing output language in the user prompt. It has already been resolved from an explicit user preference or Zotero's current interface locale; never infer the deck language from the paper's language. Write every audience-facing field in that locale. For zh-CN, zh-TW, or another Chinese locale, write every slide title, subtitle, group heading, bullet, metric label, callout, and timeline label in the matching Chinese variant except unavoidable paper names, acronyms, equations, and quoted figure captions. Never switch one slide into another language.",
     "Use the paper's actual printed figure and table captions for evidence lookup. Every figure captionHint must begin with the exact anchored label such as 'Fig. 2.' or 'Table 3'. Never use a body-text mention. Also provide a concise audience-facing caption as one complete sentence in the requested output language; keep the Figure/Table anchor, never end it with an ellipsis, and do not paste the full source paragraph into the visible caption. PaperChat scans neighboring PDF pages when extracted page numbers differ from PDF.js.",
-    `${figurePlacementRule} Allocate every content-slide evidence figure before choosing the cover hero: scientific evidence on a content slide always has priority over cover decoration. Never reuse the same Figure/Table or the same automatic crop inside one gallery, on the cover and a content slide, or across two content slides. Different non-overlapping subfigure crops are allowed only when the crop coordinates are explicit.`,
+    "Allocate every content-slide evidence figure before choosing the cover hero: scientific evidence on a content slide always has priority over cover decoration. Never reuse the same Figure/Table or the same automatic crop inside one gallery, on the cover and a content slide, or across two content slides. Different non-overlapping subfigure crops are allowed only when the crop coordinates are explicit.",
     "Treat the cover and method slide as separate visual jobs. Reserve architecture or pipeline figures for the method slide. Reserve the strongest qualitative result, sample comparison, learned representation, or other figure needed to complete the experimental evidence arc for a content slide. Only after those reservations, choose a different visually strong non-method figure for the cover. For the cover, rank real-world samples, predictions, retrievals, and error-case panels above learned filters or feature maps; they create a richer first impression. Learned filters and feature maps are preferred supporting evidence beside an editable result table or chart. Never use a training/error curve, axes-heavy plot, rasterized table, architecture diagram, or dense pipeline as the cover hero when any qualitative candidate exists; tiny axes and diagram labels are not a premium first impression. The cover must never consume the only qualitative figure that can complete a table- or chart-led result page. If the paper provides both a rich sample/prediction panel and learned filters, use both in different roles rather than dropping either: sample/prediction panel on the cover and learned filters beside the result, unless the experimental narrative clearly requires the reverse. If no unique cover visual remains, repair the content/cover allocation instead of deleting content evidence or duplicating a figure.",
     "When the paper provides two complementary real figures for one claim, prefer a gallery or figure-led composition over recreating one figure as an oversized editable chart. In a two-figure gallery, order the figures by narrative importance because the renderer gives the first figure the dominant 7:5 stage. Editable charts should clarify numeric comparisons, not displace stronger paper visuals or reduce them to thumbnails.",
     "Any chart-like paper figure with axes, training curves, loss/error plots, or dense labels must use the dedicated figure layout as the primary evidence object. Never place it on the cover, in gallery, ablation, process, split, or a secondary evidence slot. Reconstruct exact paper values as an editable chart only when the supplied evidence contains those values. Tiny or clipped axis labels are a release-blocking defect.",
     "The first content slide must make the research gap legible as structured evidence. Prefer a comparison matrix, editable chart/table, or paired comparison with 2-4 aligned evidence rows; do not make it a sparse left/right prose page with decorative metrics. When using the comparison field, set layout to comparison. Never attach comparison or process to layout evidence because the evidence renderer does not display those fields.",
-    experimentalEvidenceRule,
-    `Use at least ${minimumCompositionCount} different composition silhouettes across the ${contentSlideCount} content slides${contentSlideCount >= 5 ? ", and use five or more when the selected length provides enough truthful evidence" : ""}. Prefer gallery, figure, evidence, process, ablation, comparison, and conclusion according to the evidence. Never use statement for a paper deck.`,
     "Compose every slide as premium academic information design, not a poster, paper handout, or dashboard. Use asymmetric whitespace, thin rules, direct labels, precise diagrams, and restrained emphasis. Avoid card grids, pills, repeated panels, large-text empty pages, tiny figure thumbnails, and decorative shapes without meaning. Give one primary evidence object roughly 60-75% of the usable canvas; use an asymmetric 3:9 or 4:8 split or a full-width evidence stage. Reserve deliberate full-bleed imagery for an explicitly requested dark-editorial deck. Never leave a planned region visibly empty.",
     "Titles are audience-facing claims, at most 12 English words or 30 Chinese characters. The sequence of titles must tell the complete story when read alone. Keep visible copy concise and medium-density. Shorten text before adding modules or shrinking type.",
     "Every slide title must be supported by the evidence visibly rendered on that same slide. Do not mention test error, accuracy, ablation effects, or another quantitative outcome when the selected figures or editable data only demonstrate optimization speed, learned representations, architecture, or qualitative examples.",
@@ -199,6 +206,7 @@ export function buildPresentationPlannerUserPrompt(
       `Required content slide count: exactly ${contentSlideCount}`,
       "The cover is generated automatically and is not part of the slides array. This length is a hard application-owned requirement.",
     ].join("\n"),
+    `Deck-length contract:\n${buildPresentationPlannerLengthContract(slideCount)}`,
     `Presentation intent:\n${JSON.stringify(request.intent, null, 2)}`,
     `Internal output JSON schema:\n${JSON.stringify(PresentationRequestSchema)}`,
     `Paper evidence:\n${buildPresentationPaperContext(request)}`,
