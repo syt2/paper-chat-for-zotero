@@ -31,6 +31,7 @@ describe("tool scheduler execution hooks", function () {
     const { resetSessionArtifactStoreForTests } =
       await import("../src/modules/chat/session-artifacts/index.ts");
     getToolPermissionManager().setDescriptorModeOverride("create_note", null);
+    getToolPermissionManager().setDescriptorModeOverride("download", null);
     resetSessionArtifactStoreForTests();
     (globalThis as any).Zotero = originalZotero;
     (globalThis as any).PathUtils = originalPathUtils;
@@ -94,16 +95,74 @@ describe("tool scheduler execution hooks", function () {
     );
   });
 
-  it("passes the request-scoped item key to the tool executor", async function () {
+  it("runs state-mutating downloads serially", async function () {
+    const { getToolPermissionManager } =
+      await import("../src/modules/chat/tool-permissions/index.ts");
+    const { getToolRuntimeMetadata } =
+      await import("../src/modules/chat/tool-scheduler/ToolMetadataRegistry.ts");
+    const { ToolScheduler } =
+      await import("../src/modules/chat/tool-scheduler/ToolScheduler.ts");
+
+    getToolPermissionManager().setDescriptorModeOverride(
+      "download",
+      "auto_allow",
+    );
+    assert.deepInclude(getToolRuntimeMetadata("download"), {
+      executionClass: "write",
+      concurrency: "serial",
+      mutatesState: true,
+    });
+
+    let activeExecutions = 0;
+    let maximumConcurrentExecutions = 0;
+    const scheduler = new ToolScheduler(async () => {
+      activeExecutions += 1;
+      maximumConcurrentExecutions = Math.max(
+        maximumConcurrentExecutions,
+        activeExecutions,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      activeExecutions -= 1;
+      return "ok";
+    });
+
+    const results = await scheduler.executeBatch(
+      ["download-1", "download-2"].map((id) => ({
+        toolCall: {
+          id,
+          type: "function" as const,
+          function: {
+            name: "download",
+            arguments: JSON.stringify({
+              url: `https://example.test/${id}.pdf`,
+              destination: "downloads",
+            }),
+          },
+        },
+        sessionId: "session-downloads",
+      })),
+    );
+
+    assert.equal(maximumConcurrentExecutions, 1);
+    assert.deepEqual(
+      results.map((result) => result.status),
+      ["completed", "completed"],
+    );
+  });
+
+  it("passes request-scoped context and cancellation to the tool executor", async function () {
     const { ToolScheduler } =
       await import("../src/modules/chat/tool-scheduler/ToolScheduler.ts");
     let receivedItemKey: string | null | undefined;
+    let receivedAbortSignal: AbortSignal | undefined;
     const scheduler = new ToolScheduler(
-      async (_toolCall, _fallback, _args, currentItemKey) => {
+      async (_toolCall, _fallback, _args, currentItemKey, abortSignal) => {
         receivedItemKey = currentItemKey;
+        receivedAbortSignal = abortSignal;
         return "ok";
       },
     );
+    const abortController = new AbortController();
 
     await scheduler.execute({
       toolCall: {
@@ -116,9 +175,11 @@ describe("tool scheduler execution hooks", function () {
       },
       sessionId: "session-item-context",
       currentItemKey: "SESSION-PAPER-A",
+      abortSignal: abortController.signal,
     });
 
     assert.equal(receivedItemKey, "SESSION-PAPER-A");
+    assert.equal(receivedAbortSignal, abortController.signal);
   });
 
   it("keeps the request-scoped item key after unrelated UI context changes", async function () {

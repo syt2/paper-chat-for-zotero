@@ -111,6 +111,10 @@ import {
   executeAddItem,
 } from "./libraryExecutors";
 import { getErrorMessage } from "../../../utils/common";
+import {
+  createDownloadToolDefinition,
+  executeDownloadCapability,
+} from "../../download";
 
 // 缓存条目类型
 interface CacheEntry {
@@ -557,6 +561,7 @@ export class PdfToolManager {
         },
       },
       ...createSearchToolDefinitions(),
+      createDownloadToolDefinition(),
       {
         type: "function",
         function: {
@@ -1560,6 +1565,7 @@ export class PdfToolManager {
     fallbackStructure?: PaperStructure | PaperStructureExtended,
     parsedArgs?: Record<string, unknown>,
     currentItemKeyOverride?: string | null,
+    abortSignal?: AbortSignal,
   ): Promise<string> {
     const { name, arguments: argsString } = toolCall.function;
 
@@ -1587,6 +1593,8 @@ export class PdfToolManager {
 
     // === Zotero Library 工具（不需要 PDF）===
     switch (name) {
+      case "download":
+        return executeDownloadCapability(args, undefined, abortSignal);
       case "web_search":
         if (!this.isWebSearchArgs(args)) {
           return "Error: Invalid arguments for web_search. Required: query (string)";

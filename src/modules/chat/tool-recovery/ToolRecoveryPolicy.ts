@@ -236,6 +236,15 @@ function getDirectiveTemplate(
     case "execution_failed":
     case "unspecified":
     default:
+      if (toolName === "download") {
+        return {
+          immediateAction:
+            parsed?.suggestedFix ||
+            "Find a different direct HTTP or HTTPS file URL before retrying.",
+          planningInstruction:
+            "After a download failure, follow the tool's fix hint. Retry the same URL only after correcting a destination or Zotero import problem; for network or file-size failures, use an alternative direct file URL or share the original link without downloading it.",
+        };
+      }
       if (toolName === "search_scholarly_sources") {
         return {
           immediateAction:
@@ -364,6 +373,9 @@ function getRecommendedTools(
       if (toolName === "search_scholarly_sources") {
         return ["web_search", "search_items", "search_notes", "list_all_items"];
       }
+      if (toolName === "download") {
+        return ["search_items", "list_all_items"];
+      }
       return getReadOnlyNeighborTools(toolName);
     case "invalid_arguments":
     default:
@@ -398,6 +410,8 @@ function getReadOnlyNeighborTools(toolName: string): string[] {
       return ["get_tags", "search_by_tag", "search_items"];
     case "add_item":
       return ["search_items", "list_all_items", "get_collections"];
+    case "download":
+      return ["search_items", "list_all_items"];
     case "save_memory":
       return ["get_item_metadata", "get_item_notes", "search_notes"];
     case "web_search":
