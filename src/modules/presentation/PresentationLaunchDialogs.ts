@@ -25,6 +25,28 @@ const STRING_BUTTON = 127;
 const BUTTON_POSITION_0 = 1;
 const BUTTON_POSITION_1 = 256;
 export const PRESENTATION_CUSTOM_SLIDE_COUNT_OPTION = "custom";
+let currentPresentationSettingsDialogWindow: Window | null = null;
+
+/** Bring the already-open PPT settings window back above the Zotero window. */
+export function focusOpenPresentationSettingsDialog(): boolean {
+  const dialogWindow = currentPresentationSettingsDialogWindow;
+  if (!dialogWindow || dialogWindow.closed) {
+    currentPresentationSettingsDialogWindow = null;
+    return false;
+  }
+
+  try {
+    dialogWindow.focus();
+    return true;
+  } catch (error) {
+    currentPresentationSettingsDialogWindow = null;
+    ztoolkit.log(
+      "[PresentationLaunchDialogs] Failed to focus presentation settings:",
+      error,
+    );
+    return false;
+  }
+}
 
 export function shouldShowPresentationCustomSlideCount(
   selectedValue: unknown,
@@ -426,6 +448,7 @@ async function showPresentationSettingsDialog(): Promise<PresentationLaunchSetti
       },
     });
 
+  let dialogWindow: Window | null = null;
   try {
     openZToolkitDialog(
       dialogHelper,
@@ -437,6 +460,8 @@ async function showPresentationSettingsDialog(): Promise<PresentationLaunchSetti
         fitContent: true,
       },
     );
+    dialogWindow = dialogHelper.window;
+    currentPresentationSettingsDialogWindow = dialogWindow;
     await dialogHelper.dialogData.unloadLock?.promise;
   } catch (error) {
     ztoolkit.log(
@@ -444,6 +469,10 @@ async function showPresentationSettingsDialog(): Promise<PresentationLaunchSetti
       error,
     );
     return null;
+  } finally {
+    if (currentPresentationSettingsDialogWindow === dialogWindow) {
+      currentPresentationSettingsDialogWindow = null;
+    }
   }
   return selection;
 }

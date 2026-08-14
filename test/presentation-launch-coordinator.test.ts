@@ -1,5 +1,6 @@
 import { assert } from "chai";
 import { PresentationLaunchCoordinator } from "../src/modules/presentation/PresentationLaunchCoordinator.ts";
+import { createPresentationButtonLaunchHandler } from "../src/modules/ui/chat-panel/ChatPanelEvents.ts";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -12,21 +13,25 @@ function deferred<T>() {
 }
 
 describe("presentation launch coordinator", function () {
-  it("coalesces repeated clicks for the same paper", async function () {
+  it("coalesces repeated clicks and reactivates the open launch UI", async function () {
     const coordinator = new PresentationLaunchCoordinator();
     const gate = deferred<boolean>();
     let starts = 0;
+    let reactivations = 0;
     const task = () => {
       starts += 1;
       return gate.promise;
     };
 
     const first = coordinator.enqueue("1:PAPER-A", task);
-    const second = coordinator.enqueue("1:PAPER-A", task);
+    const second = coordinator.enqueue("1:PAPER-A", task, () => {
+      reactivations += 1;
+    });
     await Promise.resolve();
 
     assert.strictEqual(second, first);
     assert.equal(starts, 1);
+    assert.equal(reactivations, 1);
     gate.resolve(true);
     assert.isTrue(await first);
   });
@@ -78,5 +83,41 @@ describe("presentation launch coordinator", function () {
     assert.equal((rejection as Error).message, "launch failed");
     assert.isTrue(await second);
     assert.deepEqual(order, ["A", "B"]);
+  });
+
+  it("keeps the chat button activatable while the shared launch is pending", async function () {
+    const gate = deferred<boolean>();
+    const attributes = new Map<string, string>();
+    let launches = 0;
+    const handler = createPresentationButtonLaunchHandler(
+      {
+        launchPresentation: () => {
+          launches += 1;
+          return gate.promise;
+        },
+        appendError: (message: string) => {
+          throw new Error(`Unexpected launch error: ${message}`);
+        },
+      },
+      {
+        setAttribute: (name: string, value: string) => {
+          attributes.set(name, value);
+        },
+        removeAttribute: (name: string) => {
+          attributes.delete(name);
+        },
+      },
+    );
+
+    handler();
+    handler();
+
+    assert.equal(launches, 2);
+    assert.equal(attributes.get("aria-busy"), "true");
+    gate.resolve(true);
+    await gate.promise;
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.isFalse(attributes.has("aria-busy"));
   });
 });

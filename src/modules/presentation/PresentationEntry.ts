@@ -2,7 +2,10 @@ import { getString } from "../../utils/locale";
 import { getAuthManager } from "../auth";
 import { getProviderManager } from "../providers";
 import { showAuthDialog } from "../ui/AuthDialog";
-import { createPresentationLaunchDialogs } from "./PresentationLaunchDialogs";
+import {
+  createPresentationLaunchDialogs,
+  focusOpenPresentationSettingsDialog,
+} from "./PresentationLaunchDialogs";
 import {
   guardPresentationLaunch,
   PRESENTATION_LAUNCH_PROMPT,
@@ -127,8 +130,10 @@ export function launchPresentationForItem(
 ): Promise<boolean> {
   const paper = resolvePresentationPaper(item);
   const key = paper ? `${paper.libraryID}:${paper.key}` : `invalid:${item.id}`;
-  return launchCoordinator.enqueue(key, () =>
-    runPresentationLaunch(item, source, openPresentationChat),
+  return launchCoordinator.enqueue(
+    key,
+    () => runPresentationLaunch(item, source, openPresentationChat),
+    focusOpenPresentationSettingsDialog,
   );
 }
 

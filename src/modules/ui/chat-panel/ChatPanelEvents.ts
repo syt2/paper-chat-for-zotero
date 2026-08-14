@@ -590,6 +590,40 @@ export async function refreshCheckinDisplay(
   }
 }
 
+export function createPresentationButtonLaunchHandler(
+  context: Pick<ChatPanelContext, "launchPresentation" | "appendError">,
+  presentationBtn: Pick<HTMLButtonElement, "setAttribute" | "removeAttribute">,
+): () => void {
+  let pendingLaunch: Promise<boolean> | null = null;
+
+  return () => {
+    if (pendingLaunch) {
+      // Re-enter the shared coordinator so it can focus the existing settings
+      // window. The original invocation remains responsible for reporting a
+      // failure, which avoids duplicate error messages for the same Promise.
+      void context.launchPresentation().catch(() => undefined);
+      return;
+    }
+
+    presentationBtn.setAttribute("aria-busy", "true");
+    const launch = context.launchPresentation();
+    pendingLaunch = launch;
+    void launch
+      .catch((error) => {
+        ztoolkit.log("[Chat] Failed to launch presentation:", error);
+        context.appendError(
+          error instanceof Error ? error.message : String(error),
+        );
+      })
+      .finally(() => {
+        if (pendingLaunch === launch) {
+          pendingLaunch = null;
+          presentationBtn.removeAttribute("aria-busy");
+        }
+      });
+  };
+}
+
 /**
  * Setup all event handlers for the chat panel
  */
@@ -1147,23 +1181,12 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
     ztoolkit.log("New session created:", newSession.id);
   });
 
-  presentationBtn?.addEventListener("click", async () => {
-    if (presentationBtn.disabled) return;
-
-    presentationBtn.disabled = true;
-    presentationBtn.setAttribute("aria-busy", "true");
-    try {
-      await context.launchPresentation();
-    } catch (error) {
-      ztoolkit.log("[Chat] Failed to launch presentation:", error);
-      context.appendError(
-        error instanceof Error ? error.message : String(error),
-      );
-    } finally {
-      presentationBtn.disabled = false;
-      presentationBtn.removeAttribute("aria-busy");
-    }
-  });
+  if (presentationBtn) {
+    presentationBtn.addEventListener(
+      "click",
+      createPresentationButtonLaunchHandler(context, presentationBtn),
+    );
+  }
 
   summarizeConversationBtn?.addEventListener("click", async () => {
     if (summarizeConversationBtn.disabled) {

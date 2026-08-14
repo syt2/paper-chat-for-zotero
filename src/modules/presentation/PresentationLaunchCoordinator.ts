@@ -7,9 +7,16 @@ export class PresentationLaunchCoordinator {
   private readonly runsByPaper = new Map<string, Promise<boolean>>();
   private queueTail: Promise<void> = Promise.resolve();
 
-  enqueue(paperKey: string, task: () => Promise<boolean>): Promise<boolean> {
+  enqueue(
+    paperKey: string,
+    task: () => Promise<boolean>,
+    reactivateExisting?: () => void,
+  ): Promise<boolean> {
     const existing = this.runsByPaper.get(paperKey);
-    if (existing) return existing;
+    if (existing) {
+      reactivateExisting?.();
+      return existing;
+    }
 
     const run = this.queueTail.then(task);
     // A rejected launch must not poison later launches for other papers.
