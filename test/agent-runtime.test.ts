@@ -4480,7 +4480,11 @@ describe("agent runtime plan semantics", function () {
     );
 
     const result = await planner({
-      intent: { sourceItemKey: "SBZ2M99R", language: "zh-CN" },
+      intent: {
+        sourceItemKey: "SBZ2M99R",
+        language: "zh-CN",
+        instructions: "面向组会，突出消融实验。",
+      },
       paper: {
         metadata: { title: "ImageNet classification", year: 2012 },
         sections: [],
@@ -4505,7 +4509,9 @@ describe("agent runtime plan semantics", function () {
     assert.lengthOf(capturedMessages, 2);
     assert.equal(capturedMessages[0].promptCacheBreakpoint, "explicit");
     assert.notInclude(capturedMessages[0].content, "SBZ2M99R");
+    assert.notInclude(capturedMessages[0].content, "面向组会");
     assert.include(capturedMessages[1].content, "SBZ2M99R");
+    assert.include(capturedMessages[1].content, "面向组会，突出消融实验。");
     assert.include(capturedMessages[1].content, "Fig. 1. Network architecture");
     assert.include(capturedMessages[1].content, "Internal output JSON schema");
   });
@@ -5048,12 +5054,12 @@ describe("agent runtime plan semantics", function () {
         executeBatch: async () => [],
       },
     ) as any;
-    const capturedPrompts: string[] = [];
+    const capturedMessages: ChatMessage[][] = [];
     let callCount = 0;
     const provider = {
       chatCompletionWithTools: async (messages: ChatMessage[]) => {
         callCount += 1;
-        capturedPrompts.push(messages[1].content);
+        capturedMessages.push(messages);
         return callCount === 1
           ? { content: "not-json" }
           : {
@@ -5083,8 +5089,18 @@ describe("agent runtime plan semantics", function () {
 
     assert.equal(callCount, 2);
     assert.equal(result.title, "Repaired deck");
-    assert.include(capturedPrompts[1], "Repair the previous internal");
-    assert.include(capturedPrompts[1], "not-json");
+    assert.equal(capturedMessages[0][0].promptCacheBreakpoint, "explicit");
+    assert.equal(capturedMessages[1][0].promptCacheBreakpoint, "explicit");
+    assert.equal(
+      capturedMessages[0][0].content,
+      capturedMessages[1][0].content,
+    );
+    assert.notInclude(capturedMessages[1][0].content, "not-json");
+    assert.include(
+      capturedMessages[1][1].content,
+      "Repair the previous internal",
+    );
+    assert.include(capturedMessages[1][1].content, "not-json");
   });
 
   it("runs visual review statelessly and rejects suppressed tool protocol", async function () {
@@ -5102,7 +5118,7 @@ describe("agent runtime plan semantics", function () {
       },
     ) as any;
     let capturedOptions: Record<string, unknown> | undefined;
-    let capturedMessages: ChatMessage[] = [];
+    const capturedMessageSnapshots: ChatMessage[][] = [];
     let callCount = 0;
     const provider = {
       chatCompletionWithTools: async (
@@ -5112,7 +5128,7 @@ describe("agent runtime plan semantics", function () {
         options: Record<string, unknown>,
       ) => {
         callCount += 1;
-        capturedMessages = messages;
+        capturedMessageSnapshots.push(messages);
         capturedOptions = options;
         return { content: "", suppressedToolCall: true };
       },
@@ -5140,11 +5156,21 @@ describe("agent runtime plan semantics", function () {
       toolChoice: "none",
       stateless: true,
     });
+    const capturedMessages = capturedMessageSnapshots[1];
+    assert.equal(
+      capturedMessageSnapshots[0][0].content,
+      capturedMessageSnapshots[1][0].content,
+    );
+    assert.equal(
+      capturedMessageSnapshots[0][0].promptCacheBreakpoint,
+      "explicit",
+    );
     assert.equal(capturedMessages[0].promptCacheBreakpoint, "explicit");
     assert.notInclude(capturedMessages[0].content, "Review stage: draft");
-    assert.notInclude(capturedMessages[0].content, "slideNumber 2-1");
+    assert.notInclude(capturedMessages[0].content, "slideNumber");
     assert.include(capturedMessages[1].content, "Review stage: draft");
     assert.include(capturedMessages[1].content, "slideNumber 2-2");
+    assert.include(capturedMessages[1].content, "Protocol issue:");
     assert.include(
       capturedMessages[0].content,
       "quoted Figure/Table captions are source evidence",
@@ -5177,5 +5203,52 @@ describe("agent runtime plan semantics", function () {
       capturedMessages[0].content,
       "one category label correctly names a cluster",
     );
+  });
+
+  it("keeps final-review policy after the visual-review cache breakpoint", async function () {
+    const runtime = new AgentRuntime(
+      { updateSessionMeta: async () => undefined } as any,
+      {
+        isSessionActive: () => false,
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "",
+        generateId: () => `final-review-${Math.random()}`,
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async () => [],
+      },
+    ) as any;
+    let capturedMessages: ChatMessage[] = [];
+    const provider = {
+      chatCompletionWithTools: async (messages: ChatMessage[]) => {
+        capturedMessages = messages;
+        return {
+          content: JSON.stringify({ verdict: "pass", summary: "ready" }),
+        };
+      },
+    };
+    const reviewer = runtime.createPresentationVisualReviewer(
+      provider,
+      async (operation: () => Promise<unknown>) => operation(),
+    );
+
+    await reviewer({
+      stage: "final",
+      title: "Deck",
+      outline: "Six slides",
+      previewSlides: [
+        "data:image/png;base64,AAAA",
+        "data:image/png;base64,BBBB",
+        "data:image/png;base64,CCCC",
+      ],
+    });
+
+    assert.equal(capturedMessages[0].promptCacheBreakpoint, "explicit");
+    assert.notInclude(capturedMessages[0].content, "final internal review");
+    assert.notInclude(capturedMessages[0].content, "slideNumber");
+    assert.include(capturedMessages[1].content, "final internal review");
+    assert.include(capturedMessages[1].content, "Never return revise");
+    assert.include(capturedMessages[1].content, "slideNumber 2-3");
   });
 });

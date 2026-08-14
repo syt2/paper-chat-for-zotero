@@ -3,7 +3,7 @@ import type { AuthManager } from "../auth/AuthManager";
 import { showAuthDialog } from "../ui/AuthDialog";
 import type { PresentationLaunchSettings } from "./PresentationLaunchSettings";
 
-export const PRESENTATION_MINIMUM_REMAINING_TOKENS = 1_000_000;
+export const PRESENTATION_MINIMUM_REMAINING_TOKENS = 250_000;
 export const PRESENTATION_LAUNCH_PROMPT =
   "请直接使用 presentation 工具，基于当前论文生成一份 PPT。";
 
@@ -15,7 +15,6 @@ export interface PresentationBalanceSnapshot {
 
 export interface PresentationLaunchGuardDialogs {
   confirmSwitchToPaperChat(): Promise<boolean>;
-  showBalanceRefreshFailed(): Promise<void>;
   showInsufficientBalance(balance: PresentationBalanceSnapshot): Promise<void>;
   configurePresentation(): Promise<PresentationLaunchSettings | null>;
 }
@@ -45,12 +44,7 @@ export type PresentationLaunchGuardResult =
     }
   | {
       allowed: false;
-      reason:
-        | "provider"
-        | "login"
-        | "balance_refresh"
-        | "balance"
-        | "cancelled";
+      reason: "provider" | "login" | "balance" | "cancelled";
     };
 
 function toUsableTokenAmount(value: unknown): number {
@@ -61,22 +55,17 @@ function toUsableTokenAmount(value: unknown): number {
 
 export function getPresentationBalanceSnapshot(
   authManager: Pick<AuthManager, "getBalance" | "getSubscriptionUsageSummary">,
-  options: { includeSubscription?: boolean } = {},
 ): PresentationBalanceSnapshot {
   const quota = toUsableTokenAmount(authManager.getBalance().quota);
-  const subscriptionRemaining =
-    options.includeSubscription === false
-      ? 0
-      : toUsableTokenAmount(
-          authManager.getSubscriptionUsageSummary()?.amountRemaining,
-        );
+  const subscriptionRemaining = toUsableTokenAmount(
+    authManager.getSubscriptionUsageSummary()?.amountRemaining,
+  );
   return {
     quota,
     subscriptionRemaining,
-    // The account may consume from either the normal quota pool or an active
-    // subscription pool. Requiring one complete PPT budget in a single pool
-    // avoids assuming that the backend combines them for one request.
-    available: Math.max(quota, subscriptionRemaining),
+    // Presentation eligibility uses the user's total cached spendable balance:
+    // ordinary token quota plus the remaining active subscription allowance.
+    available: quota + subscriptionRemaining,
   };
 }
 

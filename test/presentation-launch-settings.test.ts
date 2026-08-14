@@ -9,9 +9,12 @@ import {
   DEFAULT_PRESENTATION_LAUNCH_SETTINGS,
   isPresentationPresetSlideCount,
   normalizePresentationLaunchSettings,
+  normalizePresentationUserInstructions,
   parsePresentationSlideCount,
   PRESENTATION_MAXIMUM_SLIDE_COUNT,
   PRESENTATION_MINIMUM_SLIDE_COUNT,
+  PRESENTATION_USER_INSTRUCTIONS_MAX_LENGTH,
+  truncatePresentationUserInstructions,
 } from "../src/modules/presentation/PresentationLaunchSettings.ts";
 
 describe("presentation launch settings", function () {
@@ -41,7 +44,11 @@ describe("presentation launch settings", function () {
         slideCount: 8,
         designSystem: "dark-editorial",
       }),
-      { slideCount: 8, designSystem: "dark-editorial" },
+      {
+        slideCount: 8,
+        designSystem: "dark-editorial",
+        userInstructions: "",
+      },
     );
     assert.deepEqual(
       normalizePresentationLaunchSettings({
@@ -50,6 +57,42 @@ describe("presentation launch settings", function () {
       }),
       DEFAULT_PRESENTATION_LAUNCH_SETTINGS,
     );
+  });
+
+  it("trims and bounds one-time user requirements without persisting a default", function () {
+    assert.equal(
+      normalizePresentationUserInstructions("  Focus on ablations.  "),
+      "Focus on ablations.",
+    );
+    assert.equal(normalizePresentationUserInstructions(null), "");
+    const oversized = "x".repeat(
+      PRESENTATION_USER_INSTRUCTIONS_MAX_LENGTH + 25,
+    );
+    const normalized = normalizePresentationLaunchSettings({
+      userInstructions: oversized,
+    });
+    assert.lengthOf(
+      normalized.userInstructions,
+      PRESENTATION_USER_INSTRUCTIONS_MAX_LENGTH,
+    );
+    assert.equal(DEFAULT_PRESENTATION_LAUNCH_SETTINGS.userInstructions, "");
+  });
+
+  it("never cuts a Unicode surrogate pair at the instruction boundary", function () {
+    const exact = `${"x".repeat(
+      PRESENTATION_USER_INSTRUCTIONS_MAX_LENGTH - 2,
+    )}😀`;
+    assert.equal(truncatePresentationUserInstructions(exact), exact);
+
+    const splitAtBoundary = `${"x".repeat(
+      PRESENTATION_USER_INSTRUCTIONS_MAX_LENGTH - 1,
+    )}😀`;
+    const truncated = truncatePresentationUserInstructions(splitAtBoundary);
+    assert.equal(
+      truncated,
+      "x".repeat(PRESENTATION_USER_INSTRUCTIONS_MAX_LENGTH - 1),
+    );
+    assert.notMatch(truncated, /[\uD800-\uDFFF]$/u);
   });
 
   it("uses the custom field only while custom length is selected", function () {

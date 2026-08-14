@@ -71,6 +71,7 @@ interface ResponsesRequestResult {
 export interface OpenAIResponsesRuntimeOptions {
   sessionId?: string;
   hostedWebSearch?: boolean;
+  explicitPromptCacheBreakpoints?: boolean;
 }
 
 export interface ResponsesStreamHandlers {
@@ -123,6 +124,7 @@ function fingerprintMessage(message: ChatMessage): string {
       id: message.id,
       role: message.role,
       content: message.content,
+      promptCacheBreakpoint: message.promptCacheBreakpoint,
       reasoning: message.reasoning,
       images: message.images,
       tool_calls: message.tool_calls,
@@ -136,6 +138,7 @@ function semanticFingerprintMessage(message: ChatMessage): string {
     stablePromptCacheStringify({
       role: message.role,
       content: message.content,
+      promptCacheBreakpoint: message.promptCacheBreakpoint,
       reasoning: message.reasoning,
       images: message.images,
       tool_calls: message.tool_calls,
@@ -419,6 +422,45 @@ function convertMessagesToResponsesInput(
   });
 
   return input;
+}
+
+function supportsExplicitPromptCacheBreakpoints(
+  modelId: string,
+  declaredSupport?: boolean,
+): boolean {
+  if (declaredSupport !== undefined) return declaredSupport;
+  const match = modelId
+    .trim()
+    .toLowerCase()
+    .match(/^(?:[^/]+\/)?gpt-(\d+)(?:\.(\d+))?(?:[-.]|$)/);
+  if (!match) return false;
+  const major = Number(match[1]);
+  const minor = Number(match[2] || 0);
+  return major > 5 || (major === 5 && minor >= 6);
+}
+
+function removeUnsupportedPromptCacheBreakpoint(
+  message: ChatMessage,
+): ChatMessage {
+  if (!message.promptCacheBreakpoint) return message;
+  const { promptCacheBreakpoint: _unsupported, ...compatibleMessage } = message;
+  return compatibleMessage;
+}
+
+function createExplicitResponsesPromptCacheKey(
+  messages: ChatMessage[],
+  modelId: string,
+): string | undefined {
+  const breakpointIndex = messages.findLastIndex(
+    (message) => message.promptCacheBreakpoint === "explicit",
+  );
+  if (breakpointIndex < 0) return undefined;
+  const reusablePrefix = convertMessagesToResponsesInput(
+    messages.slice(0, breakpointIndex + 1),
+  );
+  return `paperchat_explicit_${hashText(modelId)}_${hashText(
+    stablePromptCacheStringify(reusablePrefix),
+  )}`;
 }
 
 function convertTools(
@@ -1077,9 +1119,17 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
   }
 
   private prepareLocalMessages(messages: ChatMessage[]): ChatMessage[] {
-    const filtered = sanitizeOpenAIToolCallMessages(
+    let filtered = sanitizeOpenAIToolCallMessages(
       this.filterMessages(messages),
     );
+    if (
+      !supportsExplicitPromptCacheBreakpoints(
+        this._config.defaultModel,
+        this.runtimeOptions.explicitPromptCacheBreakpoints,
+      )
+    ) {
+      filtered = filtered.map(removeUnsupportedPromptCacheBreakpoint);
+    }
     if (!this._config.systemPrompt) {
       return filtered;
     }
@@ -1184,7 +1234,14 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     if (supportsTemperature(this._config.defaultModel)) {
       body.temperature = this._config.temperature ?? 0.7;
     }
-    if (this.runtimeOptions.sessionId) {
+    const explicitPromptCacheKey = createExplicitResponsesPromptCacheKey(
+      plan.localMessages,
+      this._config.defaultModel,
+    );
+    if (explicitPromptCacheKey) {
+      body.prompt_cache_key = explicitPromptCacheKey;
+      body.prompt_cache_options = { mode: "explicit" };
+    } else if (this.runtimeOptions.sessionId) {
       body.prompt_cache_key = createResponsesPromptCacheKey(
         this.runtimeOptions.sessionId,
         this._config.defaultModel,

@@ -188,6 +188,7 @@ describe("paperchat tier routing", function () {
           apiCapabilities: {
             responses: true,
             hostedWebSearch: true,
+            explicitPromptCacheBreakpoints: true,
             reasoning: {
               protocol: "openai",
               efforts: ["none", "low", "medium", "high", "xhigh", "max"],
@@ -222,6 +223,7 @@ describe("paperchat tier routing", function () {
         apiCapabilities: {
           responses: true,
           hostedWebSearch: true,
+          explicitPromptCacheBreakpoints: true,
           reasoning: {
             protocol: "openai",
             efforts: ["none", "low", "medium", "high", "xhigh", "max"],

@@ -7,6 +7,7 @@ import {
 import {
   PRESENTATION_MAXIMUM_SLIDE_COUNT,
   PRESENTATION_MINIMUM_SLIDE_COUNT,
+  PRESENTATION_USER_INSTRUCTIONS_MAX_LENGTH,
   resolvePresentationSlideCount,
 } from "./PresentationLaunchSettings";
 
@@ -30,7 +31,7 @@ export const PresentationIntentSchema = Type.Object(
     title: Type.Optional(Type.String({ maxLength: 160 })),
     instructions: Type.Optional(
       Type.String({
-        maxLength: 1_000,
+        maxLength: PRESENTATION_USER_INSTRUCTIONS_MAX_LENGTH,
         description:
           "Optional audience, emphasis, or style request. A normal paper PPT request does not need this field.",
       }),
@@ -194,6 +195,9 @@ export function buildPresentationPlannerUserPrompt(
   const outputLanguage = request.intent.language || "en-US";
   const slideCount = resolvePresentationSlideCount(request.intent.slideCount);
   const contentSlideCount = slideCount - 1;
+  const userInstructions = request.intent.instructions?.trim();
+  const structuredIntent: Record<string, unknown> = { ...request.intent };
+  delete structuredIntent.instructions;
   const sections = [
     [
       `Zotero display locale resolved for this presentation: ${outputLanguage}`,
@@ -207,10 +211,21 @@ export function buildPresentationPlannerUserPrompt(
       "The cover is generated automatically and is not part of the slides array. This length is a hard application-owned requirement.",
     ].join("\n"),
     `Deck-length contract:\n${buildPresentationPlannerLengthContract(slideCount)}`,
-    `Presentation intent:\n${JSON.stringify(request.intent, null, 2)}`,
+    `Presentation intent:\n${JSON.stringify(structuredIntent, null, 2)}`,
     `Internal output JSON schema:\n${JSON.stringify(PresentationRequestSchema)}`,
     `Paper evidence:\n${buildPresentationPaperContext(request)}`,
   ];
+  if (userInstructions) {
+    sections.splice(
+      2,
+      0,
+      [
+        "User-provided requirements for this generation:",
+        userInstructions,
+        "Honor these requirements when they do not conflict with the selected output language, slide count, design system, paper evidence, or renderer contract.",
+      ].join("\n"),
+    );
+  }
   if (request.repair) {
     const issues = request.repair.issues
       .map((issue) => String(issue).trim())

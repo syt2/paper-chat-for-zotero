@@ -1860,16 +1860,22 @@ export class PdfToolManager {
             : fallbackStructure
               ? this.ensureExtendedStructure(fallbackStructure)
               : null;
+          const authorizedArgs: Record<string, unknown> = {
+            ...args,
+            ...(sourceItemKey ? { sourceItemKey } : {}),
+            // These values come from the visible settings window and are
+            // frozen in the app-owned authorization. The outer chat model
+            // cannot silently change them, including on a retry.
+            slideCount: presentationAuthorization.settings.slideCount,
+            designSystem: presentationAuthorization.settings.designSystem,
+          };
+          delete authorizedArgs.instructions;
+          if (presentationAuthorization.settings.userInstructions) {
+            authorizedArgs.instructions =
+              presentationAuthorization.settings.userInstructions;
+          }
           const result = await executePresentationCapability(
-            {
-              ...args,
-              ...(sourceItemKey ? { sourceItemKey } : {}),
-              // These values come from the visible settings window and are
-              // frozen in the app-owned authorization. The outer chat model
-              // cannot silently change them, including on a retry.
-              slideCount: presentationAuthorization.settings.slideCount,
-              designSystem: presentationAuthorization.settings.designSystem,
-            },
+            authorizedArgs,
             executionContext?.presentationVisualReviewer,
             executionContext?.presentationPlanner,
             paper || undefined,

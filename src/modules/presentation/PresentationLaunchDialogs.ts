@@ -16,6 +16,7 @@ import {
   PRESENTATION_MAXIMUM_SLIDE_COUNT,
   PRESENTATION_MINIMUM_SLIDE_COUNT,
   PRESENTATION_SLIDE_COUNTS,
+  PRESENTATION_USER_INSTRUCTIONS_MAX_LENGTH,
   type PresentationDesignSystem,
   type PresentationLaunchSettings,
   type PresentationSlideCount,
@@ -25,26 +26,20 @@ const STRING_BUTTON = 127;
 const BUTTON_POSITION_0 = 1;
 const BUTTON_POSITION_1 = 256;
 export const PRESENTATION_CUSTOM_SLIDE_COUNT_OPTION = "custom";
-let currentPresentationSettingsDialogWindow: Window | null = null;
 
-/** Bring the already-open PPT settings window back above the Zotero window. */
-export function focusOpenPresentationSettingsDialog(): boolean {
-  const dialogWindow = currentPresentationSettingsDialogWindow;
-  if (!dialogWindow || dialogWindow.closed) {
-    currentPresentationSettingsDialogWindow = null;
-    return false;
-  }
+export interface PresentationLaunchDialogOptions {
+  onSettingsFocusReady?: (focus: () => void) => void;
+}
 
+function focusPresentationSettingsDialog(dialogWindow: Window): void {
+  if (dialogWindow.closed) return;
   try {
     dialogWindow.focus();
-    return true;
   } catch (error) {
-    currentPresentationSettingsDialogWindow = null;
     ztoolkit.log(
       "[PresentationLaunchDialogs] Failed to focus presentation settings:",
       error,
     );
-    return false;
   }
 }
 
@@ -150,7 +145,22 @@ function syncCustomSlideCountVisibility(select: HTMLSelectElement): void {
   clearSlideCountError(select.ownerDocument);
 }
 
-async function showPresentationSettingsDialog(): Promise<PresentationLaunchSettings | null> {
+function updatePresentationInstructionsCount(input: HTMLTextAreaElement): void {
+  const count = input.ownerDocument.getElementById(
+    "presentation-user-instructions-count",
+  );
+  if (!count) return;
+  count.textContent = getString("presentation-user-instructions-count", {
+    args: {
+      current: input.value.length,
+      maximum: PRESENTATION_USER_INSTRUCTIONS_MAX_LENGTH,
+    },
+  });
+}
+
+async function showPresentationSettingsDialog(
+  options: PresentationLaunchDialogOptions = {},
+): Promise<PresentationLaunchSettings | null> {
   const mainWindow = Zotero.getMainWindow();
   if (!mainWindow) return null;
 
@@ -351,6 +361,79 @@ async function showPresentationSettingsDialog(): Promise<PresentationLaunchSetti
             ),
           ),
         },
+        {
+          tag: "label",
+          attributes: { for: "presentation-user-instructions" },
+          properties: {
+            textContent: getString("presentation-user-instructions-label"),
+          },
+          styles: { fontWeight: "600", alignSelf: "start", paddingTop: "7px" },
+        },
+        {
+          tag: "div",
+          styles: {
+            width: "100%",
+            display: "flex",
+            flexDirection: "column",
+            gap: "4px",
+          },
+          children: [
+            {
+              tag: "textarea",
+              id: "presentation-user-instructions",
+              attributes: {
+                rows: "4",
+                maxlength: String(PRESENTATION_USER_INSTRUCTIONS_MAX_LENGTH),
+                "aria-label": getString("presentation-user-instructions-label"),
+                "aria-describedby": "presentation-user-instructions-count",
+              },
+              properties: {
+                value: "",
+                placeholder: getString(
+                  "presentation-user-instructions-placeholder",
+                ),
+              },
+              styles: {
+                width: "100%",
+                minHeight: "82px",
+                maxHeight: "180px",
+                boxSizing: "border-box",
+                padding: "8px 10px",
+                resize: "vertical",
+                font: "inherit",
+                lineHeight: "1.45",
+              },
+              listeners: [
+                {
+                  type: "input",
+                  listener: (event: Event) => {
+                    updatePresentationInstructionsCount(
+                      event.currentTarget as HTMLTextAreaElement,
+                    );
+                  },
+                },
+              ],
+            },
+            {
+              tag: "div",
+              id: "presentation-user-instructions-count",
+              properties: {
+                textContent: getString("presentation-user-instructions-count", {
+                  args: {
+                    current: 0,
+                    maximum: PRESENTATION_USER_INSTRUCTIONS_MAX_LENGTH,
+                  },
+                }),
+              },
+              styles: {
+                color: "color-mix(in srgb, CanvasText 62%, transparent)",
+                fontSize: "0.9em",
+                lineHeight: "1.35",
+                textAlign: "end",
+              },
+            },
+          ],
+        },
       ],
     },
   ];
@@ -428,10 +511,16 @@ async function showPresentationSettingsDialog(): Promise<PresentationLaunchSetti
             "presentation-design-system",
           ) as HTMLSelectElement | null
         )?.value;
+        const userInstructions = (
+          doc.getElementById(
+            "presentation-user-instructions",
+          ) as HTMLTextAreaElement | null
+        )?.value;
         selection = normalizePresentationLaunchSettings({
           slideCount,
           designSystem:
             designSystem as PresentationLaunchSettings["designSystem"],
+          userInstructions,
         });
         try {
           setPref("paperchatPresentationSlideCount", selection.slideCount);
@@ -461,7 +550,11 @@ async function showPresentationSettingsDialog(): Promise<PresentationLaunchSetti
       },
     );
     dialogWindow = dialogHelper.window;
-    currentPresentationSettingsDialogWindow = dialogWindow;
+    if (dialogWindow) {
+      options.onSettingsFocusReady?.(() =>
+        focusPresentationSettingsDialog(dialogWindow!),
+      );
+    }
     await dialogHelper.dialogData.unloadLock?.promise;
   } catch (error) {
     ztoolkit.log(
@@ -469,15 +562,13 @@ async function showPresentationSettingsDialog(): Promise<PresentationLaunchSetti
       error,
     );
     return null;
-  } finally {
-    if (currentPresentationSettingsDialogWindow === dialogWindow) {
-      currentPresentationSettingsDialogWindow = null;
-    }
   }
   return selection;
 }
 
-export function createPresentationLaunchDialogs(): PresentationLaunchGuardDialogs {
+export function createPresentationLaunchDialogs(
+  options: PresentationLaunchDialogOptions = {},
+): PresentationLaunchGuardDialogs {
   return {
     async confirmSwitchToPaperChat(): Promise<boolean> {
       return showTwoButtonDialog({
@@ -486,14 +577,6 @@ export function createPresentationLaunchDialogs(): PresentationLaunchGuardDialog
         primary: getString("presentation-switch-paperchat"),
         secondary: getString("auth-cancel"),
       }).accepted;
-    },
-
-    async showBalanceRefreshFailed(): Promise<void> {
-      Services.prompt.alert(
-        getPromptParent(),
-        getString("presentation-balance-refresh-failed-title"),
-        getString("presentation-balance-refresh-failed-message"),
-      );
     },
 
     async showInsufficientBalance(
@@ -518,7 +601,7 @@ export function createPresentationLaunchDialogs(): PresentationLaunchGuardDialog
     },
 
     async configurePresentation(): Promise<PresentationLaunchSettings | null> {
-      return showPresentationSettingsDialog();
+      return showPresentationSettingsDialog(options);
     },
   };
 }

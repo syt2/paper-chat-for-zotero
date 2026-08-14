@@ -35,6 +35,7 @@ import {
 } from "../../presentation/PresentationEntry";
 import {
   isPresentationSessionCompatibleWithPaper,
+  presentationLaunchRequiresActiveSession,
   selectPresentationSession,
 } from "../../presentation/PresentationSessionPolicy";
 import { createPresentationLaunchAuthorization } from "../../presentation/PresentationLaunchAuthorization";
@@ -1048,6 +1049,7 @@ let globalTabNotifierID: string | null = null; // Persistent notifier for sideba
 let contentInitialized = false;
 let moduleCurrentItem: Zotero.Item | null = null;
 let pendingPanelItem: Zotero.Item | null = null;
+let pendingPanelReadyAction: (() => void | Promise<void>) | null = null;
 let themeCleanup: (() => void) | null = null;
 
 // Panel mode state
@@ -1063,6 +1065,7 @@ let panelOpenSource: ChatPanelOpenSource = "unknown";
 let suppressFloatingUnloadTracking = false;
 const readingLoopPanelSubscriptions = new WeakMap<HTMLElement, () => void>();
 const eventHandlerDisposers = new WeakMap<HTMLElement, () => void>();
+const readyPanelContainers = new WeakSet<HTMLElement>();
 let readingLoopExecutorOwner: HTMLElement | null = null;
 let readingLoopToolbarUnsubscribe: (() => void) | null = null;
 let readingLoopLatestSnapshot: ReadingLoopSnapshot | null = null;
@@ -1336,6 +1339,7 @@ function openFloatingWindow(): boolean {
       floatingWindow = null;
       floatingContainer = null;
       floatingContentInitialized = false;
+      pendingPanelReadyAction = null;
       updateToolbarButtonState(false);
     });
   });
@@ -1402,6 +1406,7 @@ function initializeFloatingWindowContent(): void {
 async function initializeChatContentCommon(
   container: HTMLElement,
 ): Promise<void> {
+  readyPanelContainers.delete(container);
   const authManager = getAuthManager();
   const context = createContext(container);
   const requestedItem = pendingPanelItem;
@@ -1475,6 +1480,8 @@ async function initializeChatContentCommon(
   context.updateAttachmentsPreview();
 
   focusInput(container);
+  readyPanelContainers.add(container);
+  await flushPendingPanelReadyAction();
 }
 
 function setupReadingLoopIntegration(
@@ -1557,6 +1564,7 @@ function cleanupPanelIntegrations(
     return;
   }
   if (disposeEventHandlers) {
+    readyPanelContainers.delete(container);
     eventHandlerDisposers.get(container)?.();
     eventHandlerDisposers.delete(container);
   }
@@ -1871,6 +1879,7 @@ function closeFloatingWindow(): void {
   floatingWindow = null;
   floatingContainer = null;
   floatingContentInitialized = false;
+  pendingPanelReadyAction = null;
 }
 
 /**
@@ -2232,6 +2241,74 @@ export function showPanel(source: ChatPanelOpenSource = "unknown"): void {
   });
 }
 
+function getVisibleChatContainer(): HTMLElement | null {
+  return currentPanelMode === "floating" ? floatingContainer : chatContainer;
+}
+
+async function flushPendingPanelReadyAction(): Promise<void> {
+  const container = getVisibleChatContainer();
+  if (!container?.isConnected || !readyPanelContainers.has(container)) return;
+  const action = pendingPanelReadyAction;
+  if (!action) return;
+  pendingPanelReadyAction = null;
+  try {
+    await action();
+  } catch (error) {
+    ztoolkit.log("[ChatPanel] Deferred panel action failed:", error);
+  }
+}
+
+function runWhenPanelReady(action: () => void | Promise<void>): void {
+  // Only the latest navigation request should win if the user clicks two task
+  // cards while a floating window is still loading.
+  pendingPanelReadyAction = action;
+  void flushPendingPanelReadyAction();
+}
+
+async function syncPanelSessionForItem(options: {
+  manager: ChatManager;
+  item: Zotero.Item;
+  session?: ChatSession | null;
+  expectedSessionId?: string;
+  clearAttachments?: boolean;
+  afterRender?: (container: HTMLElement) => void;
+}): Promise<boolean> {
+  const container = getVisibleChatContainer();
+  if (!container?.isConnected || !readyPanelContainers.has(container)) {
+    return false;
+  }
+  if (
+    options.expectedSessionId &&
+    options.manager.getActiveSession()?.id !== options.expectedSessionId
+  ) {
+    return false;
+  }
+
+  const context = createContext(container);
+  context.setCurrentItem(options.item);
+  await context.updatePdfCheckboxVisibility(options.item);
+  if (
+    options.expectedSessionId &&
+    options.manager.getActiveSession()?.id !== options.expectedSessionId
+  ) {
+    return false;
+  }
+
+  const session = options.session ?? options.manager.getActiveSession();
+  if (session) {
+    context.renderMessages(session.messages, () =>
+      options.afterRender?.(container),
+    );
+    context.renderExecutionPlan(session.executionPlan);
+  }
+  if (options.clearAttachments) {
+    context.clearAttachments();
+    context.updateAttachmentsPreview();
+  }
+  updateModelSelectorDisplay(container);
+  return true;
+}
+
 /**
  * Open the panel and bind its follow-up-message context to a specific paper.
  * The deferred refresh also covers a newly created floating window.
@@ -2247,31 +2324,71 @@ export function showPanelForItem(
   getReadingLoopService().setCurrentItem(item);
   showPanel(source);
 
-  const syncContainer = async (container: HTMLElement | null) => {
-    if (!container) return;
-    if (pendingPanelItem === item) {
-      pendingPanelItem = null;
-    }
+  if (!isPanelShown()) {
+    if (pendingPanelItem === item) pendingPanelItem = null;
+    return;
+  }
+
+  const syncContainer = async () => {
     moduleCurrentItem = item;
     manager.setCurrentItemKey(item.key, item.libraryID);
-    await updatePdfCheckboxVisibilityForItem(container, item, manager);
-    const session = manager.getActiveSession();
-    if (session) {
-      const context = createContext(container);
-      context.renderMessages(session.messages);
-      context.renderExecutionPlan(session.executionPlan);
-      updateModelSelectorDisplay(container);
+    if (await syncPanelSessionForItem({ manager, item })) {
+      if (pendingPanelItem === item) pendingPanelItem = null;
     }
   };
 
-  void syncContainer(
-    currentPanelMode === "sidebar" ? chatContainer : floatingContainer,
-  );
-  Zotero.getMainWindow().setTimeout(() => {
-    void syncContainer(
-      currentPanelMode === "sidebar" ? chatContainer : floatingContainer,
-    );
-  }, 0);
+  runWhenPanelReady(syncContainer);
+}
+
+async function focusRunningPresentationTask(
+  item: Zotero.Item,
+  source: Extract<
+    ChatPanelOpenSource,
+    "presentation_menu" | "presentation_button"
+  >,
+  sessionId: string,
+  assistantMessageId: string,
+): Promise<void> {
+  const manager = getChatManager();
+  const session = await manager.switchSession(sessionId);
+  if (!session || manager.getActiveSession()?.id !== sessionId) return;
+
+  moduleCurrentItem = item;
+  manager.setCurrentItemKey(item.key, item.libraryID);
+  getReadingLoopService().setCurrentItem(item);
+  pendingPanelItem = item;
+  showPanel(source);
+  if (!isPanelShown()) {
+    if (pendingPanelItem === item) pendingPanelItem = null;
+    return;
+  }
+
+  const syncAndLocate = async (): Promise<void> => {
+    await syncPanelSessionForItem({
+      manager,
+      item,
+      session,
+      expectedSessionId: sessionId,
+      afterRender: (container) => {
+        if (pendingPanelItem === item) pendingPanelItem = null;
+        const chatHistory = container.querySelector(
+          "#chat-history",
+        ) as HTMLElement | null;
+        if (chatHistory) {
+          const messageElement = scrollToAndHighlightMessage(
+            chatHistory,
+            assistantMessageId,
+          );
+          if (messageElement) {
+            messageElement.setAttribute("tabindex", "-1");
+            messageElement.focus({ preventScroll: true });
+          }
+        }
+      },
+    });
+  };
+
+  runWhenPanelReady(syncAndLocate);
 }
 
 /**
@@ -2286,6 +2403,7 @@ export async function openPresentationForItem(
     "presentation_menu" | "presentation_button"
   >,
   settings: PresentationLaunchSettings,
+  onTaskReady?: (focusTask: () => void) => void,
   expectedActiveSession: ChatSession | null = null,
 ): Promise<boolean> {
   const manager = getChatManager();
@@ -2323,23 +2441,32 @@ export async function openPresentationForItem(
     return false;
   }
 
-  moduleCurrentItem = item;
-  manager.setCurrentItemKey(item.key, item.libraryID);
-  getReadingLoopService().setCurrentItem(item);
+  const targetSessionIsActive = () =>
+    manager.getActiveSession()?.id === session.id;
+  if (targetSessionIsActive()) {
+    moduleCurrentItem = item;
+    manager.setCurrentItemKey(item.key, item.libraryID);
+    getReadingLoopService().setCurrentItem(item);
+    pendingPanelItem = item;
+    showPanel(source);
 
-  showPanel(source);
-
-  const activeContainer =
-    currentPanelMode === "floating" ? floatingContainer : chatContainer;
-  if (activeContainer?.isConnected) {
-    const context = createContext(activeContainer);
-    context.setCurrentItem(item);
-    await context.updatePdfCheckboxVisibility(item);
-    context.renderMessages(session.messages);
-    context.renderExecutionPlan(session.executionPlan);
-    context.clearAttachments();
-    context.updateAttachmentsPreview();
-    updateModelSelectorDisplay(activeContainer);
+    if (isPanelShown()) {
+      runWhenPanelReady(async () => {
+        if (
+          await syncPanelSessionForItem({
+            manager,
+            item,
+            session,
+            expectedSessionId: session.id,
+            clearAttachments: true,
+          })
+        ) {
+          if (pendingPanelItem === item) pendingPanelItem = null;
+        }
+      });
+    } else if (pendingPanelItem === item) {
+      pendingPanelItem = null;
+    }
   }
 
   if (getProviderManager().getActiveProviderId() !== "paperchat") {
@@ -2350,7 +2477,10 @@ export async function openPresentationForItem(
     item,
     attachPdf: true,
     targetSession: session,
-    requireTargetSessionActive: true,
+    // A library-menu launch owns a fresh item session and may continue in the
+    // background when another paper is opened. The in-chat button still
+    // belongs to the conversation that was active when its settings opened.
+    requireTargetSessionActive: presentationLaunchRequiresActiveSession(source),
     allowedToolNames: ["presentation"],
     allowPaperChatRetry: true,
     requiredProviderId: "paperchat",
@@ -2361,6 +2491,16 @@ export async function openPresentationForItem(
       },
       settings,
     ),
+    onAssistantMessageCreated: ({ sessionId, assistantMessageId }) => {
+      onTaskReady?.(() => {
+        void focusRunningPresentationTask(
+          item,
+          source,
+          sessionId,
+          assistantMessageId,
+        );
+      });
+    },
   });
 }
 
@@ -3104,14 +3244,16 @@ function createContext(container: HTMLElement): ChatPanelContext {
       return launchPresentationForItem(
         item,
         "chat_button",
-        (launchItem, prompt, source, settings) =>
+        (launchItem, prompt, source, settings, onTaskReady) =>
           openPresentationForItem(
             launchItem,
             prompt,
             source,
             settings,
+            onTaskReady,
             session,
           ),
+        container.ownerDocument.defaultView || undefined,
       );
     },
     renderMessages: (

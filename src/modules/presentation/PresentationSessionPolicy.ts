@@ -20,6 +20,13 @@ export interface PresentationSessionSelection {
   expectedActiveSession: ChatSession | null;
 }
 
+/** Only an in-chat launch remains owned by the conversation it was clicked in. */
+export function presentationLaunchRequiresActiveSession(
+  source: PresentationPanelOpenSource,
+): boolean {
+  return source === "presentation_button";
+}
+
 /**
  * Sessions created before library IDs were persisted belong to the personal
  * library. Keep those chats usable while still rejecting an identically keyed

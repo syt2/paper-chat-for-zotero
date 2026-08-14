@@ -165,6 +165,20 @@ describe("presentation planner", function () {
     assert.include(prompt, "Use at least 3 different composition silhouettes");
   });
 
+  it("keeps the full evidence contract after the cache breakpoint", function () {
+    const prompt = buildPresentationPlannerUserPrompt(request);
+
+    assert.include(prompt, "at least three real PDF figure placements");
+    assert.include(prompt, "content slides 3 through 4");
+    assert.include(prompt, "structured experimental or ablation results");
+    assert.include(prompt, "pair it with a distinct non-table PDF figure");
+    assert.include(
+      prompt,
+      "Do not simplify a table-plus-figure result page into table-only",
+    );
+    assert.include(prompt, "Use at least 4 different composition silhouettes");
+  });
+
   it("states the resolved Zotero interface language in the planner prompt", function () {
     const prompt = buildPresentationPlannerUserPrompt(request);
 
@@ -176,6 +190,24 @@ describe("presentation planner", function () {
     assert.include(prompt, "hard output-language requirement");
     assert.include(prompt, "follows Zotero's current display language");
     assert.include(prompt, "Never infer or switch the PPT language");
+  });
+
+  it("places one-time user requirements only in the dynamic planner prompt", function () {
+    const instructions = "面向本科生，重点解释消融实验，少用公式。";
+    const systemPrompt = buildPresentationPlannerSystemPrompt();
+    const userPrompt = buildPresentationPlannerUserPrompt({
+      ...request,
+      intent: { ...request.intent, instructions },
+    });
+
+    assert.notInclude(systemPrompt, instructions);
+    assert.include(
+      userPrompt,
+      "User-provided requirements for this generation",
+    );
+    assert.include(userPrompt, instructions);
+    assert.equal(userPrompt.split(instructions).length - 1, 1);
+    assert.include(userPrompt, "selected output language, slide count");
   });
 
   it("feeds contract failures back through one internal repair prompt", function () {

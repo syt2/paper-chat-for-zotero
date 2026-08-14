@@ -2,15 +2,16 @@ import { getString } from "../../utils/locale";
 import { getAuthManager } from "../auth";
 import { getProviderManager } from "../providers";
 import { showAuthDialog } from "../ui/AuthDialog";
-import {
-  createPresentationLaunchDialogs,
-  focusOpenPresentationSettingsDialog,
-} from "./PresentationLaunchDialogs";
+import { createPresentationLaunchDialogs } from "./PresentationLaunchDialogs";
 import {
   guardPresentationLaunch,
   PRESENTATION_LAUNCH_PROMPT,
 } from "./PresentationLaunchGuard";
-import { PresentationLaunchCoordinator } from "./PresentationLaunchCoordinator";
+import {
+  MAX_CONCURRENT_PRESENTATION_RUNS,
+  PresentationLaunchCoordinator,
+  type PresentationLaunchLifecycle,
+} from "./PresentationLaunchCoordinator";
 import type { PresentationLaunchSettings } from "./PresentationLaunchSettings";
 
 const PRESENTATION_ITEM_MENU_ID = "paperchat-generate-presentation-menuitem";
@@ -22,7 +23,37 @@ export type PresentationChatOpener = (
   prompt: string,
   source: "presentation_menu" | "presentation_button",
   settings: PresentationLaunchSettings,
+  onTaskReady?: (focusTask: () => void) => void,
 ) => Promise<boolean>;
+
+export function createDeferredPresentationFocus(): {
+  requestFocus: () => void;
+  setFocus: (focus: () => void) => void;
+  clearFocus: () => void;
+} {
+  let focus: (() => void) | null = null;
+  let focusRequested = false;
+  return {
+    requestFocus: () => {
+      if (focus) {
+        focus();
+      } else {
+        focusRequested = true;
+      }
+    },
+    setFocus: (nextFocus) => {
+      focus = nextFocus;
+      if (focusRequested) {
+        focusRequested = false;
+        focus();
+      }
+    },
+    clearFocus: () => {
+      focus = null;
+      focusRequested = false;
+    },
+  };
+}
 
 function isPdfAttachment(item: Zotero.Item): boolean {
   return (
@@ -84,10 +115,23 @@ function showMissingPdfDialog(): void {
   );
 }
 
+function showPresentationConcurrencyLimitDialog(parentWindow?: Window): void {
+  Services.prompt.alert(
+    (parentWindow || Zotero.getMainWindow()) as unknown as mozIDOMWindowProxy,
+    getString("presentation-concurrency-limit-title"),
+    getString("presentation-concurrency-limit-message", {
+      args: { maximum: MAX_CONCURRENT_PRESENTATION_RUNS },
+    }),
+  );
+}
+
 async function runPresentationLaunch(
   item: Zotero.Item,
   source: PresentationLaunchSource,
   openPresentationChat: PresentationChatOpener,
+  lifecycle: PresentationLaunchLifecycle,
+  onSettingsFocusReady: (focus: () => void) => void,
+  clearSettingsFocus: () => void,
 ): Promise<boolean> {
   const paper = resolvePresentationPaper(item);
   if (!paper || !paperHasPdf(paper)) {
@@ -98,16 +142,22 @@ async function runPresentationLaunch(
   const guardResult = await guardPresentationLaunch({
     providerManager: getProviderManager(),
     authManager: getAuthManager(),
-    dialogs: createPresentationLaunchDialogs(),
+    dialogs: createPresentationLaunchDialogs({ onSettingsFocusReady }),
     ensureLoggedIn: () => showAuthDialog("login"),
-  });
+  }).finally(clearSettingsFocus);
   if (!guardResult.allowed) return false;
+
+  const taskFocus = createDeferredPresentationFocus();
+  if (!lifecycle.beginRunning(taskFocus.requestFocus)) {
+    return false;
+  }
 
   const started = await openPresentationChat(
     paper,
     PRESENTATION_LAUNCH_PROMPT,
     source === "library_menu" ? "presentation_menu" : "presentation_button",
     guardResult.settings,
+    taskFocus.setFocus,
   );
   if (!started) {
     Services.prompt.alert(
@@ -120,20 +170,35 @@ async function runPresentationLaunch(
 }
 
 /**
- * Launch one PPT per paper at a time. This protects against double-clicking
- * either entry while its modal gate is open.
+ * Keep one launch per paper, focus its settings window or running task on a
+ * repeated click, and let different papers run in parallel within the global
+ * presentation concurrency limit.
  */
 export function launchPresentationForItem(
   item: Zotero.Item,
   source: PresentationLaunchSource,
   openPresentationChat: PresentationChatOpener,
+  parentWindow?: Window,
 ): Promise<boolean> {
   const paper = resolvePresentationPaper(item);
   const key = paper ? `${paper.libraryID}:${paper.key}` : `invalid:${item.id}`;
+  const settingsFocus = createDeferredPresentationFocus();
   return launchCoordinator.enqueue(
     key,
-    () => runPresentationLaunch(item, source, openPresentationChat),
-    focusOpenPresentationSettingsDialog,
+    (lifecycle) =>
+      runPresentationLaunch(
+        item,
+        source,
+        openPresentationChat,
+        lifecycle,
+        settingsFocus.setFocus,
+        settingsFocus.clearFocus,
+      ),
+    {
+      focusConfiguration: settingsFocus.requestFocus,
+      onCapacityExceeded: () =>
+        showPresentationConcurrencyLimitDialog(parentWindow),
+    },
   );
 }
 

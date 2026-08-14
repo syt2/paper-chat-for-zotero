@@ -1,5 +1,6 @@
 import { assert } from "chai";
 import {
+  createDeferredPresentationFocus,
   getSingleSelectedPresentationPaper,
   paperHasPdf,
   resolvePresentationPaper,
@@ -7,6 +8,7 @@ import {
 } from "../src/modules/presentation/PresentationEntry.ts";
 import {
   isPresentationSessionCompatibleWithPaper,
+  presentationLaunchRequiresActiveSession,
   selectPresentationSession,
 } from "../src/modules/presentation/PresentationSessionPolicy.ts";
 import type { ChatSession } from "../src/types/chat.ts";
@@ -108,6 +110,33 @@ describe("presentation entry", function () {
     assert.isNull(getSingleSelectedPresentationPaper());
     selected = [];
     assert.isNull(getSingleSelectedPresentationPaper());
+  });
+
+  it("defers a running-task focus request until its message card exists", function () {
+    const focus = createDeferredPresentationFocus();
+    let focusCalls = 0;
+
+    focus.requestFocus();
+    assert.equal(focusCalls, 0);
+    focus.setFocus(() => {
+      focusCalls += 1;
+    });
+    assert.equal(focusCalls, 1);
+    focus.requestFocus();
+    assert.equal(focusCalls, 2);
+
+    focus.clearFocus();
+    focus.requestFocus();
+    assert.equal(focusCalls, 2);
+  });
+
+  it("allows dedicated menu sessions to run in the background", function () {
+    assert.isFalse(
+      presentationLaunchRequiresActiveSession("presentation_menu"),
+    );
+    assert.isTrue(
+      presentationLaunchRequiresActiveSession("presentation_button"),
+    );
   });
 
   function createHarness(active: ChatSession | null) {

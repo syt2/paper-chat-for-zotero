@@ -2,6 +2,7 @@ export const PRESENTATION_SLIDE_COUNTS = [6, 10, 15] as const;
 
 export const PRESENTATION_MINIMUM_SLIDE_COUNT = 4;
 export const PRESENTATION_MAXIMUM_SLIDE_COUNT = 30;
+export const PRESENTATION_USER_INSTRUCTIONS_MAX_LENGTH = 4_000;
 
 export type PresentationPresetSlideCount =
   (typeof PRESENTATION_SLIDE_COUNTS)[number];
@@ -19,11 +20,13 @@ export type PresentationDesignSystem =
 export interface PresentationLaunchSettings {
   slideCount: PresentationSlideCount;
   designSystem: PresentationDesignSystem;
+  userInstructions: string;
 }
 
 export const DEFAULT_PRESENTATION_LAUNCH_SETTINGS = Object.freeze({
   slideCount: 6,
   designSystem: "teal-green-academic-defense",
+  userInstructions: "",
 }) satisfies Readonly<PresentationLaunchSettings>;
 
 export function isPresentationSlideCount(
@@ -74,6 +77,20 @@ export function isPresentationDesignSystem(
   );
 }
 
+export function truncatePresentationUserInstructions(value: string): string {
+  if (value.length <= PRESENTATION_USER_INSTRUCTIONS_MAX_LENGTH) return value;
+  const truncated = value.slice(0, PRESENTATION_USER_INSTRUCTIONS_MAX_LENGTH);
+  const finalCodeUnit = truncated.charCodeAt(truncated.length - 1);
+  return finalCodeUnit >= 0xd800 && finalCodeUnit <= 0xdbff
+    ? truncated.slice(0, -1)
+    : truncated;
+}
+
+export function normalizePresentationUserInstructions(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return truncatePresentationUserInstructions(value.trim());
+}
+
 export function normalizePresentationLaunchSettings(
   value: Partial<PresentationLaunchSettings> | null | undefined,
 ): PresentationLaunchSettings {
@@ -82,5 +99,8 @@ export function normalizePresentationLaunchSettings(
     designSystem: isPresentationDesignSystem(value?.designSystem)
       ? value.designSystem
       : DEFAULT_PRESENTATION_LAUNCH_SETTINGS.designSystem,
+    userInstructions: normalizePresentationUserInstructions(
+      value?.userInstructions,
+    ),
   };
 }

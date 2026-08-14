@@ -2106,6 +2106,98 @@ describe("paperchat storage and chat manager", function () {
     assert.equal(delegateConfig.defaultModel, "m3");
   });
 
+  it("forwards routing-declared explicit cache support through PaperChatProvider", async function () {
+    prefStore.set(`${PREFS_PREFIX}.apiKey`, "test-key");
+    prefStore.set(`${PREFS_PREFIX}.userId`, 1);
+    prefStore.set(`${PREFS_PREFIX}.username`, "tester");
+    prefStore.set(
+      `${PREFS_PREFIX}.paperchatRoutingConfigCache`,
+      JSON.stringify({
+        "presentation-alias-enabled": {
+          tierCode: 2,
+          apiCapabilities: {
+            responses: true,
+            hostedWebSearch: false,
+            explicitPromptCacheBreakpoints: true,
+          },
+        },
+        "presentation-alias-disabled": {
+          tierCode: 2,
+          apiCapabilities: {
+            responses: true,
+            hostedWebSearch: false,
+            explicitPromptCacheBreakpoints: false,
+          },
+        },
+      }),
+    );
+    loadCachedRatios();
+    destroyAuthManager();
+
+    const requests: Array<Record<string, any>> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input, init) => {
+      requests.push(JSON.parse(String(init?.body)));
+      return new Response(
+        JSON.stringify({
+          id: `resp_explicit_${requests.length}`,
+          status: "completed",
+          store: true,
+          output: [
+            {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: "done", annotations: [] }],
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+
+    const messages: ChatMessage[] = [
+      {
+        id: "planner-system",
+        role: "system",
+        content: "Stable presentation planner.",
+        promptCacheBreakpoint: "explicit",
+        timestamp: 1,
+      },
+      { id: "planner-user", role: "user", content: "Paper A", timestamp: 2 },
+    ];
+
+    try {
+      for (const model of [
+        "presentation-alias-enabled",
+        "presentation-alias-disabled",
+      ]) {
+        const provider = new PaperChatProvider({
+          id: "paperchat",
+          name: "PaperChat",
+          type: "paperchat",
+          enabled: true,
+          isBuiltin: true,
+          order: 0,
+          resolvedModelOverride: model,
+          requestSessionId: `session-${model}`,
+          availableModels: [model],
+        });
+        await provider.chatCompletionWithTools(messages, undefined, undefined, {
+          toolChoice: "none",
+          stateless: true,
+        });
+      }
+
+      assert.lengthOf(requests, 2);
+      assert.deepEqual(requests[0].prompt_cache_options, { mode: "explicit" });
+      assert.equal(requests[0].input[0].role, "developer");
+      assert.notProperty(requests[1], "prompt_cache_options");
+      assert.equal(requests[1].input[0].role, "system");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("reuses an untouched model chain but resets it after another model answers", async function () {
     prefStore.set(`${PREFS_PREFIX}.apiKey`, "test-key");
     prefStore.set(`${PREFS_PREFIX}.userId`, 1);
@@ -6854,6 +6946,223 @@ describe("paperchat storage and chat manager", function () {
     } finally {
       providerManager.getActiveProviderId = originalGetActiveProviderId;
       providerManager.executeWithRetry = originalExecuteWithRetry;
+      contextManager.filterMessages = originalFilterMessages;
+    }
+  });
+
+  it("runs two authorized presentation sessions concurrently without crossing state", async function () {
+    const providerManager = getProviderManager() as any;
+    const originalGetActiveProviderId = providerManager.getActiveProviderId;
+    const originalGetProvider = providerManager.getProvider;
+    const contextManager = getContextManager() as any;
+    const originalCompactBeforeSendIfNeeded =
+      contextManager.compactBeforeSendIfNeeded;
+    const originalFilterMessages = contextManager.filterMessages;
+
+    const foregroundSession: ChatSession = {
+      id: "foreground-session",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: "FRGND001",
+      lastActiveItemLibraryID: 1,
+      messages: [],
+    };
+    const paperKeys = ["PAPERA01", "PAPERB02"];
+    const presentationSessions = ["A", "B"].map(
+      (suffix, index): ChatSession => ({
+        id: `background-presentation-${suffix}`,
+        createdAt: 1,
+        updatedAt: 1,
+        lastActiveItemKey: paperKeys[index],
+        lastActiveItemLibraryID: 1,
+        messages: [],
+      }),
+    );
+    const papers = ["A", "B"].map(
+      (suffix, index) =>
+        ({
+          id: index + 9,
+          key: paperKeys[index],
+          libraryID: 1,
+          getField: () => `Paper ${suffix}`,
+        }) as unknown as Zotero.Item,
+    );
+    const provider = {
+      config: { id: "paperchat", type: "openai" },
+      getName: () => "PaperChat",
+      isReady: () => true,
+      supportsToolCalling: () => true,
+      supportsPdfUpload: () => false,
+      chatCompletionWithTools: async () => ({ content: "unused" }),
+    };
+    const insertedMessages = new Map<string, ChatMessage[]>();
+    const taskLocations = new Map<
+      string,
+      { sessionId: string; assistantMessageId: string }
+    >();
+    let resolveBothStarted!: () => void;
+    const bothStarted = new Promise<void>((resolve) => {
+      resolveBothStarted = resolve;
+    });
+    const startedSessions = new Set<string>();
+    const finishBySession = new Map<
+      string,
+      { promise: Promise<void>; resolve: () => void }
+    >();
+    for (const session of presentationSessions) {
+      let resolveFinish!: () => void;
+      finishBySession.set(session.id, {
+        promise: new Promise<void>((resolve) => {
+          resolveFinish = resolve;
+        }),
+        resolve: () => resolveFinish(),
+      });
+    }
+
+    providerManager.getActiveProviderId = () => "paperchat";
+    providerManager.getProvider = (providerId: string) =>
+      providerId === "paperchat" ? provider : null;
+    contextManager.compactBeforeSendIfNeeded = async () => false;
+    contextManager.filterMessages = (session: ChatSession) => ({
+      messages: [...session.messages],
+      summaryTriggered: false,
+    });
+
+    try {
+      const manager = Object.create(ChatManager.prototype) as any;
+      manager.currentSession = foregroundSession;
+      manager.activeSessionRunIds = new Map();
+      manager.sessionRunCounters = new Map();
+      manager.activeSessionAbortControllers = new Map();
+      manager.paperChatRerollSessions = new Set();
+      manager.streamingSessions = new Map();
+      manager.currentItemKey = "FRGND001";
+      manager.currentItemLibraryID = 1;
+      manager.pdfExtractor = {
+        hasPdfAttachment: async () => false,
+      };
+      manager.init = async () => undefined;
+      manager.sessionStorage = {
+        insertMessage: async (sessionId: string, message: ChatMessage) => {
+          const messages = insertedMessages.get(sessionId) || [];
+          messages.push(message);
+          insertedMessages.set(sessionId, messages);
+        },
+        updateSessionMeta: async () => undefined,
+      };
+      manager.sendMessageWithToolCalling = async (
+        _provider: unknown,
+        _messages: ChatMessage[],
+        assistantMessage: ChatMessage,
+        _pdfWasAttached: boolean,
+        _summaryTriggered: boolean,
+        _hasCurrentItem: boolean,
+        _item: Zotero.Item,
+        sendingSession: ChatSession,
+      ) => {
+        startedSessions.add(sendingSession.id);
+        if (startedSessions.size === presentationSessions.length) {
+          resolveBothStarted();
+        }
+        await finishBySession.get(sendingSession.id)!.promise;
+        assistantMessage.content = `completed:${sendingSession.id}`;
+        assistantMessage.streamingState = undefined;
+        return true;
+      };
+
+      const runs = presentationSessions.map((presentationSession, index) => {
+        const paper = papers[index];
+        return manager.sendMessage(`generate ${paper.key}`, {
+          item: paper,
+          targetSession: presentationSession,
+          requireTargetSessionActive: false,
+          requiredProviderId: "paperchat",
+          allowedToolNames: ["presentation"],
+          presentationAuthorization: createPresentationLaunchAuthorization(
+            { itemKey: paper.key, libraryID: paper.libraryID },
+            {
+              slideCount: 6,
+              designSystem: "teal-green-academic-defense",
+              userInstructions: `Focus on paper ${index}.`,
+            },
+          ),
+          onAssistantMessageCreated: (location: {
+            sessionId: string;
+            assistantMessageId: string;
+          }) => {
+            taskLocations.set(presentationSession.id, location);
+            assert.isTrue(
+              (insertedMessages.get(location.sessionId) || []).some(
+                (message) => message.id === location.assistantMessageId,
+              ),
+            );
+          },
+        });
+      });
+
+      await bothStarted;
+      assert.deepEqual(
+        [...startedSessions].sort(),
+        presentationSessions.map((session) => session.id).sort(),
+      );
+      assert.deepEqual(
+        [...manager.activeSessionRunIds.keys()].sort(),
+        presentationSessions.map((session) => session.id).sort(),
+      );
+      assert.equal(manager.currentSession, foregroundSession);
+      assert.equal(manager.currentItemKey, "FRGND001");
+      assert.equal(manager.currentItemLibraryID, 1);
+      for (const [index, session] of presentationSessions.entries()) {
+        assert.deepEqual(
+          session.messages.map((message) => ({
+            role: message.role,
+            content: message.content,
+            sourceItemKeys: message.sourceItemKeys,
+          })),
+          [
+            {
+              role: "user",
+              content: `generate ${papers[index].key}`,
+              sourceItemKeys: undefined,
+            },
+            {
+              role: "assistant",
+              content: "",
+              sourceItemKeys: [papers[index].key],
+            },
+          ],
+        );
+        assert.equal(taskLocations.get(session.id)?.sessionId, session.id);
+        assert.equal(
+          taskLocations.get(session.id)?.assistantMessageId,
+          session.messages[1].id,
+        );
+      }
+
+      finishBySession.get(presentationSessions[1].id)!.resolve();
+      assert.isTrue(await runs[1]);
+      assert.isTrue(
+        manager.activeSessionRunIds.has(presentationSessions[0].id),
+      );
+      assert.isFalse(
+        manager.activeSessionRunIds.has(presentationSessions[1].id),
+      );
+      finishBySession.get(presentationSessions[0].id)!.resolve();
+      assert.isTrue(await runs[0]);
+      assert.isEmpty(manager.activeSessionRunIds);
+      assert.equal(
+        presentationSessions[0].messages[1].content,
+        `completed:${presentationSessions[0].id}`,
+      );
+      assert.equal(
+        presentationSessions[1].messages[1].content,
+        `completed:${presentationSessions[1].id}`,
+      );
+    } finally {
+      providerManager.getActiveProviderId = originalGetActiveProviderId;
+      providerManager.getProvider = originalGetProvider;
+      contextManager.compactBeforeSendIfNeeded =
+        originalCompactBeforeSendIfNeeded;
       contextManager.filterMessages = originalFilterMessages;
     }
   });

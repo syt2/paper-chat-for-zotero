@@ -172,6 +172,10 @@ type InternalSendMessageOptions = SendMessageOptions & {
   noteSummaryContext?: NoteSummaryContext;
   requiredProviderId?: "paperchat";
   presentationAuthorization?: PresentationLaunchAuthorization;
+  onAssistantMessageCreated?: (location: {
+    sessionId: string;
+    assistantMessageId: string;
+  }) => void;
 };
 
 function hasValidPresentationAuthorization(
@@ -1839,12 +1843,15 @@ export class ChatManager {
         }
       }
 
-      // The reader can move independently from the chat session. Bind every
-      // send to its explicit item so retrying an older failed turn cannot run
-      // tools against the newly opened paper.
-      this.currentItemKey = itemKey;
-      this.currentItemLibraryID = itemLibraryID;
-      getPdfToolManager().setCurrentItemKey(itemKey);
+      // The reader can move independently from a background chat session.
+      // Keep the foreground compatibility pointer aligned with the visible
+      // session; the tool runtime below binds this send through
+      // sendingSession.lastActiveItemKey instead.
+      if (this.isSessionActive(sendingSession)) {
+        this.currentItemKey = itemKey;
+        this.currentItemLibraryID = itemLibraryID;
+        getPdfToolManager().setCurrentItemKey(itemKey);
+      }
 
       // 获取活动的 AI 提供商
       const providerManager = getProviderManager();
@@ -2148,6 +2155,19 @@ export class ChatManager {
           sendingSession.id,
           assistantMessage,
         );
+      }
+      if (options.onAssistantMessageCreated) {
+        try {
+          options.onAssistantMessageCreated({
+            sessionId: sendingSession.id,
+            assistantMessageId: assistantMessage.id,
+          });
+        } catch (error) {
+          ztoolkit.log(
+            "[ChatManager] Assistant-message callback failed:",
+            error,
+          );
+        }
       }
       sendingSession.executionPlan = undefined;
       if (!options.resumeFailedTurn) {

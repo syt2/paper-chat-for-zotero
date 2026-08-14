@@ -52,13 +52,17 @@ export class PaperChatProvider implements AIProvider {
   private createResponsesRuntimeOptions(modelId: string): {
     sessionId?: string;
     hostedWebSearch: boolean;
+    explicitPromptCacheBreakpoints?: boolean;
   } {
+    const capabilities = getPaperChatApiCapabilities(
+      modelId,
+      getModelRoutingMeta(),
+    );
     return {
       sessionId: this._config.requestSessionId,
-      hostedWebSearch: getPaperChatApiCapabilities(
-        modelId,
-        getModelRoutingMeta(),
-      ).hostedWebSearch,
+      hostedWebSearch: capabilities.hostedWebSearch,
+      explicitPromptCacheBreakpoints:
+        capabilities.explicitPromptCacheBreakpoints,
     };
   }
 

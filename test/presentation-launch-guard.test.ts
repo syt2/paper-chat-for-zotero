@@ -12,6 +12,7 @@ import type { PresentationLaunchSettings } from "../src/modules/presentation/Pre
 const DEFAULT_SETTINGS: PresentationLaunchSettings = {
   slideCount: 6,
   designSystem: "teal-green-academic-defense",
+  userInstructions: "",
 };
 
 interface GuardHarnessOptions {
@@ -40,9 +41,6 @@ function createGuardHarness(options: GuardHarnessOptions = {}) {
     confirmSwitchToPaperChat: async () => {
       calls.push("provider-dialog");
       return options.switchAccepted ?? true;
-    },
-    showBalanceRefreshFailed: async () => {
-      calls.push("refresh-failed-dialog");
     },
     showInsufficientBalance: async () => {
       calls.push("balance-dialog");
@@ -124,27 +122,32 @@ describe("presentation launch guard", function () {
     );
   });
 
-  it("requires a balance strictly greater than one million tokens", function () {
-    for (const amount of [999_999, 1_000_000]) {
-      assert.isFalse(
-        hasEnoughPresentationBalance({
-          quota: amount,
-          subscriptionRemaining: 0,
-          available: amount,
-        }),
-      );
-    }
-    assert.isTrue(
+  it("requires more than two hundred fifty thousand cached tokens", function () {
+    assert.isFalse(
       hasEnoughPresentationBalance({
-        quota: 1_000_001,
+        quota: 249_999,
         subscriptionRemaining: 0,
-        available: 1_000_001,
+        available: 249_999,
       }),
     );
-    assert.equal(PRESENTATION_MINIMUM_REMAINING_TOKENS, 1_000_000);
+    assert.isFalse(
+      hasEnoughPresentationBalance({
+        quota: 250_000,
+        subscriptionRemaining: 0,
+        available: 250_000,
+      }),
+    );
+    assert.isTrue(
+      hasEnoughPresentationBalance({
+        quota: 250_001,
+        subscriptionRemaining: 0,
+        available: 250_001,
+      }),
+    );
+    assert.equal(PRESENTATION_MINIMUM_REMAINING_TOKENS, 250_000);
   });
 
-  it("accepts either complete usable balance pool without summing partial pools", function () {
+  it("adds ordinary quota and subscription balance for launch eligibility", function () {
     const authManager = {
       getBalance: () => ({ quota: 400_000, usedQuota: 0 }),
       getSubscriptionUsageSummary: () => ({
@@ -154,15 +157,15 @@ describe("presentation launch guard", function () {
     assert.deepEqual(getPresentationBalanceSnapshot(authManager as never), {
       quota: 400_000,
       subscriptionRemaining: 1_200_000,
-      available: 1_200_000,
+      available: 1_600_000,
     });
 
     const splitPools = getPresentationBalanceSnapshot({
-      getBalance: () => ({ quota: 600_000, usedQuota: 0 }),
-      getSubscriptionUsageSummary: () => ({ amountRemaining: 600_000 }),
+      getBalance: () => ({ quota: 150_000, usedQuota: 0 }),
+      getSubscriptionUsageSummary: () => ({ amountRemaining: 150_000 }),
     } as never);
-    assert.equal(splitPools.available, 600_000);
-    assert.isFalse(hasEnoughPresentationBalance(splitPools));
+    assert.equal(splitPools.available, 300_000);
+    assert.isTrue(hasEnoughPresentationBalance(splitPools));
   });
 
   it("switches to PaperChat before using the cached balance", async function () {
@@ -231,8 +234,8 @@ describe("presentation launch guard", function () {
     assert.deepEqual(harness.calls, ["login-dialog"]);
   });
 
-  it("blocks a cached balance of 999,999", async function () {
-    const harness = createGuardHarness({ quota: 999_999 });
+  it("blocks a cached balance of 249,999", async function () {
+    const harness = createGuardHarness({ quota: 249_999 });
     assert.deepEqual(await harness.run(), {
       allowed: false,
       reason: "balance",
@@ -240,18 +243,21 @@ describe("presentation launch guard", function () {
     assert.deepEqual(harness.calls, ["balance-dialog"]);
   });
 
-  it("blocks a cached balance of 1,000,000", async function () {
-    const harness = createGuardHarness({ quota: 1_000_000 });
-    assert.deepEqual(await harness.run(), {
-      allowed: false,
-      reason: "balance",
-    });
-    assert.deepEqual(harness.calls, ["balance-dialog"]);
-  });
-
-  it("allows 1,000,001 cached tokens without refreshing the account", async function () {
+  it("blocks exactly 250,000 cached tokens without refreshing the account", async function () {
     const harness = createGuardHarness({
-      quota: 1_000_001,
+      quota: 250_000,
+      failIfBalanceRefreshed: true,
+    });
+    assert.deepEqual(await harness.run(), {
+      allowed: false,
+      reason: "balance",
+    });
+    assert.deepEqual(harness.calls, ["balance-dialog"]);
+  });
+
+  it("allows 250,001 cached tokens without refreshing the account", async function () {
+    const harness = createGuardHarness({
+      quota: 250_001,
       failIfBalanceRefreshed: true,
     });
     assert.isTrue((await harness.run()).allowed);
@@ -293,7 +299,7 @@ describe("presentation launch guard", function () {
   it("rechecks balance after settings confirmation before authorizing the turn", async function () {
     const harness = createGuardHarness({
       quota: 1_000_001,
-      quotaAfterSettings: 1_000_000,
+      quotaAfterSettings: 249_999,
     });
     assert.deepEqual(await harness.run(), {
       allowed: false,
@@ -314,7 +320,7 @@ describe("presentation launch guard", function () {
       balance: {
         quota: 10,
         subscriptionRemaining: 10_000_000,
-        available: 10_000_000,
+        available: 10_000_010,
       },
       settings: DEFAULT_SETTINGS,
     });
@@ -325,6 +331,7 @@ describe("presentation launch guard", function () {
     const settings: PresentationLaunchSettings = {
       slideCount: 15,
       designSystem: "dark-editorial",
+      userInstructions: "Focus on the ablation study.",
     };
     const result = await createGuardHarness({ settings }).run();
 
