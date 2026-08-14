@@ -152,6 +152,8 @@ describe("chat agent safeguards", function () {
       "ask",
     );
     assert.equal(manager.getDescriptor("create_note")?.mode, "auto_allow");
+    assert.equal(manager.getDescriptor("download")?.mode, "auto_allow");
+    assert.equal(manager.getDescriptor("download")?.riskLevel, "write");
     assert.equal(manager.getDescriptor("save_memory")?.mode, "auto_allow");
     assert.equal(manager.getDescriptor("get_full_text")?.mode, "ask");
   });
@@ -177,6 +179,29 @@ describe("chat agent safeguards", function () {
     assert.equal(manager.getDescriptor("save_memory")?.mode, "deny");
     assert.equal(manager.getDescriptor("get_full_text")?.mode, "ask");
     assert.equal(manager.getDescriptor("list_all_items")?.mode, "auto_allow");
+  });
+
+  it("advertises download with and without an active paper", async function () {
+    const { PdfToolManager } =
+      await import("../src/modules/chat/pdf-tools/PdfToolManager");
+    const manager = new PdfToolManager();
+
+    for (const hasCurrentItem of [false, true]) {
+      const definition = manager
+        .getToolDefinitions(hasCurrentItem)
+        .find((tool) => tool.function.name === "download");
+
+      assert.isDefined(definition);
+      assert.include(definition?.function.description || "", "200 MiB");
+      assert.deepEqual(definition?.function.parameters.required, [
+        "url",
+        "destination",
+      ]);
+      assert.deepEqual(
+        definition?.function.parameters.properties.destination?.enum,
+        ["zotero", "downloads"],
+      );
+    }
   });
 
   it("ignores malformed default risk mode entries in prefs", async function () {

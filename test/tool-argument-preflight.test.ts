@@ -54,6 +54,35 @@ describe("tool argument preflight", function () {
     });
   });
 
+  it("repairs common download argument aliases", async function () {
+    const { preflightToolArguments } =
+      await import("../src/modules/chat/tool-arguments/ToolArgumentPreflight.ts");
+    const { validateAndRepairToolArguments } =
+      await import("../src/modules/chat/tool-arguments/ToolArgumentValidation.ts");
+
+    const normalized = preflightToolArguments("download", {
+      download_url: "https://example.test/paper.pdf",
+      save_to: "Zotero",
+      file_name: "paper.pdf",
+      parent_item_key: "ITEM0001",
+    });
+
+    assert.deepEqual(normalized, {
+      url: "https://example.test/paper.pdf",
+      destination: "Zotero",
+      filename: "paper.pdf",
+      parentItemKey: "ITEM0001",
+    });
+    const validated = validateAndRepairToolArguments("download", normalized);
+    assert.equal(validated.ok, true);
+    assert.deepEqual(validated.args, {
+      url: "https://example.test/paper.pdf",
+      destination: "zotero",
+      filename: "paper.pdf",
+      parentItemKey: "ITEM0001",
+    });
+  });
+
   it("repairs scholarly-search aliases and rejects general-web sources", async function () {
     const { preflightToolArguments } =
       await import("../src/modules/chat/tool-arguments/ToolArgumentPreflight.ts");

@@ -302,4 +302,37 @@ describe("tool recovery policy", function () {
     assert.include(directive.immediateAction, "vendor-hosted web_search");
     assert.include(directive.planningInstruction, "actually exposed");
   });
+
+  it("replans a failed download around a different direct URL", async function () {
+    const { getRecoveryDirective } =
+      await import("../src/modules/chat/tool-recovery/ToolRecoveryPolicy.ts");
+
+    const directive = getRecoveryDirective({
+      toolCall: {
+        id: "download-failed",
+        type: "function",
+        function: {
+          name: "download",
+          arguments: JSON.stringify({
+            url: "https://example.test/not-a-file",
+            destination: "zotero",
+          }),
+        },
+      },
+      status: "failed",
+      content: [
+        "Error: The file could not be downloaded.",
+        "Category: execution_failed",
+        "Retryable: yes",
+        "Cause: HTTP 404",
+      ].join("\n"),
+    } satisfies ToolExecutionResult);
+
+    assert.include(
+      directive.planningInstruction,
+      "alternative direct file URL",
+    );
+    assert.includeMembers(directive.recommendedTools, ["search_items"]);
+    assert.notInclude(directive.recommendedTools, "web_search");
+  });
 });

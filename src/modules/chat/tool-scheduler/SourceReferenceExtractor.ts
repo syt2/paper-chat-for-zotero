@@ -1,4 +1,9 @@
 import type { ToolSourceReference, ToolCall } from "../../../types/tool";
+import {
+  DOWNLOAD_REFERENCE_MANIFEST_PREFIX,
+  DOWNLOAD_SUCCESS_MESSAGE,
+  DOWNLOAD_ZOTERO_SUCCESS_MESSAGE,
+} from "../../download";
 import { normalizeSourceUrl } from "../note-source-provenance";
 
 const ZOTERO_KEY_PATTERN = /^[A-Z0-9]{8}$/;
@@ -199,6 +204,39 @@ function extractWebResultUrls(content: string): string[] {
   return [];
 }
 
+interface DownloadReferenceManifest {
+  attachmentKey?: unknown;
+  parentItemKey?: unknown;
+  collectionKey?: unknown;
+  sourceUrl?: unknown;
+}
+
+function extractDownloadReferenceManifest(
+  content: string,
+): DownloadReferenceManifest | null {
+  const lines = content.split("\n");
+  const successLine = lines[0]?.trim();
+  if (
+    successLine !== DOWNLOAD_SUCCESS_MESSAGE &&
+    successLine !== DOWNLOAD_ZOTERO_SUCCESS_MESSAGE
+  ) {
+    return null;
+  }
+
+  if (!lines[1]?.startsWith(DOWNLOAD_REFERENCE_MANIFEST_PREFIX)) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(
+      lines[1].slice(DOWNLOAD_REFERENCE_MANIFEST_PREFIX.length),
+    ) as (DownloadReferenceManifest & { version?: unknown }) | null;
+    return parsed?.version === 1 ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 interface ExtractedAnnotation {
   key: string;
   page?: number;
@@ -359,6 +397,21 @@ export function deriveToolSourceReferences(
       /^[\t ]*Added to collection:[\t ]*([A-Z0-9]{8})[\t ]*$/gim,
     )) {
       addCollection(key);
+    }
+  }
+
+  if (toolName === "download") {
+    const manifest = extractDownloadReferenceManifest(rawContent);
+    if (manifest) {
+      addItem(manifest.attachmentKey);
+      addItem(manifest.parentItemKey);
+      addCollection(manifest.collectionKey);
+      if (typeof manifest.sourceUrl === "string") {
+        const url = normalizeSourceUrl(manifest.sourceUrl);
+        if (url) {
+          addReference({ type: "web", url });
+        }
+      }
     }
   }
 

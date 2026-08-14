@@ -70,6 +70,11 @@ const TOOL_PERMISSION_DESCRIPTORS: Record<
     "read",
     "Read a previously saved large tool result artifact from the current session.",
   ),
+  download: createDescriptor(
+    "download",
+    "write",
+    "Download a file into Zotero or the system Downloads folder.",
+  ),
   web_search: {
     ...createDescriptor(
       "web_search",

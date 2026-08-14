@@ -6,6 +6,21 @@ const COMMON_ALIASES: Record<string, string> = {
 };
 
 const TOOL_SPECIFIC_ALIASES: Record<string, Record<string, string>> = {
+  download: {
+    download_url: "url",
+    downloadUrl: "url",
+    file_url: "url",
+    fileUrl: "url",
+    source_url: "url",
+    sourceUrl: "url",
+    href: "url",
+    link: "url",
+    save_to: "destination",
+    saveTo: "destination",
+    file_name: "filename",
+    parent_item_key: "parentItemKey",
+    collection_key: "collectionKey",
+  },
   web_search: {
     maxResults: "max_results",
     includeContent: "include_content",

@@ -113,6 +113,7 @@ ${webSearchLine}
 - get_item_metadata: Get bibliographic metadata of any Zotero item (no PDF needed)
 - get_item_notes: Get all notes/annotations for an item
 - get_note_content: Get the full content of a specific note
+- download: Download a public HTTP or HTTPS file up to 200 MiB into Zotero or the system Downloads folder when the user asks to save or import it
 - get_annotations: Read PDF annotations saved in Zotero
 - search_items: Search Zotero items by title, author, year, or metadata
 - search_fulltext: Find papers whose PDF full text mentions a word or phrase
@@ -219,6 +220,7 @@ ${webSearchLine}
 - get_item_metadata: Get bibliographic metadata of any Zotero item (no PDF needed)
 - get_item_notes: Get all notes/annotations for an item
 - get_note_content: Get the full content of a specific note
+- download: Download a public HTTP or HTTPS file up to 200 MiB into Zotero or the system Downloads folder when the user asks to save or import it
 - get_annotations: Read PDF annotations saved in Zotero
 - get_pdf_selection: Read the user's current PDF selection
 - search_items: Search Zotero items by metadata

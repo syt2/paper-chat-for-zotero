@@ -201,6 +201,7 @@ interface StreamingRuntimeExecutionOptions extends RuntimeExecutionOptions {
 interface ToolIterationParams {
   sendingSession: ChatSession;
   sessionRunId?: number;
+  abortSignal?: AbortSignal;
   currentMessages: ChatMessage[];
   assistantMessage: ChatMessage;
   provider: ToolCallingProvider;
@@ -219,7 +220,6 @@ interface ToolIterationParams {
   allowedToolNames: Set<string>;
   selectedSearchScope?: SelectedSearchScope;
   noteSummaryContext?: NoteSummaryContext;
-  abortSignal?: AbortSignal;
   executeProviderRequest: ProviderRequestExecutor;
   presentationAuthorization?: PresentationLaunchAuthorization;
 }
@@ -545,6 +545,7 @@ export class AgentRuntime {
           const toolIteration = await this.runToolIteration({
             sendingSession,
             sessionRunId,
+            abortSignal,
             currentMessages,
             assistantMessage,
             provider,
@@ -565,7 +566,6 @@ export class AgentRuntime {
             ),
             selectedSearchScope,
             noteSummaryContext,
-            abortSignal,
             executeProviderRequest,
             presentationAuthorization,
           });
@@ -848,6 +848,7 @@ export class AgentRuntime {
           const toolIteration = await this.runToolIteration({
             sendingSession,
             sessionRunId,
+            abortSignal,
             currentMessages,
             assistantMessage,
             provider,
@@ -868,7 +869,6 @@ export class AgentRuntime {
             ),
             selectedSearchScope,
             noteSummaryContext,
-            abortSignal,
             executeProviderRequest,
             presentationAuthorization,
           });
@@ -1371,6 +1371,7 @@ export class AgentRuntime {
     const {
       sendingSession,
       sessionRunId,
+      abortSignal,
       currentMessages,
       assistantMessage,
       provider,
@@ -1388,7 +1389,6 @@ export class AgentRuntime {
       allowedToolNames,
       selectedSearchScope,
       noteSummaryContext,
-      abortSignal,
       executeProviderRequest,
       presentationAuthorization,
     } = params;
@@ -1797,6 +1797,7 @@ export class AgentRuntime {
                 assistantMessage,
                 entry.requests,
                 iteration,
+                abortSignal,
               )
             : entry.kind === "user_input"
               ? [
@@ -2532,6 +2533,7 @@ export class AgentRuntime {
     assistantMessage: ChatMessage,
     requests: ToolSchedulerRequest[],
     iteration: number,
+    abortSignal?: AbortSignal,
   ): Promise<ToolExecutionResult[]> {
     const startedRequests: ToolSchedulerRequest[] = [];
 
@@ -2541,24 +2543,27 @@ export class AgentRuntime {
         this.callbacks.isSessionTracked,
         sessionRunId,
         () =>
-          this.toolScheduler.executeBatch(requests, {
-            onExecutionReady: (request) => {
-              this.ensureSessionTracked(session, sessionRunId);
-              startedRequests.push(request);
-              this.emitRuntimeEvent<"tool_started">(
-                session,
-                sessionRunId,
-                assistantMessage,
-                {
-                  type: "tool_started",
-                  toolCallId: request.toolCall.id,
-                  toolName: request.toolCall.function.name,
-                  args: request.toolCall.function.arguments,
-                  iteration,
-                },
-              );
+          this.toolScheduler.executeBatch(
+            requests.map((request) => ({ ...request, abortSignal })),
+            {
+              onExecutionReady: (request) => {
+                this.ensureSessionTracked(session, sessionRunId);
+                startedRequests.push(request);
+                this.emitRuntimeEvent<"tool_started">(
+                  session,
+                  sessionRunId,
+                  assistantMessage,
+                  {
+                    type: "tool_started",
+                    toolCallId: request.toolCall.id,
+                    toolName: request.toolCall.function.name,
+                    args: request.toolCall.function.arguments,
+                    iteration,
+                  },
+                );
+              },
             },
-          }),
+          ),
       );
     } catch (error) {
       if (error instanceof SessionRunInvalidatedError) {

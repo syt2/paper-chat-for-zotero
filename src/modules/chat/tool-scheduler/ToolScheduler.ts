@@ -58,6 +58,7 @@ export interface ToolSchedulerRequest {
   fallbackStructure?: PaperStructure | PaperStructureExtended;
   currentItemKey?: string | null;
   executionContext?: ToolSchedulerExecutionContext;
+  abortSignal?: AbortSignal;
 }
 
 export interface ToolSchedulerExecutionHooks {
@@ -75,6 +76,7 @@ export type ToolExecutor = (
   args: Record<string, unknown>,
   currentItemKey?: string | null,
   executionContext?: ToolSchedulerExecutionContext,
+  abortSignal?: AbortSignal,
 ) => Promise<string>;
 
 interface PreparedToolExecution {
@@ -121,13 +123,21 @@ export class ToolScheduler {
   constructor(executor?: ToolExecutor) {
     this.executor =
       executor ??
-      ((toolCall, fallbackStructure, args, currentItemKey, executionContext) =>
+      ((
+        toolCall,
+        fallbackStructure,
+        args,
+        currentItemKey,
+        executionContext,
+        abortSignal,
+      ) =>
         getPdfToolManager().executeToolCall(
           toolCall,
           fallbackStructure,
           args,
           currentItemKey,
           executionContext,
+          abortSignal,
         ));
   }
 
@@ -607,6 +617,7 @@ export class ToolScheduler {
               prepared.args,
               prepared.request.currentItemKey,
               prepared.request.executionContext,
+              prepared.request.abortSignal,
             );
       const normalizedError = content.trimStart().startsWith("Error:")
         ? normalizeToolErrorContent(

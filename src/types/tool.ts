@@ -313,6 +313,7 @@ export type PaperToolName =
   | "presentation"
   | "request_user_input"
   | "read_artifact"
+  | "download"
   | "web_search"
   | "search_scholarly_sources"
   | "get_paper_section"

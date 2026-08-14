@@ -63,6 +63,8 @@ function getToolIntentTitle(toolName: string): string {
       return "Check information outside Zotero";
     case "search_scholarly_sources":
       return "Search scholarly sources";
+    case "download":
+      return "Download requested file";
     case "select_search_scope":
       return "Decide the allowed external-search scope";
     case "create_note":
