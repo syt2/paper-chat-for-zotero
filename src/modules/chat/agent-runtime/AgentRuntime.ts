@@ -104,7 +104,11 @@ import {
   type PresentationPlanner,
 } from "../../presentation/PresentationPlanner";
 import { normalizePresentationToolCall } from "../../presentation/PresentationToolCallPolicy";
-import type { PresentationProgressUpdate } from "../../presentation/contracts";
+import { PresentationCardProgressTracker } from "../../presentation/PresentationCardProgress";
+import type {
+  PresentationCardProgress,
+  PresentationProgressUpdate,
+} from "../../presentation/contracts";
 
 interface AgentRuntimeCallbacks {
   isSessionActive: (session: ChatSession) => boolean;
@@ -126,6 +130,7 @@ interface AgentRuntimeCallbacks {
       resultPreviewMaxLength?: number;
       showResultWhileCalling?: boolean;
       presentationArtifact?: PresentationToolCardArtifact;
+      presentationProgress?: PresentationCardProgress;
     },
   ) => string;
   generateId: () => string;
@@ -1407,7 +1412,10 @@ export class AgentRuntime {
     );
     const createPresentationProgress =
       (presentationCall: ToolCall, localId: string) =>
-      async (update: PresentationProgressUpdate): Promise<void> => {
+      async (
+        update: PresentationProgressUpdate,
+        cardProgress: PresentationCardProgress,
+      ): Promise<void> => {
         if (!this.callbacks.isSessionTracked(sendingSession, sessionRunId)) {
           return;
         }
@@ -1436,6 +1444,9 @@ export class AgentRuntime {
             previewPaths: update.previewPaths,
             isDraft: update.isDraft,
             localId,
+            stage: cardProgress.stage,
+            startedAt: cardProgress.startedAt,
+            updatedAt: cardProgress.updatedAt,
             iteration,
           },
         );
@@ -1571,26 +1582,36 @@ export class AgentRuntime {
       accumulatedDisplay += roundContent;
     }
 
-    const formatCallingToolCards = (calls: ToolCall[]): string =>
-      calls
-        .map((toolCall) => {
-          const localId = presentationLocalIds.get(toolCall);
-          return this.callbacks.formatToolCallCard(
-            toolCall.function.name,
-            toolCall.function.arguments,
-            "calling",
-            undefined,
-            localId ? { expandStateId: localId } : undefined,
-          );
-        })
-        .join("");
-
     let activeCallingDisplay = "";
     let activePendingDisplayToolCalls = new Map<string, ToolCall>();
     let activeProgressByToolCall = new Map<
       string,
-      PresentationProgressUpdate
+      PresentationCardProgressTracker
     >();
+    const formatCallingToolCards = (calls: ToolCall[]): string =>
+      calls
+        .map((toolCall) => {
+          const localId = presentationLocalIds.get(toolCall);
+          const progress = localId
+            ? activeProgressByToolCall.get(localId)?.progress
+            : undefined;
+          return this.callbacks.formatToolCallCard(
+            toolCall.function.name,
+            toolCall.function.arguments,
+            "calling",
+            progress?.message,
+            localId
+              ? {
+                  expandStateId: localId,
+                  showResultWhileCalling: Boolean(progress?.message),
+                  resultPreviewMaxLength: 320,
+                  presentationArtifact: findPresentationArtifact(localId),
+                  presentationProgress: progress,
+                }
+              : undefined,
+          );
+        })
+        .join("");
     const upsertPresentationArtifact = (
       artifact: PresentationToolCardArtifact,
     ): void => {
@@ -1637,7 +1658,12 @@ export class AgentRuntime {
         return;
       }
       const localId = presentationLocalIds.get(toolCall) || toolCall.id;
-      activeProgressByToolCall.set(localId, update);
+      const tracker =
+        activeProgressByToolCall.get(localId) ||
+        new PresentationCardProgressTracker();
+      activeProgressByToolCall.set(localId, tracker);
+      const nextProgress = tracker.update(update);
+      await createPresentationProgress(toolCall, localId)(update, nextProgress);
       if (update.pptxPath || update.previewPaths?.length) {
         upsertPresentationArtifact({
           toolCallId: toolCall.id,
@@ -1647,25 +1673,9 @@ export class AgentRuntime {
           isDraft: update.isDraft,
         });
       }
-      const progressCards = [...activePendingDisplayToolCalls.values()]
-        .map((pendingToolCall) => {
-          const pendingLocalId =
-            presentationLocalIds.get(pendingToolCall) || pendingToolCall.id;
-          const progress = activeProgressByToolCall.get(pendingLocalId);
-          return this.callbacks.formatToolCallCard(
-            pendingToolCall.function.name,
-            pendingToolCall.function.arguments,
-            "calling",
-            progress?.message,
-            {
-              expandStateId: pendingLocalId,
-              showResultWhileCalling: Boolean(progress),
-              resultPreviewMaxLength: 320,
-              presentationArtifact: findPresentationArtifact(pendingLocalId),
-            },
-          );
-        })
-        .join("");
+      const progressCards = formatCallingToolCards([
+        ...activePendingDisplayToolCalls.values(),
+      ]);
       const display = activeCallingDisplay + progressCards;
       assistantMessage.content = display;
       assistantMessage.streamingState = "in_progress";
@@ -1718,16 +1728,14 @@ export class AgentRuntime {
             if (request.toolCall.function.name !== "presentation") continue;
             const localId =
               presentationLocalIds.get(request.toolCall) || request.toolCall.id;
-            const eventProgress = createPresentationProgress(
-              request.toolCall,
+            activeProgressByToolCall.set(
               localId,
+              new PresentationCardProgressTracker(),
             );
             request.executionContext = {
               ...request.executionContext,
-              presentationProgress: async (update) => {
-                await eventProgress(update);
-                await renderCallingProgress(request.toolCall, update);
-              },
+              presentationProgress: (update) =>
+                renderCallingProgress(request.toolCall, update),
             };
           }
         }
@@ -1894,17 +1902,27 @@ export class AgentRuntime {
               ? null
               : parseToolError(executionResult.content);
 
+          const presentationLocalId =
+            toolName === "presentation"
+              ? presentationLocalIds.get(toolCall) || toolCall.id
+              : undefined;
           const presentationArtifact =
             toolName === "presentation"
               ? parsePresentationToolCardArtifact(
                   toolResult,
                   toolCall.id,
-                  presentationLocalIds.get(toolCall) || toolCall.id,
+                  presentationLocalId || toolCall.id,
                 )
               : undefined;
           if (presentationArtifact) {
             upsertPresentationArtifact(presentationArtifact);
           }
+          const presentationProgress = presentationLocalId
+            ? (
+                activeProgressByToolCall.get(presentationLocalId) ||
+                new PresentationCardProgressTracker()
+              ).finish(toolSucceeded)
+            : undefined;
 
           accumulatedDisplay += this.callbacks.formatToolCallCard(
             toolName,
@@ -1913,9 +1931,11 @@ export class AgentRuntime {
             toolResult,
             toolName === "presentation"
               ? {
-                  expandStateId:
-                    presentationLocalIds.get(toolCall) || toolCall.id,
-                  presentationArtifact,
+                  expandStateId: presentationLocalId,
+                  presentationArtifact:
+                    findPresentationArtifact(presentationLocalId || "") ||
+                    presentationArtifact,
+                  presentationProgress,
                   resultPreviewMaxLength: 600,
                 }
               : undefined,

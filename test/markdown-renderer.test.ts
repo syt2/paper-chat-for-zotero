@@ -177,6 +177,158 @@ describe("markdown renderer source groups", function () {
     }
   });
 
+  it("renders monotonic presentation stages, elapsed time, and the trusted draft inside one dedicated card", function () {
+    const originalPathUtils = (globalThis as { PathUtils?: unknown }).PathUtils;
+    const originalZotero = (globalThis as { Zotero?: unknown }).Zotero;
+    (globalThis as { PathUtils?: unknown }).PathUtils = {
+      toFileURI: (path: string) => `file://${path}`,
+    };
+    (globalThis as { Zotero?: unknown }).Zotero = {
+      getMainWindow: () => null,
+    };
+    const doc = new FakeDocument();
+    const root = new FakeElement(doc, "div");
+    const now = Date.now();
+    const startedAt = now - 90_000;
+    const stageStartedAt = now - 50_000;
+    const findByAttribute = (
+      node: FakeElement,
+      name: string,
+      value: string,
+    ): FakeElement | undefined => {
+      if (node.getAttribute(name) === value) return node;
+      for (const child of node.children) {
+        const found = findByAttribute(child, name, value);
+        if (found) return found;
+      }
+      return undefined;
+    };
+    const collectByAttribute = (
+      node: FakeElement,
+      name: string,
+    ): FakeElement[] => [
+      ...(node.getAttribute(name) ? [node] : []),
+      ...node.children.flatMap((child) => collectByAttribute(child, name)),
+    ];
+    try {
+      renderMarkdownToElement(
+        root as unknown as HTMLElement,
+        `<tool-call status="calling" expand-key="presentation-progress-1" presentation-phase="reviewing" presentation-stage="refining" presentation-message="正在进行视觉检查" presentation-started-at="${startedAt}" presentation-stage-started-at="${stageStartedAt}" presentation-updated-at="${now}">
+<tool-name>⏳ presentation</tool-name>
+<tool-status>调用中...</tool-status>
+<tool-result>raw tool detail that should not become the progress label</tool-result>
+</tool-call>`,
+        "message-presentation-progress-card",
+        {
+          presentationArtifactAction: {
+            openLabel: "Open PPTX",
+            draftLabel: "Open current draft",
+            onOpen: async () => undefined,
+          },
+          presentationArtifacts: new Map([
+            [
+              "presentation-progress-1",
+              {
+                toolCallId: "presentation-progress-call",
+                localId: "presentation-progress-1",
+                path: "/safe/presentations/current-draft.pptx",
+                previewPaths: ["/safe/presentations/current-draft-slide-1.png"],
+                isDraft: true,
+              },
+            ],
+          ]),
+          isTrustedPresentationPreviewPath: (path) =>
+            path.startsWith("/safe/presentations/"),
+        },
+      );
+
+      const card = findByAttribute(
+        root,
+        "data-presentation-progress-card",
+        "true",
+      );
+      const activeStage = findByAttribute(
+        root,
+        "data-presentation-stage",
+        "refining",
+      );
+      const hint = findByAttribute(
+        root,
+        "data-presentation-long-running-hint",
+        "true",
+      );
+      const elapsed = findByAttribute(
+        root,
+        "data-presentation-elapsed",
+        "true",
+      );
+      const activity = findByAttribute(
+        root,
+        "data-presentation-current-activity",
+        "true",
+      );
+      const artifact = findByAttribute(
+        root,
+        "data-presentation-artifact",
+        "true",
+      );
+
+      assert.equal(
+        card?.getAttribute("data-presentation-active-stage"),
+        "refining",
+      );
+      assert.equal(
+        activeStage?.getAttribute("data-presentation-stage-state"),
+        "active",
+      );
+      assert.equal(hint?.style.display, "block");
+      assert.match(elapsed?.textContent || "", /01:3\d/);
+      assert.include(
+        activity?.children[1]?.textContent || "",
+        "正在进行视觉检查",
+      );
+      assert.equal(artifact?.parentNode, card);
+      assert.lengthOf(
+        collectByAttribute(root, "data-presentation-artifact"),
+        1,
+      );
+      assert.notInclude(root.textContent, "%");
+    } finally {
+      (globalThis as { PathUtils?: unknown }).PathUtils = originalPathUtils;
+      (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
+    }
+  });
+
+  it("keeps ordinary tool calls on the existing generic card", function () {
+    const originalZotero = (globalThis as { Zotero?: unknown }).Zotero;
+    (globalThis as { Zotero?: unknown }).Zotero = {
+      getMainWindow: () => null,
+    };
+    const doc = new FakeDocument();
+    const root = new FakeElement(doc, "div");
+    try {
+      renderMarkdownToElement(
+        root as unknown as HTMLElement,
+        `<tool-call status="calling">
+<tool-name>⏳ search_paper_content</tool-name>
+<tool-status>调用中...</tool-status>
+</tool-call>`,
+        "message-generic-tool-card",
+      );
+      const hasPresentationCard = (node: FakeElement): boolean =>
+        node.getAttribute("data-presentation-progress-card") === "true" ||
+        node.children.some(hasPresentationCard);
+      assert.isFalse(hasPresentationCard(root));
+      assert.include(
+        root.children[0]?.children[0]?.children[0]?.children[0]?.textContent ||
+          "",
+        "search_paper_content",
+      );
+    } finally {
+      (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
+    }
+  });
+
   it("does not load app-owned presentation previews outside the trusted presentation root", function () {
     const originalPathUtils = (globalThis as { PathUtils?: unknown }).PathUtils;
     const originalZotero = (globalThis as { Zotero?: unknown }).Zotero;

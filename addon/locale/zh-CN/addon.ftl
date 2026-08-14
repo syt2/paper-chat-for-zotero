@@ -295,6 +295,16 @@ paperchat-chat-user-input-too-few = 至少选择 { $count } 项。
 paperchat-chat-presentation-open = 打开 PPTX
 paperchat-chat-presentation-open-draft = 打开当前草稿
 paperchat-chat-presentation-open-failed = 无法打开这个 PPTX
+paperchat-chat-presentation-progress-title = 生成 PPT
+paperchat-chat-presentation-progress-elapsed = 已用时 { $time }
+paperchat-chat-presentation-progress-current = 正在进行{ $stage }
+paperchat-chat-presentation-progress-long-running = { $stage }通常需要较长时间，任务仍在运行
+paperchat-chat-presentation-progress-stage-preparing = 准备论文
+paperchat-chat-presentation-progress-stage-planning = 规划结构
+paperchat-chat-presentation-progress-stage-extracting = 提取素材
+paperchat-chat-presentation-progress-stage-drafting = 生成草稿
+paperchat-chat-presentation-progress-stage-refining = 视觉优化
+paperchat-chat-presentation-progress-stage-saving = 保存到 Zotero
 
 # Presentation entry and launch gate
 paperchat-presentation-generate = 生成 PPT

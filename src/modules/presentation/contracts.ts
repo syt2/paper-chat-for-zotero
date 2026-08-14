@@ -24,6 +24,29 @@ export interface PresentationProgressUpdate {
   total?: number;
 }
 
+/** Stable, user-facing stages for the dedicated presentation tool card. */
+export type PresentationCardStage =
+  | "preparing"
+  | "planning"
+  | "extracting"
+  | "drafting"
+  | "refining"
+  | "saving";
+
+/**
+ * App-authored display state derived from the lower-level renderer phases.
+ * The stage is monotonic even when an internal repair loops back through
+ * planning or rendering.
+ */
+export interface PresentationCardProgress {
+  phase: PresentationProgressPhase;
+  stage: PresentationCardStage;
+  message: string;
+  startedAt: number;
+  stageStartedAt: number;
+  updatedAt: number;
+}
+
 export type PresentationProgressCallback = (
   update: PresentationProgressUpdate,
 ) => void | Promise<void>;

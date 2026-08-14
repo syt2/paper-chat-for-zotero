@@ -295,6 +295,16 @@ paperchat-chat-user-input-too-few = Select at least { $count } options.
 paperchat-chat-presentation-open = Open PPTX
 paperchat-chat-presentation-open-draft = Open current draft
 paperchat-chat-presentation-open-failed = Could not open this PPTX
+paperchat-chat-presentation-progress-title = Generate PPT
+paperchat-chat-presentation-progress-elapsed = Elapsed { $time }
+paperchat-chat-presentation-progress-current = Working on { $stage }
+paperchat-chat-presentation-progress-long-running = { $stage } usually takes a while. The task is still running.
+paperchat-chat-presentation-progress-stage-preparing = Prepare paper
+paperchat-chat-presentation-progress-stage-planning = Plan structure
+paperchat-chat-presentation-progress-stage-extracting = Extract assets
+paperchat-chat-presentation-progress-stage-drafting = Build draft
+paperchat-chat-presentation-progress-stage-refining = Visual polish
+paperchat-chat-presentation-progress-stage-saving = Save to Zotero
 
 # Presentation entry and launch gate
 paperchat-presentation-generate = Generate PPT

@@ -31,6 +31,7 @@ import type {
   AIProvider,
   PaperChatProviderConfig,
 } from "../../types/provider";
+import type { PresentationCardProgress } from "../presentation/contracts";
 import {
   MissingActiveSessionError,
   SessionLoadError,
@@ -3058,6 +3059,7 @@ export class ChatManager {
       resultPreviewMaxLength?: number;
       showResultWhileCalling?: boolean;
       presentationArtifact?: PresentationToolCardArtifact;
+      presentationProgress?: PresentationCardProgress;
     },
   ): string {
     const statusIcon =
@@ -3089,6 +3091,16 @@ export class ChatManager {
     const escapedExpandStateId = options?.expandStateId
       ? this.escapeXml(options.expandStateId)
       : "";
+    const presentationProgress = options?.presentationProgress;
+    const escapedPresentationPhase = presentationProgress?.phase
+      ? this.escapeXml(presentationProgress.phase)
+      : "";
+    const escapedPresentationStage = presentationProgress?.stage
+      ? this.escapeXml(presentationProgress.stage)
+      : "";
+    const escapedPresentationMessage = presentationProgress
+      ? this.escapeXml(presentationProgress.message)
+      : "";
     const resultPreviewMaxLength = options?.resultPreviewMaxLength ?? 100;
     const escapedResult = resultPreview
       ? this.escapeXml(
@@ -3119,6 +3131,12 @@ export class ChatManager {
     // 使用特殊标记格式，便于 MessageRenderer 识别和渲染
     let card = `\n<tool-call status="${status}"${
       escapedExpandStateId ? ` expand-key="${escapedExpandStateId}"` : ""
+    }${
+      presentationProgress &&
+      escapedPresentationPhase &&
+      escapedPresentationStage
+        ? ` presentation-phase="${escapedPresentationPhase}" presentation-stage="${escapedPresentationStage}" presentation-message="${escapedPresentationMessage}" presentation-started-at="${presentationProgress.startedAt}" presentation-stage-started-at="${presentationProgress.stageStartedAt}" presentation-updated-at="${presentationProgress.updatedAt}"`
+        : ""
     }>\n`;
     card += `<tool-name>${statusIcon} ${escapedToolName}</tool-name>\n`;
     if (escapedArgs) {

@@ -26,6 +26,8 @@ export {
 export { normalizePresentationToolCall } from "./PresentationToolCallPolicy";
 export type {
   PresentationCapabilityTestOptions,
+  PresentationCardProgress,
+  PresentationCardStage,
   PresentationProgressCallback,
   PresentationProgressPhase,
   PresentationProgressUpdate,

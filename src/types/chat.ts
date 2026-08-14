@@ -296,6 +296,10 @@ export interface AgentRuntimeToolProgressEvent extends AgentRuntimeEventBase {
   previewPaths?: string[];
   isDraft?: boolean;
   localId?: string;
+  /** Monotonic presentation-card stage derived by the app runtime. */
+  stage?: import("../modules/presentation/contracts").PresentationCardStage;
+  startedAt?: number;
+  updatedAt?: number;
 }
 
 export interface AgentRuntimeToolCompletedEvent extends AgentRuntimeEventBase {

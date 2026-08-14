@@ -4531,6 +4531,10 @@ describe("agent runtime plan semantics", function () {
       status: string;
       result?: string;
       path?: string;
+      phase?: string;
+      stage?: string;
+      startedAt?: number;
+      updatedAt?: number;
     }> = [];
     const runtime = new AgentRuntime(
       {
@@ -4563,12 +4567,24 @@ describe("agent runtime plan semantics", function () {
           _args: string,
           status: string,
           result?: string,
-          options?: { presentationArtifact?: { path?: string } },
+          options?: {
+            presentationArtifact?: { path?: string };
+            presentationProgress?: {
+              phase: string;
+              stage: string;
+              startedAt: number;
+              updatedAt: number;
+            };
+          },
         ) => {
           formattedCards.push({
             status,
             result,
             path: options?.presentationArtifact?.path,
+            phase: options?.presentationProgress?.phase,
+            stage: options?.presentationProgress?.stage,
+            startedAt: options?.presentationProgress?.startedAt,
+            updatedAt: options?.presentationProgress?.updatedAt,
           });
           return `<presentation status="${status}">${result || ""}</presentation>`;
         },
@@ -4582,6 +4598,12 @@ describe("agent runtime plan semantics", function () {
             phase: "planning",
             message: "正在规划 6 页结构",
             current: 2,
+            total: 9,
+          });
+          await requests[0].executionContext.presentationProgress({
+            phase: "resolving_media",
+            message: "正在提取论文证据图",
+            current: 3,
             total: 9,
           });
           await requests[0].executionContext.presentationProgress({
@@ -4602,6 +4624,30 @@ describe("agent runtime plan semantics", function () {
             },
             "the file milestone must reach storage before the renderer continues",
           );
+          await requests[0].executionContext.presentationProgress({
+            phase: "reviewing",
+            message: "正在进行视觉检查",
+            pptxPath: "/safe/presentation-draft.pptx",
+            isDraft: true,
+          });
+          await requests[0].executionContext.presentationProgress({
+            phase: "repairing",
+            message: "正在改进版式与内容",
+            pptxPath: "/safe/presentation-draft.pptx",
+            isDraft: true,
+          });
+          await requests[0].executionContext.presentationProgress({
+            phase: "rendering",
+            message: "正在生成改进版 PPT",
+            pptxPath: "/safe/presentation-draft.pptx",
+            isDraft: true,
+          });
+          await requests[0].executionContext.presentationProgress({
+            phase: "attaching",
+            message: "正在挂载到 Zotero",
+            pptxPath: "/safe/presentation-draft.pptx",
+            isDraft: true,
+          });
           return [
             {
               toolCall: requests[0].toolCall,
@@ -4692,7 +4738,57 @@ describe("agent runtime plan semantics", function () {
         toolProgressEvents.map((event) =>
           event.type === "tool_progress" ? event.phase : "",
         ),
-        ["planning", "rendering"],
+        [
+          "planning",
+          "resolving_media",
+          "rendering",
+          "reviewing",
+          "repairing",
+          "rendering",
+          "attaching",
+        ],
+      );
+      assert.deepEqual(
+        toolProgressEvents.map((event) =>
+          event.type === "tool_progress" ? event.stage : undefined,
+        ),
+        [
+          "planning",
+          "extracting",
+          "drafting",
+          "refining",
+          "refining",
+          "refining",
+          "saving",
+        ],
+      );
+      const callingStages = formattedCards
+        .filter((card) => card.status === "calling" && card.stage)
+        .map((card) => card.stage);
+      const stageOrder = [
+        "preparing",
+        "planning",
+        "extracting",
+        "drafting",
+        "refining",
+        "saving",
+      ];
+      assert.isTrue(
+        callingStages.every(
+          (stage, index) =>
+            index === 0 ||
+            stageOrder.indexOf(stage || "") >=
+              stageOrder.indexOf(callingStages[index - 1] || ""),
+        ),
+      );
+      assert.isTrue(
+        toolProgressEvents.every(
+          (event) =>
+            event.type !== "tool_progress" ||
+            (typeof event.startedAt === "number" &&
+              typeof event.updatedAt === "number" &&
+              event.updatedAt >= event.startedAt),
+        ),
       );
       assert.equal(
         session.executionPlan?.steps.find(

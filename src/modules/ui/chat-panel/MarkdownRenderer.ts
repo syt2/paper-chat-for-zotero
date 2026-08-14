@@ -11,6 +11,7 @@ import { HTML_NS } from "./types";
 import { isDarkMode } from "./ChatPanelTheme";
 import type { EvidenceRecord } from "../../../types/evidence";
 import type { PresentationToolCardArtifact } from "../../../types/chat";
+import type { PresentationCardProgress } from "../../presentation/contracts";
 import { normalizeEvidenceRecords } from "../../chat/evidence";
 import {
   getToolCallCardExpandKey,
@@ -20,6 +21,10 @@ import {
 } from "./ToolCallGroupExpandState";
 import { AGENT_MAX_PLANNING_ITERATIONS_SETTINGS_HREF } from "../../../utils/internalLinks";
 import { openAgentMaxPlanningIterationsSettings } from "../../preferences/navigation";
+import {
+  buildPresentationProgressCardElement,
+  parsePresentationCardProgress,
+} from "./PresentationProgressCard";
 
 // Initialize markdown-it with XHTML output
 const md = new MarkdownIt({
@@ -224,6 +229,7 @@ interface ToolCallCardData {
   toolArgs?: string;
   statusText: string;
   toolResult?: string;
+  presentationProgress?: PresentationCardProgress;
 }
 
 type ToolCallFragment =
@@ -503,7 +509,7 @@ export function stripIncompleteTrailingToolCall(content: string): string {
 function parseToolCallFragments(content: string): ToolCallFragment[] {
   const stableContent = stripIncompleteTrailingToolCall(content);
   const toolCallRegex =
-    /<tool-call status="(calling|completed|error)"(?: expand-key="([^"]*)")?>\s*<tool-name>([^<]*)<\/tool-name>\s*(?:<tool-args>([^<]*)<\/tool-args>\s*)?<tool-status>([^<]*)<\/tool-status>\s*(?:<tool-result>([^<]*)<\/tool-result>\s*)?(?:<presentation-artifact([^>]*)>\s*([\s\S]*?)<\/presentation-artifact>\s*)?<\/tool-call>/g;
+    /<tool-call status="(calling|completed|error)"(?: expand-key="([^"]*)")?(?: presentation-phase="([^"]*)" presentation-stage="([^"]*)" presentation-message="([^"]*)" presentation-started-at="(\d+)" presentation-stage-started-at="(\d+)" presentation-updated-at="(\d+)")?>\s*<tool-name>([^<]*)<\/tool-name>\s*(?:<tool-args>([^<]*)<\/tool-args>\s*)?<tool-status>([^<]*)<\/tool-status>\s*(?:<tool-result>([^<]*)<\/tool-result>\s*)?(?:<presentation-artifact([^>]*)>\s*([\s\S]*?)<\/presentation-artifact>\s*)?<\/tool-call>/g;
 
   const fragments: ToolCallFragment[] = [];
   let lastIndex = 0;
@@ -520,8 +526,21 @@ function parseToolCallFragments(content: string): ToolCallFragment[] {
       }
     }
 
-    const [, status, expandKey, toolName, toolArgs, statusText, toolResult] =
-      match;
+    const [
+      ,
+      status,
+      expandKey,
+      presentationPhase,
+      presentationStage,
+      presentationMessage,
+      presentationStartedAt,
+      presentationStageStartedAt,
+      presentationUpdatedAt,
+      toolName,
+      toolArgs,
+      statusText,
+      toolResult,
+    ] = match;
 
     fragments.push({
       kind: "tool",
@@ -532,6 +551,14 @@ function parseToolCallFragments(content: string): ToolCallFragment[] {
         toolArgs,
         statusText,
         toolResult,
+        presentationProgress: parsePresentationCardProgress(
+          presentationPhase,
+          presentationStage,
+          unescapeXml(presentationMessage || ""),
+          presentationStartedAt,
+          presentationStageStartedAt,
+          presentationUpdatedAt,
+        ),
       },
     });
 
@@ -559,7 +586,27 @@ function buildToolCallCardElement(
   doc: Document,
   entry: ToolCallCardData,
   expandStateKey: string | null = null,
+  presentationArtifact?: PresentationToolCardArtifact,
+  options: MarkdownRenderOptions = {},
 ): HTMLElement {
+  if (entry.presentationProgress) {
+    return buildPresentationProgressCardElement(
+      doc,
+      {
+        status: entry.status,
+        progress: entry.presentationProgress,
+        errorText: unescapeXml(entry.toolResult || entry.statusText || ""),
+      },
+      presentationArtifact
+        ? buildPresentationArtifactElement(
+            doc,
+            presentationArtifact,
+            options,
+            true,
+          )
+        : undefined,
+    );
+  }
   const dark = isDarkMode();
   const colors = dark ? toolCallStyles.dark : toolCallStyles.light;
   const { status, toolName, toolArgs, statusText, toolResult } = entry;
@@ -722,6 +769,7 @@ function buildPresentationArtifactElement(
   doc: Document,
   artifact: PresentationToolCardArtifact,
   options: MarkdownRenderOptions,
+  embedded = false,
 ): HTMLElement {
   const dark = isDarkMode();
   const colors = dark ? toolCallStyles.dark : toolCallStyles.light;
@@ -741,11 +789,12 @@ function buildPresentationArtifactElement(
     display: "flex",
     flexDirection: "column",
     gap: "8px",
-    margin: "8px 0",
-    padding: "9px 12px 10px",
-    border: `1px solid ${colors.cardBorder}`,
-    borderRadius: "8px",
-    background: colors.resultBg,
+    margin: embedded ? "2px 0 0" : "8px 0",
+    padding: embedded ? "10px 0 0" : "9px 12px 10px",
+    border: embedded ? "none" : `1px solid ${colors.cardBorder}`,
+    borderTop: `1px solid ${colors.cardBorder}`,
+    borderRadius: embedded ? "0" : "8px",
+    background: embedded ? "transparent" : colors.resultBg,
     overflow: "hidden",
   });
 
@@ -835,8 +884,13 @@ function renderPresentationArtifacts(
   doc: Document,
   parent: HTMLElement,
   options: MarkdownRenderOptions,
+  renderedArtifactKeys: ReadonlySet<string>,
 ): void {
-  for (const artifact of options.presentationArtifacts?.values() || []) {
+  for (const [
+    artifactKey,
+    artifact,
+  ] of options.presentationArtifacts?.entries() || []) {
+    if (renderedArtifactKeys.has(artifactKey)) continue;
     parent.appendChild(
       buildPresentationArtifactElement(doc, artifact, options),
     );
@@ -855,21 +909,36 @@ function renderToolCallGroup(
   entries: ToolCallCardData[],
   messageId: string | undefined,
   groupIndex: number,
+  options: MarkdownRenderOptions,
+  renderedArtifactKeys: Set<string>,
 ): void {
   const getEntryExpandStateKey = (entry: ToolCallCardData): string | null =>
     getToolCallCardExpandKey(
       messageId,
       entry.expandKey ? unescapeXml(entry.expandKey) : undefined,
     );
+  const buildEntryCard = (entry: ToolCallCardData): HTMLElement => {
+    const artifactKey =
+      entry.presentationProgress && entry.expandKey
+        ? unescapeXml(entry.expandKey)
+        : undefined;
+    const artifact = artifactKey
+      ? options.presentationArtifacts?.get(artifactKey)
+      : undefined;
+    if (artifact && artifactKey) {
+      renderedArtifactKeys.add(artifactKey);
+    }
+    return buildToolCallCardElement(
+      doc,
+      entry,
+      getEntryExpandStateKey(entry),
+      artifact,
+      options,
+    );
+  };
 
   if (entries.length === 1) {
-    parent.appendChild(
-      buildToolCallCardElement(
-        doc,
-        entries[0],
-        getEntryExpandStateKey(entries[0]),
-      ),
-    );
+    parent.appendChild(buildEntryCard(entries[0]));
     return;
   }
 
@@ -904,9 +973,7 @@ function renderToolCallGroup(
   const earlierBody = doc.createElementNS(HTML_NS, "div") as HTMLElement;
   earlierBody.style.paddingLeft = "4px";
   for (const entry of earlier) {
-    earlierBody.appendChild(
-      buildToolCallCardElement(doc, entry, getEntryExpandStateKey(entry)),
-    );
+    earlierBody.appendChild(buildEntryCard(entry));
   }
   details.appendChild(earlierBody);
 
@@ -922,9 +989,7 @@ function renderToolCallGroup(
   }
 
   parent.appendChild(details);
-  parent.appendChild(
-    buildToolCallCardElement(doc, latest, getEntryExpandStateKey(latest)),
-  );
+  parent.appendChild(buildEntryCard(latest));
 }
 
 function renderMarkdownFragment(
@@ -1426,6 +1491,7 @@ function renderToolCallCards(
   content: string,
   messageId: string | undefined,
   options: MarkdownRenderOptions = {},
+  renderedArtifactKeys: Set<string> = new Set(),
 ): string {
   const fragments = parseToolCallFragments(content);
   if (fragments.length === 1 && fragments[0].kind === "markdown") {
@@ -1452,7 +1518,15 @@ function renderToolCallCards(
     }
 
     if (entries.length > 0) {
-      renderToolCallGroup(doc, parent, entries, messageId, groupIndex);
+      renderToolCallGroup(
+        doc,
+        parent,
+        entries,
+        messageId,
+        groupIndex,
+        options,
+        renderedArtifactKeys,
+      );
       groupIndex++;
     }
   }
@@ -1573,18 +1647,25 @@ export function renderMarkdownToElement(
   element.textContent = "";
 
   // First, check for and render tool call cards
+  const renderedPresentationArtifactKeys = new Set<string>();
   const remainingContent = renderToolCallCards(
     doc,
     element,
     markdownContent,
     messageId,
     options,
+    renderedPresentationArtifactKeys,
   );
 
   // Presentation artifacts are a privileged, app-owned side channel. Render
   // them independently of assistant-authored markup so copied or fabricated
   // `<presentation-artifact>` tags cannot create or relocate file actions.
-  renderPresentationArtifacts(doc, element, options);
+  renderPresentationArtifacts(
+    doc,
+    element,
+    options,
+    renderedPresentationArtifactKeys,
+  );
 
   if (!remainingContent) {
     return;
