@@ -7,24 +7,27 @@ import {
   PRESENTATION_MINIMUM_REMAINING_TOKENS,
   type PresentationLaunchGuardDialogs,
 } from "../src/modules/presentation/PresentationLaunchGuard.ts";
+import type { PresentationLaunchSettings } from "../src/modules/presentation/PresentationLaunchSettings.ts";
+
+const DEFAULT_SETTINGS: PresentationLaunchSettings = {
+  slideCount: 6,
+  designSystem: "teal-green-academic-defense",
+};
 
 interface GuardHarnessOptions {
   providerId?: string;
   loggedIn?: boolean;
   quota?: number;
   subscriptionRemaining?: number;
-  refreshResult?: {
-    userInfo: boolean;
-    subscriptionInfo: boolean;
-  };
+  failIfBalanceRefreshed?: boolean;
   switchAccepted?: boolean;
   loginAccepted?: boolean;
-  warningSuppressed?: boolean;
-  warningAccepted?: boolean;
-  providerAfterWarning?: string;
-  loggedInAfterWarning?: boolean;
-  quotaAfterWarning?: number;
+  settingsAccepted?: boolean;
+  providerAfterSettings?: string;
+  loggedInAfterSettings?: boolean;
+  quotaAfterSettings?: number;
   paperChatReady?: boolean;
+  settings?: PresentationLaunchSettings;
 }
 
 function createGuardHarness(options: GuardHarnessOptions = {}) {
@@ -44,18 +47,20 @@ function createGuardHarness(options: GuardHarnessOptions = {}) {
     showInsufficientBalance: async () => {
       calls.push("balance-dialog");
     },
-    confirmHighTokenConsumption: async () => {
-      calls.push("cost-dialog");
-      if (options.providerAfterWarning) {
-        providerId = options.providerAfterWarning;
+    configurePresentation: async () => {
+      calls.push("settings-dialog");
+      if (options.providerAfterSettings) {
+        providerId = options.providerAfterSettings;
       }
-      if (options.loggedInAfterWarning !== undefined) {
-        loggedIn = options.loggedInAfterWarning;
+      if (options.loggedInAfterSettings !== undefined) {
+        loggedIn = options.loggedInAfterSettings;
       }
-      if (options.quotaAfterWarning !== undefined) {
-        quota = options.quotaAfterWarning;
+      if (options.quotaAfterSettings !== undefined) {
+        quota = options.quotaAfterSettings;
       }
-      return options.warningAccepted ?? true;
+      return options.settingsAccepted === false
+        ? null
+        : options.settings || DEFAULT_SETTINGS;
     },
   };
 
@@ -63,12 +68,10 @@ function createGuardHarness(options: GuardHarnessOptions = {}) {
     isLoggedIn: () => loggedIn,
     refreshUserInfo: async () => {
       calls.push("refresh-balance");
-      return (
-        options.refreshResult ?? {
-          userInfo: true,
-          subscriptionInfo: true,
-        }
-      );
+      if (options.failIfBalanceRefreshed) {
+        throw new Error("presentation launch must use cached balance");
+      }
+      return { userInfo: true, subscriptionInfo: true };
     },
     getBalance: () => ({ quota, usedQuota: 0 }),
     getSubscriptionUsageSummary: () =>
@@ -109,7 +112,6 @@ function createGuardHarness(options: GuardHarnessOptions = {}) {
           loggedIn = options.loginAccepted ?? true;
           return loggedIn;
         },
-        isCostWarningSuppressed: () => options.warningSuppressed ?? false,
       }),
   };
 }
@@ -163,7 +165,7 @@ describe("presentation launch guard", function () {
     assert.isFalse(hasEnoughPresentationBalance(splitPools));
   });
 
-  it("switches to PaperChat before refreshing balance", async function () {
+  it("switches to PaperChat before using the cached balance", async function () {
     const harness = createGuardHarness({ providerId: "openai" });
     assert.deepEqual(await harness.run(), {
       allowed: true,
@@ -172,13 +174,12 @@ describe("presentation launch guard", function () {
         subscriptionRemaining: 0,
         available: 1_000_001,
       },
+      settings: DEFAULT_SETTINGS,
     });
     assert.deepEqual(harness.calls, [
       "provider-dialog",
       "switch:paperchat",
-      "refresh-balance",
-      "cost-dialog",
-      "refresh-balance",
+      "settings-dialog",
     ]);
   });
 
@@ -193,9 +194,7 @@ describe("presentation launch guard", function () {
       "provider-dialog",
       "switch:paperchat",
       "login-dialog",
-      "refresh-balance",
-      "cost-dialog",
-      "refresh-balance",
+      "settings-dialog",
     ]);
   });
 
@@ -217,7 +216,7 @@ describe("presentation launch guard", function () {
       allowed: false,
       reason: "provider",
     });
-    assert.deepEqual(harness.calls, ["refresh-balance", "cost-dialog"]);
+    assert.deepEqual(harness.calls, ["settings-dialog"]);
   });
 
   it("requires login before checking balance", async function () {
@@ -232,126 +231,116 @@ describe("presentation launch guard", function () {
     assert.deepEqual(harness.calls, ["login-dialog"]);
   });
 
-  it("blocks a freshly refreshed balance of 999,999", async function () {
+  it("blocks a cached balance of 999,999", async function () {
     const harness = createGuardHarness({ quota: 999_999 });
     assert.deepEqual(await harness.run(), {
       allowed: false,
       reason: "balance",
     });
-    assert.deepEqual(harness.calls, ["refresh-balance", "balance-dialog"]);
+    assert.deepEqual(harness.calls, ["balance-dialog"]);
   });
 
-  it("blocks a freshly refreshed balance of 1,000,000", async function () {
+  it("blocks a cached balance of 1,000,000", async function () {
     const harness = createGuardHarness({ quota: 1_000_000 });
     assert.deepEqual(await harness.run(), {
       allowed: false,
       reason: "balance",
     });
-    assert.deepEqual(harness.calls, ["refresh-balance", "balance-dialog"]);
+    assert.deepEqual(harness.calls, ["balance-dialog"]);
   });
 
-  it("allows 1,000,001 tokens after the cost confirmation", async function () {
+  it("allows 1,000,001 cached tokens without refreshing the account", async function () {
+    const harness = createGuardHarness({
+      quota: 1_000_001,
+      failIfBalanceRefreshed: true,
+    });
+    assert.isTrue((await harness.run()).allowed);
+    assert.deepEqual(harness.calls, ["settings-dialog"]);
+  });
+
+  it("shows the settings and high-token warning on every launch", async function () {
     const harness = createGuardHarness({ quota: 1_000_001 });
+
     assert.isTrue((await harness.run()).allowed);
-    assert.deepEqual(harness.calls, [
-      "refresh-balance",
-      "cost-dialog",
-      "refresh-balance",
-    ]);
+    assert.isTrue((await harness.run()).allowed);
+    assert.deepEqual(harness.calls, ["settings-dialog", "settings-dialog"]);
   });
 
-  it("does not let the cost-warning preference bypass balance checks", async function () {
-    const harness = createGuardHarness({
-      quota: 1_000_000,
-      warningSuppressed: true,
-    });
-    assert.deepEqual(await harness.run(), {
-      allowed: false,
-      reason: "balance",
-    });
-    assert.deepEqual(harness.calls, ["refresh-balance", "balance-dialog"]);
-  });
-
-  it("skips only the high-consumption warning when suppressed", async function () {
+  it("does not authorize the turn if the provider changes while settings are open", async function () {
     const harness = createGuardHarness({
       quota: 1_000_001,
-      warningSuppressed: true,
-    });
-    assert.isTrue((await harness.run()).allowed);
-    assert.deepEqual(harness.calls, ["refresh-balance"]);
-  });
-
-  it("does not authorize the turn if the provider changes while the warning is open", async function () {
-    const harness = createGuardHarness({
-      quota: 1_000_001,
-      providerAfterWarning: "openai",
+      providerAfterSettings: "openai",
     });
     assert.deepEqual(await harness.run(), {
       allowed: false,
       reason: "provider",
     });
-    assert.deepEqual(harness.calls, ["refresh-balance", "cost-dialog"]);
+    assert.deepEqual(harness.calls, ["settings-dialog"]);
   });
 
-  it("does not authorize the turn if login expires while the warning is open", async function () {
+  it("does not authorize the turn if login expires while settings are open", async function () {
     const harness = createGuardHarness({
       quota: 1_000_001,
-      loggedInAfterWarning: false,
+      loggedInAfterSettings: false,
     });
     assert.deepEqual(await harness.run(), {
       allowed: false,
       reason: "login",
     });
-    assert.deepEqual(harness.calls, ["refresh-balance", "cost-dialog"]);
+    assert.deepEqual(harness.calls, ["settings-dialog"]);
   });
 
-  it("rechecks balance after the cost warning before authorizing the turn", async function () {
+  it("rechecks balance after settings confirmation before authorizing the turn", async function () {
     const harness = createGuardHarness({
       quota: 1_000_001,
-      quotaAfterWarning: 1_000_000,
+      quotaAfterSettings: 1_000_000,
     });
     assert.deepEqual(await harness.run(), {
       allowed: false,
       reason: "balance",
     });
-    assert.deepEqual(harness.calls, [
-      "refresh-balance",
-      "cost-dialog",
-      "refresh-balance",
-      "balance-dialog",
-    ]);
+    assert.deepEqual(harness.calls, ["settings-dialog", "balance-dialog"]);
   });
 
-  it("blocks stale subscription data when ordinary quota is insufficient", async function () {
+  it("uses the cached subscription balance without a network refresh", async function () {
     const harness = createGuardHarness({
       quota: 10,
       subscriptionRemaining: 10_000_000,
-      refreshResult: { userInfo: true, subscriptionInfo: false },
-    });
-    assert.deepEqual(await harness.run(), {
-      allowed: false,
-      reason: "balance_refresh",
-    });
-    assert.deepEqual(harness.calls, [
-      "refresh-balance",
-      "refresh-failed-dialog",
-    ]);
-  });
-
-  it("allows fresh ordinary quota even if the optional subscription refresh failed", async function () {
-    const harness = createGuardHarness({
-      quota: 1_000_001,
-      subscriptionRemaining: 10,
-      refreshResult: { userInfo: true, subscriptionInfo: false },
+      failIfBalanceRefreshed: true,
     });
     const result = await harness.run();
     assert.deepEqual(result, {
       allowed: true,
       balance: {
-        quota: 1_000_001,
-        subscriptionRemaining: 0,
-        available: 1_000_001,
+        quota: 10,
+        subscriptionRemaining: 10_000_000,
+        available: 10_000_000,
       },
+      settings: DEFAULT_SETTINGS,
     });
+    assert.deepEqual(harness.calls, ["settings-dialog"]);
+  });
+
+  it("returns the selected slide count and design system", async function () {
+    const settings: PresentationLaunchSettings = {
+      slideCount: 15,
+      designSystem: "dark-editorial",
+    };
+    const result = await createGuardHarness({ settings }).run();
+
+    assert.isTrue(result.allowed);
+    if (result.allowed) {
+      assert.deepEqual(result.settings, settings);
+    }
+  });
+
+  it("cancels immediately when settings are dismissed", async function () {
+    const harness = createGuardHarness({ settingsAccepted: false });
+
+    assert.deepEqual(await harness.run(), {
+      allowed: false,
+      reason: "cancelled",
+    });
+    assert.deepEqual(harness.calls, ["settings-dialog"]);
   });
 });

@@ -12,6 +12,7 @@ describe("presentation planner", function () {
       sourceItemKey: "SBZ2M99R",
       language: "zh-CN" as const,
       designSystem: "teal-green-academic-defense" as const,
+      slideCount: 6 as const,
     },
     paper: {
       metadata: {
@@ -58,7 +59,7 @@ describe("presentation planner", function () {
   it("keeps visual quality and evidence rules inside the planner", function () {
     const prompt = buildPresentationPlannerSystemPrompt();
 
-    assert.include(prompt, "exactly five content slides");
+    assert.include(prompt, "exactly 5 content slides");
     assert.include(prompt, "at least three real PDF figure placements");
     assert.include(
       prompt,
@@ -84,7 +85,7 @@ describe("presentation planner", function () {
       "Tiny or clipped axis labels are a release-blocking defect",
     );
     assert.include(prompt, "first content slide must make the research gap");
-    assert.include(prompt, "content slides three and four");
+    assert.include(prompt, "content slides 3 through 4");
     assert.include(prompt, "structured experimental or ablation result");
     assert.include(prompt, "pair it with a distinct non-table PDF figure");
     assert.include(
@@ -120,6 +121,46 @@ describe("presentation planner", function () {
       "rank real-world samples, predictions, retrievals, and error-case panels above learned filters",
     );
     assert.include(prompt, "Return one JSON object only");
+  });
+
+  it("turns preset and custom lengths into exact planner contracts", function () {
+    for (const [slideCount, contentSlideCount] of [
+      [4, 3],
+      [6, 5],
+      [8, 7],
+      [10, 9],
+      [15, 14],
+      [30, 29],
+    ] as const) {
+      const systemPrompt = buildPresentationPlannerSystemPrompt(slideCount);
+      const userPrompt = buildPresentationPlannerUserPrompt({
+        ...request,
+        intent: { ...request.intent, slideCount },
+      });
+
+      assert.include(
+        systemPrompt,
+        `exactly ${contentSlideCount} content slides`,
+      );
+      assert.include(
+        systemPrompt,
+        `Set request-level slideCount to ${slideCount}`,
+      );
+      assert.include(userPrompt, `Selected total slide count: ${slideCount}`);
+      assert.include(
+        userPrompt,
+        `Required content slide count: exactly ${contentSlideCount}`,
+      );
+    }
+  });
+
+  it("uses a coherent compact evidence arc for a four-page deck", function () {
+    const prompt = buildPresentationPlannerSystemPrompt(4);
+
+    assert.include(prompt, "three content slides");
+    assert.include(prompt, "On content slide 2");
+    assert.notInclude(prompt, "slides 3 through 2");
+    assert.include(prompt, "Use at least 3 different composition silhouettes");
   });
 
   it("states the resolved Zotero interface language in the planner prompt", function () {

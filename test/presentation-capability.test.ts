@@ -52,6 +52,15 @@ describe("presentation capability", function () {
     assert.property(definition.function.parameters.properties, "sourceItemKey");
     assert.property(definition.function.parameters.properties, "language");
     assert.property(definition.function.parameters.properties, "instructions");
+    assert.property(definition.function.parameters.properties, "slideCount");
+    assert.equal(
+      definition.function.parameters.properties.slideCount.minimum,
+      4,
+    );
+    assert.equal(
+      definition.function.parameters.properties.slideCount.maximum,
+      30,
+    );
     assert.notProperty(definition.function.parameters.properties, "slides");
     assert.isBelow(
       JSON.stringify(definition.function.parameters).length,
@@ -172,6 +181,77 @@ describe("presentation capability", function () {
 
     assert.equal(normalized.language, "zh-CN");
     assert.deepEqual(validatePresentationQuality(normalized as any), []);
+  });
+
+  it("keeps an explicitly selected page count blocking in production mode", function () {
+    for (const slideCount of [4, 6, 8, 10, 15, 30] as const) {
+      const issues = validatePresentationQuality({
+        title: "Selected length deck",
+        sourceItemKey: "SBZ2M99R",
+        slideCount,
+        slides: Array.from({ length: slideCount - 2 }, (_, index) => ({
+          title: `Evidence ${index + 1}`,
+          layout: "figure",
+          figure: {
+            page: index + 1,
+            captionHint: `Figure ${index + 1}: evidence`,
+          },
+        })),
+      } as any);
+      const blocking = filterBlockingPresentationQualityIssues(issues, false);
+
+      assert.include(
+        blocking.join("\n"),
+        `selected presentation length requires exactly ${slideCount - 1} content slides`,
+      );
+    }
+  });
+
+  it("accepts the middle slide as the evidence arc in a four-page deck", function () {
+    const issues = validatePresentationQuality({
+      title: "Compact paper deck",
+      sourceItemKey: "SBZ2M99R",
+      slideCount: 4,
+      coverMetrics: [
+        { value: "1.2M", label: "images" },
+        { value: "15.3%", label: "top-5 error" },
+      ],
+      slides: [
+        {
+          title: "The baseline misses the core signal",
+          layout: "comparison",
+          comparison: {
+            left: { title: "Baseline", bullets: ["Local context"] },
+            right: { title: "Paper", bullets: ["Global context"] },
+          },
+        },
+        {
+          title: "The method improves the measured outcome",
+          layout: "ablation",
+          chart: {
+            type: "bar",
+            labels: ["Baseline", "Paper"],
+            values: [20.1, 15.3],
+          },
+        },
+        {
+          title: "The evidence defines the next questions",
+          layout: "conclusion",
+          bullets: ["Finding one", "Finding two", "Finding three"],
+          callouts: [{ text: "Limit one" }, { text: "Limit two" }],
+          timeline: [
+            { label: "Validate" },
+            { label: "Scale" },
+            { label: "Deploy" },
+          ],
+        },
+      ],
+    } as any);
+
+    assert.notInclude(
+      issues.join("\n"),
+      "experimental or ablation portion of a full paper deck",
+    );
   });
 
   it("repairs an invalid internal plan once and permits fresh outer retries", async function () {
@@ -1098,7 +1178,7 @@ describe("presentation capability", function () {
     });
     const errors = validatePresentationQuality(normalized as any);
 
-    assert.include(errors.join("\n"), "exactly five content slides");
+    assert.include(errors.join("\n"), "exactly 5 content slides");
   });
 
   it("rejects dense training plots outside a dedicated figure composition", function () {
@@ -1425,7 +1505,7 @@ describe("presentation capability", function () {
     };
     assert.include(
       validatePresentationQuality(weakLateEvidence).join("\n"),
-      "experimental or ablation half of a full paper deck",
+      "experimental or ablation portion of a full paper deck",
     );
 
     const longCaptionGallery = structuredClone(validDeck);

@@ -41,6 +41,7 @@ import type {
   PresentationSourceContext,
   PresentationRenderWithPreviewResult,
 } from "./contracts";
+import { resolvePresentationSlideCount } from "./PresentationLaunchSettings";
 
 const PRESENTATIONS_FOLDER = "presentations";
 const PRESENTATION_PROGRESS_ORDER: PresentationProgressPhase[] = [
@@ -65,11 +66,12 @@ type PresentationProgressMessages = Record<
 
 function getPresentationProgressMessages(
   language: string,
+  slideCount: number,
 ): PresentationProgressMessages {
   if (/^zh(?:-|$)/i.test(language)) {
     return {
       analyzing: "正在读取论文",
-      planning: "正在规划 6 页结构",
+      planning: `正在规划 ${slideCount} 页结构`,
       resolving_media: "正在提取论文证据图",
       rendering: "正在生成首版 PPT",
       reviewing: "正在进行视觉检查",
@@ -83,7 +85,7 @@ function getPresentationProgressMessages(
   }
   return {
     analyzing: "Reading the paper",
-    planning: "Planning the six-page structure",
+    planning: `Planning the ${slideCount}-slide structure`,
     resolving_media: "Extracting evidence figures from the paper",
     rendering: "Rendering the first editable draft",
     reviewing: "Reviewing visual quality",
@@ -268,7 +270,7 @@ export function createPresentationToolDefinition(): ToolDefinition {
     function: {
       name: "presentation",
       description:
-        "Create a polished, editable six-page PowerPoint from the current Zotero paper. Call this directly for a normal request such as '为这篇论文生成一个 PPT'. Provide only the current sourceItemKey and any explicit language or style preference; when language is omitted or auto, PaperChat uses Zotero's current interface language. PaperChat performs detailed evidence planning, figure selection, rendering, visual review, and export internally.",
+        "Create a polished, editable 4- to 30-slide PowerPoint from the current Zotero paper. Call this directly for a normal request such as '为这篇论文生成一个 PPT'. Provide only the current sourceItemKey and any explicit language, length, or style preference; when language is omitted or auto, PaperChat uses Zotero's current interface language. PaperChat performs detailed evidence planning, figure selection, rendering, visual review, and export internally.",
       parameters:
         PresentationIntentSchema as unknown as ToolDefinition["function"]["parameters"],
     },
@@ -319,6 +321,7 @@ export function mergePresentationPlanMetadata(
       planned.author?.trim() ||
       resolvePresentationAuthor(paper.metadata.authors, intent.language),
     designSystem: intent.designSystem || planned.designSystem,
+    slideCount: intent.slideCount || planned.slideCount,
     fileName: intent.fileName || planned.fileName,
   };
 }
@@ -432,7 +435,11 @@ export async function executePresentationCapability(
   const strictQuality = shouldUseStrictPresentationQualityGate(testOptions);
   const mediaResolver = testOptions?.mediaResolver || resolvePresentationMedia;
   const progressLanguage = resolvePresentationLanguage(args.language);
-  const progressMessages = getPresentationProgressMessages(progressLanguage);
+  const requestedSlideCount = resolvePresentationSlideCount(args.slideCount);
+  const progressMessages = getPresentationProgressMessages(
+    progressLanguage,
+    requestedSlideCount,
+  );
   const emitProgress = async (
     phase: PresentationProgressPhase,
     update: Omit<
@@ -499,6 +506,9 @@ export async function executePresentationCapability(
       const intent = {
         ...args,
         language: resolvePresentationLanguage(args.language),
+        ...(args.slideCount === undefined
+          ? {}
+          : { slideCount: requestedSlideCount }),
       } as PresentationIntent;
       const mergeIntent = (planned: PresentationRequest): unknown =>
         mergePresentationPlanMetadata(planned, intent, paper);
@@ -650,8 +660,20 @@ export async function executePresentationCapability(
     else visualRepairUsed = true;
     await emitProgress("repairing");
 
+    const repairSlideCount = resolvePresentationSlideCount(
+      resolvedIntent.slideCount,
+    );
+    const repairContentSlideCount = repairSlideCount - 1;
+    const repairFigureContract =
+      repairContentSlideCount >= 4
+        ? "at least three unique real paper-figure placements across at least two content slides"
+        : "at least two real paper-figure placements with one dominant method or result visual";
+    const repairCompositionCount = Math.min(
+      repairContentSlideCount,
+      repairContentSlideCount >= 5 ? 4 : 3,
+    );
     const invariantIssues = [
-      "Preserve the complete paper-deck contract while repairing the listed defect: exactly five content slides, at least three unique real paper-figure placements across at least two content slides, four composition silhouettes, and a complete conclusion slide.",
+      `Preserve the complete paper-deck contract while repairing the listed defect: exactly ${repairContentSlideCount} content slides plus the automatic cover (${repairSlideCount} pages total), ${repairFigureContract}, at least ${repairCompositionCount} composition silhouettes, and a complete conclusion slide.`,
       "Preserve every valid real PDF figure and structured evidence module from the previous draft unless the reported defect names that exact module as duplicate, incorrect, unreadable, or unsafe. Repair composition around valid evidence; do not simplify a figure-plus-table or figure-plus-chart slide into a single table, chart, or prose block.",
       "The first content slide must still express the research problem and gap through a real comparison, matrix, editable chart, or editable table. Metrics plus prose alone are invalid even when another slide is being repaired.",
     ];

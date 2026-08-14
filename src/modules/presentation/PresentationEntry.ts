@@ -2,15 +2,13 @@ import { getString } from "../../utils/locale";
 import { getAuthManager } from "../auth";
 import { getProviderManager } from "../providers";
 import { showAuthDialog } from "../ui/AuthDialog";
-import {
-  createPresentationLaunchDialogs,
-  isPresentationCostWarningSuppressed,
-} from "./PresentationLaunchDialogs";
+import { createPresentationLaunchDialogs } from "./PresentationLaunchDialogs";
 import {
   guardPresentationLaunch,
   PRESENTATION_LAUNCH_PROMPT,
 } from "./PresentationLaunchGuard";
 import { PresentationLaunchCoordinator } from "./PresentationLaunchCoordinator";
+import type { PresentationLaunchSettings } from "./PresentationLaunchSettings";
 
 const PRESENTATION_ITEM_MENU_ID = "paperchat-generate-presentation-menuitem";
 const launchCoordinator = new PresentationLaunchCoordinator();
@@ -20,6 +18,7 @@ export type PresentationChatOpener = (
   item: Zotero.Item,
   prompt: string,
   source: "presentation_menu" | "presentation_button",
+  settings: PresentationLaunchSettings,
 ) => Promise<boolean>;
 
 function isPdfAttachment(item: Zotero.Item): boolean {
@@ -98,7 +97,6 @@ async function runPresentationLaunch(
     authManager: getAuthManager(),
     dialogs: createPresentationLaunchDialogs(),
     ensureLoggedIn: () => showAuthDialog("login"),
-    isCostWarningSuppressed: isPresentationCostWarningSuppressed,
   });
   if (!guardResult.allowed) return false;
 
@@ -106,6 +104,7 @@ async function runPresentationLaunch(
     paper,
     PRESENTATION_LAUNCH_PROMPT,
     source === "library_menu" ? "presentation_menu" : "presentation_button",
+    guardResult.settings,
   );
   if (!started) {
     Services.prompt.alert(

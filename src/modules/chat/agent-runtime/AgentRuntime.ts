@@ -2377,7 +2377,7 @@ export class AgentRuntime {
               finalStage
                 ? "This is the final internal review. Return only pass or reject: pass when all slides are genuinely presentation-ready, reject when a material defect remains. Every production rejection is reported as an advisory warning and must not imply that no PPTX was written; the visual reviewer does not own the export gate. Never return revise at the final gate."
                 : "This is the draft gate. If the deck is close but needs one repair pass, return concise slide patches. Reject it if the fixed layout system cannot make it presentation-ready.",
-              "Return JSON only with: verdict (pass, revise, or reject), summary, failureClass (editorial or render_safety for every non-pass verdict), optional deckPatch, and optional patches. deckPatch may contain coverLayout (single-hero or editorial-collage), coverTitleScale (compact, standard, or large), swapCoverFigureOrder, or dropCoverEvidenceLine. Each slide patch uses exported slideNumber 2-6 and may contain layout, title, subtitle, eyebrow, keyMessage, bullets, figureEmphasis (standard or dominant), swapFigureOrder, or dropFields. Allowed dropFields: subtitle, keyMessage, bullets, groups, metrics, callouts, figure, figures, chart, table, equation, matrix, timeline, process, comparison.",
+              `Return JSON only with: verdict (pass, revise, or reject), summary, failureClass (editorial or render_safety for every non-pass verdict), optional deckPatch, and optional patches. deckPatch may contain coverLayout (single-hero or editorial-collage), coverTitleScale (compact, standard, or large), swapCoverFigureOrder, or dropCoverEvidenceLine. Each slide patch uses exported slideNumber 2-${Math.max(2, request.previewSlides.length)} and may contain layout, title, subtitle, eyebrow, keyMessage, bullets, figureEmphasis (standard or dominant), swapFigureOrder, or dropFields. Allowed dropFields: subtitle, keyMessage, bullets, groups, metrics, callouts, figure, figures, chart, table, equation, matrix, timeline, process, comparison.`,
               repair
                 ? "The previous reviewer response violated the JSON protocol. Correct that protocol error now; do not change the supplied slide evidence and do not call tools."
                 : "",
@@ -2450,7 +2450,9 @@ export class AgentRuntime {
           {
             id: this.callbacks.generateId(),
             role: "system",
-            content: buildPresentationPlannerSystemPrompt(),
+            content: buildPresentationPlannerSystemPrompt(
+              planningRequest.intent.slideCount,
+            ),
             timestamp: Date.now(),
           },
           {

@@ -21,7 +21,8 @@ pref("paperchatRatiosCache", "");
 pref("paperchatRoutingConfigCache", "");
 pref("paperchatTierState", "");
 pref("paperchatSuppressHighTierWarning", false);
-pref("paperchatSuppressPresentationCostWarning", false);
+pref("paperchatPresentationSlideCount", 6);
+pref("paperchatPresentationDesignSystem", "teal-green-academic-defense");
 pref("reasoningEffort", "default");
 pref("paperchatBaseUrlOverride", "");
 

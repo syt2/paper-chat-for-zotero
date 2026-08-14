@@ -1,8 +1,14 @@
 import type { PresentationSourceContext } from "./contracts";
+import {
+  DEFAULT_PRESENTATION_LAUNCH_SETTINGS,
+  normalizePresentationLaunchSettings,
+  type PresentationLaunchSettings,
+} from "./PresentationLaunchSettings";
 
 export interface PresentationLaunchAuthorization {
   readonly providerId: "paperchat";
   readonly source: Readonly<PresentationSourceContext>;
+  readonly settings: Readonly<PresentationLaunchSettings>;
 }
 
 export const MAX_PRESENTATION_ATTEMPTS_PER_AUTHORIZATION = 3;
@@ -36,10 +42,13 @@ const authorizationStates = new WeakMap<
  */
 export function createPresentationLaunchAuthorization(
   source: PresentationSourceContext,
+  settings: PresentationLaunchSettings = DEFAULT_PRESENTATION_LAUNCH_SETTINGS,
 ): PresentationLaunchAuthorization {
+  const normalizedSettings = normalizePresentationLaunchSettings(settings);
   const authorization: PresentationLaunchAuthorization = {
     providerId: "paperchat",
     source: Object.freeze({ ...source }),
+    settings: Object.freeze({ ...normalizedSettings }),
   };
   authorizationStates.set(authorization, { status: "ready", attempts: 0 });
   return Object.freeze(authorization);

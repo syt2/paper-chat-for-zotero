@@ -38,6 +38,7 @@ import {
   selectPresentationSession,
 } from "../../presentation/PresentationSessionPolicy";
 import { createPresentationLaunchAuthorization } from "../../presentation/PresentationLaunchAuthorization";
+import type { PresentationLaunchSettings } from "../../presentation/PresentationLaunchSettings";
 
 import { HTML_NS, type AttachmentState, type ChatPanelContext } from "./types";
 import { chatColors } from "../../../utils/colors";
@@ -2284,6 +2285,7 @@ export async function openPresentationForItem(
     ChatPanelOpenSource,
     "presentation_menu" | "presentation_button"
   >,
+  settings: PresentationLaunchSettings,
   expectedActiveSession: ChatSession | null = null,
 ): Promise<boolean> {
   const manager = getChatManager();
@@ -2352,10 +2354,13 @@ export async function openPresentationForItem(
     allowedToolNames: ["presentation"],
     allowPaperChatRetry: true,
     requiredProviderId: "paperchat",
-    presentationAuthorization: createPresentationLaunchAuthorization({
-      itemKey: item.key,
-      libraryID: item.libraryID,
-    }),
+    presentationAuthorization: createPresentationLaunchAuthorization(
+      {
+        itemKey: item.key,
+        libraryID: item.libraryID,
+      },
+      settings,
+    ),
   });
 }
 
@@ -3099,8 +3104,14 @@ function createContext(container: HTMLElement): ChatPanelContext {
       return launchPresentationForItem(
         item,
         "chat_button",
-        (launchItem, prompt, source) =>
-          openPresentationForItem(launchItem, prompt, source, session),
+        (launchItem, prompt, source, settings) =>
+          openPresentationForItem(
+            launchItem,
+            prompt,
+            source,
+            settings,
+            session,
+          ),
       );
     },
     renderMessages: (

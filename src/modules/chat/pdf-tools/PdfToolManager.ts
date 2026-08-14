@@ -1861,7 +1861,15 @@ export class PdfToolManager {
               ? this.ensureExtendedStructure(fallbackStructure)
               : null;
           const result = await executePresentationCapability(
-            sourceItemKey ? { ...args, sourceItemKey } : args,
+            {
+              ...args,
+              ...(sourceItemKey ? { sourceItemKey } : {}),
+              // These values come from the visible settings window and are
+              // frozen in the app-owned authorization. The outer chat model
+              // cannot silently change them, including on a retry.
+              slideCount: presentationAuthorization.settings.slideCount,
+              designSystem: presentationAuthorization.settings.designSystem,
+            },
             executionContext?.presentationVisualReviewer,
             executionContext?.presentationPlanner,
             paper || undefined,

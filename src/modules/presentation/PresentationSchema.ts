@@ -1,4 +1,8 @@
 import { Type, type Static } from "@sinclair/typebox";
+import {
+  PRESENTATION_MAXIMUM_SLIDE_COUNT,
+  PRESENTATION_MINIMUM_SLIDE_COUNT,
+} from "./PresentationLaunchSettings";
 
 const NormalizedCropSchema = Type.Object(
   {
@@ -369,6 +373,14 @@ export const PresentationRequestSchema = Type.Object(
         },
       ),
     ),
+    slideCount: Type.Optional(
+      Type.Integer({
+        minimum: PRESENTATION_MINIMUM_SLIDE_COUNT,
+        maximum: PRESENTATION_MAXIMUM_SLIDE_COUNT,
+        description:
+          "Requested total exported slide count, including the automatic cover. PaperChat validates slides.length against slideCount - 1.",
+      }),
+    ),
     fileName: Type.Optional(Type.String({ maxLength: 120 })),
     coverFigure: Type.Optional(PresentationFigureSchema),
     coverFigures: Type.Optional(
@@ -397,7 +409,7 @@ export const PresentationRequestSchema = Type.Object(
   {
     additionalProperties: false,
     description:
-      "A polished, evidence-first presentation specification. For a six-page deck provide five content slides, because the cover is automatic.",
+      "A polished, evidence-first presentation specification. slides contains content pages only because PaperChat creates the cover automatically.",
   },
 );
 

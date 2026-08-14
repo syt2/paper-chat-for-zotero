@@ -261,6 +261,7 @@ describe("presentation source context", function () {
     const manager = new PdfToolManager() as any;
     let extractionCalls = 0;
     let plannerCalls = 0;
+    const plannerIntents: Array<Record<string, unknown>> = [];
     manager.extractAndParsePaper = async () => {
       extractionCalls += 1;
       return {
@@ -271,15 +272,22 @@ describe("presentation source context", function () {
         pageCount: 1,
       };
     };
-    const authorization = createPresentationLaunchAuthorization({
-      itemKey: "CURRENT1",
-      libraryID: 1,
-    });
+    const authorization = createPresentationLaunchAuthorization(
+      {
+        itemKey: "CURRENT1",
+        libraryID: 1,
+      },
+      {
+        slideCount: 8,
+        designSystem: "dark-editorial",
+      },
+    );
     const executionContext = {
       paperSource: { itemKey: "CURRENT1", libraryID: 1 },
       presentationAuthorization: authorization,
-      presentationPlanner: async () => {
+      presentationPlanner: async ({ intent }: any) => {
         plannerCalls += 1;
+        plannerIntents.push(intent);
         throw new Error(`planner failure ${plannerCalls}`);
       },
     };
@@ -288,7 +296,11 @@ describe("presentation source context", function () {
       type: "function" as const,
       function: {
         name: "presentation",
-        arguments: JSON.stringify({ sourceItemKey: "CURRENT1" }),
+        arguments: JSON.stringify({
+          sourceItemKey: "CURRENT1",
+          slideCount: 6,
+          designSystem: "paperchat-editorial",
+        }),
       },
     };
 
@@ -319,6 +331,16 @@ describe("presentation source context", function () {
       assert.include(blocked, "Retryable: no");
       assert.equal(extractionCalls, 3);
       assert.equal(plannerCalls, 3);
+      assert.deepEqual(
+        plannerIntents.map(({ slideCount, designSystem }) => ({
+          slideCount,
+          designSystem,
+        })),
+        Array.from({ length: 3 }, () => ({
+          slideCount: 8,
+          designSystem: "dark-editorial",
+        })),
+      );
     } finally {
       runtime.ztoolkit = previousZtoolkit;
     }

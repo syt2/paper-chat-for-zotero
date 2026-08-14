@@ -3,6 +3,7 @@ import type {
   PresentationRequest,
   PresentationSlide,
 } from "./PresentationSchema";
+import { resolvePresentationSlideCount } from "./PresentationLaunchSettings";
 
 function normalizeTitle(value: string): string {
   return value
@@ -126,6 +127,7 @@ function isStructuralPresentationQualityIssue(issue: string): boolean {
     /\/table\/highlightRow: index exceeds row count/u,
     /\/matrix: every row must contain exactly one cell per column/u,
     /\/matrix\/highlightColumn: index exceeds column count/u,
+    /\/slides: selected presentation length requires exactly \d+ content slides/u,
   ].some((pattern) => pattern.test(issue));
 }
 
@@ -699,28 +701,44 @@ export function validatePresentationQuality(
 
   const visualCount = request.slides.filter(hasVisualEvidence).length;
   const isPaperDeck = Boolean(request.sourceItemKey);
-  if (isPaperDeck && request.slides.length !== 5) {
+  const expectedSlideCount = resolvePresentationSlideCount(request.slideCount);
+  const expectedContentSlideCount = expectedSlideCount - 1;
+  if (isPaperDeck && request.slides.length !== expectedContentSlideCount) {
     errors.push(
-      `/slides: paper presentations require exactly five content slides plus the automatic cover, producing six pages total; found ${request.slides.length} content slides.`,
+      request.slideCount === undefined
+        ? `/slides: paper presentations require exactly ${expectedContentSlideCount} content slides plus the automatic cover, producing ${expectedSlideCount} pages total; found ${request.slides.length} content slides.`
+        : `/slides: selected presentation length requires exactly ${expectedContentSlideCount} content slides plus the automatic cover, producing ${expectedSlideCount} pages total; found ${request.slides.length} content slides.`,
     );
   }
   const usesDefaultAcademicDesign =
     !request.designSystem ||
     request.designSystem === "teal-green-academic-defense";
-  if (isPaperDeck && request.slides.length === 5 && usesDefaultAcademicDesign) {
+  if (
+    isPaperDeck &&
+    request.slides.length === expectedContentSlideCount &&
+    usesDefaultAcademicDesign
+  ) {
     const coverMetricCount = request.coverMetrics?.length || 0;
     if (coverMetricCount < 2 || coverMetricCount > 3) {
       errors.push(
         `/coverMetrics: the default academic paper deck requires two or three paper-grounded cover metrics; found ${coverMetricCount}. Use defensible dataset, model, experiment, or headline-result values. If the paper cannot support them, fail instead of exporting a sparse cover.`,
       );
     }
-    const lateEvidenceSlides = request.slides.slice(2, 4);
-    if (!lateEvidenceSlides.some(hasStructuredResult)) {
+    const evidenceStartIndex = request.slides.length === 3 ? 1 : 2;
+    const experimentalEvidenceSlides = request.slides.slice(
+      evidenceStartIndex,
+      -1,
+    );
+    if (!experimentalEvidenceSlides.some(hasStructuredResult)) {
+      const evidencePath =
+        request.slides.length === 3
+          ? "/slides/1"
+          : `/slides/2-${Math.max(2, request.slides.length - 2)}`;
       errors.push(
-        "/slides/2-3: the experimental or ablation half of a full paper deck must include at least one structured result as an editable chart, table, matrix, or comparison. Two consecutive figure-only pages produce a weak evidence story; repair the plan or fail instead of exporting it.",
+        `${evidencePath}: the experimental or ablation portion of a full paper deck must include at least one structured result as an editable chart, table, matrix, or comparison. A figure-only evidence arc produces a weak story; repair the plan or fail instead of exporting it.`,
       );
     }
-    for (const [offset, slide] of lateEvidenceSlides.entries()) {
+    for (const [offset, slide] of experimentalEvidenceSlides.entries()) {
       if (
         slide.layout === "ablation" &&
         slide.table &&
@@ -729,7 +747,7 @@ export function validatePresentationQuality(
         slideFigures(slide).length === 0
       ) {
         errors.push(
-          `/slides/${offset + 2}: a compact academic ablation table needs one distinct non-table PDF figure as supporting qualitative evidence when the paper supplies one. Reserve content evidence before choosing the cover hero; do not reduce a table-plus-figure result page to table-only.`,
+          `/slides/${offset + evidenceStartIndex}: a compact academic ablation table needs one distinct non-table PDF figure as supporting qualitative evidence when the paper supplies one. Reserve content evidence before choosing the cover hero; do not reduce a table-plus-figure result page to table-only.`,
         );
       }
     }
