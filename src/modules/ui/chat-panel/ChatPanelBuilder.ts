@@ -497,10 +497,25 @@ export function createChatContainer(
   );
 
   // Toolbar buttons
-  const toolbarButtons = createElement(doc, "div", {
-    display: "flex",
-    gap: "6px",
-  });
+  const toolbarButtons = createElement(
+    doc,
+    "div",
+    {
+      display: "flex",
+      gap: "6px",
+    },
+    { id: "chat-toolbar-primary-actions" },
+  );
+  const toolbarRightActions = createElement(
+    doc,
+    "div",
+    {
+      display: "flex",
+      gap: "6px",
+      marginLeft: "auto",
+    },
+    { id: "chat-toolbar-secondary-actions" },
+  );
 
   const btnStyle: Partial<CSSStyleDeclaration> = {
     background: theme.buttonBg,
@@ -567,7 +582,7 @@ export function createChatContainer(
   const summarizeConversationBtn = createElement(
     doc,
     "button",
-    { ...btnStyle, display: "none", marginLeft: "auto" },
+    { ...btnStyle, display: "none" },
     {
       id: "chat-summarize-conversation-note",
       title: getString("chat-summarize-conversation-note"),
@@ -586,7 +601,6 @@ export function createChatContainer(
 
   toolbarButtons.appendChild(newChatBtn);
   toolbarButtons.appendChild(uploadFileBtn);
-  toolbarButtons.appendChild(presentationBtn);
   toolbarButtons.appendChild(historyBtn);
   if (getPref("debugContextExportEnabled") === true) {
     // Internal debug-only export button. The pref defaults to false and is not exposed in settings.
@@ -606,8 +620,10 @@ export function createChatContainer(
     toolbarButtons.appendChild(debugContextBtn);
   }
 
+  toolbarRightActions.appendChild(summarizeConversationBtn);
+  toolbarRightActions.appendChild(presentationBtn);
   toolbar.appendChild(toolbarButtons);
-  toolbar.appendChild(summarizeConversationBtn);
+  toolbar.appendChild(toolbarRightActions);
 
   // Attachments Preview
   const attachmentsPreview = createElement(
