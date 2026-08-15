@@ -1,5 +1,6 @@
 import { assert } from "chai";
 import {
+  bindPresentationCustomSlideCountVisibility,
   createPresentationDialogSelectOption,
   parsePresentationDialogSlideCount,
   PRESENTATION_CUSTOM_SLIDE_COUNT_OPTION,
@@ -130,5 +131,42 @@ describe("presentation launch settings", function () {
     assert.equal(option.properties?.textContent, "Custom…");
     assert.isTrue(option.properties?.selected);
     assert.notProperty(option, "attributes");
+  });
+
+  it("binds custom slide-count visibility after Zotero 7 adapts the select", function () {
+    const listeners = new Map<string, EventListener>();
+    const customInput = {
+      style: { display: "none" },
+      removeAttribute() {},
+    };
+    const error = { style: { visibility: "visible" } };
+    const elements = new Map<string, unknown>();
+    const doc = {
+      getElementById(id: string) {
+        return elements.get(id) ?? null;
+      },
+    } as unknown as Document;
+    const select = {
+      value: "6",
+      ownerDocument: doc,
+      addEventListener(type: string, listener: EventListener) {
+        listeners.set(type, listener);
+      },
+    } as unknown as HTMLSelectElement;
+    elements.set("presentation-slide-count", select);
+    elements.set("presentation-custom-slide-count", customInput);
+    elements.set("presentation-slide-count-error", error);
+
+    bindPresentationCustomSlideCountVisibility(doc);
+
+    assert.sameMembers([...listeners.keys()], ["input", "change", "blur"]);
+    select.value = PRESENTATION_CUSTOM_SLIDE_COUNT_OPTION;
+    listeners.get("blur")?.call(select, new Event("blur"));
+    assert.equal(customInput.style.display, "block");
+    assert.equal(error.style.visibility, "hidden");
+
+    select.value = "10";
+    listeners.get("change")?.call(select, new Event("change"));
+    assert.equal(customInput.style.display, "none");
   });
 });

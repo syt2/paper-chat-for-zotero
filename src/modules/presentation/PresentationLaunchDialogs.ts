@@ -150,6 +150,21 @@ function syncCustomSlideCountVisibility(select: HTMLSelectElement): void {
   clearSlideCountError(select.ownerDocument);
 }
 
+export function bindPresentationCustomSlideCountVisibility(
+  doc: Document,
+): void {
+  const select = doc.getElementById(
+    "presentation-slide-count",
+  ) as HTMLSelectElement | null;
+  if (!select) return;
+
+  const sync = () => syncCustomSlideCountVisibility(select);
+  for (const type of ["input", "change", "blur"]) {
+    select.addEventListener(type, sync);
+  }
+  sync();
+}
+
 function updatePresentationInstructionsCount(input: HTMLTextAreaElement): void {
   const count = input.ownerDocument.getElementById(
     "presentation-user-instructions-count",
@@ -176,22 +191,6 @@ async function showPresentationSettingsDialog(
   );
   let selection: PresentationLaunchSettings | null = null;
   const children: TagElementProps[] = [
-    {
-      tag: "style",
-      properties: {
-        textContent: `
-          @supports selector(select:has(option:checked)) {
-            #presentation-custom-slide-count {
-              display: none !important;
-            }
-            #presentation-slide-count:has(option[value="${PRESENTATION_CUSTOM_SLIDE_COUNT_OPTION}"]:checked)
-              + #presentation-custom-slide-count {
-              display: block !important;
-            }
-          }
-        `,
-      },
-    },
     {
       tag: "div",
       properties: {
@@ -245,17 +244,6 @@ async function showPresentationSettingsDialog(
                     boxSizing: "border-box",
                     padding: "7px 10px",
                   },
-                  // Zotero's ztoolkit menu adapter assigns select.value and
-                  // then blurs the select without dispatching a change event.
-                  // Listen for blur as well and never steal focus while its
-                  // native popup is closing.
-                  listeners: ["input", "change", "blur"].map((type) => ({
-                    type,
-                    listener: (event: Event) => {
-                      const select = event.currentTarget as HTMLSelectElement;
-                      syncCustomSlideCountVisibility(select);
-                    },
-                  })),
                   children: [
                     ...PRESENTATION_SLIDE_COUNTS.map((slideCount) =>
                       createPresentationDialogSelectOption(
@@ -542,6 +530,14 @@ async function showPresentationSettingsDialog(
         dialogHelper.window?.close();
       },
     });
+
+  // Zotero 7's ztoolkit select adapter wraps the select and replaces its
+  // declarative listeners. Bind after the dialog DOM has been constructed so
+  // both Zotero 7 and newer native-select paths update the custom field.
+  dialogHelper.dialogData.loadCallback = () => {
+    const doc = dialogHelper.window?.document;
+    if (doc) bindPresentationCustomSlideCountVisibility(doc);
+  };
 
   let dialogWindow: Window | null = null;
   let closeOnAbort: (() => void) | undefined;
