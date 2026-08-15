@@ -1,4 +1,5 @@
 import type { ToolDefinition } from "../../types/tool";
+import { createAbortController } from "../../utils/abort";
 import { getErrorMessage } from "../../utils/common";
 import {
   formatToolError,
@@ -502,10 +503,22 @@ function isBlockedIpv4Host(hostname: string): boolean {
     (first === 192 && second === 0 && (third === 0 || third === 2)) ||
     (first === 192 && second === 168) ||
     (first === 192 && second === 88 && third === 99) ||
-    (first === 198 && (second === 18 || second === 19)) ||
+    isProxyFakeIpv4Host(hostname) ||
     (first === 198 && second === 51 && third === 100) ||
     (first === 203 && second === 0 && third === 113) ||
     first >= 224
+  );
+}
+
+function isProxyFakeIpv4Host(hostname: string): boolean {
+  const octets = hostname.split(".").map(Number);
+  return (
+    octets.length === 4 &&
+    octets.every(
+      (octet) => Number.isInteger(octet) && octet >= 0 && octet <= 255,
+    ) &&
+    octets[0] === 198 &&
+    (octets[1] === 18 || octets[1] === 19)
   );
 }
 
@@ -547,6 +560,17 @@ function parseIpv6Words(hostname: string): number[] | null {
   const omitted = 8 - head.length - tail.length;
   if (omitted < 1) return null;
   return [...head, ...Array<number>(omitted).fill(0), ...tail];
+}
+
+function isProxyFakeIpv6Host(hostname: string): boolean {
+  const words = parseIpv6Words(hostname);
+  return (
+    words !== null &&
+    words[0] === 0xfdfe &&
+    words[1] === 0xdcba &&
+    words[2] === 0x9876 &&
+    words[3] === 0x0000
+  );
 }
 
 function ipv4HostFromWords(high: number, low: number): string {
@@ -728,7 +752,17 @@ async function assertResolvedPublicDownloadUrl(
   const addresses: string[] = [];
   while (record.hasMore()) {
     const address = record.getNextAddrAsString();
-    if (isBlockedIpv4Host(address) || isBlockedIpv6Host(address)) {
+    // Clash and similar TUN proxies synthesize fake IPv4/IPv6 addresses for
+    // public hostnames. Permit their dedicated ranges only for HTTPS hostnames:
+    // literal URLs remain blocked above, while TLS still binds the request to
+    // the original hostname.
+    const isSecureProxyFakeIp =
+      url.protocol === "https:" &&
+      (isProxyFakeIpv4Host(address) || isProxyFakeIpv6Host(address));
+    if (
+      (isBlockedIpv4Host(address) && !isSecureProxyFakeIp) ||
+      (isBlockedIpv6Host(address) && !isSecureProxyFakeIp)
+    ) {
       throw new DownloadCapabilityError(
         `The download host resolves to a local or private address: ${address}`,
         "invalid_arguments",
@@ -1066,7 +1100,16 @@ export function createDefaultDownloadRuntime(): DownloadCapabilityRuntime {
       let aborted = abortSignal?.aborted === true;
       let timedOut = false;
       let inactivityTimer: ReturnType<typeof setTimeout> | undefined;
-      const controller = new AbortController();
+      const controller = createAbortController();
+      const controllerSignal = controller.signal;
+      if (!controllerSignal) {
+        throw new DownloadCapabilityError(
+          "Zotero download cancellation support is unavailable.",
+          "unavailable",
+          false,
+          "Restart Zotero and try the download again.",
+        );
+      }
       const abortDownload = () => {
         aborted = true;
         controller.abort();
@@ -1091,16 +1134,16 @@ export function createDefaultDownloadRuntime(): DownloadCapabilityRuntime {
           resetInactivityTimer();
           const validatedHost = await assertResolvedPublicDownloadUrl(
             currentUrl,
-            controller.signal,
+            controllerSignal,
           );
-          await assertSafeDownloadProxyRoute(currentUrl, controller.signal);
+          await assertSafeDownloadProxyRoute(currentUrl, controllerSignal);
           resetInactivityTimer();
           response = await withPinnedDownloadHost(
             validatedHost,
-            controller.signal,
+            controllerSignal,
             () =>
               fetch(currentUrl.toString(), {
-                signal: controller.signal,
+                signal: controllerSignal,
                 redirect: "manual",
                 credentials: "omit",
                 referrerPolicy: "no-referrer",

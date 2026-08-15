@@ -372,6 +372,8 @@ describe("download capability", function () {
     const conflictingTargets = createFakeRuntime();
     const downloadsWithParent = createFakeRuntime();
     const localNetwork = createFakeRuntime();
+    const benchmarkLiteral = createFakeRuntime();
+    const proxyIpv6Literal = createFakeRuntime();
     const ipv4CompatibleLoopback = createFakeRuntime();
     const siteLocalIpv6 = createFakeRuntime();
 
@@ -415,6 +417,20 @@ describe("download capability", function () {
       { url: "http://127.0.0.1/private.pdf", destination: "downloads" },
       localNetwork.runtime,
     );
+    const benchmarkLiteralResult = await executeDownloadCapability(
+      {
+        url: "https://198.18.0.104/private.pdf",
+        destination: "downloads",
+      },
+      benchmarkLiteral.runtime,
+    );
+    const proxyIpv6LiteralResult = await executeDownloadCapability(
+      {
+        url: "https://[fdfe:dcba:9876::64]/private.pdf",
+        destination: "downloads",
+      },
+      proxyIpv6Literal.runtime,
+    );
     const ipv4CompatibleLoopbackResult = await executeDownloadCapability(
       { url: "http://[::7f00:1]/private.pdf", destination: "downloads" },
       ipv4CompatibleLoopback.runtime,
@@ -431,6 +447,8 @@ describe("download capability", function () {
       conflictingTargetsResult,
       downloadsWithParentResult,
       localNetworkResult,
+      benchmarkLiteralResult,
+      proxyIpv6LiteralResult,
       ipv4CompatibleLoopbackResult,
       siteLocalIpv6Result,
     ]) {
@@ -442,6 +460,8 @@ describe("download capability", function () {
     assert.equal(conflictingTargets.calls.temporaryDirectories, 0);
     assert.equal(downloadsWithParent.calls.temporaryDirectories, 0);
     assert.equal(localNetwork.calls.temporaryDirectories, 0);
+    assert.equal(benchmarkLiteral.calls.temporaryDirectories, 0);
+    assert.equal(proxyIpv6Literal.calls.temporaryDirectories, 0);
     assert.equal(ipv4CompatibleLoopback.calls.temporaryDirectories, 0);
     assert.equal(siteLocalIpv6.calls.temporaryDirectories, 0);
   });
@@ -617,7 +637,7 @@ describe("download capability", function () {
     assert.include(filenameFallbackResult, "File path: /downloads/paper.pdf");
   });
 
-  it("streams anonymous manual redirects with DNS, size, and abort guards", async function () {
+  it("streams anonymous manual redirects without a plugin-global AbortController", async function () {
     const writes: Array<{ path: string; bytes: number; append: boolean }> = [];
     const removedPaths: string[] = [];
     const setDnsAddresses = (addresses: string[], trrMode = 0) => {
@@ -771,13 +791,26 @@ describe("download capability", function () {
         ],
       });
     };
+    const NativeAbortController = globalThis.AbortController;
+    const NativeZotero = (globalThis as any).Zotero;
+    (globalThis as any).Zotero = {
+      getMainWindow: () => ({ AbortController: NativeAbortController }),
+    };
     const runtime = createDefaultDownloadRuntime();
-
-    const metadata = await runtime.downloadToFile(
-      "https://example.test/paper.pdf",
-      "/tmp/paper.pdf",
-      MAX_DOWNLOAD_BYTES,
-    );
+    const metadata = await (async () => {
+      delete (globalThis as any).AbortController;
+      try {
+        return await runtime.downloadToFile(
+          "https://example.test/paper.pdf",
+          "/tmp/paper.pdf",
+          MAX_DOWNLOAD_BYTES,
+        );
+      } finally {
+        (globalThis as any).AbortController = NativeAbortController;
+        if (NativeZotero === undefined) delete (globalThis as any).Zotero;
+        else (globalThis as any).Zotero = NativeZotero;
+      }
+    })();
 
     assert.deepEqual(requestUrls, [
       "https://example.test/paper.pdf",
@@ -808,7 +841,66 @@ describe("download capability", function () {
     ]);
     assert.equal(activePins.size, 0);
 
+    setDnsAddresses(["198.18.0.104"]);
+    let fakeIpFetchCount = 0;
+    (globalThis as any).fetch = async (url: string) => {
+      assert.deepEqual(activePins.get(new URL(url).hostname), ["198.18.0.104"]);
+      fakeIpFetchCount += 1;
+      return createResponse({ status: 200, chunks: [[5]] });
+    };
+    await runtime.downloadToFile(
+      "https://public.example.test/fake-ip.pdf",
+      "/tmp/fake-ip.pdf",
+      MAX_DOWNLOAD_BYTES,
+    );
+    let insecureFakeIpError: unknown;
+    try {
+      await runtime.downloadToFile(
+        "http://public.example.test/fake-ip.pdf",
+        "/tmp/insecure-fake-ip.pdf",
+        MAX_DOWNLOAD_BYTES,
+      );
+    } catch (error) {
+      insecureFakeIpError = error;
+    }
+    assert.include(
+      String((insecureFakeIpError as Error)?.message || ""),
+      "resolves to a local or private address",
+    );
+    assert.equal(fakeIpFetchCount, 1);
+
+    setDnsAddresses(["fdfe:dcba:9876::64"]);
+    let fakeIpv6FetchCount = 0;
+    (globalThis as any).fetch = async (url: string) => {
+      assert.deepEqual(activePins.get(new URL(url).hostname), [
+        "fdfe:dcba:9876::64",
+      ]);
+      fakeIpv6FetchCount += 1;
+      return createResponse({ status: 200, chunks: [[6]] });
+    };
+    await runtime.downloadToFile(
+      "https://public.example.test/fake-ipv6.pdf",
+      "/tmp/fake-ipv6.pdf",
+      MAX_DOWNLOAD_BYTES,
+    );
+    let insecureFakeIpv6Error: unknown;
+    try {
+      await runtime.downloadToFile(
+        "http://public.example.test/fake-ipv6.pdf",
+        "/tmp/insecure-fake-ipv6.pdf",
+        MAX_DOWNLOAD_BYTES,
+      );
+    } catch (error) {
+      insecureFakeIpv6Error = error;
+    }
+    assert.include(
+      String((insecureFakeIpv6Error as Error)?.message || ""),
+      "resolves to a local or private address",
+    );
+    assert.equal(fakeIpv6FetchCount, 1);
+
     let streamCancelCount = 0;
+    setDnsAddresses(["93.184.216.34"]);
     (globalThis as any).fetch = async () =>
       createResponse({
         status: 200,
