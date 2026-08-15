@@ -1,4 +1,8 @@
 import { getString } from "../../utils/locale";
+import {
+  getAnalyticsService,
+  trackPaperChatPresentationEntryClicked,
+} from "../analytics";
 import { getAuthManager } from "../auth";
 import { getProviderManager } from "../providers";
 import { showAuthDialog } from "../ui/AuthDialog";
@@ -311,6 +315,10 @@ export function registerPresentationEntryMenu(
     icon: `chrome://${addon.data.config.addonRef}/content/icons/presentation.svg`,
     getVisibility: () => !!getSingleSelectedPresentationPaper(),
     commandListener: () => {
+      trackPaperChatPresentationEntryClicked(
+        getAnalyticsService(),
+        "library_menu",
+      );
       const paper = getSingleSelectedPresentationPaper();
       if (paper) {
         void launchPresentationForItem(

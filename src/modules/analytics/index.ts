@@ -18,6 +18,18 @@ export type {
   AnalyticsServiceOptions,
 } from "./AnalyticsService";
 export { ANALYTICS_EVENTS, type AnalyticsEventName } from "./events";
+export {
+  trackPaperChatPresentationEntryClicked,
+  trackPaperChatPurchaseButtonClicked,
+  trackPaperChatPurchaseEntryClicked,
+  type AnalyticsTracker,
+  type PaperChatPresentationEntryContext,
+  type PaperChatPresentationEntrySource,
+  type PaperChatProductCategory,
+  type PaperChatPurchaseEntryContext,
+  type PaperChatPurchaseEntrySource,
+  type PaperChatPurchaseItemAnalytics,
+} from "./businessEvents";
 
 const ANALYTICS_ENABLED = true;
 const ANALYTICS_APP_KEY = "A-SH-9454265759";
@@ -139,7 +151,16 @@ function buildAnalyticsService(): Analytics {
 
 export function getAnalyticsService(): Analytics {
   if (!analyticsService) {
-    analyticsService = buildAnalyticsService();
+    try {
+      analyticsService = buildAnalyticsService();
+    } catch (error) {
+      try {
+        pluginLogger.log("[Analytics] failed to initialize service", { error });
+      } catch {
+        // Analytics initialization and logging are both best-effort.
+      }
+      analyticsService = new NoopAnalyticsService();
+    }
   }
   return analyticsService;
 }

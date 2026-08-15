@@ -2,6 +2,10 @@ import type { TagElementProps } from "zotero-plugin-toolkit";
 import { getString } from "../../utils/locale";
 import { getPref, setPref } from "../../utils/prefs";
 import { openZToolkitDialog } from "../../utils/dialog";
+import {
+  getAnalyticsService,
+  trackPaperChatPurchaseEntryClicked,
+} from "../analytics";
 import { openPaperChatPurchaseDialog } from "../preferences/UserAuthUI";
 import {
   formatPresentationBalance,
@@ -614,6 +618,11 @@ export function createPresentationLaunchDialogs(
         secondary: getString("auth-cancel"),
       });
       if (decision.accepted) {
+        trackPaperChatPurchaseEntryClicked(
+          getAnalyticsService(),
+          "presentation_insufficient_balance",
+          { low_balance: true },
+        );
         await openPaperChatPurchaseDialog();
       }
     },

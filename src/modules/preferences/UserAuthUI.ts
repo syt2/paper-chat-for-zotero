@@ -18,7 +18,14 @@ import {
 import { showAuthDialog } from "../ui/AuthDialog";
 import type { PrefsRefreshOptions } from "./types";
 import { showMessage } from "./utils";
-import { ANALYTICS_EVENTS, getAnalyticsService } from "../analytics";
+import {
+  ANALYTICS_EVENTS,
+  getAnalyticsService,
+  trackPaperChatPurchaseButtonClicked,
+  trackPaperChatPurchaseEntryClicked,
+  type PaperChatProductCategory,
+  type PaperChatPurchaseItemAnalytics,
+} from "../analytics";
 import { renderSanitizedHtmlToElement } from "./PaperChatNoticeRenderer";
 import { populatePaperchatModels } from "./PaperchatProviderUI";
 import { NO_RETRY_ON_THROTTLE } from "../../utils/http";
@@ -35,8 +42,6 @@ const PURCHASE_POLL_MAX_ATTEMPTS = 200;
 const PURCHASE_POLL_FAILURE_NOTICE_ATTEMPTS = 3;
 const REDEEM_DIALOG_BIND_MAX_ATTEMPTS = 30;
 const REDEEM_DIALOG_BIND_RETRY_DELAY_MS = 100;
-type PaperChatProductCategory = "quota" | "subscription";
-
 const PURCHASE_DIALOG_MAX_WIDTH = "446px";
 
 interface RedeemCodeInfo {
@@ -525,14 +530,10 @@ export function bindUserAuthEvents(
   // Get redemption code button - show QR code dialog
   const getRedeemCodeBtn = doc.getElementById("pref-get-redeem-code-btn");
   getRedeemCodeBtn?.addEventListener("click", async () => {
-    getAnalyticsService().track(
-      ANALYTICS_EVENTS.paperChatPurchaseEntryClicked,
-      {
-        low_balance: isPaperChatLowBalance(authManager),
-        logged_in: authManager.isLoggedIn(),
-        source: "preferences",
-      },
-    );
+    trackPaperChatPurchaseEntryClicked(getAnalyticsService(), "preferences", {
+      low_balance: isPaperChatLowBalance(authManager),
+      logged_in: authManager.isLoggedIn(),
+    });
     await showRedeemCodeDialog(doc, authManager);
   });
 
@@ -1268,15 +1269,16 @@ function getProductCategory(
   return "quota";
 }
 
-function getProductAnalyticsProps(product: PaperChatProduct): {
-  sku: string;
-  product_category: PaperChatProductCategory;
-  money: string;
-} {
+export function getProductAnalyticsProps(
+  product: PaperChatProduct,
+): PaperChatPurchaseItemAnalytics {
   return {
+    item: product.sku,
     sku: product.sku,
+    product_name: product.name,
     product_category: getProductCategory(product),
     money: product.money,
+    quota_label: product.quotaLabel || undefined,
   };
 }
 
@@ -1584,6 +1586,10 @@ function bindProductPurchaseEvents(
       setStatus(getString("pref-paperchat-purchase-failed"), true);
       return;
     }
+    trackPaperChatPurchaseButtonClicked(
+      getAnalyticsService(),
+      getProductAnalyticsProps(product),
+    );
     setButtonsDisabled(true, getString("pref-paperchat-buy-loading"));
     setStatus(getString("pref-paperchat-purchase-creating"));
     getAnalyticsService().track(

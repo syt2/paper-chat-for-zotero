@@ -50,7 +50,12 @@ import {
   updateChatHistoryAutoScrollState,
   updateChatHistoryScrollBottomButton,
 } from "./MessageRenderer";
-import { ANALYTICS_EVENTS, getAnalyticsService } from "../../analytics";
+import {
+  ANALYTICS_EVENTS,
+  getAnalyticsService,
+  trackPaperChatPresentationEntryClicked,
+  trackPaperChatPurchaseEntryClicked,
+} from "../../analytics";
 import { buildErrorProps } from "../../analytics/errorProps";
 import { LOW_BALANCE_WARNING_THRESHOLD } from "../../preferences/UserAuthUI";
 import {
@@ -603,10 +608,17 @@ export async function refreshCheckinDisplay(
 export function createPresentationButtonLaunchHandler(
   context: Pick<ChatPanelContext, "launchPresentation" | "appendError">,
   presentationBtn: Pick<HTMLButtonElement, "setAttribute" | "removeAttribute">,
+  trackEntryClick: (repeatClick: boolean) => void = (repeatClick) =>
+    trackPaperChatPresentationEntryClicked(
+      getAnalyticsService(),
+      "chat_button",
+      { repeat_click: repeatClick },
+    ),
 ): () => void {
   let pendingLaunch: Promise<boolean> | null = null;
 
   return () => {
+    trackEntryClick(pendingLaunch !== null);
     if (pendingLaunch) {
       // Re-enter the shared coordinator so it can focus the existing settings
       // window. The original invocation remains responsible for reporting a
@@ -1515,12 +1527,10 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
         source: "chat_user_bar_balance",
         low_balance: true,
       });
-      getAnalyticsService().track(
-        ANALYTICS_EVENTS.paperChatPurchaseEntryClicked,
-        {
-          source: "chat_user_bar_balance",
-          low_balance: true,
-        },
+      trackPaperChatPurchaseEntryClicked(
+        getAnalyticsService(),
+        "chat_user_bar_balance",
+        { low_balance: true },
       );
       void import("../../preferences/UserAuthUI")
         .then((module) => module.openPaperChatSettingsForTopup())
@@ -1553,11 +1563,9 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
       ) {
         return;
       }
-      getAnalyticsService().track(
-        ANALYTICS_EVENTS.paperChatPurchaseEntryClicked,
-        {
-          source: "chat_user_bar_subscription",
-        },
+      trackPaperChatPurchaseEntryClicked(
+        getAnalyticsService(),
+        "chat_user_bar_subscription",
       );
       void import("../../preferences/UserAuthUI")
         .then((module) => module.openPaperChatSettingsForTopup())

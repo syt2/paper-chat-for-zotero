@@ -261,38 +261,45 @@ export class AnalyticsService {
       return;
     }
 
-    const eventProps: AnalyticsEventProps = {
-      userId: this.getUserId() ?? "",
-      ...props,
-    };
+    try {
+      const eventProps: AnalyticsEventProps = {
+        userId: this.getUserId() ?? "",
+        ...props,
+      };
 
-    const event: AnalyticsEvent = {
-      timestamp: new Date(this.now()).toISOString(),
-      sessionId: this.getCurrentSessionId(),
-      eventName,
-      systemProps: {
-        locale: this.getLocale(),
-        osName: this.getOsName(),
-        osVersion: this.getZoteroVersion(),
-        deviceModel: this.getSystemVersion(),
-        isDebug: this.isDebug,
-        appVersion: this.appVersion,
-        sdkVersion: this.sdkVersion,
-      },
-      props: normalizeEventProps(eventProps),
-    };
+      const event: AnalyticsEvent = {
+        timestamp: new Date(this.now()).toISOString(),
+        sessionId: this.getCurrentSessionId(),
+        eventName,
+        systemProps: {
+          locale: this.getLocale(),
+          osName: this.getOsName(),
+          osVersion: this.getZoteroVersion(),
+          deviceModel: this.getSystemVersion(),
+          isDebug: this.isDebug,
+          appVersion: this.appVersion,
+          sdkVersion: this.sdkVersion,
+        },
+        props: normalizeEventProps(eventProps),
+      };
 
-    if (this.pendingEvents.length >= this.maxQueueSize) {
-      const dropped = this.pendingEvents.shift();
-      this.logger?.log("[Analytics] queue overflow, dropped oldest event", {
-        droppedEventName: dropped?.eventName,
-        queueLimit: this.maxQueueSize,
+      if (this.pendingEvents.length >= this.maxQueueSize) {
+        const dropped = this.pendingEvents.shift();
+        this.safeLog("[Analytics] queue overflow, dropped oldest event", {
+          droppedEventName: dropped?.eventName,
+          queueLimit: this.maxQueueSize,
+        });
+      }
+      this.pendingEvents.push(event);
+
+      if (this.pendingEvents.length >= this.maxBatchSize) {
+        this.flushInBackground();
+      }
+    } catch (error) {
+      this.safeLog("[Analytics] failed to enqueue event", {
+        eventName,
+        error,
       });
-    }
-    this.pendingEvents.push(event);
-
-    if (this.pendingEvents.length >= this.maxBatchSize) {
-      void this.flushOnce();
     }
   }
 
@@ -324,7 +331,7 @@ export class AnalyticsService {
       await this.flush();
 
       if (this.pendingEvents.length > 0) {
-        this.logger?.log("[Analytics] dropping pending events during destroy", {
+        this.safeLog("[Analytics] dropping pending events during destroy", {
           droppedCount: this.pendingEvents.length,
         });
         this.pendingEvents = [];
@@ -346,8 +353,14 @@ export class AnalyticsService {
         this.skipTicksRemaining -= 1;
         return;
       }
-      void this.flushOnce();
+      this.flushInBackground();
     }
+  }
+
+  private flushInBackground(): void {
+    void this.flushOnce().catch((error) => {
+      this.safeLog("[Analytics] background flush failed", { error });
+    });
   }
 
   private flushOnce(): Promise<boolean> {
@@ -382,7 +395,7 @@ export class AnalyticsService {
           response.status < 500 &&
           response.status !== 429
         ) {
-          this.logger?.log("[Analytics] batch rejected, dropping", {
+          this.safeLog("[Analytics] batch rejected, dropping", {
             status: response.status,
             response: response.responseText || "",
             batchSize: batch.length,
@@ -417,7 +430,9 @@ export class AnalyticsService {
   ): boolean {
     this.consecutiveFailures += 1;
     if (this.consecutiveFailures > this.maxConsecutiveFailures) {
-      this.logger?.log(
+      this.consecutiveFailures = 0;
+      this.skipTicksRemaining = 0;
+      this.safeLog(
         "[Analytics] dropping batch after max consecutive failures",
         {
           ...context,
@@ -425,19 +440,25 @@ export class AnalyticsService {
           maxConsecutiveFailures: this.maxConsecutiveFailures,
         },
       );
-      this.consecutiveFailures = 0;
-      this.skipTicksRemaining = 0;
       return true;
     }
 
-    this.logger?.log("[Analytics] batch send failed, will retry", {
+    this.skipTicksRemaining = this.consecutiveFailures;
+    this.pendingEvents.unshift(...batch);
+    this.safeLog("[Analytics] batch send failed, will retry", {
       ...context,
       attempt: this.consecutiveFailures,
       batchSize: batch.length,
     });
-    this.skipTicksRemaining = this.consecutiveFailures;
-    this.pendingEvents.unshift(...batch);
     return false;
+  }
+
+  private safeLog(message: string, context?: unknown): void {
+    try {
+      this.logger?.log(message, context);
+    } catch {
+      // Analytics diagnostics are best-effort and cannot affect callers.
+    }
   }
 
   private getCurrentSessionId(): string {

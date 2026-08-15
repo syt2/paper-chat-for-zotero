@@ -256,6 +256,7 @@ describe("presentation launch coordinator", function () {
     const gate = deferred<boolean>();
     const attributes = new Map<string, string>();
     let launches = 0;
+    const trackedRepeatClicks: boolean[] = [];
     const handler = createPresentationButtonLaunchHandler(
       {
         launchPresentation: () => {
@@ -274,12 +275,14 @@ describe("presentation launch coordinator", function () {
           attributes.delete(name);
         },
       },
+      (repeatClick) => trackedRepeatClicks.push(repeatClick),
     );
 
     handler();
     handler();
 
     assert.equal(launches, 2);
+    assert.deepEqual(trackedRepeatClicks, [false, true]);
     assert.equal(attributes.get("aria-busy"), "true");
     gate.resolve(true);
     await gate.promise;

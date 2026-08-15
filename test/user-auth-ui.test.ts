@@ -1,5 +1,8 @@
 import { assert } from "chai";
-import { updateUserDisplay } from "../src/modules/preferences/UserAuthUI";
+import {
+  getProductAnalyticsProps,
+  updateUserDisplay,
+} from "../src/modules/preferences/UserAuthUI";
 
 class FakeElement {
   readonly style: Record<string, string> = {};
@@ -116,5 +119,45 @@ describe("PaperChat user auth preferences", function () {
     assert.equal(loginButton.textContent, "Log in");
     assert.isNull(status.getAttribute("value"));
     assert.isNull(loginButton.getAttribute("label"));
+  });
+
+  it("uses the product SKU as the stable analytics item", function () {
+    assert.deepEqual(
+      getProductAnalyticsProps({
+        sku: "newapi_subscription_plan_monthly",
+        name: "Monthly Pro",
+        money: "49.00",
+        description: "Monthly subscription",
+        quotaLabel: "1M / month",
+      }),
+      {
+        item: "newapi_subscription_plan_monthly",
+        sku: "newapi_subscription_plan_monthly",
+        product_name: "Monthly Pro",
+        product_category: "subscription",
+        money: "49.00",
+        quota_label: "1M / month",
+      },
+    );
+  });
+
+  it("classifies quota products and omits a missing quota label", function () {
+    assert.deepEqual(
+      getProductAnalyticsProps({
+        sku: "quota_500k",
+        name: "500K Credits",
+        money: "29.90",
+        description: "One-time quota",
+        quotaLabel: null,
+      }),
+      {
+        item: "quota_500k",
+        sku: "quota_500k",
+        product_name: "500K Credits",
+        product_category: "quota",
+        money: "29.90",
+        quota_label: undefined,
+      },
+    );
   });
 });
