@@ -26,6 +26,22 @@ export interface PictureExtent {
   h: number;
 }
 
+export interface PresentationRenderVerificationOptions {
+  /** Explicit strict seam for tests; normal plugin exports are advisory. */
+  strict?: boolean;
+}
+
+function reportVerificationIssue(
+  warnings: string[],
+  message: string,
+  options?: PresentationRenderVerificationOptions,
+): void {
+  if (options?.strict) {
+    throw new Error(message);
+  }
+  warnings.push(message);
+}
+
 interface TextShapeExtent extends PictureExtent {
   text: string;
   fontSize: number;
@@ -92,6 +108,7 @@ function verifyPictureGeometry(
   xml: string,
   slide: RenderablePresentationSlide,
   slideNumber: number,
+  options?: PresentationRenderVerificationOptions,
 ): string[] {
   const warnings: string[] = [];
   const extents = extractPictureExtents(xml);
@@ -105,8 +122,10 @@ function verifyPictureGeometry(
       extent.x + extent.w > SLIDE_WIDTH_EMU + tolerance ||
       extent.y + extent.h > SLIDE_HEIGHT_EMU + tolerance
     ) {
-      throw new Error(
+      reportVerificationIssue(
+        warnings,
         `Presentation render verification failed on slide ${slideNumber}: a picture is outside the slide canvas.`,
+        options,
       );
     }
   });
@@ -126,6 +145,7 @@ function verifyCoverPictureGeometry(
   xml: string,
   hasPaperSource: boolean,
   expectedFigures: number,
+  options?: PresentationRenderVerificationOptions,
 ): string[] {
   const warnings: string[] = [];
   const extents = extractPictureExtents(xml);
@@ -139,8 +159,10 @@ function verifyCoverPictureGeometry(
       extent.x + extent.w > SLIDE_WIDTH_EMU + tolerance ||
       extent.y + extent.h > SLIDE_HEIGHT_EMU + tolerance
     ) {
-      throw new Error(
+      reportVerificationIssue(
+        warnings,
         "Presentation render verification failed on the cover: a picture is outside the slide canvas.",
+        options,
       );
     }
   });
@@ -340,66 +362,79 @@ function expectedFigureCount(slide: RenderablePresentationSlide): number {
 export async function verifyRenderedPresentation(
   bytes: Uint8Array,
   spec: RenderablePresentationRequest,
+  options?: PresentationRenderVerificationOptions,
 ): Promise<string[]> {
   const warnings: string[] = [];
   const archive = await JSZip.loadAsync(bytes);
   const expectedSlideCount = spec.slides.length + 1;
   const coverXml = await archive.file("ppt/slides/slide1.xml")?.async("string");
   if (!coverXml) {
-    throw new Error(
+    reportVerificationIssue(
+      warnings,
       "Presentation render verification failed: cover slide missing.",
+      options,
     );
-  }
-  const coverText = slideText(coverXml);
-  const compactCoverText = coverText.replace(/\s+/gu, "");
-  const compactExpectedTitle = normalizeText(spec.title).replace(/\s+/gu, "");
-  if (!compactCoverText.includes(compactExpectedTitle)) {
-    throw new Error(
-      `Presentation render verification failed: cover omitted the deck title "${spec.title}".`,
-    );
-  }
-  for (const marker of [spec.subtitle, spec.author].filter(
-    (value): value is string => Boolean(value?.trim()),
-  )) {
-    if (!coverText.includes(normalizeText(marker))) {
-      warnings.push(`Cover: renderer omitted optional text "${marker}".`);
+  } else {
+    const coverText = slideText(coverXml);
+    const compactCoverText = coverText.replace(/\s+/gu, "");
+    const compactExpectedTitle = normalizeText(spec.title).replace(/\s+/gu, "");
+    if (!compactCoverText.includes(compactExpectedTitle)) {
+      reportVerificationIssue(
+        warnings,
+        `Presentation render verification failed: cover omitted the deck title "${spec.title}".`,
+        options,
+      );
     }
-  }
-  const coverFigureCount = planPresentationCoverFigures(
-    spec,
-    resolvePresentationThemeBlueprint(spec).id !== "paperchat-editorial",
-  ).length;
-  const renderedCoverFigures = (coverXml.match(/<p:pic>/g) || []).length;
-  if (renderedCoverFigures < coverFigureCount) {
+    for (const marker of [spec.subtitle, spec.author].filter(
+      (value): value is string => Boolean(value?.trim()),
+    )) {
+      if (!coverText.includes(normalizeText(marker))) {
+        warnings.push(`Cover: renderer omitted optional text "${marker}".`);
+      }
+    }
+    const coverFigureCount = planPresentationCoverFigures(
+      spec,
+      resolvePresentationThemeBlueprint(spec).id !== "paperchat-editorial",
+    ).length;
+    const renderedCoverFigures = (coverXml.match(/<p:pic>/g) || []).length;
+    if (renderedCoverFigures < coverFigureCount) {
+      warnings.push(
+        `Cover: rendered ${renderedCoverFigures}/${coverFigureCount} planned figures.`,
+      );
+    }
     warnings.push(
-      `Cover: rendered ${renderedCoverFigures}/${coverFigureCount} planned figures.`,
+      ...verifyCoverPictureGeometry(
+        coverXml,
+        Boolean(spec.sourceItemKey),
+        coverFigureCount,
+        options,
+      ),
     );
   }
-  warnings.push(
-    ...verifyCoverPictureGeometry(
-      coverXml,
-      Boolean(spec.sourceItemKey),
-      coverFigureCount,
-    ),
-  );
 
   for (let index = 0; index < expectedSlideCount; index++) {
     const path = `ppt/slides/slide${index + 1}.xml`;
     if (!archive.file(path)) {
-      throw new Error(
+      reportVerificationIssue(
+        warnings,
         `Presentation render verification failed: expected ${expectedSlideCount} slides but ${path} is missing.`,
+        options,
       );
     }
   }
   if (archive.file(`ppt/slides/slide${expectedSlideCount + 1}.xml`)) {
-    throw new Error(
+    reportVerificationIssue(
+      warnings,
       `Presentation render verification failed: output contains more than ${expectedSlideCount} slides.`,
+      options,
     );
   }
 
   for (const [index, slide] of spec.slides.entries()) {
     const path = `ppt/slides/slide${index + 2}.xml`;
-    const xml = await archive.file(path)!.async("string");
+    const slideEntry = archive.file(path);
+    if (!slideEntry) continue;
+    const xml = await slideEntry.async("string");
     const text = slideText(xml);
     const missing = expectedMarkers(slide).filter(
       (marker) => !text.includes(normalizeText(marker)),
@@ -422,11 +457,13 @@ export async function verifyRenderedPresentation(
       );
     }
     if (spec.sourceItemKey) {
-      warnings.push(...verifyPictureGeometry(xml, slide, index + 2));
+      warnings.push(...verifyPictureGeometry(xml, slide, index + 2, options));
     }
     if (slide.chart && !xml.includes("<c:chart")) {
-      throw new Error(
+      reportVerificationIssue(
+        warnings,
         `Presentation render verification failed on slide ${index + 2}: chart relationship missing.`,
+        options,
       );
     }
     const layout = resolveLayout(slide, index);
@@ -434,8 +471,10 @@ export async function verifyRenderedPresentation(
       slide.table || (slide.matrix && layout !== "conclusion"),
     );
     if (requiresNativeTable && !xml.includes("<a:tbl>")) {
-      throw new Error(
+      reportVerificationIssue(
+        warnings,
         `Presentation render verification failed on slide ${index + 2}: table or matrix missing.`,
+        options,
       );
     }
   }

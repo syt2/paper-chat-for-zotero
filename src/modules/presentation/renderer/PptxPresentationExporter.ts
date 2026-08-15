@@ -19,37 +19,97 @@ export interface PresentationRenderWithPreviewResult {
   visualWarnings: string[];
 }
 
+export interface PresentationRendererValidationOptions {
+  /** Explicit strict seam for renderer tests; plugin exports stay advisory. */
+  strictValidation?: boolean;
+}
+
 function normalizeRendererInput(
   spec: RenderablePresentationRequest,
-): RenderablePresentationRequest {
-  const figures = [
-    ...(spec.coverFigure ? [spec.coverFigure] : []),
-    ...(spec.coverFigures || []),
-    ...spec.slides.flatMap((slide) => [
-      ...(slide.figure ? [slide.figure] : []),
-      ...(slide.figures || []),
-    ]),
-  ];
-  for (const figure of figures) {
+  options?: PresentationRendererValidationOptions,
+): {
+  normalizedSpec: RenderablePresentationRequest;
+  warnings: string[];
+} {
+  const normalized = normalizePresentationRequestInput(
+    spec as unknown as Record<string, unknown>,
+  ) as unknown as RenderablePresentationRequest;
+  const warnings: string[] = [];
+  type RendererFigure = NonNullable<
+    RenderablePresentationRequest["coverFigure"]
+  >;
+  const normalizeFigure = (
+    figure: RendererFigure,
+    path: string,
+  ): RendererFigure | undefined => {
     const data = String(figure.data);
+    const pixelWidth = Number(figure.pixelWidth);
+    const pixelHeight = Number(figure.pixelHeight);
+    let issue: string | undefined;
     if (!/^data:image\/(?:png|jpe?g);base64,/i.test(data)) {
-      throw new Error(
-        `Presentation renderer received invalid figure data on PDF page ${figure.page}: type=${typeof figure.data}, tag=${Object.prototype.toString.call(figure.data)}, prefix=${data.slice(0, 32)}, length=${data.length}.`,
-      );
-    }
-    if (
-      !Number.isFinite(figure.pixelWidth) ||
-      !Number.isFinite(figure.pixelHeight) ||
-      figure.pixelWidth <= 0 ||
-      figure.pixelHeight <= 0
+      issue = `invalid figure data on PDF page ${figure.page}: type=${typeof figure.data}, tag=${Object.prototype.toString.call(figure.data)}, prefix=${data.slice(0, 32)}, length=${data.length}`;
+    } else if (
+      !Number.isFinite(pixelWidth) ||
+      !Number.isFinite(pixelHeight) ||
+      pixelWidth <= 0 ||
+      pixelHeight <= 0
     ) {
-      throw new Error(
-        `Presentation renderer received invalid figure dimensions on PDF page ${figure.page}: ${figure.pixelWidth}x${figure.pixelHeight}.`,
-      );
+      issue = `invalid figure dimensions on PDF page ${figure.page}: ${figure.pixelWidth}x${figure.pixelHeight}`;
     }
-    figure.data = data;
-  }
-  return spec;
+    if (issue) {
+      const message = `Presentation renderer received ${issue}.`;
+      if (options?.strictValidation) throw new Error(message);
+      warnings.push(`${path}: ${message} The unusable image was omitted.`);
+      return undefined;
+    }
+    return { ...figure, data, pixelWidth, pixelHeight };
+  };
+
+  const coverCandidates = [
+    ...(normalized.coverFigure
+      ? [normalizeFigure(normalized.coverFigure, "/coverFigure")]
+      : []),
+    ...(normalized.coverFigures || []).map((figure, index) =>
+      normalizeFigure(figure, `/coverFigures/${index}`),
+    ),
+  ].filter((figure): figure is RendererFigure => Boolean(figure));
+  const slides = normalized.slides.map((slide, slideIndex) => {
+    const candidates = [
+      ...(slide.figure
+        ? [normalizeFigure(slide.figure, `/slides/${slideIndex}/figure`)]
+        : []),
+      ...(slide.figures || []).map((figure, figureIndex) =>
+        normalizeFigure(figure, `/slides/${slideIndex}/figures/${figureIndex}`),
+      ),
+    ].filter((figure): figure is RendererFigure => Boolean(figure));
+    const {
+      figure: _figure,
+      figures: _figures,
+      ...slideWithoutFigures
+    } = slide;
+    return {
+      ...slideWithoutFigures,
+      ...(candidates[0] ? { figure: candidates[0] } : {}),
+      ...(candidates.length > 1 ? { figures: candidates.slice(1) } : {}),
+    };
+  });
+  const {
+    coverFigure: _coverFigure,
+    coverFigures: _coverFigures,
+    slides: _slides,
+    ...requestWithoutFigures
+  } = normalized;
+  return {
+    normalizedSpec: {
+      ...requestWithoutFigures,
+      ...(coverCandidates[0] ? { coverFigure: coverCandidates[0] } : {}),
+      ...(coverCandidates.length > 1
+        ? { coverFigures: coverCandidates.slice(1) }
+        : {}),
+      slides,
+    },
+    warnings,
+  };
 }
 
 function assertPptxBytes(value: unknown): asserts value is Uint8Array {
@@ -67,24 +127,29 @@ function assertPptxBytes(value: unknown): asserts value is Uint8Array {
   }
 }
 
-function createPresentationDocument(spec: RenderablePresentationRequest): {
+function createPresentationDocument(
+  spec: RenderablePresentationRequest,
+  options?: PresentationRendererValidationOptions,
+): {
   presentation: PptxGenJS;
   normalizedSpec: RenderablePresentationRequest;
   visualWarnings: string[];
 } {
-  const normalizedSpec = normalizeRendererInput(
-    normalizePresentationRequestInput(
-      spec as unknown as Record<string, unknown>,
-    ) as unknown as RenderablePresentationRequest,
+  const { normalizedSpec, warnings: inputWarnings } = normalizeRendererInput(
+    spec,
+    options,
   );
-  const visualWarnings = normalizedSpec.sourceItemKey
-    ? validateResolvedVisualContract(
-        normalizedSpec.slides,
-        normalizedSpec.slides.map((slide, index) =>
-          resolveLayout(slide, index),
-        ),
-      )
-    : [];
+  const visualWarnings = [
+    ...inputWarnings,
+    ...(normalizedSpec.sourceItemKey
+      ? validateResolvedVisualContract(
+          normalizedSpec.slides,
+          normalizedSpec.slides.map((slide, index) =>
+            resolveLayout(slide, index),
+          ),
+        )
+      : []),
+  ];
   assertWideCanvas();
   const presentation = new PptxGenJS();
   const palette = resolveTheme(normalizedSpec);
@@ -120,6 +185,7 @@ function createPresentationDocument(spec: RenderablePresentationRequest): {
 async function writeAndVerifyPresentation(
   presentation: PptxGenJS,
   normalizedSpec: RenderablePresentationRequest,
+  options?: PresentationRendererValidationOptions,
 ): Promise<{ bytes: Uint8Array; verificationWarnings: string[] }> {
   const bytes = await presentation.write({
     outputType: "uint8array",
@@ -129,30 +195,38 @@ async function writeAndVerifyPresentation(
   const verificationWarnings = await verifyRenderedPresentation(
     bytes,
     normalizedSpec,
+    { strict: options?.strictValidation },
   );
   return { bytes, verificationWarnings };
 }
 
 export async function renderPresentation(
   spec: RenderablePresentationRequest,
+  options?: PresentationRendererValidationOptions,
 ): Promise<Uint8Array> {
-  const { presentation, normalizedSpec } = createPresentationDocument(spec);
+  const { presentation, normalizedSpec } = createPresentationDocument(
+    spec,
+    options,
+  );
   const { bytes } = await writeAndVerifyPresentation(
     presentation,
     normalizedSpec,
+    options,
   );
   return bytes;
 }
 
 export async function renderPresentationWithPreview(
   spec: RenderablePresentationRequest,
+  options?: PresentationRendererValidationOptions,
 ): Promise<PresentationRenderWithPreviewResult> {
   const { presentation, normalizedSpec, visualWarnings } =
-    createPresentationDocument(spec);
+    createPresentationDocument(spec, options);
   const previewSlides = await renderPresentationPreviewSlides(presentation);
   const { bytes, verificationWarnings } = await writeAndVerifyPresentation(
     presentation,
     normalizedSpec,
+    options,
   );
   return {
     bytes,

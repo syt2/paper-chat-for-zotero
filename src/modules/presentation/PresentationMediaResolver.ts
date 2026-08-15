@@ -108,11 +108,16 @@ const sharedStandalonePageCache = new Map<
 
 export class PresentationResolvedMediaDuplicateError extends Error {
   readonly issues: string[];
+  readonly resolvedRequest?: RenderablePresentationRequest;
 
-  constructor(issues: string[]) {
+  constructor(
+    issues: string[],
+    resolvedRequest?: RenderablePresentationRequest,
+  ) {
     super(issues.join("; "));
     this.name = "PresentationResolvedMediaDuplicateError";
     this.issues = issues;
+    this.resolvedRequest = resolvedRequest;
   }
 }
 
@@ -2496,7 +2501,10 @@ export async function resolvePresentationMedia(
   };
   const duplicateIssues = validateResolvedPresentationMedia(resolved);
   if (duplicateIssues.length > 0) {
-    throw new PresentationResolvedMediaDuplicateError(duplicateIssues);
+    throw new PresentationResolvedMediaDuplicateError(
+      duplicateIssues,
+      resolved,
+    );
   }
   return resolved;
 }

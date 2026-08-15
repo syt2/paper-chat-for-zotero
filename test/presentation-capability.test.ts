@@ -183,7 +183,7 @@ describe("presentation capability", function () {
     assert.deepEqual(validatePresentationQuality(normalized as any), []);
   });
 
-  it("keeps an explicitly selected page count blocking in production mode", function () {
+  it("keeps an explicitly selected page-count mismatch advisory in production mode", function () {
     for (const slideCount of [4, 6, 8, 10, 15, 30] as const) {
       const issues = validatePresentationQuality({
         title: "Selected length deck",
@@ -201,9 +201,10 @@ describe("presentation capability", function () {
       const blocking = filterBlockingPresentationQualityIssues(issues, false);
 
       assert.include(
-        blocking.join("\n"),
+        issues.join("\n"),
         `selected presentation length requires exactly ${slideCount - 1} content slides`,
       );
+      assert.deepEqual(blocking, []);
     }
   });
 
@@ -769,7 +770,7 @@ describe("presentation capability", function () {
     ]);
   });
 
-  it("keeps structural issues blocking while editorial quality is advisory by default", function () {
+  it("keeps every planning-quality issue advisory by default", function () {
     const issues = [
       "/slides/0: evidence layout requires at least two evidence modules such as PDF figures, a chart, table, equation, matrix, or metrics.",
       "/slides/0: 940 visible characters exceed the 760-character budget for the evidence composition.",
@@ -780,9 +781,10 @@ describe("presentation capability", function () {
       filterBlockingPresentationQualityIssues(issues, true),
       issues,
     );
-    assert.deepEqual(filterBlockingPresentationQualityIssues(issues, false), [
-      "/slides/0/table: every row must match the header count.",
-    ]);
+    assert.deepEqual(
+      filterBlockingPresentationQualityIssues(issues, false),
+      [],
+    );
   });
 
   it("uses an explicit test-only seam for strict editorial quality", function () {
@@ -818,7 +820,7 @@ describe("presentation capability", function () {
     );
   });
 
-  it("blocks only deterministic native-object data-shape failures in production", function () {
+  it("does not let deterministic planning diagnostics block production export", function () {
     const structuralIssues = [
       "/slides/0/chart: labels and values must have the same length.",
       "/slides/1/figures/0/crop: x+width and y+height must stay within 1.",
@@ -836,7 +838,7 @@ describe("presentation capability", function () {
         [...structuralIssues, ...layoutPreferences],
         false,
       ),
-      structuralIssues,
+      [],
     );
   });
 
@@ -939,41 +941,14 @@ describe("presentation capability", function () {
     assert.notProperty(normalized.slides[1], "callouts");
   });
 
-  it("rejects malformed specifications before touching the Zotero runtime", async function () {
+  it("rejects schema-invalid specifications before touching the Zotero runtime", async function () {
     const missingSlides = await executePresentationCapability({
       title: "Missing slides",
       slides: null,
     });
-    const mismatchedChart = await executePresentationCapability({
-      title: "Bad chart",
-      slides: [
-        {
-          title: "Slide",
-          chart: {
-            type: "bar",
-            labels: ["A", "B"],
-            values: [1],
-          },
-        },
-      ],
-    });
-    const mismatchedTable = await executePresentationCapability({
-      title: "Bad table",
-      slides: [
-        {
-          title: "Slide",
-          table: {
-            headers: ["A", "B"],
-            rows: [["only one cell"]],
-          },
-        },
-      ],
-    });
 
     assert.match(missingSlides, /^Error: Invalid presentation specification/);
     assert.include(missingSlides, "slides");
-    assert.include(mismatchedChart, "labels and values");
-    assert.include(mismatchedTable, "header count");
   });
 
   it("rejects text-wall decks and duplicate covers before rendering", async function () {
@@ -2082,7 +2057,7 @@ describe("presentation capability", function () {
     }
   });
 
-  it("keeps the trusted library ID during duplicate-media repair", async function () {
+  it("keeps the trusted library ID and exports a persistent duplicate crop with warnings", async function () {
     const runtime = globalThis as any;
     const previousZotero = runtime.Zotero;
     const previousServices = runtime.Services;
@@ -2090,7 +2065,6 @@ describe("presentation capability", function () {
     const previousPathUtils = runtime.PathUtils;
     const target: Record<string, unknown> = {};
     const libraryIDs: Array<number | undefined> = [];
-    let resolveCalls = 0;
     runtime.Zotero = {
       DataDirectory: { dir: "/zotero-data" },
       getMainWindow: () => target,
@@ -2131,21 +2105,42 @@ describe("presentation capability", function () {
         {
           mediaResolver: async (request, sourceLibraryID) => {
             libraryIDs.push(sourceLibraryID);
-            resolveCalls += 1;
-            if (resolveCalls === 1) {
-              throw new PresentationResolvedMediaDuplicateError([
-                "synthetic duplicate crop",
-              ]);
-            }
-            return request as any;
+            throw new PresentationResolvedMediaDuplicateError(
+              ["synthetic duplicate crop"],
+              request as any,
+            );
           },
         },
         { itemKey: "SHARED01", libraryID: 5 },
       );
       const payload = JSON.parse(result);
 
-      assert.oneOf(payload.status, ["completed", "completed_with_warnings"]);
+      assert.equal(payload.status, "completed_with_warnings");
+      assert.include(payload.visualReviewSummary, "synthetic duplicate crop");
       assert.deepEqual(libraryIDs, [5, 5]);
+
+      libraryIDs.length = 0;
+      const strictResult = await executePresentationCapability(
+        VALID_REQUEST,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        {
+          strictQualityGate: true,
+          mediaResolver: async (request, sourceLibraryID) => {
+            libraryIDs.push(sourceLibraryID);
+            throw new PresentationResolvedMediaDuplicateError(
+              ["synthetic duplicate crop"],
+              request as any,
+            );
+          },
+        },
+        { itemKey: "SHARED01", libraryID: 5 },
+      );
+      assert.match(strictResult, /^Error: Presentation generation failed/);
+      assert.include(strictResult, "synthetic duplicate crop");
+      assert.deepEqual(libraryIDs, [5]);
     } finally {
       resetPresentationRendererForTests();
       runtime.Zotero = previousZotero;

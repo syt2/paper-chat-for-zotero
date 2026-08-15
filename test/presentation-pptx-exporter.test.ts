@@ -266,6 +266,82 @@ describe("presentation PPTX exporter probe", function () {
     assert.match(warnings.join("\n"), /occupy only/);
   });
 
+  it("reports deterministic OOXML verification defects without blocking runtime export", async function () {
+    const archive = new JSZip();
+    archive.file(
+      "ppt/slides/slide1.xml",
+      '<p:sld xmlns:p="p" xmlns:a="a"><p:cSld><p:spTree><a:t>Verification contract</a:t></p:spTree></p:cSld></p:sld>',
+    );
+    archive.file(
+      "ppt/slides/slide2.xml",
+      '<p:sld xmlns:p="p" xmlns:a="a"><p:cSld><p:spTree><a:t>Result chart</a:t></p:spTree></p:cSld></p:sld>',
+    );
+    const bytes = await archive.generateAsync({ type: "uint8array" });
+    const spec: RenderablePresentationRequest = {
+      title: "Verification contract",
+      slides: [
+        {
+          title: "Result chart",
+          chart: {
+            type: "bar",
+            labels: ["A", "B"],
+            values: [1, 2],
+          },
+        },
+      ],
+    };
+
+    const warnings = await verifyRenderedPresentation(bytes, spec);
+    assert.include(warnings.join("\n"), "chart relationship missing");
+
+    let strictError: unknown;
+    try {
+      await verifyRenderedPresentation(bytes, spec, { strict: true });
+    } catch (error) {
+      strictError = error;
+    }
+    assert.instanceOf(strictError, Error);
+    assert.include(
+      (strictError as Error).message,
+      "chart relationship missing",
+    );
+  });
+
+  it("omits unusable resolved images in runtime exports but keeps a strict renderer seam", async function () {
+    const spec = {
+      title: "Invalid image fallback",
+      slides: [
+        {
+          title: "The narrative still exports",
+          keyMessage:
+            "The media object is unusable, but the deck remains useful.",
+          figure: {
+            page: 3,
+            data: "not-an-image",
+            pixelWidth: 640,
+            pixelHeight: 360,
+          },
+        },
+      ],
+    } as RenderablePresentationRequest;
+
+    const bytes = await renderPresentation(spec);
+    const archive = await JSZip.loadAsync(bytes);
+    const slideXml =
+      await archive.files["ppt/slides/slide2.xml"].async("string");
+    assert.include(slideXml, "The narrative still exports");
+    assert.notInclude(slideXml, "<p:pic>");
+
+    let strictError: unknown;
+    try {
+      await renderPresentation(spec, { strictValidation: true });
+    } catch (error) {
+      strictError = error;
+    }
+    assert.instanceOf(strictError, Error);
+    assert.include((strictError as Error).message, "invalid figure data");
+  });
+
   it("accepts a single ultra-wide figure that fills the width at 20% slide area", async function () {
     const archive = new JSZip();
     archive.file(

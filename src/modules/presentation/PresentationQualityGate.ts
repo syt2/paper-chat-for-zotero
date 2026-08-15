@@ -108,34 +108,16 @@ function evidenceModuleCount(slide: PresentationSlide): number {
 }
 
 /**
- * Strict test runs keep every editorial heuristic blocking so planner drift is
- * visible immediately. The normal plugin path blocks only deterministic data
- * shape failures that cannot be represented safely as native PPT objects.
- * Layout choice, module count, density, hierarchy, and other composition
- * preferences stay advisory so a usable deck is not discarded before its first
- * successful render.
+ * Strict test runs keep every planner diagnostic blocking so regressions stay
+ * visible. The user-facing plugin path treats every quality diagnostic as
+ * advisory. Schema validity, rendering, and file persistence remain separate
+ * execution requirements, but a quality rule alone must never discard a deck.
  */
-function isStructuralPresentationQualityIssue(issue: string): boolean {
-  return [
-    /itemKey or request-level sourceItemKey is required/u,
-    /\/crop: x\+width and y\+height must stay within 1/u,
-    /\/chart: provide exactly one of values or series/u,
-    /\/chart: labels and values must have the same length/u,
-    /\/chart\/series\/\d+: values must match the labels length/u,
-    /\/chart\/highlightIndex: index exceeds labels length/u,
-    /\/table: every row must match the header count/u,
-    /\/table\/highlightRow: index exceeds row count/u,
-    /\/matrix: every row must contain exactly one cell per column/u,
-    /\/matrix\/highlightColumn: index exceeds column count/u,
-    /\/slides: selected presentation length requires exactly \d+ content slides/u,
-  ].some((pattern) => pattern.test(issue));
-}
-
 export function filterBlockingPresentationQualityIssues(
   issues: string[],
   strict: boolean,
 ): string[] {
-  return strict ? issues : issues.filter(isStructuralPresentationQualityIssue);
+  return strict ? issues : [];
 }
 
 export function shouldUseStrictPresentationQualityGate(options?: {

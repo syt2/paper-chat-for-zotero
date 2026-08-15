@@ -876,19 +876,74 @@ export async function executePresentationCapability(
         if (!(error instanceof PresentationResolvedMediaDuplicateError)) {
           throw error;
         }
-        const repaired = await runFullStructuralRepair(
-          "media",
-          error.issues,
-          candidate,
-        );
-        if (!repaired) throw error;
-        return {
-          request: repaired,
-          renderableRequest: await mediaResolver(
-            repaired,
-            sourceContext?.libraryID,
-          ),
+        const acceptDuplicateMedia = (
+          acceptedRequest: PresentationRequest,
+          duplicateError: PresentationResolvedMediaDuplicateError,
+          context: string,
+        ) => {
+          if (!duplicateError.resolvedRequest) {
+            throw duplicateError;
+          }
+          acceptReleaseVisualWarning(
+            `${context}: ${duplicateError.issues.slice(0, 6).join("; ")}`,
+          );
+          return {
+            request: acceptedRequest,
+            renderableRequest: duplicateError.resolvedRequest,
+          };
         };
+
+        let repaired: PresentationRequest | undefined;
+        try {
+          repaired = await runFullStructuralRepair(
+            "media",
+            error.issues,
+            candidate,
+          );
+        } catch (repairError) {
+          if (strictQuality) throw repairError;
+          return acceptDuplicateMedia(
+            candidate,
+            error,
+            `Duplicate-image repair failed, so PaperChat exported the original usable media instead of blocking (${getErrorMessage(repairError)})`,
+          );
+        }
+        if (!repaired) {
+          if (strictQuality) throw error;
+          return acceptDuplicateMedia(
+            candidate,
+            error,
+            "Duplicate-image validation remained advisory because no internal repair planner was available",
+          );
+        }
+        try {
+          return {
+            request: repaired,
+            renderableRequest: await mediaResolver(
+              repaired,
+              sourceContext?.libraryID,
+            ),
+          };
+        } catch (repairedError) {
+          if (
+            !(repairedError instanceof PresentationResolvedMediaDuplicateError)
+          ) {
+            throw repairedError;
+          }
+          if (strictQuality) throw repairedError;
+          if (!repairedError.resolvedRequest && error.resolvedRequest) {
+            return acceptDuplicateMedia(
+              candidate,
+              error,
+              "The repaired plan still repeated a crop, so PaperChat exported the original usable media instead of blocking",
+            );
+          }
+          return acceptDuplicateMedia(
+            repaired,
+            repairedError,
+            "The repaired plan still repeated a crop, so PaperChat exported it with a non-blocking warning",
+          );
+        }
       }
     };
     const renderPreview = async (
