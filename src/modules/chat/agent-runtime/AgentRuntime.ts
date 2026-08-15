@@ -2380,7 +2380,6 @@ export class AgentRuntime {
           {
             id: this.callbacks.generateId(),
             role: "system",
-            promptCacheBreakpoint: "explicit",
             content: [
               "You are the visual quality gate for PaperChat academic presentations.",
               "Inspect every supplied slide image at full size and judge the deck as a premium public research presentation, not as a merely valid file.",
@@ -2396,8 +2395,13 @@ export class AgentRuntime {
               "Use verdicts to guide internal development and repair, not to decide whether a production PPTX may be written. pass means the deck is genuinely presentation-ready and may still include minor optional polish in the summary. revise means one bounded draft repair can resolve a visible problem. reject means a material defect still harms readability, evidence scale, hierarchy, consistency, or audience trust. In production every visual-review verdict is advisory and the best successfully rendered deck is still exported; only deterministic schema, renderer, PPTX integrity, or filesystem failures may prevent writing. Never revise or reject only for subjective preference or micro-polish.",
               "Classify every non-pass verdict with failureClass. Use editorial for evidence-module count, visual density, image count, cover styling, composition variety, hierarchy, empty canvas, or other presentation-quality judgment. Use render_safety only to prioritize repair of catastrophic source cropping, severe text clipping or overflow that makes content unreadable, or another defect that makes the deck unsafe to present. Even render_safety is a production repair signal rather than a visual-model veto. Never label a merely sparse or less-polished slide as render_safety.",
               "Audit editable charts against the chart structure included in the outline, not by counting visible bars alone. In a grouped bar chart, one category label correctly names a cluster containing one bar per legend series; do not demand a separate category label for every bar. Reject only when the outline itself shows missing or mismatched labels/values, or the rendered legend and category labels are actually unreadable.",
-              "The user message states the review stage, allowed slide range, and any protocol correction. Follow it without changing source evidence.",
-              "Return JSON only with: verdict (pass, revise, or reject), summary, failureClass (editorial or render_safety for every non-pass verdict), optional deckPatch, and optional patches. deckPatch may contain coverLayout (single-hero or editorial-collage), coverTitleScale (compact, standard, or large), swapCoverFigureOrder, or dropCoverEvidenceLine. Each slide patch may contain layout, title, subtitle, eyebrow, keyMessage, bullets, figureEmphasis (standard or dominant), swapFigureOrder, or dropFields. Allowed dropFields: subtitle, keyMessage, bullets, groups, metrics, callouts, figure, figures, chart, table, equation, matrix, timeline, process, comparison.",
+              finalStage
+                ? "This is the final internal review. Return only pass or reject: pass when all slides are genuinely presentation-ready, reject when a material defect remains. Every production rejection is reported as an advisory warning and must not imply that no PPTX was written; the visual reviewer does not own the export gate. Never return revise at the final gate."
+                : "This is the draft gate. If the deck is close but needs one repair pass, return concise slide patches. Reject it if the fixed layout system cannot make it presentation-ready.",
+              `Return JSON only with: verdict (pass, revise, or reject), summary, failureClass (editorial or render_safety for every non-pass verdict), optional deckPatch, and optional patches. deckPatch may contain coverLayout (single-hero or editorial-collage), coverTitleScale (compact, standard, or large), swapCoverFigureOrder, or dropCoverEvidenceLine. Each slide patch uses exported slideNumber 2-${Math.max(2, request.previewSlides.length)} and may contain layout, title, subtitle, eyebrow, keyMessage, bullets, figureEmphasis (standard or dominant), swapFigureOrder, or dropFields. Allowed dropFields: subtitle, keyMessage, bullets, groups, metrics, callouts, figure, figures, chart, table, equation, matrix, timeline, process, comparison.`,
+              repair
+                ? "The previous reviewer response violated the JSON protocol. Correct that protocol error now; do not change the supplied slide evidence and do not call tools."
+                : "",
             ]
               .filter(Boolean)
               .join("\n"),
@@ -2408,14 +2412,7 @@ export class AgentRuntime {
             role: "user",
             content: [
               `Review stage: ${request.stage}`,
-              finalStage
-                ? "This is the final internal review. Return only pass or reject: pass when all slides are genuinely presentation-ready, reject when a material defect remains. Every production rejection is reported as an advisory warning and must not imply that no PPTX was written; the visual reviewer does not own the export gate. Never return revise at the final gate."
-                : "This is the draft gate. If the deck is close but needs one repair pass, return concise slide patches. Reject it if the fixed layout system cannot make it presentation-ready.",
-              `Each slide patch uses exported slideNumber 2-${Math.max(2, request.previewSlides.length)}.`,
               `Deck outline:\n${request.outline}`,
-              repair
-                ? "The previous reviewer response violated the JSON protocol. Correct that protocol error now; do not change the supplied slide evidence and do not call tools."
-                : "",
               repair ? `Protocol issue: ${repair.message}` : "",
               repair?.previousDraft === undefined
                 ? ""
@@ -2474,8 +2471,9 @@ export class AgentRuntime {
           {
             id: this.callbacks.generateId(),
             role: "system",
-            promptCacheBreakpoint: "explicit",
-            content: buildPresentationPlannerSystemPrompt(),
+            content: buildPresentationPlannerSystemPrompt(
+              planningRequest.intent.slideCount,
+            ),
             timestamp: Date.now(),
           },
           {

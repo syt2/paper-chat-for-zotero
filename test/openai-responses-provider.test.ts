@@ -14,7 +14,6 @@ function createProvider(
   runtime: {
     sessionId?: string;
     hostedWebSearch?: boolean;
-    explicitPromptCacheBreakpoints?: boolean;
   } = {},
   configOverrides: Partial<ApiKeyProviderConfig> = {},
 ): OpenAIResponsesProvider {
@@ -401,169 +400,23 @@ describe("OpenAIResponsesProvider", function () {
     ]);
   });
 
-  it("serializes an explicit reusable system prefix with one stable cache key", async function () {
-    const requestBodies: Array<Record<string, any>> = [];
-    globalThis.fetch = (async (_input, init) => {
-      requestBodies.push(JSON.parse(String(init?.body)));
-      return jsonResponse(completedResponse("resp_cache_breakpoint", "done"));
-    }) as typeof fetch;
-
-    for (const [index, sessionId] of [
-      "presentation-cache-a",
-      "presentation-cache-b",
-    ].entries()) {
-      const provider = createProvider(
-        { sessionId },
-        {
-          defaultModel: "gpt-5.6-terra",
-          availableModels: ["gpt-5.6-terra"],
-        },
-      );
-      await provider.chatCompletionWithTools(
-        [
-          {
-            id: "planner-system",
-            role: "system",
-            content: "Long fixed planner instructions.",
-            promptCacheBreakpoint: "explicit",
-            timestamp: 1,
-          },
-          message(
-            "planner-input",
-            "user",
-            `Dynamic paper evidence and repair ${index + 1}.`,
-          ),
-        ],
-        undefined,
-        undefined,
-        { toolChoice: "none", stateless: true },
-      );
-    }
-
-    const changedPrefixProvider = createProvider(
-      { sessionId: "presentation-cache-c" },
-      {
-        defaultModel: "gpt-5.6-terra",
-        availableModels: ["gpt-5.6-terra"],
-      },
-    );
-    await changedPrefixProvider.chatCompletionWithTools(
-      [
-        {
-          id: "planner-system-changed",
-          role: "system",
-          content: "Changed fixed planner instructions.",
-          promptCacheBreakpoint: "explicit",
-          timestamp: 1,
-        },
-        message(
-          "planner-input",
-          "user",
-          "Dynamic paper evidence and repair 3.",
-        ),
-      ],
-      undefined,
-      undefined,
-      { toolChoice: "none", stateless: true },
-    );
-
-    assert.lengthOf(requestBodies, 3);
-    assert.equal(
-      requestBodies[0].prompt_cache_key,
-      requestBodies[1].prompt_cache_key,
-    );
-    assert.notEqual(
-      requestBodies[0].prompt_cache_key,
-      requestBodies[2].prompt_cache_key,
-    );
-    assert.notDeepEqual(requestBodies[0].input, requestBodies[1].input);
-    assert.deepEqual(requestBodies[0].prompt_cache_options, {
-      mode: "explicit",
-    });
-    assert.deepEqual(requestBodies[0].input, [
-      {
-        role: "developer",
-        content: [
-          {
-            type: "input_text",
-            text: "Long fixed planner instructions.",
-            prompt_cache_breakpoint: { mode: "explicit" },
-          },
-        ],
-      },
-      { role: "user", content: "Dynamic paper evidence and repair 1." },
-    ]);
-  });
-
-  it("honors routing-declared explicit cache support for model aliases", async function () {
-    const requestBodies: Array<Record<string, any>> = [];
-    globalThis.fetch = (async (_input, init) => {
-      requestBodies.push(JSON.parse(String(init?.body)));
-      return jsonResponse(completedResponse("resp_cache_capability", "done"));
-    }) as typeof fetch;
-    const messages: ChatMessage[] = [
-      {
-        id: "planner-system",
-        role: "system",
-        content: "Stable planner instructions.",
-        promptCacheBreakpoint: "explicit",
-        timestamp: 1,
-      },
-      message("planner-input", "user", "Dynamic paper evidence."),
-    ];
-
-    await createProvider(
-      {
-        sessionId: "alias-enabled",
-        explicitPromptCacheBreakpoints: true,
-      },
-      {
-        defaultModel: "paperchat-presentation-model",
-        availableModels: ["paperchat-presentation-model"],
-      },
-    ).chatCompletionWithTools(messages, undefined, undefined, {
-      toolChoice: "none",
-      stateless: true,
-    });
-    await createProvider(
-      {
-        sessionId: "gpt-disabled",
-        explicitPromptCacheBreakpoints: false,
-      },
-      {
-        defaultModel: "gpt-5.6-terra",
-        availableModels: ["gpt-5.6-terra"],
-      },
-    ).chatCompletionWithTools(messages, undefined, undefined, {
-      toolChoice: "none",
-      stateless: true,
-    });
-
-    assert.deepEqual(requestBodies[0].prompt_cache_options, {
-      mode: "explicit",
-    });
-    assert.equal(requestBodies[0].input[0].role, "developer");
-    assert.notProperty(requestBodies[1], "prompt_cache_options");
-    assert.equal(requestBodies[1].input[0].role, "system");
-  });
-
-  it("omits explicit cache fields for Responses models older than GPT-5.6", async function () {
+  it("does not send unsupported explicit prompt-cache fields for GPT-5.6", async function () {
     let requestBody: Record<string, any> = {};
     globalThis.fetch = (async (_input, init) => {
       requestBody = JSON.parse(String(init?.body));
-      return jsonResponse(completedResponse("resp_legacy_cache", "done"));
+      return jsonResponse(completedResponse("resp_gpt56_cache", "done"));
     }) as typeof fetch;
 
-    const provider = createProvider({ sessionId: "presentation-legacy" });
+    const provider = createProvider(
+      { sessionId: "presentation-gpt56" },
+      {
+        defaultModel: "gpt-5.6-terra",
+        availableModels: ["gpt-5.6-terra"],
+      },
+    );
     await provider.chatCompletionWithTools(
       [
-        {
-          id: "planner-system",
-          role: "system",
-          content: "Long fixed planner instructions.",
-          promptCacheBreakpoint: "explicit",
-          timestamp: 1,
-        },
+        message("planner-system", "system", "Presentation planner."),
         message("planner-input", "user", "Dynamic paper evidence."),
       ],
       undefined,
@@ -571,63 +424,16 @@ describe("OpenAIResponsesProvider", function () {
       { toolChoice: "none", stateless: true },
     );
 
-    assert.deepEqual(requestBody.input, [
-      { role: "system", content: "Long fixed planner instructions." },
-      { role: "user", content: "Dynamic paper evidence." },
-    ]);
     assert.notProperty(requestBody, "prompt_cache_options");
+    assert.notInclude(JSON.stringify(requestBody), "prompt_cache_breakpoint");
     assert.equal(
       requestBody.prompt_cache_key,
-      createResponsesPromptCacheKey("presentation-legacy", "gpt-5.4"),
+      createResponsesPromptCacheKey("presentation-gpt56", "gpt-5.6-terra"),
     );
-  });
-
-  it("invalidates a stored chain when the cache-breakpoint hint changes", async function () {
-    const requestBodies: Array<Record<string, any>> = [];
-    const responses = [
-      completedResponse("resp_before_breakpoint", "first"),
-      completedResponse("resp_after_breakpoint", "second"),
-    ];
-    globalThis.fetch = (async (_input, init) => {
-      requestBodies.push(JSON.parse(String(init?.body)));
-      return jsonResponse(responses.shift()!);
-    }) as typeof fetch;
-
-    const provider = createProvider(
-      { sessionId: "breakpoint-fingerprint" },
-      {
-        defaultModel: "gpt-5.6-terra",
-        availableModels: ["gpt-5.6-terra"],
-      },
-    );
-    const systemMessage: ChatMessage = {
-      id: "stable-system",
-      role: "system",
-      content: "Stable instructions.",
-      timestamp: 1,
-    };
-    await provider.chatCompletion([
-      systemMessage,
-      message("u1", "user", "first question"),
+    assert.deepEqual(requestBody.input, [
+      { role: "system", content: "Presentation planner." },
+      { role: "user", content: "Dynamic paper evidence." },
     ]);
-    await provider.chatCompletion([
-      { ...systemMessage, promptCacheBreakpoint: "explicit" },
-      message("u1", "user", "first question"),
-      message("a1", "assistant", "first"),
-      message("u2", "user", "second question"),
-    ]);
-
-    assert.notProperty(requestBodies[1], "previous_response_id");
-    assert.deepInclude(requestBodies[1].input[0], {
-      role: "developer",
-      content: [
-        {
-          type: "input_text",
-          text: "Stable instructions.",
-          prompt_cache_breakpoint: { mode: "explicit" },
-        },
-      ],
-    });
   });
 
   it("isolates two Responses model chains and invalidates A after B answers", async function () {

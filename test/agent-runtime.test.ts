@@ -4507,7 +4507,6 @@ describe("agent runtime plan semantics", function () {
       stateless: true,
     });
     assert.lengthOf(capturedMessages, 2);
-    assert.equal(capturedMessages[0].promptCacheBreakpoint, "explicit");
     assert.notInclude(capturedMessages[0].content, "SBZ2M99R");
     assert.notInclude(capturedMessages[0].content, "面向组会");
     assert.include(capturedMessages[1].content, "SBZ2M99R");
@@ -5089,8 +5088,6 @@ describe("agent runtime plan semantics", function () {
 
     assert.equal(callCount, 2);
     assert.equal(result.title, "Repaired deck");
-    assert.equal(capturedMessages[0][0].promptCacheBreakpoint, "explicit");
-    assert.equal(capturedMessages[1][0].promptCacheBreakpoint, "explicit");
     assert.equal(
       capturedMessages[0][0].content,
       capturedMessages[1][0].content,
@@ -5157,19 +5154,17 @@ describe("agent runtime plan semantics", function () {
       stateless: true,
     });
     const capturedMessages = capturedMessageSnapshots[1];
-    assert.equal(
+    assert.notEqual(
       capturedMessageSnapshots[0][0].content,
       capturedMessageSnapshots[1][0].content,
     );
-    assert.equal(
-      capturedMessageSnapshots[0][0].promptCacheBreakpoint,
-      "explicit",
+    assert.include(capturedMessages[0].content, "This is the draft gate");
+    assert.include(capturedMessages[0].content, "slideNumber 2-2");
+    assert.include(
+      capturedMessages[0].content,
+      "previous reviewer response violated the JSON protocol",
     );
-    assert.equal(capturedMessages[0].promptCacheBreakpoint, "explicit");
-    assert.notInclude(capturedMessages[0].content, "Review stage: draft");
-    assert.notInclude(capturedMessages[0].content, "slideNumber");
     assert.include(capturedMessages[1].content, "Review stage: draft");
-    assert.include(capturedMessages[1].content, "slideNumber 2-2");
     assert.include(capturedMessages[1].content, "Protocol issue:");
     assert.include(
       capturedMessages[0].content,
@@ -5205,7 +5200,7 @@ describe("agent runtime plan semantics", function () {
     );
   });
 
-  it("keeps final-review policy after the visual-review cache breakpoint", async function () {
+  it("keeps final-review policy in the visual-review system prompt", async function () {
     const runtime = new AgentRuntime(
       { updateSessionMeta: async () => undefined } as any,
       {
@@ -5244,11 +5239,9 @@ describe("agent runtime plan semantics", function () {
       ],
     });
 
-    assert.equal(capturedMessages[0].promptCacheBreakpoint, "explicit");
-    assert.notInclude(capturedMessages[0].content, "final internal review");
-    assert.notInclude(capturedMessages[0].content, "slideNumber");
-    assert.include(capturedMessages[1].content, "final internal review");
-    assert.include(capturedMessages[1].content, "Never return revise");
-    assert.include(capturedMessages[1].content, "slideNumber 2-3");
+    assert.include(capturedMessages[0].content, "final internal review");
+    assert.include(capturedMessages[0].content, "Never return revise");
+    assert.include(capturedMessages[0].content, "slideNumber 2-3");
+    assert.include(capturedMessages[1].content, "Review stage: final");
   });
 });

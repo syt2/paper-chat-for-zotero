@@ -17,7 +17,6 @@ export interface PaperChatModelRoutingMeta {
   apiCapabilities?: {
     responses?: boolean;
     hostedWebSearch?: boolean;
-    explicitPromptCacheBreakpoints?: boolean;
     reasoning?: ModelReasoningCapability;
   };
 }
@@ -166,19 +165,11 @@ export function parseModelRoutingConfig(
         unknown
       >;
       const responses = capabilities.responses === true;
-      const explicitPromptCacheBreakpoints =
-        responses &&
-        typeof capabilities.explicitPromptCacheBreakpoints === "boolean"
-          ? capabilities.explicitPromptCacheBreakpoints
-          : undefined;
       const reasoning = parseReasoningCapability(capabilities.reasoning);
       if (responses || reasoning) {
         meta.apiCapabilities = {
           responses,
           hostedWebSearch: responses && capabilities.hostedWebSearch === true,
-          ...(explicitPromptCacheBreakpoints === undefined
-            ? {}
-            : { explicitPromptCacheBreakpoints }),
           ...(reasoning ? { reasoning } : {}),
         };
       }
@@ -204,15 +195,12 @@ export function getPaperChatApiCapabilities(
 ): {
   responses: boolean;
   hostedWebSearch: boolean;
-  explicitPromptCacheBreakpoints?: boolean;
   reasoning?: ModelReasoningCapability;
 } {
   const capabilities = routingMeta[model]?.apiCapabilities;
   return {
     responses: capabilities?.responses === true,
     hostedWebSearch: capabilities?.hostedWebSearch === true,
-    explicitPromptCacheBreakpoints:
-      capabilities?.explicitPromptCacheBreakpoints,
     reasoning: capabilities?.reasoning,
   };
 }

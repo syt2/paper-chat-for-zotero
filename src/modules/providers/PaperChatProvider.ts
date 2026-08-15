@@ -52,7 +52,6 @@ export class PaperChatProvider implements AIProvider {
   private createResponsesRuntimeOptions(modelId: string): {
     sessionId?: string;
     hostedWebSearch: boolean;
-    explicitPromptCacheBreakpoints?: boolean;
   } {
     const capabilities = getPaperChatApiCapabilities(
       modelId,
@@ -61,8 +60,6 @@ export class PaperChatProvider implements AIProvider {
     return {
       sessionId: this._config.requestSessionId,
       hostedWebSearch: capabilities.hostedWebSearch,
-      explicitPromptCacheBreakpoints:
-        capabilities.explicitPromptCacheBreakpoints,
     };
   }
 
