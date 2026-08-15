@@ -132,6 +132,7 @@ export type ToolPolicyName =
   | "retry_block"
   | "presentation_response_limit"
   | "budget_block"
+  | "tool_availability"
   | "permission_decision"
   | "argument_parse"
   | "argument_repair"
@@ -311,6 +312,7 @@ export interface NativeOutlineItem {
 // 工具名称枚举
 export type PaperToolName =
   | "presentation"
+  | "request_presentation"
   | "request_user_input"
   | "read_artifact"
   | "download"

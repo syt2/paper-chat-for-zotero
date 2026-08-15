@@ -29,6 +29,7 @@ export const PRESENTATION_CUSTOM_SLIDE_COUNT_OPTION = "custom";
 
 export interface PresentationLaunchDialogOptions {
   onSettingsFocusReady?: (focus: () => void) => void;
+  abortSignal?: AbortSignal;
 }
 
 function focusPresentationSettingsDialog(dialogWindow: Window): void {
@@ -161,6 +162,7 @@ function updatePresentationInstructionsCount(input: HTMLTextAreaElement): void {
 async function showPresentationSettingsDialog(
   options: PresentationLaunchDialogOptions = {},
 ): Promise<PresentationLaunchSettings | null> {
+  if (options.abortSignal?.aborted) return null;
   const mainWindow = Zotero.getMainWindow();
   if (!mainWindow) return null;
 
@@ -538,6 +540,7 @@ async function showPresentationSettingsDialog(
     });
 
   let dialogWindow: Window | null = null;
+  let closeOnAbort: (() => void) | undefined;
   try {
     openZToolkitDialog(
       dialogHelper,
@@ -555,6 +558,17 @@ async function showPresentationSettingsDialog(
         focusPresentationSettingsDialog(dialogWindow!),
       );
     }
+    if (options.abortSignal) {
+      closeOnAbort = () => {
+        if (!dialogHelper.window?.closed) {
+          dialogHelper.window?.close();
+        }
+      };
+      options.abortSignal.addEventListener("abort", closeOnAbort, {
+        once: true,
+      });
+      if (options.abortSignal.aborted) closeOnAbort();
+    }
     await dialogHelper.dialogData.unloadLock?.promise;
   } catch (error) {
     ztoolkit.log(
@@ -562,6 +576,10 @@ async function showPresentationSettingsDialog(
       error,
     );
     return null;
+  } finally {
+    if (closeOnAbort) {
+      options.abortSignal?.removeEventListener("abort", closeOnAbort);
+    }
   }
   return selection;
 }

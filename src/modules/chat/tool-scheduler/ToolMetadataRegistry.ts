@@ -22,6 +22,13 @@ const TOOL_RUNTIME_METADATA: Record<PaperToolName, ToolRuntimeMetadata> = {
     targetScope: "external",
     mutatesState: true,
   },
+  request_presentation: {
+    name: "request_presentation",
+    executionClass: "read",
+    concurrency: "serial",
+    targetScope: "external",
+    mutatesState: false,
+  },
   request_user_input: {
     name: "request_user_input",
     executionClass: "read",

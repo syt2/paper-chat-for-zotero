@@ -22,6 +22,7 @@ import {
   fingerprintToolExecutionResult,
   findBlockedRetryMatch,
 } from "../tool-retry/ToolRetryPolicy";
+import { PRESENTATION_LAUNCH_TOOL_NAME } from "../../presentation/PresentationToolLaunchSession";
 
 export type ToolExecutionBatchEntry =
   | {
@@ -41,6 +42,10 @@ export function findCompletedToolResultMatch(
   toolCall: ToolCall,
   previousResults: ToolExecutionResult[],
 ): ToolExecutionResult | null {
+  // This result represents one turn's native confirmation and in-memory
+  // capability, not a repeatable read. A recovered turn must run the guard
+  // again so it can mint a fresh authorization for its new launch session.
+  if (toolCall.function.name === PRESENTATION_LAUNCH_TOOL_NAME) return null;
   const fingerprint = fingerprintToolCall(toolCall);
   for (let index = previousResults.length - 1; index >= 0; index--) {
     const result = previousResults[index];

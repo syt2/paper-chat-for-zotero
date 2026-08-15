@@ -102,6 +102,7 @@ import {
   updateModelSelectorDisplay,
   refreshCheckinDisplay,
   syncSendButtonState,
+  syncSessionNavigationState,
   updateConversationNoteSummaryButton,
 } from "./ChatPanelEvents";
 import { loadCachedRatios } from "../../preferences/ModelsFetcher";
@@ -2271,6 +2272,7 @@ async function syncPanelSessionForItem(options: {
   session?: ChatSession | null;
   expectedSessionId?: string;
   clearAttachments?: boolean;
+  syncNavigationState?: boolean;
   afterRender?: (container: HTMLElement) => void;
 }): Promise<boolean> {
   const container = getVisibleChatContainer();
@@ -2292,6 +2294,14 @@ async function syncPanelSessionForItem(options: {
     options.manager.getActiveSession()?.id !== options.expectedSessionId
   ) {
     return false;
+  }
+
+  if (options.syncNavigationState) {
+    syncSessionNavigationState(
+      context,
+      container.querySelector("#chat-send-button") as HTMLButtonElement | null,
+      options.manager,
+    );
   }
 
   const session = options.session ?? options.manager.getActiveSession();
@@ -2340,7 +2350,7 @@ export function showPanelForItem(
   runWhenPanelReady(syncContainer);
 }
 
-async function focusRunningPresentationTask(
+async function focusRunningPresentationTaskUnsafe(
   item: Zotero.Item,
   source: Extract<
     ChatPanelOpenSource,
@@ -2369,6 +2379,7 @@ async function focusRunningPresentationTask(
       item,
       session,
       expectedSessionId: sessionId,
+      syncNavigationState: true,
       afterRender: (container) => {
         if (pendingPanelItem === item) pendingPanelItem = null;
         const chatHistory = container.querySelector(
@@ -2389,6 +2400,28 @@ async function focusRunningPresentationTask(
   };
 
   runWhenPanelReady(syncAndLocate);
+}
+
+/** Best-effort UI navigation must never surface as an unhandled rejection. */
+export async function focusRunningPresentationTask(
+  item: Zotero.Item,
+  source: Extract<
+    ChatPanelOpenSource,
+    "presentation_menu" | "presentation_button"
+  >,
+  sessionId: string,
+  assistantMessageId: string,
+): Promise<void> {
+  try {
+    await focusRunningPresentationTaskUnsafe(
+      item,
+      source,
+      sessionId,
+      assistantMessageId,
+    );
+  } catch (error) {
+    ztoolkit.log("[ChatPanel] Failed to focus presentation task:", error);
+  }
 }
 
 /**

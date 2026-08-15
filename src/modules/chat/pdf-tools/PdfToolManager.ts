@@ -69,7 +69,10 @@ import {
   extractNativeOutline,
   type NativeOutlineExtraction,
 } from "./nativeOutlineExtractor";
-import type { AgentPromptContext } from "./promptGenerator";
+import type {
+  AgentPromptContext,
+  PresentationToolPromptMode,
+} from "./promptGenerator";
 import type { SearchToolPromptMode } from "../agent-runtime/SearchScopeGate";
 import { generatePaperContextPrompt as generatePaperContextPromptFn } from "./promptGenerator";
 import { createSearchToolDefinitions } from "./SearchToolDefinitions";
@@ -112,6 +115,7 @@ import {
 } from "./libraryExecutors";
 import { getErrorMessage } from "../../../utils/common";
 import {
+  createPresentationLaunchToolDefinition,
   createPresentationToolDefinition,
   executePresentationCapability,
 } from "../../presentation";
@@ -465,7 +469,10 @@ export class PdfToolManager {
    */
   getToolDefinitions(
     hasCurrentItem: boolean = true,
-    options: { includePresentation?: boolean } = {},
+    options: {
+      includePresentation?: boolean;
+      includePresentationLauncher?: boolean;
+    } = {},
   ): ToolDefinition[] {
     const itemKeyProp = this.getItemKeyProperty();
 
@@ -473,6 +480,9 @@ export class PdfToolManager {
     const libraryTools: ToolDefinition[] = [
       ...(options.includePresentation
         ? [createPresentationToolDefinition()]
+        : []),
+      ...(options.includePresentationLauncher
+        ? [createPresentationLaunchToolDefinition()]
         : []),
       {
         type: "function" as const,
@@ -1827,6 +1837,35 @@ export class PdfToolManager {
         }
         return this.executeSaveMemory(args);
       }
+      case "request_presentation": {
+        const launchSession = executionContext?.presentationLaunchSession;
+        if (!launchSession) {
+          return "The guarded PaperChat presentation launcher is unavailable in this turn. Do not call presentation directly.";
+        }
+        const launchResult = await launchSession.requestAuthorization();
+        if (launchResult.allowed) {
+          return `The user confirmed PaperChat's native presentation settings. The private presentation tool is now available for the authorized current paper (${launchSession.source.itemKey}). Call presentation now with {"sourceItemKey":"${launchSession.source.itemKey}"}. Do not ask for another confirmation and do not change the confirmed slide count, style, or custom instructions.`;
+        }
+        const blockedMessages: Record<typeof launchResult.reason, string> = {
+          provider:
+            "The guarded presentation launch stopped because PaperChat is no longer the active provider. Do not call presentation.",
+          login:
+            "The guarded presentation launch stopped because the PaperChat account is not logged in. Do not call presentation.",
+          balance:
+            "The guarded presentation launch stopped because the cached available token balance does not meet the required threshold. The plugin already showed the purchase option. Do not call presentation.",
+          cancelled:
+            "The user cancelled the native presentation settings window. Do not call presentation or ask for the same settings again in this turn.",
+          already_active:
+            "A presentation for this paper is already being configured or generated. PaperChat focused the existing settings window or task card. Do not start a duplicate presentation.",
+          capacity_exceeded:
+            "PaperChat already has the maximum number of presentation tasks running. The plugin showed the concurrency notice. Do not call presentation.",
+          turn_finished:
+            "This chat turn ended before presentation authorization was issued. Do not call presentation.",
+          launch_failed:
+            "The native presentation launch failed before authorization was issued. Do not call presentation directly.",
+        };
+        return blockedMessages[launchResult.reason];
+      }
       case "presentation": {
         const presentationAuthorization =
           executionContext?.presentationAuthorization;
@@ -2050,6 +2089,7 @@ export class PdfToolManager {
     memoryContext?: string,
     agentContext?: AgentPromptContext,
     searchToolMode: SearchToolPromptMode = "unified",
+    presentationToolMode: PresentationToolPromptMode = "private",
   ): string {
     return generatePaperContextPromptFn(
       currentPaperStructure,
@@ -2059,6 +2099,7 @@ export class PdfToolManager {
       memoryContext,
       agentContext,
       searchToolMode,
+      presentationToolMode,
     );
   }
 }

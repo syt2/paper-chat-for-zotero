@@ -16,4 +16,5 @@ export {
   stopChatSearchBackfillForShutdown,
   addSelectedTextAttachment,
   openPresentationForItem,
+  focusRunningPresentationTask,
 } from "./chat-panel";

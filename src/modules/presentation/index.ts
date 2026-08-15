@@ -5,6 +5,21 @@ export {
   isTrustedPresentationPreviewPath,
 } from "./PresentationCapability";
 export {
+  createPresentationLaunchToolDefinition,
+  PRESENTATION_LAUNCH_TOOL_NAME,
+  type PresentationToolLaunchResult,
+  type PresentationToolLaunchSession,
+} from "./PresentationToolLaunchSession";
+export {
+  canLaunchPresentationFromChat,
+  createPresentationChatLaunchSession,
+  registerPresentationChatLaunchBridge,
+  unregisterPresentationChatLaunchBridge,
+  type PresentationChatLaunchBridge,
+  type PresentationChatLaunchOptions,
+  type PresentationTaskLocation,
+} from "./PresentationChatLaunchBridge";
+export {
   attachPresentationToZotero,
   type PresentationAttachmentResult,
 } from "./PresentationAttachment";

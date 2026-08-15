@@ -10,6 +10,7 @@ import {
   unregisterChatPanel,
   togglePanel,
   openPresentationForItem,
+  focusRunningPresentationTask,
 } from "./modules/ui";
 import { getAuthManager, destroyAuthManager } from "./modules/auth";
 import { destroyProviderManager } from "./modules/providers";
@@ -57,9 +58,17 @@ import {
   unregisterLibraryChatScopeMenus,
 } from "./modules/ui/LibraryChatScope";
 import {
+  canLaunchChatPresentationForItem,
+  createChatPresentationToolLaunchSession,
   registerPresentationEntryMenu,
+  registerPresentationTaskFocusHandler,
   unregisterPresentationEntryMenu,
+  unregisterPresentationTaskFocusHandler,
 } from "./modules/presentation/PresentationEntry";
+import {
+  registerPresentationChatLaunchBridge,
+  unregisterPresentationChatLaunchBridge,
+} from "./modules/presentation/PresentationChatLaunchBridge";
 
 async function onStartup() {
   await Promise.all([
@@ -169,7 +178,19 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
   // Register reader-side chat entry points (selection popup + annotation menu)
   registerReaderChatEntries();
   registerLibraryChatScopeMenus();
+  registerPresentationChatLaunchBridge({
+    canLaunch: canLaunchChatPresentationForItem,
+    createSession: createChatPresentationToolLaunchSession,
+  });
   registerPresentationEntryMenu(openPresentationForItem);
+  registerPresentationTaskFocusHandler((item, location) => {
+    void focusRunningPresentationTask(
+      item,
+      "presentation_button",
+      location.sessionId,
+      location.assistantMessageId,
+    );
+  });
 
   // Register Chat Panel menu in Tools menu
   ztoolkit.Menu.register("menuTools", {
@@ -195,6 +216,8 @@ async function onShutdown(): Promise<void> {
   unregisterReaderChatEntries();
   unregisterLibraryChatScopeMenus();
   unregisterPresentationEntryMenu();
+  unregisterPresentationChatLaunchBridge();
+  unregisterPresentationTaskFocusHandler();
   // Await so ChatManager.destroy() (session meta write, extraction) finishes
   // before StorageDatabase is torn down below.
   await unregisterChatPanel();

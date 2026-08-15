@@ -183,6 +183,16 @@ function clearPendingQuotedMessages(context: ChatPanelContext): void {
   context.updateAttachmentsPreview();
 }
 
+/** Keep session-bound composer state aligned after any programmatic switch. */
+export function syncSessionNavigationState(
+  context: ChatPanelContext,
+  sendButton: HTMLButtonElement | null,
+  chatManager: ChatPanelContext["chatManager"],
+): void {
+  clearPendingQuotedMessages(context);
+  syncSendButtonState(sendButton, chatManager);
+}
+
 function trackChatModelSwitched(props: Record<string, string | boolean>): void {
   getAnalyticsService().track(ANALYTICS_EVENTS.chatModelSwitched, props);
 }
@@ -879,9 +889,7 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
         return;
       }
 
-      clearPendingQuotedMessages(context);
-
-      syncSendButtonState(sendButton, chatManager);
+      syncSessionNavigationState(context, sendButton, chatManager);
       const itemKey = loadedSession.lastActiveItemKey;
       if (itemKey) {
         const libraryID =

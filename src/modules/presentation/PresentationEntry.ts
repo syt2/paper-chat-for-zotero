@@ -8,14 +8,30 @@ import {
   PRESENTATION_LAUNCH_PROMPT,
 } from "./PresentationLaunchGuard";
 import {
+  createPresentationLaunchKey,
   MAX_CONCURRENT_PRESENTATION_RUNS,
   PresentationLaunchCoordinator,
   type PresentationLaunchLifecycle,
 } from "./PresentationLaunchCoordinator";
 import type { PresentationLaunchSettings } from "./PresentationLaunchSettings";
+import {
+  createPresentationToolLaunchSession,
+  type PresentationToolLaunchSession,
+} from "./PresentationToolLaunchSession";
+import type {
+  PresentationChatLaunchOptions,
+  PresentationTaskLocation,
+} from "./PresentationChatLaunchBridge";
 
 const PRESENTATION_ITEM_MENU_ID = "paperchat-generate-presentation-menuitem";
 const launchCoordinator = new PresentationLaunchCoordinator();
+
+export type PresentationTaskFocusHandler = (
+  item: Zotero.Item,
+  location: PresentationTaskLocation,
+) => void;
+
+let presentationTaskFocusHandler: PresentationTaskFocusHandler | null = null;
 
 export type PresentationLaunchSource = "library_menu" | "chat_button";
 export type PresentationChatOpener = (
@@ -126,6 +142,21 @@ function showPresentationConcurrencyLimitDialog(parentWindow?: Window): void {
   );
 }
 
+async function runSharedPresentationGuard(
+  onSettingsFocusReady?: (focus: () => void) => void,
+  abortSignal?: AbortSignal,
+) {
+  return guardPresentationLaunch({
+    providerManager: getProviderManager(),
+    authManager: getAuthManager(),
+    dialogs: createPresentationLaunchDialogs({
+      onSettingsFocusReady,
+      abortSignal,
+    }),
+    ensureLoggedIn: () => showAuthDialog("login"),
+  });
+}
+
 async function runPresentationLaunch(
   item: Zotero.Item,
   source: PresentationLaunchSource,
@@ -140,12 +171,10 @@ async function runPresentationLaunch(
     return false;
   }
 
-  const guardResult = await guardPresentationLaunch({
-    providerManager: getProviderManager(),
-    authManager: getAuthManager(),
-    dialogs: createPresentationLaunchDialogs({ onSettingsFocusReady }),
-    ensureLoggedIn: () => showAuthDialog("login"),
-  }).finally(clearSettingsFocus);
+  const guardResult =
+    await runSharedPresentationGuard(onSettingsFocusReady).finally(
+      clearSettingsFocus,
+    );
   if (!guardResult.allowed) return false;
 
   const taskFocus = createDeferredPresentationFocus();
@@ -170,6 +199,70 @@ async function runPresentationLaunch(
   return started;
 }
 
+/** Register the UI-only action used when another entry focuses a model task. */
+export function registerPresentationTaskFocusHandler(
+  handler: PresentationTaskFocusHandler,
+): void {
+  presentationTaskFocusHandler = handler;
+}
+
+export function unregisterPresentationTaskFocusHandler(): void {
+  presentationTaskFocusHandler = null;
+}
+
+/**
+ * Build the per-turn bridge used by the model-visible launcher. It reuses the
+ * exact same balance/settings guard and launch coordinator as the toolbar and
+ * library menu, but does not expose the resulting authorization to the model.
+ */
+export function createChatPresentationToolLaunchSession(
+  item: Zotero.Item,
+  location: PresentationTaskLocation,
+  options: PresentationChatLaunchOptions = {},
+): PresentationToolLaunchSession | null {
+  const paper = resolveLaunchablePresentationPaper(item);
+  if (!paper) return null;
+
+  return createPresentationToolLaunchSession({
+    coordinator: launchCoordinator,
+    source: {
+      itemKey: paper.key,
+      libraryID: paper.libraryID,
+    },
+    abortSignal: options.abortSignal,
+    runGuard: (onSettingsFocusReady) =>
+      runSharedPresentationGuard(onSettingsFocusReady, options.abortSignal),
+    focusTask: () => presentationTaskFocusHandler?.(paper, location),
+    onCapacityExceeded: () =>
+      showPresentationConcurrencyLimitDialog(options.parentWindow),
+    onError: (error) => {
+      ztoolkit.log(
+        "[PresentationEntry] Model-triggered presentation launch failed:",
+        error,
+      );
+    },
+  });
+}
+
+export function canLaunchChatPresentationForItem(item: Zotero.Item): boolean {
+  return resolveLaunchablePresentationPaper(item) !== null;
+}
+
+function resolveLaunchablePresentationPaper(
+  item: Zotero.Item,
+): Zotero.Item | null {
+  const paper = resolvePresentationPaper(item);
+  if (
+    !paper ||
+    !paperHasPdf(paper) ||
+    !paper.key ||
+    !Number.isSafeInteger(paper.libraryID)
+  ) {
+    return null;
+  }
+  return paper;
+}
+
 /**
  * Keep one launch per paper, focus its settings window or running task on a
  * repeated click, and let different papers run in parallel within the global
@@ -182,7 +275,12 @@ export function launchPresentationForItem(
   parentWindow?: Window,
 ): Promise<boolean> {
   const paper = resolvePresentationPaper(item);
-  const key = paper ? `${paper.libraryID}:${paper.key}` : `invalid:${item.id}`;
+  const key = paper
+    ? createPresentationLaunchKey({
+        libraryID: paper.libraryID,
+        itemKey: paper.key,
+      })
+    : `invalid:${item.id}`;
   const settingsFocus = createDeferredPresentationFocus();
   return launchCoordinator.enqueue(
     key,

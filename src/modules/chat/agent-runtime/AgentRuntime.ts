@@ -28,6 +28,12 @@ import type {
 } from "../tool-scheduler";
 import type { ToolSchedulerExecutionContext } from "../tool-scheduler/ToolScheduler";
 import type { PresentationLaunchAuthorization } from "../../presentation/PresentationLaunchAuthorization";
+import { createPresentationToolDefinition } from "../../presentation/PresentationCapability";
+import {
+  createPresentationLaunchToolDefinition,
+  PRESENTATION_LAUNCH_TOOL_NAME,
+  type PresentationToolLaunchSession,
+} from "../../presentation/PresentationToolLaunchSession";
 import { ExecutionPlanManager } from "./ExecutionPlanManager";
 import {
   createReusedCompletedToolResult,
@@ -188,6 +194,7 @@ interface RuntimeExecutionOptions {
     },
   ) => string | null;
   presentationAuthorization?: PresentationLaunchAuthorization;
+  presentationLaunchSession?: PresentationToolLaunchSession;
 }
 
 interface StreamingRuntimeExecutionOptions extends RuntimeExecutionOptions {
@@ -222,6 +229,49 @@ interface ToolIterationParams {
   noteSummaryContext?: NoteSummaryContext;
   executeProviderRequest: ProviderRequestExecutor;
   presentationAuthorization?: PresentationLaunchAuthorization;
+  presentationLaunchSession?: PresentationToolLaunchSession;
+}
+
+function syncPresentationLaunchTools(
+  tools: ToolDefinition[],
+  launchSession: PresentationToolLaunchSession | undefined,
+): void {
+  if (!launchSession) return;
+  const authorization = launchSession.getAuthorization();
+  const desiredToolName = authorization
+    ? "presentation"
+    : PRESENTATION_LAUNCH_TOOL_NAME;
+  for (let index = tools.length - 1; index >= 0; index -= 1) {
+    const name = tools[index].function.name;
+    if (
+      (name === "presentation" || name === PRESENTATION_LAUNCH_TOOL_NAME) &&
+      name !== desiredToolName
+    ) {
+      tools.splice(index, 1);
+    }
+  }
+  if (tools.some((tool) => tool.function.name === desiredToolName)) return;
+  tools.push(
+    authorization
+      ? createPresentationToolDefinition()
+      : createPresentationLaunchToolDefinition(),
+  );
+  tools.sort((left, right) =>
+    left.function.name.localeCompare(right.function.name),
+  );
+}
+
+function reservePresentationLaunchHandoffIterations(
+  launchSession: PresentationToolLaunchSession | undefined,
+  alreadyReserved: boolean,
+  currentIteration: number,
+  maxIterations: number,
+): number | null {
+  if (alreadyReserved || !launchSession?.getAuthorization()) return null;
+  // The launcher consumes one model round. Preserve one following round for
+  // the private presentation call and one for the user-facing final answer,
+  // even when the user configured the minimum two-iteration agent budget.
+  return Math.max(maxIterations, currentIteration + 2);
 }
 
 function rewriteToolCallItemKey(
@@ -291,7 +341,7 @@ function createUnavailableToolResult(toolCall: ToolCall): ToolExecutionResult {
     policyTrace: [
       {
         stage: "planner",
-        policy: "permission_decision",
+        policy: "tool_availability",
         outcome: "blocked",
         summary:
           "Blocked a tool that was not available in the current model round.",
@@ -425,6 +475,7 @@ export class AgentRuntime {
       searchScopeGate,
       refreshSystemPrompt,
       presentationAuthorization,
+      presentationLaunchSession,
     } = options;
     const logPrefix = "Streaming Tool Calling";
     const configuredMaxIterations = this.getMaxIterations();
@@ -433,6 +484,7 @@ export class AgentRuntime {
     let presentationRecoveryNudges = 0;
     let pendingRetryablePresentationFailure = false;
     let presentationFailureAttempts = 0;
+    let presentationLaunchHandoffBudgetReserved = false;
     let budgetLimits = getToolBudgetLimits(configuredMaxIterations);
     let iteration = 0;
     let accumulatedDisplay = assistantMessage.content;
@@ -468,6 +520,7 @@ export class AgentRuntime {
     try {
       while (iteration < maxIterations) {
         iteration++;
+        syncPresentationLaunchTools(tools, presentationLaunchSession);
         const iterationControl = this.createIterationControl(
           iteration,
           tools,
@@ -568,10 +621,25 @@ export class AgentRuntime {
             noteSummaryContext,
             executeProviderRequest,
             presentationAuthorization,
+            presentationLaunchSession,
           });
           accumulatedDisplay = toolIteration.accumulatedDisplay;
           presentationFailureAttempts +=
             toolIteration.retryablePresentationFailures;
+          const handoffMaxIterations =
+            reservePresentationLaunchHandoffIterations(
+              presentationLaunchSession,
+              presentationLaunchHandoffBudgetReserved,
+              iteration,
+              maxIterations,
+            );
+          if (handoffMaxIterations !== null) {
+            presentationLaunchHandoffBudgetReserved = true;
+            if (handoffMaxIterations !== maxIterations) {
+              maxIterations = handoffMaxIterations;
+              budgetLimits = getToolBudgetLimits(maxIterations);
+            }
+          }
           const presentationRetryBudgetRemaining =
             presentationFailureAttempts < MAX_PRESENTATION_ATTEMPTS_PER_TURN;
           if (toolIteration.completedPresentationCalls > 0) {
@@ -734,6 +802,7 @@ export class AgentRuntime {
       searchScopeGate,
       refreshSystemPrompt,
       presentationAuthorization,
+      presentationLaunchSession,
     } = options;
     const logPrefix = "Tool Calling";
     const configuredMaxIterations = this.getMaxIterations();
@@ -742,6 +811,7 @@ export class AgentRuntime {
     let presentationRecoveryNudges = 0;
     let pendingRetryablePresentationFailure = false;
     let presentationFailureAttempts = 0;
+    let presentationLaunchHandoffBudgetReserved = false;
     let budgetLimits = getToolBudgetLimits(configuredMaxIterations);
     let iteration = 0;
     let accumulatedDisplay = assistantMessage.content;
@@ -777,6 +847,7 @@ export class AgentRuntime {
     try {
       while (iteration < maxIterations) {
         iteration++;
+        syncPresentationLaunchTools(tools, presentationLaunchSession);
         const iterationControl = this.createIterationControl(
           iteration,
           tools,
@@ -871,10 +942,25 @@ export class AgentRuntime {
             noteSummaryContext,
             executeProviderRequest,
             presentationAuthorization,
+            presentationLaunchSession,
           });
           accumulatedDisplay = toolIteration.accumulatedDisplay;
           presentationFailureAttempts +=
             toolIteration.retryablePresentationFailures;
+          const handoffMaxIterations =
+            reservePresentationLaunchHandoffIterations(
+              presentationLaunchSession,
+              presentationLaunchHandoffBudgetReserved,
+              iteration,
+              maxIterations,
+            );
+          if (handoffMaxIterations !== null) {
+            presentationLaunchHandoffBudgetReserved = true;
+            if (handoffMaxIterations !== maxIterations) {
+              maxIterations = handoffMaxIterations;
+              budgetLimits = getToolBudgetLimits(maxIterations);
+            }
+          }
           const presentationRetryBudgetRemaining =
             presentationFailureAttempts < MAX_PRESENTATION_ATTEMPTS_PER_TURN;
           if (toolIteration.completedPresentationCalls > 0) {
@@ -1391,6 +1477,7 @@ export class AgentRuntime {
       noteSummaryContext,
       executeProviderRequest,
       presentationAuthorization,
+      presentationLaunchSession,
     } = params;
     const contextStrategy = getToolContextStrategy(provider);
 
@@ -1451,8 +1538,12 @@ export class AgentRuntime {
           },
         );
       };
+    const activePresentationAuthorization =
+      presentationAuthorization ||
+      presentationLaunchSession?.getAuthorization();
     const executionContext: ToolSchedulerExecutionContext | undefined =
       currentItemKey ||
+      presentationLaunchSession ||
       normalizedToolCalls.some(
         (toolCall) => toolCall.function.name === "presentation",
       )
@@ -1461,7 +1552,12 @@ export class AgentRuntime {
               itemKey: currentItemKey || undefined,
               libraryID: currentItemLibraryID,
             },
-            ...(presentationAuthorization ? { presentationAuthorization } : {}),
+            ...(activePresentationAuthorization
+              ? {
+                  presentationAuthorization: activePresentationAuthorization,
+                }
+              : {}),
+            ...(presentationLaunchSession ? { presentationLaunchSession } : {}),
             ...(normalizedToolCalls.some(
               (toolCall) => toolCall.function.name === "presentation",
             )

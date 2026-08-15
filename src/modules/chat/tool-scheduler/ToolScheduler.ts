@@ -36,6 +36,7 @@ import type {
   PresentationSourceContext,
 } from "../../presentation/contracts";
 import type { PresentationLaunchAuthorization } from "../../presentation/PresentationLaunchAuthorization";
+import type { PresentationToolLaunchSession } from "../../presentation/PresentationToolLaunchSession";
 
 export interface ToolSchedulerExecutionContext {
   presentationVisualReviewer?: PresentationVisualReviewer;
@@ -49,6 +50,11 @@ export interface ToolSchedulerExecutionContext {
    * The model cannot populate this context through tool arguments.
    */
   presentationAuthorization?: PresentationLaunchAuthorization;
+  /**
+   * App-owned per-turn bridge for the low-risk request_presentation tool.
+   * It may mint a private authorization only after the native guard succeeds.
+   */
+  presentationLaunchSession?: PresentationToolLaunchSession;
 }
 
 export interface ToolSchedulerRequest {

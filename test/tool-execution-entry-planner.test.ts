@@ -205,6 +205,44 @@ describe("tool execution entry planner", function () {
     }
   });
 
+  it("never reuses a presentation launcher confirmation across recovered turns", async function () {
+    const { planToolExecutionEntries } =
+      await import("../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts");
+    const previousCall = createToolCall(
+      "launcher-1",
+      "",
+      "request_presentation",
+    );
+    const repeatedCall = createToolCall(
+      "launcher-2",
+      "",
+      "request_presentation",
+    );
+    const previousResult: ToolExecutionResult = {
+      toolCall: previousCall,
+      args: {},
+      status: "completed",
+      content: "Native settings confirmed; call presentation.",
+    };
+
+    const entries = planToolExecutionEntries({
+      sessionId: "session-1",
+      assistantMessage,
+      toolCalls: [repeatedCall],
+      previousResults: [previousResult],
+      createExecutionBatches: (requests) => [requests],
+      reuseCompletedResults: true,
+    });
+
+    assert.equal(entries[0].kind, "execute");
+    if (entries[0].kind === "execute") {
+      assert.equal(
+        entries[0].requests[0].toolCall.function.name,
+        "request_presentation",
+      );
+    }
+  });
+
   it("allows the first get_full_text call in a turn", async function () {
     const { planToolExecutionEntries } =
       await import("../src/modules/chat/agent-runtime/ToolExecutionEntryPlanner.ts");

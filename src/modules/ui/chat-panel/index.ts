@@ -16,6 +16,7 @@ export {
   stopChatSearchBackfillForShutdown,
   addSelectedTextAttachment,
   openPresentationForItem,
+  focusRunningPresentationTask,
 } from "./ChatPanelManager";
 
 // Theme utilities

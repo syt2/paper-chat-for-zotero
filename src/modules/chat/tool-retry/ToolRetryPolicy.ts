@@ -48,6 +48,14 @@ export function findBlockedRetryMatch(
       continue;
     }
     if (
+      result.policyTrace?.some((trace) => trace.policy === "tool_availability")
+    ) {
+      // Availability can change between model rounds (for example, the
+      // guarded PPT launcher exposes presentation only after confirmation).
+      // A call made too early must not poison the later authorized call.
+      continue;
+    }
+    if (
       result.policyTrace?.some(
         (trace) => trace.policy === "presentation_response_limit",
       )

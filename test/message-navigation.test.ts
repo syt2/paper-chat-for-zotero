@@ -21,7 +21,10 @@ import {
   resolveNoteSummarySourceItem,
   shouldResetSummaryButtonBusyState,
 } from "../src/modules/ui/chat-panel/NoteSummaryActions.ts";
-import { updateAttachmentsPreviewDisplay } from "../src/modules/ui/chat-panel/ChatPanelEvents.ts";
+import {
+  syncSessionNavigationState,
+  updateAttachmentsPreviewDisplay,
+} from "../src/modules/ui/chat-panel/ChatPanelEvents.ts";
 
 interface RectInit {
   top: number;
@@ -264,6 +267,85 @@ describe("chat message exact navigation", function () {
 
   afterEach(function () {
     (globalThis as { addon?: unknown }).addon = originalAddon;
+  });
+
+  it("clears only session-bound quotes and refreshes the target send state", function () {
+    let attachmentState = {
+      pendingImages: [
+        {
+          type: "base64" as const,
+          data: "YWJj",
+          mimeType: "image/png",
+          name: "figure.png",
+        },
+      ],
+      pendingFiles: [
+        {
+          type: "text" as const,
+          name: "notes.txt",
+          content: "keep me",
+          mimeType: "text/plain",
+        },
+      ],
+      pendingSelectedText: "keep selected text",
+      pendingQuotedMessages: [
+        {
+          sessionId: "old-session",
+          messageId: "old-assistant",
+          role: "assistant" as const,
+          preview: "old quote",
+          contentSnapshot: "old quote",
+          timestamp: 1,
+        },
+      ],
+    };
+    let previewUpdates = 0;
+    const icon = {
+      tagName: "span",
+      style: {} as Record<string, string>,
+      textContent: "■",
+    };
+    const attributes = new Map<string, string>();
+    const root = {
+      querySelector: (selector: string) =>
+        selector === "#chat-message-input" ? { value: "" } : null,
+    };
+    const sendButton = {
+      disabled: true,
+      style: {} as Record<string, string>,
+      title: "",
+      querySelector: (selector: string) =>
+        selector === "#chat-send-icon" ? icon : null,
+      closest: () => root,
+      setAttribute: (name: string, value: string) =>
+        attributes.set(name, value),
+    };
+    const context = {
+      getAttachmentState: () => attachmentState,
+      setAttachmentState: (nextState: typeof attachmentState) => {
+        attachmentState = nextState;
+      },
+      updateAttachmentsPreview: () => {
+        previewUpdates += 1;
+      },
+    };
+    const manager = {
+      getActiveSession: () => ({ id: "presentation-target-session" }),
+    };
+
+    syncSessionNavigationState(
+      context as any,
+      sendButton as unknown as HTMLButtonElement,
+      manager as any,
+    );
+
+    assert.deepEqual(attachmentState.pendingQuotedMessages, []);
+    assert.lengthOf(attachmentState.pendingImages, 1);
+    assert.lengthOf(attachmentState.pendingFiles, 1);
+    assert.equal(attachmentState.pendingSelectedText, "keep selected text");
+    assert.equal(previewUpdates, 1);
+    assert.equal(icon.textContent, "↑");
+    assert.equal(attributes.get("aria-label"), "paperchat-chat-send");
   });
 
   it("adds stable IDs to ordinary and system message wrappers", function () {

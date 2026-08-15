@@ -43,6 +43,7 @@ import {
   generateAgentRuntimeContextPrompt,
   getPdfToolManager,
 } from "./pdf-tools";
+import type { PresentationToolPromptMode } from "./pdf-tools/promptGenerator";
 import {
   getToolPermissionManager,
   type ToolApprovalObserver,
@@ -148,6 +149,11 @@ import {
 } from "./session-scope";
 import type { PresentationLaunchAuthorization } from "../presentation/PresentationLaunchAuthorization";
 import { isIssuedPresentationLaunchAuthorization } from "../presentation/PresentationLaunchAuthorization";
+import type { PresentationToolLaunchSession } from "../presentation/PresentationToolLaunchSession";
+import {
+  canLaunchPresentationFromChat,
+  createPresentationChatLaunchSession,
+} from "../presentation/PresentationChatLaunchBridge";
 // V1 migration now handled by migrateToSQLite.ts at startup
 
 const SUPPRESS_AUTOMATIC_RETRY = "paperChatSuppressAutomaticRetry";
@@ -235,11 +241,29 @@ function buildStableToolCatalogForPromptCache(tools: ToolDefinition[]): string {
   ];
   for (const tool of tools) {
     const fn = tool.function;
+    if (fn.name === "request_presentation" || fn.name === "presentation") {
+      // The guarded handoff intentionally swaps these two tools within one
+      // turn. Keep both out of the duplicated cache catalog so the stable
+      // prefix never contradicts the authoritative structured tools field.
+      continue;
+    }
     lines.push(`\nTool: ${fn.name}`);
     lines.push(`Description: ${fn.description}`);
     lines.push(`Parameters: ${JSON.stringify(fn.parameters)}`);
   }
   return lines.join("\n");
+}
+
+function getPresentationToolPromptMode(
+  tools: readonly ToolDefinition[],
+): PresentationToolPromptMode {
+  if (tools.some((tool) => tool.function.name === "presentation")) {
+    return "private";
+  }
+  if (tools.some((tool) => tool.function.name === "request_presentation")) {
+    return "launcher";
+  }
+  return "unavailable";
 }
 
 // 使用 common.ts 中的 getItemTitleSmart 获取 item 标题
@@ -394,7 +418,10 @@ export class ChatManager {
     provider: AIProvider | null | undefined,
     hasCurrentItem: boolean,
     searchScope?: SelectedSearchScope,
-    options: { includePresentation?: boolean } = {},
+    options: {
+      includePresentation?: boolean;
+      includePresentationLauncher?: boolean;
+    } = {},
   ): ToolDefinition[] {
     const supportsHostedWebSearch =
       provider?.supportsHostedWebSearch?.() === true;
@@ -416,8 +443,15 @@ export class ChatManager {
     hasCurrentItem: boolean;
     item?: Zotero.Item;
     searchToolMode?: SearchToolPromptMode;
+    presentationToolMode?: PresentationToolPromptMode;
   }): string {
-    const { paperStructure, hasCurrentItem, item, searchToolMode } = params;
+    const {
+      paperStructure,
+      hasCurrentItem,
+      item,
+      searchToolMode,
+      presentationToolMode,
+    } = params;
     const pdfToolManager = getPdfToolManager();
 
     return pdfToolManager.generatePaperContextPrompt(
@@ -428,6 +462,7 @@ export class ChatManager {
       undefined,
       undefined,
       searchToolMode,
+      presentationToolMode,
     );
   }
 
@@ -879,6 +914,15 @@ export class ChatManager {
       toolDefinitions = this.getToolDefinitionsForProvider(
         provider,
         hasCurrentItem,
+        undefined,
+        {
+          includePresentationLauncher:
+            hasCurrentItem &&
+            !!item &&
+            provider?.config.id === "paperchat" &&
+            provider.config.type === "paperchat" &&
+            canLaunchPresentationFromChat(item),
+        },
       );
       const searchScopeGateEnabled =
         provider?.supportsHostedWebSearch?.() === true;
@@ -911,6 +955,7 @@ export class ChatManager {
           toolDefinitions,
           searchScopeGateEnabled,
         ),
+        presentationToolMode: getPresentationToolPromptMode(toolDefinitions),
       });
       runtimeContextPrompt = this.buildToolCallingRuntimeSystemPrompt({
         memoryContext,
@@ -1792,6 +1837,7 @@ export class ChatManager {
         duration_ms: Math.max(0, Date.now() - chatStartedAt),
       });
     };
+    let presentationLaunchSession: PresentationToolLaunchSession | undefined;
 
     getAnalyticsService().track(ANALYTICS_EVENTS.chatSent, {
       provider: getProviderManager().getActiveProviderId(),
@@ -2156,6 +2202,25 @@ export class ChatManager {
           assistantMessage,
         );
       }
+      if (
+        !options.allowedToolNames &&
+        !options.presentationAuthorization &&
+        !options.noteSummaryContext &&
+        hasCurrentItem &&
+        item &&
+        provider.config.id === "paperchat" &&
+        provider.config.type === "paperchat"
+      ) {
+        presentationLaunchSession =
+          createPresentationChatLaunchSession(
+            item,
+            {
+              sessionId: sendingSession.id,
+              assistantMessageId: assistantMessage.id,
+            },
+            { abortSignal },
+          ) || undefined;
+      }
       if (options.onAssistantMessageCreated) {
         try {
           options.onAssistantMessageCreated({
@@ -2232,6 +2297,7 @@ export class ChatManager {
           options.noteSummaryContext,
           options.lockedToolItemKey,
           options.presentationAuthorization,
+          presentationLaunchSession,
         );
         if (toolCallingResult !== null) {
           trackChatCompleted(toolCallingResult);
@@ -2553,6 +2619,7 @@ export class ChatManager {
       trackChatCompleted(false);
       throw error;
     } finally {
+      presentationLaunchSession?.finish();
       this.completeSessionRun(sendingSession, sessionRunId);
     }
   }
@@ -2580,6 +2647,7 @@ export class ChatManager {
     noteSummaryContext?: NoteSummaryContext,
     lockedToolItemKey?: string,
     presentationAuthorization?: PresentationLaunchAuthorization,
+    presentationLaunchSession?: PresentationToolLaunchSession,
   ): Promise<boolean | null> {
     const pdfToolManager = getPdfToolManager();
     const providerManager = getProviderManager();
@@ -2608,7 +2676,16 @@ export class ChatManager {
         provider,
         hasCurrentItem,
         selectedSearchScope,
-        { includePresentation: !!presentationAuthorization },
+        {
+          includePresentation:
+            !!presentationAuthorization ||
+            !!presentationLaunchSession?.getAuthorization(),
+          includePresentationLauncher:
+            !!presentationLaunchSession &&
+            !presentationLaunchSession.getAuthorization() &&
+            provider?.config.id === "paperchat" &&
+            provider.config.type === "paperchat",
+        },
       );
       const allowedTools = allowedToolNameSet
         ? scopedTools.filter((tool) =>
@@ -2683,6 +2760,7 @@ export class ChatManager {
       hasCurrentItem: hasPromptPaperContext,
       item: hasPromptPaperContext ? item : undefined,
       searchToolMode: getStableSearchToolMode(),
+      presentationToolMode: getPresentationToolPromptMode(tools),
     });
     const runtimeContextPrompt = buildRuntimeSystemPrompt(
       messagesForApi,
@@ -2781,6 +2859,7 @@ export class ChatManager {
             hasCurrentItem: hasPromptPaperContext,
             item: hasPromptPaperContext ? item : undefined,
             searchToolMode: getStableSearchToolMode(),
+            presentationToolMode: getPresentationToolPromptMode(tools),
           });
         }
       };
@@ -2973,6 +3052,7 @@ export class ChatManager {
           searchScopeGate,
           abortSignal,
           presentationAuthorization,
+          presentationLaunchSession,
         );
       } else {
         ztoolkit.log(
@@ -2997,6 +3077,7 @@ export class ChatManager {
           searchScopeGate,
           abortSignal,
           presentationAuthorization,
+          presentationLaunchSession,
         );
       }
 
@@ -3241,6 +3322,7 @@ export class ChatManager {
     searchScopeGate?: SearchScopeGateConfig,
     abortSignal?: AbortSignal,
     presentationAuthorization?: PresentationLaunchAuthorization,
+    presentationLaunchSession?: PresentationToolLaunchSession,
   ): Promise<void> {
     await this.agentRuntime.executeStreamingToolLoop({
       provider,
@@ -3262,6 +3344,7 @@ export class ChatManager {
       searchScopeGate,
       refreshSystemPrompt: buildSystemPrompt,
       presentationAuthorization,
+      presentationLaunchSession,
     });
     clearPaperChatRetryableState(sendingSession);
     await this.sessionStorage.updateSessionMeta(sendingSession);
@@ -3306,6 +3389,7 @@ export class ChatManager {
     searchScopeGate?: SearchScopeGateConfig,
     abortSignal?: AbortSignal,
     presentationAuthorization?: PresentationLaunchAuthorization,
+    presentationLaunchSession?: PresentationToolLaunchSession,
   ): Promise<void> {
     await this.agentRuntime.executeNonStreamingToolLoop({
       provider,
@@ -3327,6 +3411,7 @@ export class ChatManager {
       searchScopeGate,
       refreshSystemPrompt: buildSystemPrompt,
       presentationAuthorization,
+      presentationLaunchSession,
     });
     clearPaperChatRetryableState(sendingSession);
     await this.sessionStorage.updateSessionMeta(sendingSession);

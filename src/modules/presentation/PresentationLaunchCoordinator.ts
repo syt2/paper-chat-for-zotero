@@ -1,5 +1,12 @@
 export const MAX_CONCURRENT_PRESENTATION_RUNS = 3;
 
+export function createPresentationLaunchKey(source: {
+  libraryID: number;
+  itemKey: string;
+}): string {
+  return `${source.libraryID}:${source.itemKey}`;
+}
+
 export interface PresentationLaunchLifecycle {
   /** Reserve a generation slot after the settings gate has been confirmed. */
   beginRunning(focusTask: () => void): boolean;
@@ -8,6 +15,16 @@ export interface PresentationLaunchLifecycle {
 export interface PresentationLaunchHandlers {
   focusConfiguration?: () => void;
   onCapacityExceeded?: () => void;
+}
+
+export type PresentationLaunchDisposition =
+  | "started"
+  | "existing"
+  | "capacity_exceeded";
+
+export interface PresentationLaunchEnqueueResult {
+  disposition: PresentationLaunchDisposition;
+  promise: Promise<boolean>;
 }
 
 type PresentationLaunchEntry = {
@@ -36,6 +53,20 @@ export class PresentationLaunchCoordinator {
     task: (lifecycle: PresentationLaunchLifecycle) => Promise<boolean>,
     handlers: PresentationLaunchHandlers = {},
   ): Promise<boolean> {
+    return this.enqueueWithDisposition(paperKey, task, handlers).promise;
+  }
+
+  /**
+   * Start or focus a launch while also telling callers whether they own the
+   * new task. The regular UI entries only need the shared promise, whereas a
+   * model-facing launcher must return immediately when an existing task was
+   * focused instead of waiting for that unrelated task to finish.
+   */
+  enqueueWithDisposition(
+    paperKey: string,
+    task: (lifecycle: PresentationLaunchLifecycle) => Promise<boolean>,
+    handlers: PresentationLaunchHandlers = {},
+  ): PresentationLaunchEnqueueResult {
     const existing = this.runsByPaper.get(paperKey);
     if (existing) {
       if (existing.phase === "running") {
@@ -43,12 +74,15 @@ export class PresentationLaunchCoordinator {
       } else {
         existing.focusConfiguration?.();
       }
-      return existing.promise;
+      return { disposition: "existing", promise: existing.promise };
     }
 
     if (this.runningCount >= this.maximumConcurrentRuns) {
       handlers.onCapacityExceeded?.();
-      return Promise.resolve(false);
+      return {
+        disposition: "capacity_exceeded",
+        promise: Promise.resolve(false),
+      };
     }
 
     const entry: PresentationLaunchEntry = {
@@ -90,6 +124,6 @@ export class PresentationLaunchCoordinator {
     });
     entry.promise = tracked;
     this.runsByPaper.set(paperKey, entry);
-    return tracked;
+    return { disposition: "started", promise: tracked };
   }
 }

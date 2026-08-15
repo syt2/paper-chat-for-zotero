@@ -59,6 +59,12 @@ const TOOL_PERMISSION_DESCRIPTORS: Record<
     "write",
     "Create an editable PPTX file in PaperChat's Zotero data folder.",
   ),
+  request_presentation: createDescriptor(
+    "request_presentation",
+    "read",
+    "Open PaperChat's native PPT settings and token-cost confirmation flow.",
+    "auto_allow",
+  ),
   request_user_input: createDescriptor(
     "request_user_input",
     "read",
