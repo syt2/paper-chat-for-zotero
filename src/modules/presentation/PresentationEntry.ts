@@ -63,13 +63,14 @@ function isPdfAttachment(item: Zotero.Item): boolean {
   );
 }
 
-/** Normalize a selected PDF attachment to the bibliographic paper it belongs to. */
+/** Normalize a selected PDF to its paper, or keep an independent PDF as the source. */
 export function resolvePresentationPaper(
   item: Zotero.Item | false | null | undefined,
 ): Zotero.Item | null {
   if (!item || item.isNote?.()) return null;
   if (item.isAttachment?.()) {
-    if (!isPdfAttachment(item) || !item.parentItemID) return null;
+    if (!isPdfAttachment(item)) return null;
+    if (!item.parentItemID) return item;
     const parent = Zotero.Items.get(item.parentItemID) as Zotero.Item | false;
     return parent && !parent.isAttachment?.() && !parent.isNote?.()
       ? parent

@@ -144,12 +144,12 @@ export class AISummaryManager {
   async processSingleItem(
     itemKey: string,
     mode: AISummaryMode = "quick",
+    libraryID: number = Zotero.Libraries.userLibraryID,
   ): Promise<{
     success: boolean;
     noteKey?: string;
     error?: string;
   }> {
-    const libraryID = Zotero.Libraries.userLibraryID;
     const item = Zotero.Items.getByLibraryAndKey(libraryID, itemKey);
 
     if (!item) {
@@ -291,8 +291,14 @@ export class AISummaryManager {
     const processedTag = this.config.markProcessedTag;
 
     for (const item of rawItems) {
-      // 跳过附件和笔记
-      if (item.isAttachment?.() || item.isNote?.()) continue;
+      // Skip child/non-PDF attachments, but allow an independent top-level PDF.
+      if (item.isNote?.()) continue;
+      if (
+        item.isAttachment?.() &&
+        (!item.isPDFAttachment?.() || item.parentItemID)
+      ) {
+        continue;
+      }
 
       // 如果需要排除已处理的条目
       if (this.config.excludeProcessedItems && processedTag) {

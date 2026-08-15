@@ -242,8 +242,11 @@ export class AISummaryProcessor {
     item: Zotero.Item,
   ): Promise<string | undefined> {
     try {
-      // 获取所有附件的标注
-      const attachmentIDs = item.getAttachments?.() || [];
+      const attachments = item.isPDFAttachment?.()
+        ? [item]
+        : (item.getAttachments?.() || [])
+            .map((attachmentID) => Zotero.Items.get(attachmentID))
+            .filter((attachment): attachment is Zotero.Item => !!attachment);
       const annotations: Array<{
         type: string;
         text: string;
@@ -251,10 +254,7 @@ export class AISummaryProcessor {
         page: number;
       }> = [];
 
-      for (const attachmentID of attachmentIDs) {
-        const attachment = Zotero.Items.get(attachmentID);
-        if (!attachment) continue;
-
+      for (const attachment of attachments) {
         const annotationItems = attachment.getAnnotations?.() || [];
         for (const annotation of annotationItems) {
           if (!annotation) continue;
@@ -472,7 +472,7 @@ export class AISummaryProcessor {
     config: AISummaryConfig,
     mode: AISummaryMode = "quick",
   ): Promise<string> {
-    const libraryID = Zotero.Libraries.userLibraryID;
+    const libraryID = item.libraryID || Zotero.Libraries.userLibraryID;
     const note = new Zotero.Item("note");
     note.libraryID = libraryID;
 
@@ -489,10 +489,26 @@ export class AISummaryProcessor {
 
     // 设置父条目（如果配置为子笔记）
     if (config.noteLocation === "child") {
-      // 如果 item 是附件，获取其父条目
-      let parentItem: Zotero.Item | null = item;
-      if (item.isAttachment?.() && item.parentID) {
-        parentItem = Zotero.Items.get(item.parentID) || null;
+      let parentItem: Zotero.Item | null = null;
+      if (item.isAttachment?.()) {
+        const parentID = item.parentItemID || item.parentID;
+        if (parentID) {
+          const candidate = Zotero.Items.get(parentID) || null;
+          if (
+            candidate &&
+            !candidate.isAttachment?.() &&
+            !candidate.isNote?.()
+          ) {
+            parentItem = candidate;
+          }
+        } else {
+          // Zotero attachments cannot own child notes. Keep the summary beside
+          // an independent PDF in the same library and collections instead.
+          const collections = item.getCollections?.() || [];
+          if (collections.length > 0) note.setCollections(collections);
+        }
+      } else if (!item.isNote?.()) {
+        parentItem = item;
       }
       if (parentItem) {
         note.parentID = parentItem.id;

@@ -8,6 +8,8 @@ type AISummaryServiceModule =
   typeof import("../src/modules/ai-summary/AISummaryService.ts");
 type AISummaryManagerModule =
   typeof import("../src/modules/ai-summary/AISummaryManager.ts");
+type AISummaryProcessorModule =
+  typeof import("../src/modules/ai-summary/AISummaryProcessor.ts");
 
 function createLibraryItem(key: string): Zotero.Item {
   return {
@@ -23,6 +25,7 @@ function createLibraryItem(key: string): Zotero.Item {
 describe("AI summary automatic trigger", function () {
   let serviceModule: AISummaryServiceModule;
   let managerModule: AISummaryManagerModule;
+  let processorModule: AISummaryProcessorModule;
   let originalZotero: unknown;
   let originalZtoolkit: unknown;
   let hadZotero: boolean;
@@ -36,6 +39,8 @@ describe("AI summary automatic trigger", function () {
       await import("../src/modules/ai-summary/AISummaryService.ts");
     managerModule =
       await import("../src/modules/ai-summary/AISummaryManager.ts");
+    processorModule =
+      await import("../src/modules/ai-summary/AISummaryProcessor.ts");
   });
 
   beforeEach(function () {
@@ -186,6 +191,141 @@ describe("AI summary automatic trigger", function () {
     service.isAutomaticGenerationEnabled = () => true;
     await observer!.notify("add", "item", [1]);
     assert.equal(scheduled, 1);
+  });
+
+  it("accepts an independent PDF from the item list and PDF reader", function () {
+    const service = serviceModule.getAISummaryService() as any;
+    const pdf = {
+      id: 27,
+      key: "PDFONLY",
+      libraryID: 3,
+      parentItemID: 0,
+      isNote: () => false,
+      isAttachment: () => true,
+      isPDFAttachment: () => true,
+      getField: () => "Standalone PDF",
+    } as unknown as Zotero.Item;
+    (globalThis as any).Zotero = {
+      Items: { get: (id: number) => (id === pdf.id ? pdf : false) },
+    };
+
+    assert.strictEqual(service.getSummaryTargetItem(pdf), pdf);
+    assert.strictEqual(
+      service.getParentItemFromReader({ itemID: pdf.id }),
+      pdf,
+    );
+  });
+
+  it("schedules an independent PDF when automatic summaries are enabled", async function () {
+    const service = serviceModule.getAISummaryService() as any;
+    const pdf = {
+      id: 28,
+      key: "AUTOPDF",
+      libraryID: 1,
+      parentID: false,
+      parentItemID: false,
+      isNote: () => false,
+      isAttachment: () => true,
+      isPDFAttachment: () => true,
+      getField: () => "Automatic standalone PDF",
+    } as unknown as Zotero.Item;
+    const scheduled: Zotero.Item[] = [];
+    (globalThis as any).Zotero = {
+      Items: { get: (id: number) => (id === pdf.id ? pdf : false) },
+    };
+    service.isAutomaticGenerationEnabled = () => true;
+    service.scheduleItemProcessing = (item: Zotero.Item) => {
+      scheduled.push(item);
+    };
+
+    await service.handleItemsAdded([pdf.id]);
+
+    assert.deepEqual(scheduled, [pdf]);
+  });
+
+  it("creates a top-level summary beside an independent PDF", async function () {
+    const createdNotes: Array<{
+      libraryID?: number;
+      parentID?: number;
+      collections: Array<string | number>;
+    }> = [];
+    class FakeNote {
+      key = "NOTE0001";
+      libraryID?: number;
+      parentID?: number;
+      collections: Array<string | number> = [];
+
+      constructor() {
+        createdNotes.push(this);
+      }
+
+      setNote(): void {}
+
+      setCollections(collections: Array<string | number>): void {
+        this.collections = collections;
+      }
+
+      addTag(): void {}
+
+      async saveTx(): Promise<void> {}
+    }
+    const pdf = {
+      id: 29,
+      key: "NOTEPDF",
+      libraryID: 3,
+      parentID: false,
+      parentItemID: false,
+      isNote: () => false,
+      isAttachment: () => true,
+      isPDFAttachment: () => true,
+      getCollections: () => [101, 102],
+      getField: () => "Standalone PDF",
+    } as unknown as Zotero.Item;
+    (globalThis as any).Zotero = {
+      Libraries: { userLibraryID: 1 },
+      Items: { get: () => false },
+      Item: FakeNote,
+    };
+    const processor = new processorModule.AISummaryProcessor() as any;
+
+    const noteKey = await processor.createNote(
+      pdf,
+      "Summary body",
+      {
+        id: "test",
+        name: "Test",
+        prompt: "",
+        noteTitle: "Summary: {{title}}",
+        tags: [],
+      },
+      { ...DEFAULT_AISUMMARY_CONFIG, noteLocation: "child" },
+    );
+
+    assert.equal(noteKey, "NOTE0001");
+    assert.equal(createdNotes[0].libraryID, 3);
+    assert.isUndefined(createdNotes[0].parentID);
+    assert.deepEqual(createdNotes[0].collections, [101, 102]);
+  });
+
+  it("reads annotations directly from an independent PDF", async function () {
+    const processor = new processorModule.AISummaryProcessor() as any;
+    const pdf = {
+      isPDFAttachment: () => true,
+      getAnnotations: () => [
+        {
+          annotationType: "highlight",
+          annotationText: "Standalone evidence",
+          annotationComment: "Important",
+          annotationPosition: JSON.stringify({ pageIndex: 1 }),
+        },
+      ],
+    } as unknown as Zotero.Item;
+
+    const annotations = await processor.extractAnnotations(pdf);
+
+    assert.include(annotations, "Standalone evidence");
+    assert.include(annotations, "Important");
+    assert.include(annotations, "Page 2");
   });
 
   it("rechecks the switch after the delay and clears the pending timer", function () {

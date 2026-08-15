@@ -28,6 +28,7 @@ export type TaskStatus = "pending" | "running" | "completed" | "failed";
 export interface AISummaryTask {
   id: string;
   itemKey: string;
+  libraryID: number;
   itemTitle: string;
   status: TaskStatus;
   createdAt: number;
@@ -349,7 +350,7 @@ class AISummaryService {
         if (
           topLevelItem &&
           !topLevelItem.isNote?.() &&
-          !topLevelItem.isAttachment?.()
+          (!topLevelItem.isAttachment?.() || topLevelItem.isPDFAttachment?.())
         ) {
           this.scheduleItemProcessing(topLevelItem);
         }
@@ -438,7 +439,10 @@ class AISummaryService {
     // 检查是否已在队列中
     if (
       this.taskQueue.some(
-        (t) => t.itemKey === itemKey && (t.mode ?? "quick") === mode,
+        (t) =>
+          t.libraryID === item.libraryID &&
+          t.itemKey === itemKey &&
+          (t.mode ?? "quick") === mode,
       )
     ) {
       ztoolkit.log(`[AISummaryService] Item "${title}" already in queue`);
@@ -471,8 +475,9 @@ class AISummaryService {
     }
 
     const task: AISummaryTask = {
-      id: `task-${Date.now()}-${mode}-${itemKey}`,
+      id: `task-${Date.now()}-${mode}-${item.libraryID}-${itemKey}`,
       itemKey,
+      libraryID: item.libraryID,
       itemTitle: title,
       status: "pending",
       createdAt: Date.now(),
@@ -530,6 +535,7 @@ class AISummaryService {
       const result = await manager.processSingleItem(
         pendingTask.itemKey,
         pendingTask.mode ?? "quick",
+        pendingTask.libraryID,
       );
 
       if (result.success) {
@@ -593,7 +599,7 @@ class AISummaryService {
     if (item.isNote?.()) return null;
     if (item.isPDFAttachment?.()) {
       const parentID = item.parentItemID;
-      if (!parentID) return null;
+      if (!parentID) return item;
       const parent = Zotero.Items.get(parentID);
       if (!parent || parent.isNote?.() || parent.isAttachment?.()) return null;
       return parent;
@@ -763,9 +769,7 @@ class AISummaryService {
     ztoolkit.log("[AISummaryService] Reader context menu unregistered");
   }
 
-  /**
-   * 从 Reader 获取父条目（论文条目）
-   */
+  /** Resolve the Reader PDF to its paper, or keep an independent PDF. */
   private getParentItemFromReader(reader: {
     itemID?: number;
   }): Zotero.Item | null {
@@ -774,24 +778,7 @@ class AISummaryService {
     const item = Zotero.Items.get(reader.itemID);
     if (!item) return null;
 
-    // 如果是 PDF 附件，获取其父条目
-    if (item.isAttachment?.()) {
-      const parentID = item.parentItemID;
-      if (parentID) {
-        const parent = Zotero.Items.get(parentID);
-        if (parent && !parent.isNote?.()) {
-          return parent;
-        }
-      }
-      return null;
-    }
-
-    // 非附件且非笔记
-    if (!item.isNote?.()) {
-      return item;
-    }
-
-    return null;
+    return this.getSummaryTargetItem(item);
   }
 }
 

@@ -49,6 +49,24 @@ describe("presentation entry", function () {
     assert.isTrue(paperHasPdf(paper));
   });
 
+  it("keeps an independent PDF attachment as the presentation source", function () {
+    const pdf = {
+      id: 11,
+      key: "PDFONLY1",
+      parentItemID: 0,
+      attachmentContentType: "application/pdf",
+      isAttachment: () => true,
+      isPDFAttachment: () => true,
+      isNote: () => false,
+    } as unknown as Zotero.Item;
+    (globalThis as { Zotero?: unknown }).Zotero = {
+      Items: { get: () => false },
+    };
+
+    assert.strictEqual(resolvePresentationPaper(pdf), pdf);
+    assert.isTrue(paperHasPdf(pdf));
+  });
+
   it("rejects notes and non-PDF attachments", function () {
     const note = {
       id: 12,
@@ -106,6 +124,8 @@ describe("presentation entry", function () {
     };
 
     assert.strictEqual(getSingleSelectedPresentationPaper(), paper);
+    selected = [pdf];
+    assert.strictEqual(getSingleSelectedPresentationPaper(), pdf);
     selected = [paper, paper];
     assert.isNull(getSingleSelectedPresentationPaper());
     selected = [];
