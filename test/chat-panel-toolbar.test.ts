@@ -158,14 +158,16 @@ describe("chat panel presentation toolbar entry", function () {
     assert.equal(presentation?.style.color, darkTheme.textPrimary);
   });
 
-  it("uses the supplied file-ppt geometry with the shared icon theme", function () {
+  it("uses the supplied presentation-screen geometry with the shared icon theme", function () {
     const iconPath = fileURLToPath(
       new URL("../addon/content/icons/presentation.svg", import.meta.url),
     );
     const icon = readFileSync(iconPath, "utf8");
 
-    assert.include(icon, '<rect x="4" y="14" width="40" height="20"');
-    assert.include(icon, "M25 34.2432V44L10 38.6187V34");
+    assert.include(icon, "M4 8H44");
+    assert.include(icon, "M8 8H40V34H8V8Z");
+    assert.include(icon, "M22 16L27 21L22 26");
+    assert.include(icon, "M16 42L24 34L32 42");
     assert.include(icon, "@media (prefers-color-scheme: dark)");
     assert.include(icon, ".icon-stroke { stroke: #e0e0e0; }");
   });
