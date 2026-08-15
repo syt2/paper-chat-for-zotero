@@ -625,6 +625,8 @@ interface ChatMessageRenderCallbacks {
   onNavigateToQuotedMessage?: (quote: QuotedMessageRef) => void | Promise<void>;
   onSummarizeReply?: (assistantMessageId: string) => void | Promise<void>;
   onSummarizeReplyError?: (error: Error) => void;
+  onResumePresentation?: () => void | boolean | Promise<void | boolean>;
+  onResumePresentationError?: (error: Error) => void;
   onMarkdownError?: (message: string) => void;
   onRenderComplete?: () => void;
 }
@@ -636,6 +638,18 @@ function renderMessageElementsWithMarkdownActions(
   getNavigationItem: () => Zotero.Item | null,
   callbacks: ChatMessageRenderCallbacks = {},
 ): void {
+  const markdown = createChatMarkdownRenderOptions({
+    getCurrentItem: getNavigationItem,
+    appendError: callbacks.onMarkdownError,
+  });
+  if (callbacks.onResumePresentation) {
+    markdown.presentationResumeAction = {
+      label: getString("chat-presentation-progress-resume"),
+      busyLabel: getString("chat-presentation-progress-resuming"),
+      onResume: callbacks.onResumePresentation,
+      onError: callbacks.onResumePresentationError,
+    };
+  }
   renderMessageElementsBase(
     chatHistory,
     emptyState,
@@ -645,10 +659,7 @@ function renderMessageElementsWithMarkdownActions(
     callbacks.onReroll,
     callbacks.onRerollError,
     {
-      markdown: createChatMarkdownRenderOptions({
-        getCurrentItem: getNavigationItem,
-        appendError: callbacks.onMarkdownError,
-      }),
+      markdown,
       onRetry: callbacks.onRetry,
       onRetryError: callbacks.onRetryError,
       onFork: callbacks.onFork,
@@ -3361,6 +3372,16 @@ function createContext(container: HTMLElement): ChatPanelContext {
                 : undefined,
               onSummarizeReplyError: (error) => {
                 context.appendError(error.message);
+              },
+              onResumePresentation: () => context.launchPresentation(),
+              onResumePresentationError: (error) => {
+                ztoolkit.log(
+                  "[ChatPanel] Failed to resume presentation:",
+                  error,
+                );
+                context.appendError(
+                  `${getString("chat-presentation-progress-resume-failed")}: ${error.message}`,
+                );
               },
               onMarkdownError: context.appendError,
               onRenderComplete,

@@ -6,7 +6,18 @@ import type {
 import { isDarkMode } from "./ChatPanelTheme";
 import { HTML_NS } from "./types";
 
-export type PresentationProgressCardStatus = "calling" | "completed" | "error";
+export type PresentationProgressCardStatus =
+  | "calling"
+  | "completed"
+  | "error"
+  | "interrupted";
+
+export interface PresentationProgressResumeAction {
+  label: string;
+  busyLabel: string;
+  onResume: () => void | boolean | Promise<void | boolean>;
+  onError?: (error: Error) => void;
+}
 
 const PRESENTATION_CARD_STAGE_ORDER: readonly PresentationCardStage[] = [
   "preparing",
@@ -41,6 +52,7 @@ const palettes = {
     track: "#d8dee4",
     done: "#1a7f37",
     error: "#cf222e",
+    interrupted: "#9a6700",
   },
   dark: {
     cardBg: "#161b22",
@@ -51,6 +63,7 @@ const palettes = {
     track: "#30363d",
     done: "#3fb950",
     error: "#f85149",
+    interrupted: "#d29922",
   },
 };
 
@@ -60,9 +73,10 @@ const presentationProgressStyledDocuments = new WeakSet<Document>();
 interface PresentationProgressTimerEntry {
   root: HTMLElement;
   elapsed: HTMLElement;
-  longHint: HTMLElement;
+  longHint?: HTMLElement;
   progress: PresentationCardProgress;
   status: PresentationProgressCardStatus;
+  interruptedAt?: number;
 }
 
 interface PresentationProgressTimerState {
@@ -137,7 +151,18 @@ function updateTimerEntry(
   entry: PresentationProgressTimerEntry,
   now: number,
 ): void {
-  const endTime = entry.status === "calling" ? now : entry.progress.updatedAt;
+  const interruptedAt =
+    entry.interruptedAt !== undefined &&
+    Number.isSafeInteger(entry.interruptedAt) &&
+    entry.interruptedAt >= entry.progress.startedAt
+      ? entry.interruptedAt
+      : entry.progress.updatedAt;
+  const endTime =
+    entry.status === "calling"
+      ? now
+      : entry.status === "interrupted"
+        ? interruptedAt
+        : entry.progress.updatedAt;
   const elapsed = formatElapsed(
     Math.max(0, endTime - entry.progress.startedAt),
   );
@@ -150,7 +175,9 @@ function updateTimerEntry(
   const showLongHint =
     entry.status === "calling" &&
     now - entry.progress.stageStartedAt >= PRESENTATION_LONG_STAGE_THRESHOLD_MS;
-  entry.longHint.style.display = showLongHint ? "block" : "none";
+  if (entry.longHint) {
+    entry.longHint.style.display = showLongHint ? "block" : "none";
+  }
 }
 
 function registerProgressTimer(
@@ -247,6 +274,8 @@ export function buildPresentationProgressCardElement(
     status: PresentationProgressCardStatus;
     progress: PresentationCardProgress;
     errorText?: string;
+    interruptedAt?: number;
+    resumeAction?: PresentationProgressResumeAction;
   },
   artifactElement?: HTMLElement,
 ): HTMLElement {
@@ -259,7 +288,9 @@ export function buildPresentationProgressCardElement(
       ? palette.error
       : status === "completed"
         ? palette.done
-        : palette.active;
+        : status === "interrupted"
+          ? palette.interrupted
+          : palette.active;
 
   const card = doc.createElementNS(HTML_NS, "div") as HTMLElement;
   card.setAttribute("data-presentation-progress-card", "true");
@@ -271,7 +302,11 @@ export function buildPresentationProgressCardElement(
     gap: "10px",
     margin: "8px 0",
     padding: "12px",
-    border: `1px solid ${status === "error" ? palette.error : palette.cardBorder}`,
+    border: `1px solid ${
+      status === "error" || status === "interrupted"
+        ? accent
+        : palette.cardBorder
+    }`,
     borderRadius: "10px",
     background: palette.cardBg,
     overflow: "hidden",
@@ -323,7 +358,13 @@ export function buildPresentationProgressCardElement(
   });
   const activityMarker = doc.createElementNS(HTML_NS, "span") as HTMLElement;
   activityMarker.textContent =
-    status === "completed" ? "✓" : status === "error" ? "!" : "●";
+    status === "completed"
+      ? "✓"
+      : status === "error"
+        ? "!"
+        : status === "interrupted"
+          ? "■"
+          : "●";
   Object.assign(activityMarker.style, {
     color: accent,
     flexShrink: "0",
@@ -339,13 +380,18 @@ export function buildPresentationProgressCardElement(
   const errorSummary =
     status === "error" ? summarizeError(input.errorText || "") : "";
   currentMessage.textContent =
-    errorSummary ||
-    progress.message ||
-    getPresentationCardString(
-      "chat-presentation-progress-current",
-      `Working on ${stageLabel}`,
-      { stage: stageLabel },
-    );
+    status === "interrupted"
+      ? getPresentationCardString(
+          "chat-presentation-progress-interrupted",
+          "PPT generation was interrupted. You can start again from this paper.",
+        )
+      : errorSummary ||
+        progress.message ||
+        getPresentationCardString(
+          "chat-presentation-progress-current",
+          `Working on ${stageLabel}`,
+          { stage: stageLabel },
+        );
   activity.appendChild(currentMessage);
   card.appendChild(activity);
 
@@ -387,7 +433,9 @@ export function buildPresentationProgressCardElement(
         : index === activeIndex
           ? status === "error"
             ? "error"
-            : "active"
+            : status === "interrupted"
+              ? "interrupted"
+              : "active"
           : "pending";
     const stageElement = doc.createElementNS(HTML_NS, "div") as HTMLElement;
     stageElement.setAttribute("data-presentation-stage", stage);
@@ -405,7 +453,9 @@ export function buildPresentationProgressCardElement(
             ? accent
             : stageState === "error"
               ? palette.error
-              : palette.mutedText,
+              : stageState === "interrupted"
+                ? palette.interrupted
+                : palette.mutedText,
     });
     const marker = doc.createElementNS(HTML_NS, "span") as HTMLElement;
     marker.textContent =
@@ -415,7 +465,9 @@ export function buildPresentationProgressCardElement(
           ? "●"
           : stageState === "error"
             ? "!"
-            : "○";
+            : stageState === "interrupted"
+              ? "■"
+              : "○";
     Object.assign(marker.style, {
       fontSize: "11px",
       fontWeight: "700",
@@ -439,22 +491,78 @@ export function buildPresentationProgressCardElement(
   }
   card.appendChild(stages);
 
-  const longHint = doc.createElementNS(HTML_NS, "div") as HTMLElement;
-  longHint.setAttribute("data-presentation-long-running-hint", "true");
-  longHint.textContent = getPresentationCardString(
-    "chat-presentation-progress-long-running",
-    `${stageLabel} usually takes a while. The task is still running.`,
-    { stage: stageLabel },
-  );
-  Object.assign(longHint.style, {
-    display: "none",
-    color: palette.mutedText,
-    fontSize: "10px",
-    lineHeight: "1.4",
-  });
-  card.appendChild(longHint);
+  let longHint: HTMLElement | undefined;
+  if (status === "calling") {
+    longHint = doc.createElementNS(HTML_NS, "div") as HTMLElement;
+    longHint.setAttribute("data-presentation-long-running-hint", "true");
+    longHint.textContent = getPresentationCardString(
+      "chat-presentation-progress-long-running",
+      `${stageLabel} usually takes a while. The task is still running.`,
+      { stage: stageLabel },
+    );
+    Object.assign(longHint.style, {
+      display: "none",
+      color: palette.mutedText,
+      fontSize: "10px",
+      lineHeight: "1.4",
+    });
+    card.appendChild(longHint);
+  }
 
   if (artifactElement) card.appendChild(artifactElement);
+
+  if (status === "interrupted" && input.resumeAction) {
+    const action = input.resumeAction;
+    const button = doc.createElementNS(HTML_NS, "button") as HTMLElement;
+    button.setAttribute("type", "button");
+    button.setAttribute("data-presentation-resume", "true");
+    button.textContent = action.label;
+    Object.assign(button.style, {
+      alignSelf: "flex-start",
+      border: `1px solid ${palette.interrupted}`,
+      borderRadius: "6px",
+      padding: "5px 10px",
+      cursor: "pointer",
+      color: palette.nameText,
+      background: palette.cardBg,
+      fontSize: "11px",
+      fontWeight: "600",
+    });
+
+    let pendingResume: Promise<void | boolean> | null = null;
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (pendingResume) return;
+
+      button.setAttribute("data-busy", "true");
+      button.setAttribute("aria-busy", "true");
+      button.setAttribute("disabled", "true");
+      button.style.cursor = "wait";
+      button.style.opacity = "0.7";
+      button.textContent = action.busyLabel;
+
+      const resume = Promise.resolve().then(() => action.onResume());
+      pendingResume = resume;
+      void resume
+        .catch((error) => {
+          action.onError?.(
+            error instanceof Error ? error : new Error(String(error)),
+          );
+        })
+        .finally(() => {
+          if (pendingResume !== resume) return;
+          pendingResume = null;
+          button.removeAttribute("data-busy");
+          button.removeAttribute("aria-busy");
+          button.removeAttribute("disabled");
+          button.style.cursor = "pointer";
+          button.style.opacity = "1";
+          button.textContent = action.label;
+        });
+    });
+    card.appendChild(button);
+  }
 
   registerProgressTimer(doc, {
     root: card,
@@ -462,6 +570,7 @@ export function buildPresentationProgressCardElement(
     longHint,
     progress,
     status,
+    interruptedAt: input.interruptedAt,
   });
   return card;
 }

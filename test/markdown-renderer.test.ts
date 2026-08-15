@@ -64,6 +64,10 @@ class FakeElement {
     return this.attributes.get(name) || null;
   }
 
+  removeAttribute(name: string): void {
+    this.attributes.delete(name);
+  }
+
   addEventListener(type: string, listener: (event: any) => void): void {
     this.listeners.set(type, listener);
   }
@@ -295,6 +299,112 @@ describe("markdown renderer source groups", function () {
       assert.notInclude(root.textContent, "%");
     } finally {
       (globalThis as { PathUtils?: unknown }).PathUtils = originalPathUtils;
+      (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
+    }
+  });
+
+  it("projects an interrupted presentation card into a frozen resumable state", async function () {
+    const originalZotero = (globalThis as { Zotero?: unknown }).Zotero;
+    (globalThis as { Zotero?: unknown }).Zotero = {
+      getMainWindow: () => null,
+    };
+    const doc = new FakeDocument();
+    const root = new FakeElement(doc, "div");
+    const startedAt = 1_000_000;
+    const interruptedAt = startedAt + 32_000;
+    let resumeAttempts = 0;
+    const resumeErrors: string[] = [];
+    const findByAttribute = (
+      node: FakeElement,
+      name: string,
+      value: string,
+    ): FakeElement | undefined => {
+      if (node.getAttribute(name) === value) return node;
+      for (const child of node.children) {
+        const found = findByAttribute(child, name, value);
+        if (found) return found;
+      }
+      return undefined;
+    };
+
+    try {
+      renderMarkdownToElement(
+        root as unknown as HTMLElement,
+        `<tool-call status="calling" expand-key="presentation-interrupted" presentation-phase="rendering" presentation-stage="drafting" presentation-message="正在生成幻灯片" presentation-started-at="${startedAt}" presentation-stage-started-at="${startedAt + 12_000}" presentation-updated-at="${startedAt + 20_000}">
+<tool-name>⏳ presentation</tool-name>
+<tool-status>调用中...</tool-status>
+</tool-call>`,
+        "message-presentation-interrupted",
+        {
+          presentationInterruption: { endedAt: interruptedAt },
+          presentationResumeAction: {
+            label: "Resume presentation",
+            busyLabel: "Resuming...",
+            onResume: async () => {
+              resumeAttempts += 1;
+              throw new Error("resume failed");
+            },
+            onError: (error) => resumeErrors.push(error.message),
+          },
+        },
+      );
+
+      const card = findByAttribute(
+        root,
+        "data-presentation-progress-card",
+        "true",
+      );
+      const elapsed = findByAttribute(
+        root,
+        "data-presentation-elapsed",
+        "true",
+      );
+      const activeStage = findByAttribute(
+        root,
+        "data-presentation-stage",
+        "drafting",
+      );
+      const activity = findByAttribute(
+        root,
+        "data-presentation-current-activity",
+        "true",
+      );
+      const resume = findByAttribute(root, "data-presentation-resume", "true");
+
+      assert.equal(
+        card?.getAttribute("data-presentation-card-status"),
+        "interrupted",
+      );
+      assert.equal(elapsed?.textContent, "Elapsed 00:32");
+      assert.equal(
+        activeStage?.getAttribute("data-presentation-stage-state"),
+        "interrupted",
+      );
+      assert.isUndefined(
+        findByAttribute(
+          root,
+          "data-presentation-indeterminate-progress",
+          "true",
+        ),
+      );
+      assert.isUndefined(
+        findByAttribute(root, "data-presentation-long-running-hint", "true"),
+      );
+      assert.notProperty(activeStage?.children[0]?.style || {}, "animation");
+      assert.include(activity?.children[1]?.textContent || "", "interrupted");
+      assert.equal(resume?.textContent, "Resume presentation");
+
+      resume?.dispatch("click");
+      resume?.dispatch("click");
+      assert.equal(resume?.getAttribute("data-busy"), "true");
+      assert.equal(resume?.textContent, "Resuming...");
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      assert.equal(resumeAttempts, 1);
+      assert.deepEqual(resumeErrors, ["resume failed"]);
+      assert.isNull(resume?.getAttribute("data-busy") || null);
+      assert.isNull(resume?.getAttribute("disabled") || null);
+      assert.equal(resume?.textContent, "Resume presentation");
+    } finally {
       (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
     }
   });

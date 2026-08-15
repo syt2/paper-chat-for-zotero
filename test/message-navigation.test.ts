@@ -527,6 +527,71 @@ describe("chat message exact navigation", function () {
     assert.lengthOf(footer.children, 1);
   });
 
+  it("projects a still-calling presentation card from an interrupted message", function () {
+    const originalZotero = (globalThis as { Zotero?: unknown }).Zotero;
+    (globalThis as { Zotero?: unknown }).Zotero = {
+      getMainWindow: () => null,
+    };
+    const doc = new FakeDocument();
+    const history = new FakeElement(doc, "div");
+    history.scrollHeight = 100;
+    history.clientHeight = 100;
+    const startedAt = 1_000_000;
+    const interruptedAt = startedAt + 45_000;
+
+    try {
+      renderMessages(
+        asElement(history),
+        null,
+        [
+          message("assistant-presentation-interrupted", {
+            role: "assistant",
+            timestamp: interruptedAt,
+            content: `<tool-call status="calling" expand-key="presentation-interrupted" presentation-phase="rendering" presentation-stage="drafting" presentation-message="正在生成幻灯片" presentation-started-at="${startedAt}" presentation-stage-started-at="${startedAt + 10_000}" presentation-updated-at="${startedAt + 20_000}">
+<tool-name>⏳ presentation</tool-name>
+<tool-status>调用中...</tool-status>
+</tool-call>`,
+            streamingState: "interrupted",
+          }),
+        ],
+        darkTheme,
+        undefined,
+        undefined,
+        undefined,
+        {
+          markdown: {
+            presentationResumeAction: {
+              label: "恢复制作",
+              busyLabel: "正在恢复…",
+              onResume: async () => undefined,
+            },
+          },
+        },
+      );
+
+      const card = history.querySelector(
+        '[data-presentation-progress-card="true"]',
+      );
+      const elapsed = history.querySelector(
+        '[data-presentation-elapsed="true"]',
+      );
+      const resume = history.querySelector('[data-presentation-resume="true"]');
+      assert.equal(
+        card?.getAttribute("data-presentation-card-status"),
+        "interrupted",
+      );
+      assert.equal(elapsed?.textContent, "Elapsed 00:45");
+      assert.equal(resume?.textContent, "恢复制作");
+      assert.isNull(
+        history.querySelector(
+          '[data-presentation-indeterminate-progress="true"]',
+        ),
+      );
+    } finally {
+      (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
+    }
+  });
+
   it("keeps the interrupted error footer after a later conversation turn", function () {
     const doc = new FakeDocument();
     const history = new FakeElement(doc, "div");

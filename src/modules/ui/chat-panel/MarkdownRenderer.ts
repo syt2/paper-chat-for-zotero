@@ -24,6 +24,7 @@ import { openAgentMaxPlanningIterationsSettings } from "../../preferences/naviga
 import {
   buildPresentationProgressCardElement,
   parsePresentationCardProgress,
+  type PresentationProgressResumeAction,
 } from "./PresentationProgressCard";
 
 // Initialize markdown-it with XHTML output
@@ -401,6 +402,12 @@ function positionEvidencePopover(
 export interface MarkdownRenderOptions {
   /** Enable the trusted app-authored max-iterations settings action. */
   enableAgentMaxPlanningIterationsSettingsLink?: boolean;
+  /** Project an unfinished PPT card into a terminal UI state. */
+  presentationInterruption?: {
+    endedAt: number;
+  };
+  /** App-owned action for starting a new PPT attempt after interruption. */
+  presentationResumeAction?: PresentationProgressResumeAction;
   presentationArtifactAction?: {
     openLabel: string;
     draftLabel: string;
@@ -590,12 +597,17 @@ function buildToolCallCardElement(
   options: MarkdownRenderOptions = {},
 ): HTMLElement {
   if (entry.presentationProgress) {
+    const presentationWasInterrupted =
+      entry.status === "calling" &&
+      options.presentationInterruption !== undefined;
     return buildPresentationProgressCardElement(
       doc,
       {
-        status: entry.status,
+        status: presentationWasInterrupted ? "interrupted" : entry.status,
         progress: entry.presentationProgress,
         errorText: unescapeXml(entry.toolResult || entry.statusText || ""),
+        interruptedAt: options.presentationInterruption?.endedAt,
+        resumeAction: options.presentationResumeAction,
       },
       presentationArtifact
         ? buildPresentationArtifactElement(

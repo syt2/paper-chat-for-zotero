@@ -452,6 +452,7 @@ export function getMessageMarkdownRenderOptions(
   streamingState: ChatMessage["streamingState"],
   evidenceRecords?: ChatMessage["evidence"],
   presentationArtifacts?: ChatMessage["presentationArtifacts"],
+  messageTimestamp?: number,
 ): MarkdownRenderOptions | undefined {
   const artifactsByToolCallId = new Map(
     (presentationArtifacts || []).map((artifact) => [
@@ -459,9 +460,21 @@ export function getMessageMarkdownRenderOptions(
       artifact,
     ]),
   );
+  const presentationInterruption =
+    streamingState === "interrupted"
+      ? {
+          endedAt: messageTimestamp ?? 0,
+        }
+      : undefined;
   if (!markdown) {
-    return evidenceRecords?.length || artifactsByToolCallId.size
-      ? { evidenceRecords, presentationArtifacts: artifactsByToolCallId }
+    return evidenceRecords?.length ||
+      artifactsByToolCallId.size ||
+      presentationInterruption
+      ? {
+          evidenceRecords,
+          presentationArtifacts: artifactsByToolCallId,
+          presentationInterruption,
+        }
       : undefined;
   }
   if (streamingState === undefined) {
@@ -477,6 +490,7 @@ export function getMessageMarkdownRenderOptions(
     ...markdown,
     evidenceRecords,
     presentationArtifacts: artifactsByToolCallId,
+    presentationInterruption,
     blockquoteAction: undefined,
     sourceGroupAction: undefined,
     evidenceAction: undefined,
@@ -908,6 +922,7 @@ export function createMessageElement(
       msg.streamingState,
       msg.evidence,
       msg.presentationArtifacts,
+      msg.timestamp,
     );
     const hasCanonicalMaxIterationsNotice =
       msg.role === "assistant" &&
