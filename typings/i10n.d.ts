@@ -255,7 +255,6 @@ export type FluentMessageId =
   | 'paperchat-presentation-concurrency-limit-message'
   | 'paperchat-presentation-concurrency-limit-title'
   | 'paperchat-presentation-cost-warning-message'
-  | 'paperchat-presentation-cost-warning-title'
   | 'paperchat-presentation-design-system-label'
   | 'paperchat-presentation-generate'
   | 'paperchat-presentation-insufficient-balance-message'

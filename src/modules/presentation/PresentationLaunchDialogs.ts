@@ -231,13 +231,34 @@ async function showPresentationSettingsDialog(
   const children: TagElementProps[] = [
     {
       tag: "div",
-      properties: {
-        textContent: getString("presentation-settings-description"),
-      },
       styles: {
-        lineHeight: "1.5",
-        color: "color-mix(in srgb, CanvasText 76%, transparent)",
+        display: "flex",
+        flexDirection: "column",
+        gap: "4px",
       },
+      children: [
+        {
+          tag: "div",
+          properties: {
+            textContent: getString("presentation-settings-description"),
+          },
+          styles: {
+            lineHeight: "1.5",
+            color: "color-mix(in srgb, CanvasText 76%, transparent)",
+          },
+        },
+        {
+          tag: "div",
+          properties: {
+            textContent: getString("presentation-cost-warning-message"),
+          },
+          styles: {
+            color: "#c43d32",
+            fontSize: "0.88em",
+            lineHeight: "1.35",
+          },
+        },
+      ],
     },
     {
       tag: "div",
@@ -456,35 +477,6 @@ async function showPresentationSettingsDialog(
       ],
     },
   ];
-
-  children.push({
-    tag: "div",
-    styles: {
-      display: "flex",
-      flexDirection: "column",
-      gap: "5px",
-      padding: "11px 13px",
-      border: "1px solid color-mix(in srgb, #d89522 42%, transparent)",
-      borderRadius: "6px",
-      background: "color-mix(in srgb, #d89522 12%, Canvas)",
-    },
-    children: [
-      {
-        tag: "div",
-        properties: {
-          textContent: getString("presentation-cost-warning-title"),
-        },
-        styles: { fontWeight: "600" },
-      },
-      {
-        tag: "div",
-        properties: {
-          textContent: getString("presentation-cost-warning-message"),
-        },
-        styles: { lineHeight: "1.45" },
-      },
-    ],
-  });
 
   const dialogHelper = new ztoolkit.Dialog(1, 1)
     .addCell(0, 0, {
