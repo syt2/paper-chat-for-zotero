@@ -1,8 +1,17 @@
 import { Type, type Static } from "@sinclair/typebox";
 import {
+  PRESENTATION_DESIGN_SYSTEMS,
   PRESENTATION_MAXIMUM_SLIDE_COUNT,
   PRESENTATION_MINIMUM_SLIDE_COUNT,
 } from "./PresentationLaunchSettings";
+
+export const PresentationDesignSystemSchema = Type.Union(
+  PRESENTATION_DESIGN_SYSTEMS.map((designSystem) => Type.Literal(designSystem)),
+  {
+    description:
+      "Bundled visual system. Paper summaries default to teal-green-academic-defense; five additional academic courseware and data styles plus PaperChat editorial and dark presentation styles are available when selected.",
+  },
+);
 
 const NormalizedCropSchema = Type.Object(
   {
@@ -360,19 +369,7 @@ export const PresentationRequestSchema = Type.Object(
         Type.Literal("dark"),
       ]),
     ),
-    designSystem: Type.Optional(
-      Type.Union(
-        [
-          Type.Literal("teal-green-academic-defense"),
-          Type.Literal("paperchat-editorial"),
-          Type.Literal("dark-editorial"),
-        ],
-        {
-          description:
-            "Bundled visual system. Paper summaries default to teal-green-academic-defense: a white scholarly canvas with measured claim titles, thin precise lines, restrained accents, medium information density, and one dominant evidence object. dark-editorial remains available when explicitly requested.",
-        },
-      ),
-    ),
+    designSystem: Type.Optional(PresentationDesignSystemSchema),
     slideCount: Type.Optional(
       Type.Integer({
         minimum: PRESENTATION_MINIMUM_SLIDE_COUNT,

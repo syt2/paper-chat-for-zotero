@@ -1,6 +1,7 @@
 import { Type, type Static } from "@sinclair/typebox";
 import type { PaperStructureExtended } from "../../types/tool";
 import {
+  PresentationDesignSystemSchema,
   PresentationRequestSchema,
   type PresentationRequest,
 } from "./PresentationSchema";
@@ -9,7 +10,30 @@ import {
   PRESENTATION_MINIMUM_SLIDE_COUNT,
   PRESENTATION_USER_INSTRUCTIONS_MAX_LENGTH,
   resolvePresentationSlideCount,
+  type PresentationDesignSystem,
 } from "./PresentationLaunchSettings";
+
+const PRESENTATION_DESIGN_SYSTEM_BRIEFS: Record<
+  PresentationDesignSystem,
+  string
+> = {
+  "teal-green-academic-defense":
+    "Use a precise white scholarly canvas, restrained teal structure, thin rules, medium information density, and one dominant evidence object.",
+  "blue-line-courseware":
+    "Use editorial infographic courseware on white: electric-blue structure, cyan and gray hierarchy, asymmetric text-and-visual compositions, and a measured rhythm of evidence blocks and geometric whitespace.",
+  "deep-blue-atlas":
+    "Use deep-blue linear reasoning on white: conclusion-first titles, line-led diagrams, direct-labeled tables or timelines, panel-free asymmetric zones, and one restrained cyan evidence focus per slide.",
+  "paper-white-courseware":
+    "Use warm paper-editorial courseware: creamy paper white, forest-green structure, small coral accents, unequal columns, readable long-form explanation, and generous breathing room around one primary evidence object.",
+  "pastel-derivation":
+    "Use approachable whiteboard-like derivations on white: mist-blue structure, fixed blue and magenta semantic accents, equation or schematic-led layouts, and progressive explanation without card grids.",
+  "wine-red-data":
+    "Use data-forward academic lecture notes on white: wine-red structure, restrained purple and orange emphasis, conclusion-first titles, two-column argument-and-evidence layouts, and visible source grounding.",
+  "paperchat-editorial":
+    "Use PaperChat's clean editorial system with warm neutrals, restrained blue and gold accents, asymmetric evidence layouts, and concise magazine-like hierarchy.",
+  "dark-editorial":
+    "Use a cinematic dark editorial system with full-bleed evidence where appropriate, warm gold emphasis, large claim titles, and high-contrast projection-safe copy.",
+};
 
 export const PresentationIntentSchema = Type.Object(
   {
@@ -36,13 +60,7 @@ export const PresentationIntentSchema = Type.Object(
           "Optional audience, emphasis, or style request. A normal paper PPT request does not need this field.",
       }),
     ),
-    designSystem: Type.Optional(
-      Type.Union([
-        Type.Literal("teal-green-academic-defense"),
-        Type.Literal("paperchat-editorial"),
-        Type.Literal("dark-editorial"),
-      ]),
-    ),
+    designSystem: Type.Optional(PresentationDesignSystemSchema),
     slideCount: Type.Optional(
       Type.Integer({
         minimum: PRESENTATION_MINIMUM_SLIDE_COUNT,
@@ -189,6 +207,8 @@ export function buildPresentationPlannerUserPrompt(
   const slideCount = resolvePresentationSlideCount(request.intent.slideCount);
   const contentSlideCount = slideCount - 1;
   const userInstructions = request.intent.instructions?.trim();
+  const selectedDesignSystem =
+    request.intent.designSystem || "teal-green-academic-defense";
   const structuredIntent: Record<string, unknown> = { ...request.intent };
   delete structuredIntent.instructions;
   const sections = [
@@ -202,6 +222,11 @@ export function buildPresentationPlannerUserPrompt(
       `Selected total slide count: ${slideCount}`,
       `Required content slide count: exactly ${contentSlideCount}`,
       "The cover is generated automatically and is not part of the slides array. This length is a hard application-owned requirement.",
+    ].join("\n"),
+    [
+      `Selected visual system: ${selectedDesignSystem}`,
+      PRESENTATION_DESIGN_SYSTEM_BRIEFS[selectedDesignSystem],
+      "Use this visual signature when choosing compatible layouts and content density; the renderer owns the exact palette and geometry.",
     ].join("\n"),
     `Presentation intent:\n${JSON.stringify(structuredIntent, null, 2)}`,
     `Internal output JSON schema:\n${JSON.stringify(PresentationRequestSchema)}`,

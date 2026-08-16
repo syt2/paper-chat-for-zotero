@@ -4,14 +4,19 @@ import {
   createPresentationDialogSelectOption,
   parsePresentationDialogSlideCount,
   PRESENTATION_CUSTOM_SLIDE_COUNT_OPTION,
+  PRESENTATION_DESIGN_SYSTEM_OPTIONS,
   shouldShowPresentationCustomSlideCount,
 } from "../src/modules/presentation/PresentationLaunchDialogs.ts";
 import {
   DEFAULT_PRESENTATION_LAUNCH_SETTINGS,
+  isAcademicPresentationDesignSystem,
+  isPresentationDesignSystem,
   isPresentationPresetSlideCount,
   normalizePresentationLaunchSettings,
   normalizePresentationUserInstructions,
   parsePresentationSlideCount,
+  PRESENTATION_ACADEMIC_DESIGN_SYSTEMS,
+  PRESENTATION_DESIGN_SYSTEMS,
   PRESENTATION_MAXIMUM_SLIDE_COUNT,
   PRESENTATION_MINIMUM_SLIDE_COUNT,
   PRESENTATION_USER_INSTRUCTIONS_MAX_LENGTH,
@@ -19,6 +24,30 @@ import {
 } from "../src/modules/presentation/PresentationLaunchSettings.ts";
 
 describe("presentation launch settings", function () {
+  it("offers all six original academic styles plus the two PaperChat styles", function () {
+    assert.deepEqual(PRESENTATION_ACADEMIC_DESIGN_SYSTEMS, [
+      "teal-green-academic-defense",
+      "blue-line-courseware",
+      "deep-blue-atlas",
+      "paper-white-courseware",
+      "pastel-derivation",
+      "wine-red-data",
+    ]);
+    assert.deepEqual(
+      PRESENTATION_DESIGN_SYSTEM_OPTIONS.map((option) => option.value),
+      [...PRESENTATION_DESIGN_SYSTEMS],
+    );
+    for (const designSystem of PRESENTATION_ACADEMIC_DESIGN_SYSTEMS) {
+      assert.isTrue(isPresentationDesignSystem(designSystem));
+      assert.isTrue(isAcademicPresentationDesignSystem(designSystem));
+      assert.equal(
+        normalizePresentationLaunchSettings({ designSystem }).designSystem,
+        designSystem,
+      );
+    }
+    assert.isFalse(isAcademicPresentationDesignSystem("dark-editorial"));
+  });
+
   it("accepts preset and custom integer slide counts from 4 through 30", function () {
     for (const value of [4, 6, 8, 10, 15, 30]) {
       assert.equal(parsePresentationSlideCount(value), value);

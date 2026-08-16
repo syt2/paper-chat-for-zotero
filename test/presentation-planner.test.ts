@@ -190,6 +190,17 @@ describe("presentation planner", function () {
     assert.include(prompt, "Never infer or switch the PPT language");
   });
 
+  it("adds the selected academic preset signature to the dynamic prompt", function () {
+    const prompt = buildPresentationPlannerUserPrompt({
+      ...request,
+      intent: { ...request.intent, designSystem: "deep-blue-atlas" as const },
+    });
+
+    assert.include(prompt, "Selected visual system: deep-blue-atlas");
+    assert.include(prompt, "deep-blue linear reasoning on white");
+    assert.include(prompt, "renderer owns the exact palette and geometry");
+  });
+
   it("places one-time user requirements only in the dynamic planner prompt", function () {
     const instructions = "面向本科生，重点解释消融实验，少用公式。";
     const systemPrompt = buildPresentationPlannerSystemPrompt();

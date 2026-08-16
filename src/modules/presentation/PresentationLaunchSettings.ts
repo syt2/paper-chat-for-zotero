@@ -8,8 +8,17 @@ export type PresentationPresetSlideCount =
   (typeof PRESENTATION_SLIDE_COUNTS)[number];
 export type PresentationSlideCount = number;
 
-export const PRESENTATION_DESIGN_SYSTEMS = [
+export const PRESENTATION_ACADEMIC_DESIGN_SYSTEMS = [
   "teal-green-academic-defense",
+  "blue-line-courseware",
+  "deep-blue-atlas",
+  "paper-white-courseware",
+  "pastel-derivation",
+  "wine-red-data",
+] as const;
+
+export const PRESENTATION_DESIGN_SYSTEMS = [
+  ...PRESENTATION_ACADEMIC_DESIGN_SYSTEMS,
   "paperchat-editorial",
   "dark-editorial",
 ] as const;
@@ -74,6 +83,14 @@ export function isPresentationDesignSystem(
 ): value is PresentationDesignSystem {
   return PRESENTATION_DESIGN_SYSTEMS.includes(
     value as PresentationDesignSystem,
+  );
+}
+
+export function isAcademicPresentationDesignSystem(
+  value: unknown,
+): value is (typeof PRESENTATION_ACADEMIC_DESIGN_SYSTEMS)[number] {
+  return PRESENTATION_ACADEMIC_DESIGN_SYSTEMS.includes(
+    value as (typeof PRESENTATION_ACADEMIC_DESIGN_SYSTEMS)[number],
   );
 }
 

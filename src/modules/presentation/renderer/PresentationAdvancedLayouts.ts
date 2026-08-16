@@ -3,6 +3,7 @@ import type {
   RenderablePresentationSlide,
   ResolvedPresentationFigure,
 } from "../PresentationSchema";
+import { isAcademicPresentationDesignSystem } from "../PresentationLaunchSettings";
 import {
   BODY_FONT,
   chartColorsForSlide,
@@ -420,7 +421,7 @@ function addTable(
     table.headers.length,
     box.h,
   );
-  const academic = context.blueprint.id === "teal-green-academic-defense";
+  const academic = isAcademicPresentationDesignSystem(context.blueprint.id);
   const noBorder: PptxGenJS.BorderProps = {
     type: "none",
     color: palette.background,

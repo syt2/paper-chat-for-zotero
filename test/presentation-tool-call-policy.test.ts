@@ -56,6 +56,18 @@ describe("presentation tool-call policy", function () {
     });
   });
 
+  it("keeps an explicitly requested original academic preset", function () {
+    const normalized = normalizePresentationToolCall(
+      presentationCall({ designSystem: "deep-blue-atlas" }),
+      "请用深蓝图谱风格生成 PPT。",
+    );
+
+    assert.deepEqual(JSON.parse(normalized.function.arguments), {
+      designSystem: "deep-blue-atlas",
+      instructions: "请用深蓝图谱风格生成 PPT。",
+    });
+  });
+
   it("reuses the first failed attempt arguments instead of rotating styles", function () {
     const firstCall = presentationCall({ sourceItemKey: "SBZ2M99R" });
     const previousResults: ToolExecutionResult[] = [

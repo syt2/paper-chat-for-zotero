@@ -2,7 +2,12 @@ import { assert } from "chai";
 import JSZip from "jszip";
 import type { RenderablePresentationRequest } from "../src/modules/presentation/PresentationSchema.ts";
 import { renderPresentation } from "../src/modules/presentation/renderer/PptxPresentationExporter.ts";
-import { resolveLayout } from "../src/modules/presentation/renderer/PresentationDesignSystem.ts";
+import {
+  resolveLayout,
+  resolveTheme,
+} from "../src/modules/presentation/renderer/PresentationDesignSystem.ts";
+import { applyDefaultFadeTransitionToSlideXml } from "../src/modules/presentation/renderer/PresentationPptxTransitions.ts";
+import { resolvePresentationThemeBlueprint } from "../src/modules/presentation/renderer/PresentationThemeBlueprint.ts";
 import {
   extractPictureExtents,
   verifyRenderedPresentation,
@@ -92,6 +97,64 @@ function extractSlideText(xml: string): string {
 }
 
 describe("presentation PPTX exporter probe", function () {
+  it("writes one root-level fade transition to every exported slide", async function () {
+    const bytes = await renderPresentation({
+      title: "Fade transition",
+      slides: [{ title: "Evidence", keyMessage: "A grounded finding" }],
+    });
+    const archive = await JSZip.loadAsync(bytes);
+    for (const path of ["ppt/slides/slide1.xml", "ppt/slides/slide2.xml"]) {
+      const xml = await archive.files[path].async("string");
+      assert.lengthOf(xml.match(/<p:transition\b/gu) || [], 1);
+      assert.include(xml, '<p:transition spd="fast" advClick="1"><p:fade/>');
+      const commonSlideEnd = xml.indexOf("</p:cSld>");
+      const colorMapEnd = xml.indexOf("</p:clrMapOvr>");
+      const transitionIndex = xml.indexOf("<p:transition");
+      const timingIndex = xml.indexOf("<p:timing");
+      const extensionIndex = xml.indexOf("<p:extLst");
+      assert.isAbove(transitionIndex, Math.max(commonSlideEnd, colorMapEnd));
+      if (timingIndex >= 0) assert.isBelow(transitionIndex, timingIndex);
+      if (extensionIndex >= 0) assert.isBelow(transitionIndex, extensionIndex);
+    }
+  });
+
+  it("replaces an existing transition without disturbing slide timing", function () {
+    const xml =
+      '<p:sld xmlns:p="p"><p:cSld><p:spTree/></p:cSld><p:clrMapOvr><p:masterClrMapping/></p:clrMapOvr><p:transition><p:push/></p:transition><p:timing><p:tnLst/></p:timing></p:sld>';
+    const patched = applyDefaultFadeTransitionToSlideXml(xml);
+    assert.lengthOf(patched.match(/<p:transition\b/gu) || [], 1);
+    assert.include(patched, "<p:fade/>");
+    assert.notInclude(patched, "<p:push/>");
+    assert.isBelow(
+      patched.indexOf("</p:clrMapOvr>"),
+      patched.indexOf("<p:transition"),
+    );
+    assert.isBelow(
+      patched.indexOf("<p:transition"),
+      patched.indexOf("<p:timing"),
+    );
+  });
+
+  it("resolves distinct palettes and blueprints for all academic presets", function () {
+    const expectedAccents = {
+      "teal-green-academic-defense": "009682",
+      "blue-line-courseware": "4285F4",
+      "deep-blue-atlas": "49B7D0",
+      "paper-white-courseware": "F5987E",
+      "pastel-derivation": "0064E0",
+      "wine-red-data": "E69138",
+    } as const;
+    for (const [designSystem, accent] of Object.entries(expectedAccents)) {
+      const request = {
+        title: "Academic preset",
+        designSystem: designSystem as keyof typeof expectedAccents,
+        slides: [],
+      };
+      assert.equal(resolveTheme(request).accent, accent);
+      assert.equal(resolvePresentationThemeBlueprint(request).id, designSystem);
+    }
+  });
+
   it("localizes renderer-owned labels from the resolved Zotero locale", async function () {
     const bytes = await renderPresentation({
       title: "论文解读",

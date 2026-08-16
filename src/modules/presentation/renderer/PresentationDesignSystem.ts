@@ -2,6 +2,7 @@ import type {
   PresentationRequest,
   RenderablePresentationSlide,
 } from "../PresentationSchema";
+import type { PresentationDesignSystem } from "../PresentationLaunchSettings";
 
 export const SLIDE_WIDTH = 13.333;
 export const SLIDE_HEIGHT = 7.5;
@@ -106,14 +107,104 @@ const THEMES: Record<
   },
 };
 
+const DESIGN_SYSTEM_THEMES: Record<PresentationDesignSystem, ThemePalette> = {
+  "teal-green-academic-defense": THEMES.academic,
+  "blue-line-courseware": {
+    background: "FFFFFF",
+    paper: "F7F9FC",
+    surface: "FFFFFF",
+    text: "202124",
+    muted: "6F7780",
+    faint: "9AA0A6",
+    accent: "4285F4",
+    accentDark: "0059BA",
+    accentSoft: "ADCCFA",
+    framework: "24C2E0",
+    frameworkSoft: "E8F6FA",
+    focus: "34A853",
+    danger: "5F6368",
+    border: "D8DBE0",
+    chart: ["4285F4", "24C2E0", "0059BA", "9AA0A6", "34A853"],
+    coverText: "FFFFFF",
+  },
+  "deep-blue-atlas": {
+    background: "FFFFFF",
+    paper: "F7F9FC",
+    surface: "FFFFFF",
+    text: "203D74",
+    muted: "7F899E",
+    faint: "B5C0D0",
+    accent: "49B7D0",
+    accentDark: "203D74",
+    accentSoft: "E7ECF1",
+    framework: "2C477A",
+    frameworkSoft: "F3F6FA",
+    focus: "FD9F66",
+    danger: "E94B3B",
+    border: "D9DEE7",
+    chart: ["203D74", "49B7D0", "7F899E", "FD9F66", "E94B3B"],
+    coverText: "FFFFFF",
+  },
+  "paper-white-courseware": {
+    background: "FDFAF5",
+    paper: "FFFDFC",
+    surface: "FDFAF5",
+    text: "56687A",
+    muted: "7B8996",
+    faint: "A9B2BA",
+    accent: "F5987E",
+    accentDark: "44712E",
+    accentSoft: "F9DED8",
+    framework: "44712E",
+    frameworkSoft: "D7EBCE",
+    focus: "F5987E",
+    danger: "C96F5A",
+    border: "D9D8D0",
+    chart: ["44712E", "F5987E", "88A97A", "E8B2A5", "56687A"],
+    coverText: "FFFFFF",
+  },
+  "pastel-derivation": {
+    background: "FFFFFF",
+    paper: "F8FAFC",
+    surface: "FFFFFF",
+    text: "172C34",
+    muted: "65747A",
+    faint: "A8B1B5",
+    accent: "0064E0",
+    accentDark: "0051B8",
+    accentSoft: "DBEDFE",
+    framework: "0085FD",
+    frameworkSoft: "F1F4F7",
+    focus: "C32E8F",
+    danger: "C32E8F",
+    border: "D7DEE4",
+    chart: ["1F77B4", "FF7F0E", "2CA02C", "D62728", "C32E8F"],
+    coverText: "FFFFFF",
+  },
+  "wine-red-data": {
+    background: "FFFFFF",
+    paper: "F8F6F8",
+    surface: "FFFFFF",
+    text: "000000",
+    muted: "5E5962",
+    faint: "AAA4AD",
+    accent: "E69138",
+    accentDark: "820000",
+    accentSoft: "FFEFD9",
+    framework: "4F0E86",
+    frameworkSoft: "F3F3F3",
+    focus: "F7D05B",
+    danger: "FF0000",
+    border: "D8D3DA",
+    chart: ["820000", "E69138", "0076BA", "56C1FF", "A9AAAC"],
+    coverText: "FFFFFF",
+  },
+  "paperchat-editorial": THEMES.paperchat,
+  "dark-editorial": THEMES.dark,
+};
+
 export function resolveTheme(spec: PresentationRequest): ThemePalette {
-  if (spec.designSystem === "teal-green-academic-defense") {
-    return THEMES.academic;
-  }
-  if (spec.designSystem === "paperchat-editorial") {
-    return THEMES.paperchat;
-  }
-  if (spec.designSystem === "dark-editorial") return THEMES.dark;
+  if (spec.designSystem) return DESIGN_SYSTEM_THEMES[spec.designSystem];
   if (spec.theme) return THEMES[spec.theme];
   return spec.sourceItemKey ? THEMES.academic : THEMES.paperchat;
 }

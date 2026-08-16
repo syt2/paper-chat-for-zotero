@@ -12,6 +12,7 @@ import {
 } from "./PresentationLayoutRenderer";
 import { verifyRenderedPresentation } from "./PresentationRenderVerifier";
 import { renderPresentationPreviewSlides } from "./PresentationPreviewRenderer";
+import { applyDefaultFadeTransitions } from "./PresentationPptxTransitions";
 
 export interface PresentationRenderWithPreviewResult {
   bytes: Uint8Array;
@@ -187,17 +188,33 @@ async function writeAndVerifyPresentation(
   normalizedSpec: RenderablePresentationRequest,
   options?: PresentationRendererValidationOptions,
 ): Promise<{ bytes: Uint8Array; verificationWarnings: string[] }> {
-  const bytes = await presentation.write({
+  const rawBytes = await presentation.write({
     outputType: "uint8array",
     compression: true,
   });
-  assertPptxBytes(bytes);
+  assertPptxBytes(rawBytes);
+  let bytes = rawBytes;
+  const transitionWarnings: string[] = [];
+  try {
+    bytes = await applyDefaultFadeTransitions(rawBytes);
+    assertPptxBytes(bytes);
+  } catch (error) {
+    bytes = rawBytes;
+    transitionWarnings.push(
+      `Presentation was exported without the default fade transition: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
   const verificationWarnings = await verifyRenderedPresentation(
     bytes,
     normalizedSpec,
     { strict: options?.strictValidation },
   );
-  return { bytes, verificationWarnings };
+  return {
+    bytes,
+    verificationWarnings: [...transitionWarnings, ...verificationWarnings],
+  };
 }
 
 export async function renderPresentation(

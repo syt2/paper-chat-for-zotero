@@ -31,6 +31,44 @@ const BUTTON_POSITION_0 = 1;
 const BUTTON_POSITION_1 = 256;
 export const PRESENTATION_CUSTOM_SLIDE_COUNT_OPTION = "custom";
 
+export const PRESENTATION_DESIGN_SYSTEM_OPTIONS: ReadonlyArray<{
+  value: PresentationDesignSystem;
+  labelKey: string;
+}> = [
+  {
+    value: "teal-green-academic-defense",
+    labelKey: "presentation-style-academic",
+  },
+  {
+    value: "blue-line-courseware",
+    labelKey: "presentation-style-blue-line-courseware",
+  },
+  {
+    value: "deep-blue-atlas",
+    labelKey: "presentation-style-deep-blue-atlas",
+  },
+  {
+    value: "paper-white-courseware",
+    labelKey: "presentation-style-paper-white-courseware",
+  },
+  {
+    value: "pastel-derivation",
+    labelKey: "presentation-style-pastel-derivation",
+  },
+  {
+    value: "wine-red-data",
+    labelKey: "presentation-style-wine-red-data",
+  },
+  {
+    value: "paperchat-editorial",
+    labelKey: "presentation-style-editorial",
+  },
+  {
+    value: "dark-editorial",
+    labelKey: "presentation-style-dark",
+  },
+];
+
 export interface PresentationLaunchDialogOptions {
   onSettingsFocusReady?: (focus: () => void) => void;
   abortSignal?: AbortSignal;
@@ -334,23 +372,10 @@ async function showPresentationSettingsDialog(
             boxSizing: "border-box",
             padding: "7px 10px",
           },
-          children: [
-            {
-              value: "teal-green-academic-defense",
-              label: getString("presentation-style-academic"),
-            },
-            {
-              value: "paperchat-editorial",
-              label: getString("presentation-style-editorial"),
-            },
-            {
-              value: "dark-editorial",
-              label: getString("presentation-style-dark"),
-            },
-          ].map((option) =>
+          children: PRESENTATION_DESIGN_SYSTEM_OPTIONS.map((option) =>
             createPresentationDialogSelectOption(
               option.value,
-              option.label,
+              getString(option.labelKey),
               defaults.designSystem === option.value,
             ),
           ),

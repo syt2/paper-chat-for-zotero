@@ -6,7 +6,7 @@ const EXPLICIT_LANGUAGE_PATTERN =
   /(?:\b(?:zh(?:[-_](?:cn|tw|hk|mo))?|en(?:[-_][a-z]{2})?|ja(?:[-_]jp)?|ko(?:[-_]kr)?|english|chinese|japanese|korean)\b|中文|简体|繁体|英文|英语|日文|日语|韩文|韩语)/i;
 
 const EXPLICIT_INSTRUCTION_PATTERN =
-  /(?:面向|受众|重点|突出|着重|聚焦|强调|风格|样式|模板|组会|答辩|课程|课堂|教学|汇报|极简|简洁|暗色|深色|青绿|青绿色|编辑风|杂志风|audience|focus|emphasi[sz]e|style|theme|minimal|editorial|academic defense|dark|teal)/i;
+  /(?:面向|受众|重点|突出|着重|聚焦|强调|风格|样式|模板|组会|答辩|课程|课件|课堂|教学|汇报|极简|简洁|暗色|深色|青绿|青绿色|蓝线|深蓝|纸白|粉彩|酒红|编辑风|杂志风|audience|focus|emphasi[sz]e|style|theme|minimal|editorial|academic defense|courseware|atlas|pastel|wine red|dark|teal)/i;
 
 const EXPLICIT_TITLE_PATTERN = /(?:标题|题目|命名|title|named)/i;
 const EXPLICIT_FILENAME_PATTERN = /(?:文件名|档名|filename|file name)/i;
@@ -71,6 +71,21 @@ function explicitlyRequestsDesignSystem(
   if (normalizedRequest.includes(designSystem.toLowerCase())) return true;
   if (designSystem === "teal-green-academic-defense") {
     return /(?:青绿|青绿色|teal|学术答辩|academic defense)/i.test(userRequest);
+  }
+  if (designSystem === "blue-line-courseware") {
+    return /(?:蓝线课件|blue[- ]line courseware)/i.test(userRequest);
+  }
+  if (designSystem === "deep-blue-atlas") {
+    return /(?:深蓝图谱|deep[- ]blue atlas)/i.test(userRequest);
+  }
+  if (designSystem === "paper-white-courseware") {
+    return /(?:纸白课件|paper[- ]white courseware)/i.test(userRequest);
+  }
+  if (designSystem === "pastel-derivation") {
+    return /(?:粉彩推导|pastel derivation)/i.test(userRequest);
+  }
+  if (designSystem === "wine-red-data") {
+    return /(?:酒红数据|wine[- ]red data)/i.test(userRequest);
   }
   if (designSystem === "paperchat-editorial") {
     return /(?:编辑风|杂志风|editorial)/i.test(userRequest);
