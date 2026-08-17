@@ -48,6 +48,10 @@ import {
   resolvePresentationRendererLabels,
   type PresentationRendererLabels,
 } from "./PresentationLocalization";
+import {
+  nextPresentationAnimationObjectName,
+  type PresentationAnimationRole,
+} from "./PresentationAnimationNames";
 
 interface Box {
   x: number;
@@ -319,6 +323,7 @@ function addSlideHeading(
       bold: editorial,
       color: palette.text,
       breakLine: false,
+      objectName: nextPresentationAnimationObjectName(slide, "content-title"),
     },
   );
   if (spec.subtitle) {
@@ -429,6 +434,7 @@ function addKeyMessage(
       bold: false,
       color: palette.accentDark,
       valign: "top",
+      objectName: nextPresentationAnimationObjectName(slide, "key-message"),
     },
   );
 }
@@ -718,6 +724,7 @@ function addFigure(
   figure: ResolvedPresentationFigure,
   box: Box,
   mode: "contain" | "cover" = "contain",
+  animationRole: PresentationAnimationRole = "evidence-visual",
 ): void {
   const { palette } = context;
   slide.addShape(context.presentation.ShapeType.rect, {
@@ -739,6 +746,7 @@ function addFigure(
       h: figure.pixelHeight / 96,
       sizing: { type: "cover", w: box.w, h: box.h },
       altText: figure.caption || `PDF page ${figure.page}`,
+      objectName: nextPresentationAnimationObjectName(slide, animationRole),
     });
     return;
   }
@@ -756,6 +764,7 @@ function addFigure(
     data: String(figure.data),
     ...imageBox,
     altText: figure.caption || `PDF page ${figure.page}`,
+    objectName: nextPresentationAnimationObjectName(slide, animationRole),
   });
 }
 
@@ -886,6 +895,7 @@ function addChart(
       dataLabelPosition: "outEnd",
       dataLabelFormatCode: "0.0#",
       chartColors: seriesColors,
+      objectName: nextPresentationAnimationObjectName(slide, "chart"),
       showPercent: false,
       chartArea: {
         roundedCorners: false,
@@ -1943,13 +1953,14 @@ function renderCoverEvidencePlate(
       w: heroWidth,
       h: heroHeight,
     };
-    addFigure(context, slide, figures[0], heroBox, "contain");
+    addFigure(context, slide, figures[0], heroBox, "contain", "cover-visual");
     addFigure(
       context,
       slide,
       figures[1],
       { x: 7.08, y: 0.28, w: 5.9, h: 3.04 },
       "contain",
+      "cover-visual",
     );
     return heroBox;
   }
@@ -1971,6 +1982,7 @@ function renderCoverEvidencePlate(
         data: String(figure.data),
         ...heroBox,
         altText: figure.caption || `PDF page ${figure.page}`,
+        objectName: nextPresentationAnimationObjectName(slide, "cover-visual"),
       });
       return heroBox;
     }
@@ -1985,18 +1997,25 @@ function renderCoverEvidencePlate(
       heroBox.w = imageRegion.h * imageAspect;
       heroBox.x = imageRegion.x + imageRegion.w - heroBox.w;
     }
-    addFigure(context, slide, figure, heroBox, "contain");
+    addFigure(context, slide, figure, heroBox, "contain", "cover-visual");
     return heroBox;
   }
 
   const gap = 0.16;
   const primaryHeight = region.h * 0.62;
-  addFigure(context, slide, figures[0], {
-    x: region.x,
-    y: region.y,
-    w: region.w,
-    h: primaryHeight,
-  });
+  addFigure(
+    context,
+    slide,
+    figures[0],
+    {
+      x: region.x,
+      y: region.y,
+      w: region.w,
+      h: primaryHeight,
+    },
+    "contain",
+    "cover-visual",
+  );
 
   const supporting = figures.slice(1, 3);
   const supportingY = region.y + primaryHeight + gap;
@@ -2005,21 +2024,35 @@ function renderCoverEvidencePlate(
     const supportAspect =
       supporting[0].pixelWidth / Math.max(1, supporting[0].pixelHeight);
     const supportWidth = supportAspect >= 1.6 ? region.w : region.w * 0.82;
-    addFigure(context, slide, supporting[0], {
-      x: region.x + region.w - supportWidth,
-      y: supportingY,
-      w: supportWidth,
-      h: supportingHeight,
-    });
+    addFigure(
+      context,
+      slide,
+      supporting[0],
+      {
+        x: region.x + region.w - supportWidth,
+        y: supportingY,
+        w: supportWidth,
+        h: supportingHeight,
+      },
+      "contain",
+      "cover-visual",
+    );
   } else {
     const supportingWidth = (region.w - gap) / 2;
     supporting.forEach((figure, index) => {
-      addFigure(context, slide, figure, {
-        x: region.x + index * (supportingWidth + gap),
-        y: supportingY,
-        w: supportingWidth,
-        h: supportingHeight,
-      });
+      addFigure(
+        context,
+        slide,
+        figure,
+        {
+          x: region.x + index * (supportingWidth + gap),
+          y: supportingY,
+          w: supportingWidth,
+          h: supportingHeight,
+        },
+        "contain",
+        "cover-visual",
+      );
     });
   }
   return region;
@@ -2043,6 +2076,7 @@ function renderDarkEditorialCover(
       h: SLIDE_HEIGHT,
       sizing: { type: "cover", w: SLIDE_WIDTH, h: SLIDE_HEIGHT },
       altText: hero.caption || hero.captionHint || `PDF page ${hero.page}`,
+      objectName: nextPresentationAnimationObjectName(slide, "cover-visual"),
     });
     // Two overlays approximate a cinematic gradient while remaining editable
     // in PowerPoint: the whole frame is toned down and the title side gets a
@@ -2133,6 +2167,7 @@ function renderDarkEditorialCover(
       bold: true,
       color: palette.coverText,
       valign: "bottom",
+      objectName: nextPresentationAnimationObjectName(slide, "cover-title"),
     },
   );
   if (spec.subtitle) {
@@ -2366,6 +2401,7 @@ export function renderCover(
       bold: false,
       color: palette.text,
       valign: "middle",
+      objectName: nextPresentationAnimationObjectName(slide, "cover-title"),
     },
   );
   if (spec.subtitle) {

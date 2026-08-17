@@ -1,4 +1,5 @@
 import JSZip from "jszip";
+import { slideRootChildEnd } from "./PresentationPptxXml";
 
 const SLIDE_XML_PATH = /^ppt\/slides\/slide\d+\.xml$/u;
 const EXISTING_TRANSITION =
@@ -6,33 +7,17 @@ const EXISTING_TRANSITION =
 const FADE_TRANSITION_XML =
   '<p:transition spd="fast" advClick="1"><p:fade/></p:transition>';
 
-function rootChildEnd(
-  slideXml: string,
-  childName: "cSld" | "clrMapOvr",
-  searchFrom = 0,
-): number | undefined {
-  const opening = `<p:${childName}`;
-  const start = slideXml.indexOf(opening, searchFrom);
-  if (start < 0) return undefined;
-  const openingEnd = slideXml.indexOf(">", start + opening.length);
-  if (openingEnd < 0) return undefined;
-  if (slideXml[openingEnd - 1] === "/") return openingEnd + 1;
-  const closing = `</p:${childName}>`;
-  const closingStart = slideXml.indexOf(closing, openingEnd + 1);
-  return closingStart < 0 ? undefined : closingStart + closing.length;
-}
-
 /**
  * OOXML requires `transition` to be a direct CT_Slide child after `cSld` and
  * optional `clrMapOvr`, but before optional `timing` and `extLst` children.
  */
 export function applyDefaultFadeTransitionToSlideXml(slideXml: string): string {
   const withoutTransition = slideXml.replace(EXISTING_TRANSITION, "");
-  const commonSlideEnd = rootChildEnd(withoutTransition, "cSld");
+  const commonSlideEnd = slideRootChildEnd(withoutTransition, "cSld");
   if (commonSlideEnd === undefined) {
     throw new Error("Slide XML has no complete p:cSld root child.");
   }
-  const colorMapEnd = rootChildEnd(
+  const colorMapEnd = slideRootChildEnd(
     withoutTransition,
     "clrMapOvr",
     commonSlideEnd,
