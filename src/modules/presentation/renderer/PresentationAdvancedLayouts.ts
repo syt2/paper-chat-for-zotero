@@ -32,6 +32,7 @@ import {
   isOpenQuestionsLabel,
   type PresentationRendererLabels,
 } from "./PresentationLocalization";
+import { nextPresentationAnimationObjectName } from "./PresentationAnimationNames";
 
 interface Box {
   x: number;
@@ -140,6 +141,7 @@ function addGroupedNarrative(
         bold: false,
         color: palette.accentDark,
         valign: "top",
+        objectName: nextPresentationAnimationObjectName(slide, "key-message"),
       },
     );
     cursorY += messageHeight + 0.38;
@@ -258,6 +260,7 @@ function figureBox(
     data: String(figure.data),
     ...imageBox,
     altText: sourceCaption || `PDF page ${figure.page}`,
+    objectName: nextPresentationAnimationObjectName(slide, "evidence-visual"),
   });
   if (caption) {
     addText(
@@ -380,6 +383,7 @@ function addChart(
       dataLabelPosition: "outEnd",
       dataLabelFormatCode: "0.0#",
       chartColors: seriesColors,
+      objectName: nextPresentationAnimationObjectName(slide, "chart"),
       showPercent: false,
       chartArea: {
         roundedCorners: false,
@@ -1593,6 +1597,7 @@ export function renderConclusionLayout(
         bold: false,
         color: palette.text,
         valign: "top",
+        objectName: nextPresentationAnimationObjectName(slide, "key-message"),
       },
     );
   }
@@ -1952,6 +1957,7 @@ export function renderMatrixLayout(
         bold: true,
         color: palette.accentDark,
         align: "center",
+        objectName: nextPresentationAnimationObjectName(slide, "key-message"),
       },
     );
   }
@@ -1983,6 +1989,7 @@ export function renderTimelineLayout(
         bold: true,
         color: palette.accentDark,
         valign: "top",
+        objectName: nextPresentationAnimationObjectName(slide, "key-message"),
       },
     );
   }

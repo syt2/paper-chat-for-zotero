@@ -13,6 +13,7 @@ import {
 import { verifyRenderedPresentation } from "./PresentationRenderVerifier";
 import { renderPresentationPreviewSlides } from "./PresentationPreviewRenderer";
 import { applyDefaultFadeTransitions } from "./PresentationPptxTransitions";
+import { applyPresentationAnimations } from "./PresentationPptxAnimations";
 
 export interface PresentationRenderWithPreviewResult {
   bytes: Uint8Array;
@@ -206,6 +207,20 @@ async function writeAndVerifyPresentation(
       }`,
     );
   }
+  const animationWarnings: string[] = [];
+  try {
+    const animated = await applyPresentationAnimations(bytes);
+    bytes = animated.bytes;
+    animationWarnings.push(...animated.warnings);
+  } catch (error) {
+    // Element timing is an optional enhancement. Keep the valid static deck
+    // when an archive/parser/viewer edge case prevents timing injection.
+    animationWarnings.push(
+      `Presentation was exported without element animations: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
   const verificationWarnings = await verifyRenderedPresentation(
     bytes,
     normalizedSpec,
@@ -213,7 +228,11 @@ async function writeAndVerifyPresentation(
   );
   return {
     bytes,
-    verificationWarnings: [...transitionWarnings, ...verificationWarnings],
+    verificationWarnings: [
+      ...transitionWarnings,
+      ...animationWarnings,
+      ...verificationWarnings,
+    ],
   };
 }
 
