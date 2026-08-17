@@ -1,10 +1,15 @@
 import { getString } from "../../utils/locale";
+import { getPref } from "../../utils/prefs";
 import {
   getAnalyticsService,
   trackPaperChatPresentationEntryClicked,
 } from "../analytics";
 import { getAuthManager } from "../auth";
 import { getProviderManager } from "../providers";
+import {
+  parseTierState,
+  type PaperChatTier,
+} from "../providers/paperchat-tier-routing";
 import { showAuthDialog } from "../ui/AuthDialog";
 import { createPresentationLaunchDialogs } from "./PresentationLaunchDialogs";
 import {
@@ -32,6 +37,17 @@ import type {
 
 const PRESENTATION_ITEM_MENU_ID = "paperchat-generate-presentation-menuitem";
 const launchCoordinator = new PresentationLaunchCoordinator();
+
+function getConfiguredPaperChatTier(): PaperChatTier {
+  try {
+    return parseTierState(getPref("paperchatTierState") as string | undefined)
+      .selectedTier;
+  } catch {
+    // Preferences may be unavailable during startup/tests. Standard is the
+    // established fallback and keeps the launch gate permissive.
+    return "paperchat-standard";
+  }
+}
 
 export type PresentationTaskFocusHandler = (
   item: Zotero.Item,
@@ -455,20 +471,22 @@ function showPresentationConcurrencyLimitDialog(parentWindow?: Window): void {
   );
 }
 
-async function runSharedPresentationGuard(
-  onSettingsFocusReady?: (focus: () => void) => void,
-  abortSignal?: AbortSignal,
-  suggestedSettings?: Partial<PresentationLaunchSettings>,
-) {
+async function runSharedPresentationGuard(options: {
+  onSettingsFocusReady?: (focus: () => void) => void;
+  abortSignal?: AbortSignal;
+  suggestedSettings?: Partial<PresentationLaunchSettings>;
+  paperChatTier?: PaperChatTier;
+}) {
   return guardPresentationLaunch({
     providerManager: getProviderManager(),
     authManager: getAuthManager(),
     dialogs: createPresentationLaunchDialogs({
-      onSettingsFocusReady,
-      abortSignal,
+      onSettingsFocusReady: options.onSettingsFocusReady,
+      abortSignal: options.abortSignal,
     }),
     ensureLoggedIn: () => showAuthDialog("login"),
-    suggestedSettings,
+    suggestedSettings: options.suggestedSettings,
+    paperChatTier: options.paperChatTier,
   });
 }
 
@@ -486,10 +504,10 @@ async function runPresentationLaunch(
     return false;
   }
 
-  const guardResult =
-    await runSharedPresentationGuard(onSettingsFocusReady).finally(
-      clearSettingsFocus,
-    );
+  const guardResult = await runSharedPresentationGuard({
+    onSettingsFocusReady,
+    paperChatTier: getConfiguredPaperChatTier(),
+  }).finally(clearSettingsFocus);
   if (!guardResult.allowed) return false;
 
   const taskFocus = createDeferredPresentationFocus();
@@ -560,11 +578,12 @@ export function createChatPresentationToolLaunchSession(
     },
     abortSignal: options.abortSignal,
     runGuard: (onSettingsFocusReady, suggestedSettings) =>
-      runSharedPresentationGuard(
+      runSharedPresentationGuard({
         onSettingsFocusReady,
-        options.abortSignal,
+        abortSignal: options.abortSignal,
         suggestedSettings,
-      ),
+        paperChatTier: options.paperChatTier ?? getConfiguredPaperChatTier(),
+      }),
     focusTask: () => {
       const resolvedPaper =
         resolvedSource?.itemKey &&

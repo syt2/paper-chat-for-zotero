@@ -1,5 +1,6 @@
 import type { PresentationToolLaunchSession } from "./PresentationToolLaunchSession";
 import type { PresentationMentionSource } from "./PresentationSourceContext";
+import type { PaperChatTier } from "../providers/paperchat-tier-routing";
 
 export interface PresentationTaskLocation {
   sessionId: string;
@@ -10,6 +11,8 @@ export interface PresentationChatLaunchOptions {
   parentWindow?: Window;
   abortSignal?: AbortSignal;
   mentionSources?: readonly PresentationMentionSource[];
+  /** Tier selected by the chat session that will execute the PPT turn. */
+  paperChatTier?: PaperChatTier;
 }
 
 export interface PresentationChatLaunchBridge {

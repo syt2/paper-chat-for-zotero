@@ -1,12 +1,17 @@
 import { assert } from "chai";
 import {
   getPresentationBalanceSnapshot,
+  getPresentationMinimumRemainingTokens,
   guardPresentationLaunch,
   hasEnoughPresentationBalance,
   PRESENTATION_LAUNCH_PROMPT,
+  PRESENTATION_LITE_MINIMUM_REMAINING_TOKENS,
   PRESENTATION_MINIMUM_REMAINING_TOKENS,
+  PRESENTATION_PRO_MINIMUM_REMAINING_TOKENS,
+  type PresentationBalanceSnapshot,
   type PresentationLaunchGuardDialogs,
 } from "../src/modules/presentation/PresentationLaunchGuard.ts";
+import type { PaperChatTier } from "../src/modules/providers/paperchat-tier-routing.ts";
 import type { PresentationLaunchSettings } from "../src/modules/presentation/PresentationLaunchSettings.ts";
 
 const DEFAULT_SETTINGS: PresentationLaunchSettings = {
@@ -29,6 +34,7 @@ interface GuardHarnessOptions {
   quotaAfterSettings?: number;
   paperChatReady?: boolean;
   settings?: PresentationLaunchSettings;
+  paperChatTier?: PaperChatTier;
 }
 
 function createGuardHarness(options: GuardHarnessOptions = {}) {
@@ -36,14 +42,16 @@ function createGuardHarness(options: GuardHarnessOptions = {}) {
   let loggedIn = options.loggedIn ?? true;
   let quota = options.quota ?? 1_000_001;
   const calls: string[] = [];
+  let insufficientBalance: PresentationBalanceSnapshot | null = null;
 
   const dialogs: PresentationLaunchGuardDialogs = {
     confirmSwitchToPaperChat: async () => {
       calls.push("provider-dialog");
       return options.switchAccepted ?? true;
     },
-    showInsufficientBalance: async () => {
+    showInsufficientBalance: async (balance) => {
       calls.push("balance-dialog");
+      insufficientBalance = balance;
     },
     configurePresentation: async () => {
       calls.push("settings-dialog");
@@ -87,6 +95,7 @@ function createGuardHarness(options: GuardHarnessOptions = {}) {
 
   return {
     calls,
+    getInsufficientBalance: () => insufficientBalance,
     run: () =>
       guardPresentationLaunch({
         providerManager: {
@@ -110,6 +119,7 @@ function createGuardHarness(options: GuardHarnessOptions = {}) {
           loggedIn = options.loginAccepted ?? true;
           return loggedIn;
         },
+        paperChatTier: options.paperChatTier,
       }),
   };
 }
@@ -147,6 +157,67 @@ describe("presentation launch guard", function () {
     assert.equal(PRESENTATION_MINIMUM_REMAINING_TOKENS, 250_000);
   });
 
+  it("uses the configured cached-balance gate for each PaperChat tier", function () {
+    assert.equal(
+      getPresentationMinimumRemainingTokens("paperchat-lite"),
+      PRESENTATION_LITE_MINIMUM_REMAINING_TOKENS,
+    );
+    assert.equal(
+      getPresentationMinimumRemainingTokens("paperchat-standard"),
+      PRESENTATION_MINIMUM_REMAINING_TOKENS,
+    );
+    assert.equal(
+      getPresentationMinimumRemainingTokens("paperchat-pro"),
+      PRESENTATION_PRO_MINIMUM_REMAINING_TOKENS,
+    );
+    assert.equal(
+      getPresentationMinimumRemainingTokens("paperchat-ultra"),
+      PRESENTATION_MINIMUM_REMAINING_TOKENS,
+    );
+  });
+
+  it("requires more than one hundred fifty thousand cached tokens for Lite", async function () {
+    const atThreshold = createGuardHarness({
+      paperChatTier: "paperchat-lite",
+      quota: PRESENTATION_LITE_MINIMUM_REMAINING_TOKENS,
+    });
+    assert.deepEqual(await atThreshold.run(), {
+      allowed: false,
+      reason: "balance",
+    });
+    assert.equal(
+      atThreshold.getInsufficientBalance()?.required,
+      PRESENTATION_LITE_MINIMUM_REMAINING_TOKENS,
+    );
+
+    const aboveThreshold = createGuardHarness({
+      paperChatTier: "paperchat-lite",
+      quota: PRESENTATION_LITE_MINIMUM_REMAINING_TOKENS + 1,
+    });
+    assert.isTrue((await aboveThreshold.run()).allowed);
+  });
+
+  it("requires more than seven hundred fifty thousand cached tokens for Pro", async function () {
+    const atThreshold = createGuardHarness({
+      paperChatTier: "paperchat-pro",
+      quota: PRESENTATION_PRO_MINIMUM_REMAINING_TOKENS,
+    });
+    assert.deepEqual(await atThreshold.run(), {
+      allowed: false,
+      reason: "balance",
+    });
+    assert.equal(
+      atThreshold.getInsufficientBalance()?.required,
+      PRESENTATION_PRO_MINIMUM_REMAINING_TOKENS,
+    );
+
+    const aboveThreshold = createGuardHarness({
+      paperChatTier: "paperchat-pro",
+      quota: PRESENTATION_PRO_MINIMUM_REMAINING_TOKENS + 1,
+    });
+    assert.isTrue((await aboveThreshold.run()).allowed);
+  });
+
   it("adds ordinary quota and subscription balance for launch eligibility", function () {
     const authManager = {
       getBalance: () => ({ quota: 400_000, usedQuota: 0 }),
@@ -158,6 +229,7 @@ describe("presentation launch guard", function () {
       quota: 400_000,
       subscriptionRemaining: 1_200_000,
       available: 1_600_000,
+      required: PRESENTATION_MINIMUM_REMAINING_TOKENS,
     });
 
     const splitPools = getPresentationBalanceSnapshot({
@@ -176,6 +248,7 @@ describe("presentation launch guard", function () {
         quota: 1_000_001,
         subscriptionRemaining: 0,
         available: 1_000_001,
+        required: PRESENTATION_MINIMUM_REMAINING_TOKENS,
       },
       settings: DEFAULT_SETTINGS,
     });
@@ -321,6 +394,7 @@ describe("presentation launch guard", function () {
         quota: 10,
         subscriptionRemaining: 10_000_000,
         available: 10_000_010,
+        required: PRESENTATION_MINIMUM_REMAINING_TOKENS,
       },
       settings: DEFAULT_SETTINGS,
     });

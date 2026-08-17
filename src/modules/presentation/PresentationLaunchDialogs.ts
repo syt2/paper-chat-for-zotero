@@ -635,7 +635,7 @@ export function createPresentationLaunchDialogs(
           args: {
             current: formatPresentationBalance(balance.available),
             required: formatPresentationBalance(
-              PRESENTATION_MINIMUM_REMAINING_TOKENS,
+              balance.required ?? PRESENTATION_MINIMUM_REMAINING_TOKENS,
             ),
           },
         }),

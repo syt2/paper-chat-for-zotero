@@ -2220,7 +2220,11 @@ export class ChatManager {
               sessionId: sendingSession.id,
               assistantMessageId: assistantMessage.id,
             },
-            { abortSignal, mentionSources: presentationMentionSources },
+            {
+              abortSignal,
+              mentionSources: presentationMentionSources,
+              paperChatTier: sendingSession.selectedTier,
+            },
           ) || undefined;
       }
       if (options.onAssistantMessageCreated) {

@@ -1,16 +1,38 @@
 import { AuthService } from "../auth";
 import type { AuthManager } from "../auth/AuthManager";
+import type { PaperChatTier } from "../providers/paperchat-tier-routing";
 import { showAuthDialog } from "../ui/AuthDialog";
 import type { PresentationLaunchSettings } from "./PresentationLaunchSettings";
 
 export const PRESENTATION_MINIMUM_REMAINING_TOKENS = 250_000;
+export const PRESENTATION_LITE_MINIMUM_REMAINING_TOKENS = 150_000;
+export const PRESENTATION_PRO_MINIMUM_REMAINING_TOKENS = 750_000;
 export const PRESENTATION_LAUNCH_PROMPT =
   "请直接使用 presentation 工具，基于当前论文生成一份 PPT。";
+
+/**
+ * Return the cached-balance gate for the tier that will execute the PPT turn.
+ * Lite and Pro use their product-specific gates. Unknown or omitted values
+ * safely retain the established Standard threshold.
+ */
+export function getPresentationMinimumRemainingTokens(
+  paperChatTier?: PaperChatTier,
+): number {
+  if (paperChatTier === "paperchat-lite") {
+    return PRESENTATION_LITE_MINIMUM_REMAINING_TOKENS;
+  }
+  if (paperChatTier === "paperchat-pro") {
+    return PRESENTATION_PRO_MINIMUM_REMAINING_TOKENS;
+  }
+  return PRESENTATION_MINIMUM_REMAINING_TOKENS;
+}
 
 export interface PresentationBalanceSnapshot {
   quota: number;
   subscriptionRemaining: number;
   available: number;
+  /** Threshold used for this launch; omitted only for legacy callers. */
+  required?: number;
 }
 
 export interface PresentationLaunchGuardDialogs {
@@ -41,6 +63,8 @@ export interface PresentationLaunchGuardOptions {
    * the settings returned by the native dialog remain the source of truth.
    */
   suggestedSettings?: Partial<PresentationLaunchSettings>;
+  /** Tier bound to the chat turn that will execute the presentation. */
+  paperChatTier?: PaperChatTier;
 }
 
 export type PresentationLaunchGuardResult =
@@ -62,6 +86,7 @@ function toUsableTokenAmount(value: unknown): number {
 
 export function getPresentationBalanceSnapshot(
   authManager: Pick<AuthManager, "getBalance" | "getSubscriptionUsageSummary">,
+  required: number = PRESENTATION_MINIMUM_REMAINING_TOKENS,
 ): PresentationBalanceSnapshot {
   const quota = toUsableTokenAmount(authManager.getBalance().quota);
   const subscriptionRemaining = toUsableTokenAmount(
@@ -73,13 +98,17 @@ export function getPresentationBalanceSnapshot(
     // Presentation eligibility uses the user's total cached spendable balance:
     // ordinary token quota plus the remaining active subscription allowance.
     available: quota + subscriptionRemaining,
+    required,
   };
 }
 
 export function hasEnoughPresentationBalance(
   balance: PresentationBalanceSnapshot,
 ): boolean {
-  return balance.available > PRESENTATION_MINIMUM_REMAINING_TOKENS;
+  return (
+    balance.available >
+    (balance.required ?? PRESENTATION_MINIMUM_REMAINING_TOKENS)
+  );
 }
 
 async function getCachedPresentationBalance(
@@ -89,7 +118,10 @@ async function getCachedPresentationBalance(
   // memory. PPT launch intentionally uses that snapshot instead of refreshing
   // the account endpoint, which avoids rate-limiting a user who opens or
   // revisits the settings window several times.
-  const balance = getPresentationBalanceSnapshot(options.authManager);
+  const balance = getPresentationBalanceSnapshot(
+    options.authManager,
+    getPresentationMinimumRemainingTokens(options.paperChatTier),
+  );
   if (!hasEnoughPresentationBalance(balance)) {
     await options.dialogs.showInsufficientBalance(balance);
     return null;
