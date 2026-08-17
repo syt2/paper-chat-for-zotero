@@ -7,9 +7,17 @@ export {
 export {
   createPresentationLaunchToolDefinition,
   PRESENTATION_LAUNCH_TOOL_NAME,
+  type PresentationLaunchIntent,
+  type PresentationLaunchSourceResolution,
+  type PresentationLaunchSourceResolver,
   type PresentationToolLaunchResult,
   type PresentationToolLaunchSession,
 } from "./PresentationToolLaunchSession";
+export {
+  extractPresentationMentionSources,
+  extractPresentationRetrySources,
+  type PresentationMentionSource,
+} from "./PresentationSourceContext";
 export {
   canLaunchPresentationFromChat,
   createPresentationChatLaunchSession,
@@ -19,6 +27,7 @@ export {
   type PresentationChatLaunchOptions,
   type PresentationTaskLocation,
 } from "./PresentationChatLaunchBridge";
+export { resolvePresentationLaunchSource } from "./PresentationEntry";
 export {
   attachPresentationToZotero,
   type PresentationAttachmentResult,

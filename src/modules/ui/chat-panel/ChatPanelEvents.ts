@@ -42,6 +42,7 @@ import {
   MentionSelector,
   type MentionResource,
   findMentionAtCursor,
+  formatMentionReference,
 } from "./MentionSelector";
 import {
   scrollToAndHighlightMessage,
@@ -3120,7 +3121,8 @@ function populateModelDropdown(
 /**
  * Setup @ mention selector for the chat input
  * When user types @, show a popup to select resources (Items, Attachments, Notes)
- * Selected resource will be inserted as @[title](key:XXX)
+ * Selected resource will be inserted as @[title](library:ID,key:XXX) when the
+ * library identity is available.
  */
 function setupMentionSelector(context: ChatPanelContext): () => void {
   const { container } = context;
@@ -3444,10 +3446,11 @@ function insertMentionIntoInput(
 
   if (atPos === -1) return;
 
-  // Build the mention text with key for AI
-  const mentionText = `@[${resource.title}](key:${resource.key}) `;
+  // Preserve the selected library so model-driven PPT launches cannot bind a
+  // same-key paper from the wrong Zotero library.
+  const mentionText = `${formatMentionReference(resource)} `;
 
-  // Replace @query with @[title](key:xxx)
+  // Replace @query with the library-aware mention marker.
   const beforeAt = text.substring(0, atPos);
   const afterCursor = text.substring(cursorPos);
 
@@ -3471,7 +3474,7 @@ function replaceMentionInInput(
   resource: MentionResource,
 ): void {
   const text = input.value;
-  const mentionText = `@[${resource.title}](key:${resource.key}) `;
+  const mentionText = `${formatMentionReference(resource)} `;
   const before = text.substring(0, range.start);
   // Skip trailing space after the old mention if present
   let afterStart = range.end;

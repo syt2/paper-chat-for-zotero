@@ -119,7 +119,7 @@ import {
   createPresentationToolDefinition,
   executePresentationCapability,
 } from "../../presentation";
-import { resolvePresentationSourceItemKey } from "../../presentation/PresentationSourceContext";
+import type { PresentationDesignSystem } from "../../presentation/PresentationLaunchSettings";
 import {
   beginPresentationAuthorizationAttempt,
   finishPresentationAuthorizationAttempt,
@@ -1842,9 +1842,29 @@ export class PdfToolManager {
         if (!launchSession) {
           return "The guarded PaperChat presentation launcher is unavailable in this turn. Do not call presentation directly.";
         }
-        const launchResult = await launchSession.requestAuthorization();
+        const launchResult = await launchSession.requestAuthorization({
+          sourceItemKey:
+            typeof args.sourceItemKey === "string"
+              ? args.sourceItemKey
+              : undefined,
+          sourceLibraryID:
+            typeof args.sourceLibraryID === "number"
+              ? args.sourceLibraryID
+              : undefined,
+          slideCount:
+            typeof args.slideCount === "number" ? args.slideCount : undefined,
+          designSystem:
+            typeof args.designSystem === "string"
+              ? (args.designSystem as PresentationDesignSystem)
+              : undefined,
+          instructions:
+            typeof args.instructions === "string"
+              ? args.instructions
+              : undefined,
+        });
         if (launchResult.allowed) {
-          return `The user confirmed PaperChat's native presentation settings. The private presentation tool is now available for the authorized current paper (${launchSession.source.itemKey}). Call presentation now with {"sourceItemKey":"${launchSession.source.itemKey}"}. Do not ask for another confirmation and do not change the confirmed slide count, style, or custom instructions.`;
+          const authorizedSource = launchResult.authorization.source;
+          return `The user confirmed PaperChat's native presentation settings. The private presentation tool is now available for the authorized Zotero paper (${authorizedSource.itemKey}, library ${authorizedSource.libraryID}). Call presentation now with {"sourceItemKey":"${authorizedSource.itemKey}"}. Do not ask for another confirmation and do not change the confirmed slide count, style, or custom instructions.`;
         }
         const blockedMessages: Record<typeof launchResult.reason, string> = {
           provider:
@@ -1855,6 +1875,10 @@ export class PdfToolManager {
             "The guarded presentation launch stopped because the cached available token balance does not meet the required threshold. The plugin already showed the purchase option. Do not call presentation.",
           cancelled:
             "The user cancelled the native presentation settings window. Do not call presentation or ask for the same settings again in this turn.",
+          source_unavailable:
+            "The requested Zotero paper could not be resolved to one item with a PDF. Ask the user to select or mention exactly one paper, then try the presentation launcher again.",
+          source_ambiguous:
+            "More than one Zotero paper was mentioned or matched the requested key. Ask the user to choose exactly one paper before starting the presentation.",
           already_active:
             "A presentation for this paper is already being configured or generated. PaperChat focused the existing settings window or task card. Do not start a duplicate presentation.",
           capacity_exceeded:
@@ -1886,11 +1910,8 @@ export class PdfToolManager {
         ) {
           return "Error: The presentation source does not match the paper authorized by the user.";
         }
-        const sourceItemKey = resolvePresentationSourceItemKey(
-          args.sourceItemKey,
-          presentationAuthorization.source.itemKey,
-        );
         const sourceContext = presentationAuthorization.source;
+        const sourceItemKey = sourceContext.itemKey;
         const attempt = beginPresentationAuthorizationAttempt(
           presentationAuthorization,
         );
@@ -1909,7 +1930,11 @@ export class PdfToolManager {
               : null;
           const authorizedArgs: Record<string, unknown> = {
             ...args,
-            ...(sourceItemKey ? { sourceItemKey } : {}),
+            // The app-owned capability is the source of truth. Never let a
+            // later model round redirect planning metadata to another library
+            // after the user has confirmed the native settings.
+            sourceItemKey,
+            sourceLibraryID: sourceContext.libraryID,
             // These values come from the visible settings window and are
             // frozen in the app-owned authorization. The outer chat model
             // cannot silently change them, including on a retry.

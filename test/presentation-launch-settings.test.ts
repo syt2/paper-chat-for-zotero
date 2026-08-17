@@ -5,6 +5,7 @@ import {
   parsePresentationDialogSlideCount,
   PRESENTATION_CUSTOM_SLIDE_COUNT_OPTION,
   PRESENTATION_DESIGN_SYSTEM_OPTIONS,
+  resolvePresentationDialogDefaults,
   shouldShowPresentationCustomSlideCount,
 } from "../src/modules/presentation/PresentationLaunchDialogs.ts";
 import {
@@ -87,6 +88,36 @@ describe("presentation launch settings", function () {
       }),
       DEFAULT_PRESENTATION_LAUNCH_SETTINGS,
     );
+  });
+
+  it("prefills explicit model suggestions over saved defaults", function () {
+    const runtime = globalThis as { Zotero?: unknown };
+    const originalZotero = runtime.Zotero;
+    runtime.Zotero = {
+      Prefs: {
+        get: (key: string) =>
+          key.endsWith("paperchatPresentationSlideCount")
+            ? 6
+            : "teal-green-academic-defense",
+      },
+    };
+
+    try {
+      assert.deepEqual(
+        resolvePresentationDialogDefaults({
+          slideCount: 10,
+          designSystem: "deep-blue-atlas",
+          userInstructions: "突出消融实验",
+        }),
+        {
+          slideCount: 10,
+          designSystem: "deep-blue-atlas",
+          userInstructions: "突出消融实验",
+        },
+      );
+    } finally {
+      runtime.Zotero = originalZotero;
+    }
   });
 
   it("trims and bounds one-time user requirements without persisting a default", function () {

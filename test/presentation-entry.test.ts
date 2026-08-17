@@ -5,7 +5,9 @@ import {
   paperHasPdf,
   resolvePresentationPaper,
   resolvePresentationPaperFromCandidates,
+  resolvePresentationLaunchSource,
 } from "../src/modules/presentation/PresentationEntry.ts";
+import { extractPresentationMentionSources } from "../src/modules/presentation/PresentationSourceContext.ts";
 import {
   isPresentationSessionCompatibleWithPaper,
   presentationLaunchRequiresActiveSession,
@@ -130,6 +132,239 @@ describe("presentation entry", function () {
     assert.isNull(getSingleSelectedPresentationPaper());
     selected = [];
     assert.isNull(getSingleSelectedPresentationPaper());
+  });
+
+  it("resolves a library-aware mention ahead of the currently open paper", function () {
+    const currentPdf = {
+      id: 31,
+      isAttachment: () => true,
+      isPDFAttachment: () => true,
+    };
+    const mentionedPdf = {
+      id: 41,
+      isAttachment: () => true,
+      isPDFAttachment: () => true,
+    };
+    const current = {
+      id: 30,
+      key: "CURRENT1",
+      libraryID: 1,
+      isAttachment: () => false,
+      isNote: () => false,
+      getAttachments: () => [31],
+    } as unknown as Zotero.Item;
+    const mentioned = {
+      id: 40,
+      key: "MENTION1",
+      libraryID: 5,
+      isAttachment: () => false,
+      isNote: () => false,
+      getAttachments: () => [41],
+    } as unknown as Zotero.Item;
+    (globalThis as { Zotero?: unknown }).Zotero = {
+      Libraries: { userLibraryID: 1, getAll: () => [{ libraryID: 5 }] },
+      Items: {
+        get: (id: number) =>
+          id === 31 ? currentPdf : id === 41 ? mentionedPdf : null,
+        getByLibraryAndKey: (libraryID: number, key: string) =>
+          libraryID === 1 && key === current.key
+            ? current
+            : libraryID === 5 && key === mentioned.key
+              ? mentioned
+              : null,
+      },
+      getActiveZoteroPane: () => ({ getSelectedItems: () => [current] }),
+    };
+
+    const result = resolvePresentationLaunchSource({}, current, [
+      { itemKey: mentioned.key, libraryID: mentioned.libraryID },
+    ]);
+    assert.deepEqual(result, {
+      allowed: true,
+      source: { itemKey: mentioned.key, libraryID: mentioned.libraryID },
+    });
+  });
+
+  it("does not guess when multiple explicit mentions lack a model choice", function () {
+    const result = resolvePresentationLaunchSource({}, null, [
+      { itemKey: "PAPER1", libraryID: 1 },
+      { itemKey: "PAPER2", libraryID: 1 },
+    ]);
+    assert.deepEqual(result, { allowed: false, reason: "source_ambiguous" });
+  });
+
+  it("does not pick a library when a key-only choice matches two library mentions", function () {
+    const paper = {
+      id: 51,
+      key: "SHARED01",
+      libraryID: 1,
+      isAttachment: () => false,
+      isNote: () => false,
+      getAttachments: () => [],
+    } as unknown as Zotero.Item;
+    (globalThis as { Zotero?: unknown }).Zotero = {
+      Libraries: { userLibraryID: 1, getAll: () => [{ libraryID: 5 }] },
+      Items: {
+        getByLibraryAndKey: (libraryID: number, key: string) =>
+          key === paper.key && libraryID === 1 ? paper : null,
+      },
+    };
+
+    assert.deepEqual(
+      resolvePresentationLaunchSource({ sourceItemKey: paper.key }, null, [
+        { itemKey: paper.key, libraryID: 1 },
+        { itemKey: paper.key, libraryID: 5 },
+      ]),
+      { allowed: false, reason: "source_ambiguous" },
+    );
+  });
+
+  it("does not let a model source override an explicit mention", function () {
+    const paper = {
+      id: 61,
+      key: "MENTIONED1",
+      libraryID: 1,
+      isAttachment: () => false,
+      isNote: () => false,
+      getAttachments: () => [],
+    } as unknown as Zotero.Item;
+    const redirected = {
+      id: 62,
+      key: "REDIRECT1",
+      libraryID: 2,
+      isAttachment: () => false,
+      isNote: () => false,
+      getAttachments: () => [],
+    } as unknown as Zotero.Item;
+    (globalThis as { Zotero?: unknown }).Zotero = {
+      Libraries: { userLibraryID: 1, getAll: () => [{ libraryID: 2 }] },
+      Items: {
+        getByLibraryAndKey: (libraryID: number, key: string) =>
+          libraryID === paper.libraryID && key === paper.key
+            ? paper
+            : libraryID === redirected.libraryID && key === redirected.key
+              ? redirected
+              : null,
+      },
+    };
+
+    assert.deepEqual(
+      resolvePresentationLaunchSource(
+        {
+          sourceItemKey: redirected.key,
+          sourceLibraryID: redirected.libraryID,
+        },
+        null,
+        [{ itemKey: paper.key, libraryID: paper.libraryID }],
+      ),
+      { allowed: false, reason: "source_ambiguous" },
+    );
+    assert.deepEqual(
+      resolvePresentationLaunchSource(
+        {
+          sourceItemKey: paper.key,
+          sourceLibraryID: redirected.libraryID,
+        },
+        null,
+        [{ itemKey: paper.key, libraryID: paper.libraryID }],
+      ),
+      { allowed: false, reason: "source_ambiguous" },
+    );
+  });
+
+  it("keeps a repeated current-paper key bound to its library", function () {
+    const currentPdf = {
+      id: 71,
+      isAttachment: () => true,
+      isPDFAttachment: () => true,
+    };
+    const otherPdf = {
+      id: 81,
+      isAttachment: () => true,
+      isPDFAttachment: () => true,
+    };
+    const current = {
+      id: 70,
+      key: "SHARED02",
+      libraryID: 1,
+      isAttachment: () => false,
+      isNote: () => false,
+      getAttachments: () => [71],
+    } as unknown as Zotero.Item;
+    const other = {
+      id: 80,
+      key: "SHARED02",
+      libraryID: 5,
+      isAttachment: () => false,
+      isNote: () => false,
+      getAttachments: () => [81],
+    } as unknown as Zotero.Item;
+    (globalThis as { Zotero?: unknown }).Zotero = {
+      Libraries: { userLibraryID: 1, getAll: () => [{ libraryID: 5 }] },
+      Items: {
+        get: (id: number) =>
+          id === 71 ? currentPdf : id === 81 ? otherPdf : null,
+        getByLibraryAndKey: (libraryID: number, key: string) =>
+          key !== "SHARED02" ? null : libraryID === 1 ? current : other,
+      },
+    };
+
+    assert.deepEqual(
+      resolvePresentationLaunchSource({ sourceItemKey: "SHARED02" }, current),
+      { allowed: true, source: { itemKey: "SHARED02", libraryID: 1 } },
+    );
+    assert.deepEqual(
+      resolvePresentationLaunchSource(
+        { sourceItemKey: "SHARED02", sourceLibraryID: 5 },
+        current,
+      ),
+      { allowed: false, reason: "source_ambiguous" },
+    );
+  });
+
+  it("normalizes a reader PDF attachment key to its parent paper", function () {
+    const paper = {
+      id: 92,
+      key: "PAPER092",
+      libraryID: 1,
+      isAttachment: () => false,
+      isNote: () => false,
+      getAttachments: () => [91],
+    } as unknown as Zotero.Item;
+    const attachment = {
+      id: 91,
+      key: "PDF09201",
+      libraryID: 1,
+      parentItemID: paper.id,
+      isAttachment: () => true,
+      isPDFAttachment: () => true,
+      isNote: () => false,
+    } as unknown as Zotero.Item;
+    (globalThis as { Zotero?: unknown }).Zotero = {
+      Libraries: { userLibraryID: 1, getAll: () => [{ libraryID: 1 }] },
+      Items: {
+        get: (id: number) => (id === attachment.id ? attachment : paper),
+        getByLibraryAndKey: (libraryID: number, key: string) =>
+          libraryID === 1 && key === attachment.key ? attachment : null,
+      },
+    };
+
+    assert.deepEqual(
+      resolvePresentationLaunchSource(
+        { sourceItemKey: attachment.key, sourceLibraryID: 1 },
+        paper,
+      ),
+      { allowed: true, source: { itemKey: paper.key, libraryID: 1 } },
+    );
+  });
+
+  it("extracts the library and key from the selector marker", function () {
+    assert.deepEqual(
+      extractPresentationMentionSources(
+        "请生成 @[A paper](library:5,key:ABC123) 的 PPT",
+      ),
+      [{ itemKey: "ABC123", libraryID: 5, title: "A paper" }],
+    );
   });
 
   it("defers a running-task focus request until its message card exists", function () {

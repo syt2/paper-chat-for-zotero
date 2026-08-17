@@ -154,6 +154,7 @@ import {
   canLaunchPresentationFromChat,
   createPresentationChatLaunchSession,
 } from "../presentation/PresentationChatLaunchBridge";
+import { extractPresentationRetrySources } from "../presentation/PresentationSourceContext";
 // V1 migration now handled by migrateToSQLite.ts at startup
 
 const SUPPRESS_AUTOMATIC_RETRY = "paperChatSuppressAutomaticRetry";
@@ -917,11 +918,9 @@ export class ChatManager {
         undefined,
         {
           includePresentationLauncher:
-            hasCurrentItem &&
-            !!item &&
             provider?.config.id === "paperchat" &&
             provider.config.type === "paperchat" &&
-            canLaunchPresentationFromChat(item),
+            canLaunchPresentationFromChat(hasCurrentItem ? item! : null),
         },
       );
       const searchScopeGateEnabled =
@@ -1729,7 +1728,6 @@ export class ChatManager {
     const hasCurrentItem = item !== null && item !== undefined && item.id !== 0;
     const itemKey = hasCurrentItem ? item!.key : null;
     const itemTitle = hasCurrentItem ? getItemTitleSmart(item!) : null;
-
     ztoolkit.log(
       "[ChatManager] sendMessage called, hasCurrentItem:",
       hasCurrentItem,
@@ -1792,6 +1790,10 @@ export class ChatManager {
       );
       return false;
     }
+    const presentationMentionSources = extractPresentationRetrySources(
+      content,
+      sendingSession.messages,
+    );
     const reusedUserMessage = options.reuseUserMessageId
       ? sendingSession.messages.find(
           (message) =>
@@ -2206,19 +2208,19 @@ export class ChatManager {
         !options.allowedToolNames &&
         !options.presentationAuthorization &&
         !options.noteSummaryContext &&
-        hasCurrentItem &&
-        item &&
-        provider.config.id === "paperchat" &&
-        provider.config.type === "paperchat"
+        provider.config?.id === "paperchat" &&
+        provider.config?.type === "paperchat" &&
+        (canLaunchPresentationFromChat(hasCurrentItem ? item! : null) ||
+          presentationMentionSources.length > 0)
       ) {
         presentationLaunchSession =
           createPresentationChatLaunchSession(
-            item,
+            hasCurrentItem ? item! : null,
             {
               sessionId: sendingSession.id,
               assistantMessageId: assistantMessage.id,
             },
-            { abortSignal },
+            { abortSignal, mentionSources: presentationMentionSources },
           ) || undefined;
       }
       if (options.onAssistantMessageCreated) {

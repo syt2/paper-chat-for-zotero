@@ -362,6 +362,13 @@ export const PresentationRequestSchema = Type.Object(
           "Zotero item key for the paper being presented. Required when paper figures are used.",
       }),
     ),
+    sourceLibraryID: Type.Optional(
+      Type.Integer({
+        minimum: 1,
+        description:
+          "Zotero library ID paired with sourceItemKey, including group libraries.",
+      }),
+    ),
     theme: Type.Optional(
       Type.Union([
         Type.Literal("paperchat"),

@@ -17,6 +17,7 @@ export type MentionResourceType = "item" | "attachment" | "note";
 export interface MentionResource {
   type: MentionResourceType;
   key: string;
+  libraryID?: number;
   title: string;
   icon: string;
   parentKey?: string;
@@ -79,75 +80,105 @@ function yieldToMain(): Promise<void> {
  */
 export async function loadMentionResources(): Promise<MentionResource[]> {
   const resources: MentionResource[] = [];
-  const libraryID = Zotero.Libraries.userLibraryID;
 
   try {
-    const allItems = await Zotero.Items.getAll(libraryID);
     const CHUNK_SIZE = 100; // Process 100 items at a time
 
-    for (let i = 0; i < allItems.length; i++) {
-      const item = allItems[i];
-
-      // Yield to main thread every CHUNK_SIZE items to prevent UI blocking
-      if (i > 0 && i % CHUNK_SIZE === 0) {
-        await yieldToMain();
+    const libraryIDs: number[] = [];
+    const addLibraryID = (value: unknown): void => {
+      if (
+        Number.isSafeInteger(value) &&
+        (value as number) > 0 &&
+        !libraryIDs.includes(value as number)
+      ) {
+        libraryIDs.push(value as number);
       }
+    };
+    addLibraryID(Zotero.Libraries.userLibraryID);
+    for (const library of Zotero.Libraries.getAll?.() || []) {
+      addLibraryID(typeof library === "number" ? library : library?.libraryID);
+    }
 
-      if (item.isAttachment?.()) {
-        // Attachment resource
-        const parentID = item.parentID;
-        let parentTitle: string | undefined;
-        let parentKey: string | undefined;
+    for (const libraryID of libraryIDs) {
+      let allItems: Zotero.Item[];
+      try {
+        allItems = (await Zotero.Items.getAll(libraryID)) as Zotero.Item[];
+      } catch (error) {
+        // A revoked/unavailable group library must not hide resources from
+        // the remaining libraries or make the @ selector fail altogether.
+        ztoolkit.log(
+          `[MentionSelector] Error loading library ${libraryID}:`,
+          error,
+        );
+        continue;
+      }
+      for (let i = 0; i < allItems.length; i++) {
+        const item = allItems[i];
 
-        if (parentID) {
-          const parent = Zotero.Items.get(parentID);
-          if (parent) {
-            parentTitle = (parent.getField?.("title") as string) || undefined;
-            parentKey = parent.key;
-          }
+        // Yield to main thread every CHUNK_SIZE items to prevent UI blocking
+        if (i > 0 && i % CHUNK_SIZE === 0) {
+          await yieldToMain();
         }
 
-        resources.push({
-          type: "attachment",
-          key: item.key,
-          title:
-            (item.getField?.("title") as string) ||
-            getString("untitled-attachment"),
-          icon: "📎",
-          parentKey,
-          parentTitle,
-        });
-      } else if (item.isNote?.()) {
-        // Note resource
-        const parentID = item.parentID;
-        let parentTitle: string | undefined;
-        let parentKey: string | undefined;
+        if (item.isAttachment?.()) {
+          // Attachment resource
+          const parentID = item.parentID;
+          let parentTitle: string | undefined;
+          let parentKey: string | undefined;
 
-        if (parentID) {
-          const parent = Zotero.Items.get(parentID);
-          if (parent) {
-            parentTitle = (parent.getField?.("title") as string) || undefined;
-            parentKey = parent.key;
+          if (parentID) {
+            const parent = Zotero.Items.get(parentID);
+            if (parent) {
+              parentTitle = (parent.getField?.("title") as string) || undefined;
+              parentKey = parent.key;
+            }
           }
-        }
 
-        const noteTitle = item.getNoteTitle?.() || getString("untitled-note");
-        resources.push({
-          type: "note",
-          key: item.key,
-          title: noteTitle,
-          icon: "📝",
-          parentKey,
-          parentTitle,
-        });
-      } else {
-        // Regular item
-        resources.push({
-          type: "item",
-          key: item.key,
-          title: getItemTitle(item),
-          icon: "📄",
-        });
+          resources.push({
+            type: "attachment",
+            key: item.key,
+            libraryID,
+            title:
+              (item.getField?.("title") as string) ||
+              getString("untitled-attachment"),
+            icon: "📎",
+            parentKey,
+            parentTitle,
+          });
+        } else if (item.isNote?.()) {
+          // Note resource
+          const parentID = item.parentID;
+          let parentTitle: string | undefined;
+          let parentKey: string | undefined;
+
+          if (parentID) {
+            const parent = Zotero.Items.get(parentID);
+            if (parent) {
+              parentTitle = (parent.getField?.("title") as string) || undefined;
+              parentKey = parent.key;
+            }
+          }
+
+          const noteTitle = item.getNoteTitle?.() || getString("untitled-note");
+          resources.push({
+            type: "note",
+            key: item.key,
+            libraryID,
+            title: noteTitle,
+            icon: "📝",
+            parentKey,
+            parentTitle,
+          });
+        } else {
+          // Regular item
+          resources.push({
+            type: "item",
+            key: item.key,
+            libraryID,
+            title: getItemTitle(item),
+            icon: "📄",
+          });
+        }
       }
     }
   } catch (error) {
@@ -400,14 +431,15 @@ export function createResourceTag(
 }
 
 /**
- * Find an @[...] or @[...](key:XXX) mention at the given cursor position.
+ * Find an @[...] or a library-aware @[...](library:ID,key:XXX) mention at the
+ * given cursor position.
  * Returns the mention's range and title, or null if cursor is not in a mention.
  */
 export function findMentionAtCursor(
   text: string,
   cursorPos: number,
 ): { start: number; end: number; title: string } | null {
-  const mentionRegex = /@\[([^\]]*)\](?:\(key:[^)]*\))?/g;
+  const mentionRegex = /@\[([^\]]*)\](?:\([^)]*\))?/g;
   let match;
   while ((match = mentionRegex.exec(text)) !== null) {
     const start = match.index;
@@ -417,6 +449,14 @@ export function findMentionAtCursor(
     }
   }
   return null;
+}
+
+/** Serialize a selector result with a library-bound, model-readable marker. */
+export function formatMentionReference(resource: MentionResource): string {
+  if (Number.isSafeInteger(resource.libraryID) && resource.libraryID! > 0) {
+    return `@[${resource.title}](library:${resource.libraryID},key:${resource.key})`;
+  }
+  return `@[${resource.title}](key:${resource.key})`;
 }
 
 /**

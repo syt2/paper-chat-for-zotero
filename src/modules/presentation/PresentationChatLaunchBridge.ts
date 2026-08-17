@@ -1,4 +1,5 @@
 import type { PresentationToolLaunchSession } from "./PresentationToolLaunchSession";
+import type { PresentationMentionSource } from "./PresentationSourceContext";
 
 export interface PresentationTaskLocation {
   sessionId: string;
@@ -8,12 +9,13 @@ export interface PresentationTaskLocation {
 export interface PresentationChatLaunchOptions {
   parentWindow?: Window;
   abortSignal?: AbortSignal;
+  mentionSources?: readonly PresentationMentionSource[];
 }
 
 export interface PresentationChatLaunchBridge {
-  canLaunch(item: Zotero.Item): boolean;
+  canLaunch(item: Zotero.Item | null): boolean;
   createSession(
-    item: Zotero.Item,
+    item: Zotero.Item | null,
     location: PresentationTaskLocation,
     options?: PresentationChatLaunchOptions,
   ): PresentationToolLaunchSession | null;
@@ -47,7 +49,9 @@ export function unregisterPresentationChatLaunchBridge(): void {
   activeBridge = null;
 }
 
-export function canLaunchPresentationFromChat(item: Zotero.Item): boolean {
+export function canLaunchPresentationFromChat(
+  item: Zotero.Item | null,
+): boolean {
   try {
     return activeBridge?.canLaunch(item) === true;
   } catch (error) {
@@ -57,7 +61,7 @@ export function canLaunchPresentationFromChat(item: Zotero.Item): boolean {
 }
 
 export function createPresentationChatLaunchSession(
-  item: Zotero.Item,
+  item: Zotero.Item | null,
   location: PresentationTaskLocation,
   options?: PresentationChatLaunchOptions,
 ): PresentationToolLaunchSession | null {

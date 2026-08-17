@@ -13,7 +13,56 @@ function presentationCall(args: Record<string, unknown>): ToolCall {
   };
 }
 
+function presentationLaunchCall(args: Record<string, unknown>): ToolCall {
+  return {
+    id: "presentation-launch-call",
+    type: "function",
+    function: {
+      name: "request_presentation",
+      arguments: JSON.stringify(args),
+    },
+  };
+}
+
 describe("presentation tool-call policy", function () {
+  it("keeps a model-extracted page count but drops unrequested launcher defaults", function () {
+    const normalized = normalizePresentationToolCall(
+      presentationLaunchCall({
+        slideCount: 10,
+        designSystem: "paper-white-courseware",
+        instructions: "为这篇论文生成10页PPT",
+      }),
+      "为这篇论文生成一个 10 页的 PPT",
+    );
+
+    assert.deepEqual(JSON.parse(normalized.function.arguments), {
+      slideCount: 10,
+    });
+  });
+
+  it("keeps explicitly requested launcher style and custom emphasis", function () {
+    const userRequest =
+      "为 @[Paper](library:5,key:SBZ2M99R) 生成 10 页深蓝图谱风格的 PPT，突出消融实验。";
+    const normalized = normalizePresentationToolCall(
+      presentationLaunchCall({
+        sourceItemKey: "SBZ2M99R",
+        sourceLibraryID: 5,
+        slideCount: 10,
+        designSystem: "deep-blue-atlas",
+        instructions: "突出消融实验",
+      }),
+      userRequest,
+    );
+
+    assert.deepEqual(JSON.parse(normalized.function.arguments), {
+      sourceItemKey: "SBZ2M99R",
+      sourceLibraryID: 5,
+      slideCount: 10,
+      designSystem: "deep-blue-atlas",
+      instructions: "突出消融实验",
+    });
+  });
+
   it("removes model-invented optional arguments from a generic PPT request", function () {
     const normalized = normalizePresentationToolCall(
       presentationCall({
@@ -92,6 +141,44 @@ describe("presentation tool-call policy", function () {
 
     assert.deepEqual(JSON.parse(normalized.function.arguments), {
       sourceItemKey: "SBZ2M99R",
+    });
+  });
+
+  it("drops invalid launcher suggestions instead of blocking the native dialog", function () {
+    const normalized = normalizePresentationToolCall(
+      presentationLaunchCall({
+        sourceItemKey: "SBZ2M99R",
+        sourceLibraryID: 1.5,
+        slideCount: 31,
+        designSystem: "not-a-bundled-style",
+        instructions: "x".repeat(5_000),
+      }),
+      "为这篇论文生成一个 PPT。",
+    );
+
+    assert.deepEqual(JSON.parse(normalized.function.arguments), {
+      sourceItemKey: "SBZ2M99R",
+    });
+  });
+
+  it("keeps only bounded explicit launcher suggestions", function () {
+    const userRequest = "为这篇论文生成 10 页 PPT，突出消融实验。";
+    const normalized = normalizePresentationToolCall(
+      presentationLaunchCall({
+        sourceItemKey: "SBZ2M99R",
+        sourceLibraryID: "5",
+        slideCount: "10",
+        designSystem: "deep-blue-atlas",
+        instructions: "突出消融实验",
+      }),
+      userRequest,
+    );
+
+    assert.deepEqual(JSON.parse(normalized.function.arguments), {
+      sourceItemKey: "SBZ2M99R",
+      sourceLibraryID: 5,
+      slideCount: 10,
+      instructions: "突出消融实验",
     });
   });
 });

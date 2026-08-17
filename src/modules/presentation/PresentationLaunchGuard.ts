@@ -16,7 +16,9 @@ export interface PresentationBalanceSnapshot {
 export interface PresentationLaunchGuardDialogs {
   confirmSwitchToPaperChat(): Promise<boolean>;
   showInsufficientBalance(balance: PresentationBalanceSnapshot): Promise<void>;
-  configurePresentation(): Promise<PresentationLaunchSettings | null>;
+  configurePresentation(
+    suggestedSettings?: Partial<PresentationLaunchSettings>,
+  ): Promise<PresentationLaunchSettings | null>;
 }
 
 export interface PresentationLaunchGuardOptions {
@@ -34,6 +36,11 @@ export interface PresentationLaunchGuardOptions {
   >;
   dialogs: PresentationLaunchGuardDialogs;
   ensureLoggedIn?: () => Promise<boolean>;
+  /**
+   * Optional model-derived suggestions. These are only initial form values;
+   * the settings returned by the native dialog remain the source of truth.
+   */
+  suggestedSettings?: Partial<PresentationLaunchSettings>;
 }
 
 export type PresentationLaunchGuardResult =
@@ -121,7 +128,9 @@ export async function guardPresentationLaunch(
   let balance = await getCachedPresentationBalance(options);
   if (!balance) return { allowed: false, reason: "balance" };
 
-  const settings = await options.dialogs.configurePresentation();
+  const settings = await options.dialogs.configurePresentation(
+    options.suggestedSettings,
+  );
   if (!settings) {
     return { allowed: false, reason: "cancelled" };
   }

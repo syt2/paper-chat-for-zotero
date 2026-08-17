@@ -2,7 +2,10 @@ import { assert } from "chai";
 import { PdfToolManager } from "../src/modules/chat/pdf-tools/PdfToolManager.ts";
 import { resetPresentationRendererForTests } from "../src/modules/presentation/PresentationRendererLoader.ts";
 import { PRESENTATION_RENDERER_GLOBAL } from "../src/modules/presentation/contracts.ts";
-import { resolvePresentationSourceItemKey } from "../src/modules/presentation/PresentationSourceContext.ts";
+import {
+  extractPresentationRetrySources,
+  resolvePresentationSourceItemKey,
+} from "../src/modules/presentation/PresentationSourceContext.ts";
 import {
   beginPresentationAuthorizationAttempt,
   createPresentationLaunchAuthorization,
@@ -55,6 +58,26 @@ describe("presentation source context", function () {
     };
 
     assert.isUndefined(resolvePresentationSourceItemKey(undefined, null));
+  });
+
+  it("recovers the last explicit mention for a short cross-turn retry", function () {
+    assert.deepEqual(
+      extractPresentationRetrySources("重试下", [
+        {
+          role: "user",
+          content: "为 @[Mentioned paper](library:5,key:PAPER-B) 生成一份 PPT",
+        },
+      ]),
+      [{ itemKey: "PAPER-B", libraryID: 5, title: "Mentioned paper" }],
+    );
+    assert.isEmpty(
+      extractPresentationRetrySources("请总结这篇论文", [
+        {
+          role: "user",
+          content: "为 @[Mentioned paper](library:5,key:PAPER-B) 生成一份 PPT",
+        },
+      ]),
+    );
   });
 
   it("rejects a model attempt to replace the authorized paper", async function () {

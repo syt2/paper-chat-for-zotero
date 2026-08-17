@@ -44,6 +44,13 @@ export const PresentationIntentSchema = Type.Object(
           "Zotero item key for the current paper. Omit only when PaperChat already has an active paper.",
       }),
     ),
+    sourceLibraryID: Type.Optional(
+      Type.Integer({
+        minimum: 1,
+        description:
+          "Zotero library ID paired with sourceItemKey, including group libraries.",
+      }),
+    ),
     language: Type.Optional(
       Type.String({
         minLength: 2,

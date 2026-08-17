@@ -72,6 +72,8 @@ export const PRESENTATION_DESIGN_SYSTEM_OPTIONS: ReadonlyArray<{
 export interface PresentationLaunchDialogOptions {
   onSettingsFocusReady?: (focus: () => void) => void;
   abortSignal?: AbortSignal;
+  /** Initial values suggested by the model, never an authorization source. */
+  initialSettings?: Partial<PresentationLaunchSettings>;
 }
 
 function focusPresentationSettingsDialog(dialogWindow: Window): void {
@@ -140,6 +142,16 @@ export function getSavedPresentationLaunchSettings(): PresentationLaunchSettings
     designSystem: getPref(
       "paperchatPresentationDesignSystem",
     ) as PresentationDesignSystem,
+  });
+}
+
+/** Merge model suggestions over saved defaults for the visible confirmation form. */
+export function resolvePresentationDialogDefaults(
+  initialSettings?: Partial<PresentationLaunchSettings>,
+): PresentationLaunchSettings {
+  return normalizePresentationLaunchSettings({
+    ...getSavedPresentationLaunchSettings(),
+    ...(initialSettings || {}),
   });
 }
 
@@ -223,7 +235,7 @@ async function showPresentationSettingsDialog(
   const mainWindow = Zotero.getMainWindow();
   if (!mainWindow) return null;
 
-  const defaults = getSavedPresentationLaunchSettings();
+  const defaults = resolvePresentationDialogDefaults(options.initialSettings);
   const usesCustomSlideCount = !isPresentationPresetSlideCount(
     defaults.slideCount,
   );
@@ -428,7 +440,7 @@ async function showPresentationSettingsDialog(
                 "aria-describedby": "presentation-user-instructions-count",
               },
               properties: {
-                value: "",
+                value: defaults.userInstructions,
                 placeholder: getString(
                   "presentation-user-instructions-placeholder",
                 ),
@@ -460,7 +472,7 @@ async function showPresentationSettingsDialog(
               properties: {
                 textContent: getString("presentation-user-instructions-count", {
                   args: {
-                    current: 0,
+                    current: defaults.userInstructions.length,
                     maximum: PRESENTATION_USER_INSTRUCTIONS_MAX_LENGTH,
                   },
                 }),
@@ -640,8 +652,13 @@ export function createPresentationLaunchDialogs(
       }
     },
 
-    async configurePresentation(): Promise<PresentationLaunchSettings | null> {
-      return showPresentationSettingsDialog(options);
+    async configurePresentation(
+      suggestedSettings?: Partial<PresentationLaunchSettings>,
+    ): Promise<PresentationLaunchSettings | null> {
+      return showPresentationSettingsDialog({
+        ...options,
+        initialSettings: suggestedSettings ?? options.initialSettings,
+      });
     },
   };
 }

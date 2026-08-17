@@ -1,6 +1,12 @@
 import type { ToolCall, ToolExecutionResult } from "../../types/tool";
+import {
+  isPresentationDesignSystem,
+  normalizePresentationUserInstructions,
+  parsePresentationSlideCount,
+} from "./PresentationLaunchSettings";
 
 const PRESENTATION_TOOL_NAME = "presentation";
+const PRESENTATION_LAUNCH_TOOL_NAME = "request_presentation";
 
 const EXPLICIT_LANGUAGE_PATTERN =
   /(?:\b(?:zh(?:[-_](?:cn|tw|hk|mo))?|en(?:[-_][a-z]{2})?|ja(?:[-_]jp)?|ko(?:[-_]kr)?|english|chinese|japanese|korean)\b|中文|简体|繁体|英文|英语|日文|日语|韩文|韩语)/i;
@@ -96,6 +102,39 @@ function explicitlyRequestsDesignSystem(
   return false;
 }
 
+function parsePositiveInteger(value: unknown): number | undefined {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim()
+        ? Number(value.trim())
+        : Number.NaN;
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function normalizeLaunchInstructions(
+  userRequest: string,
+  parsedInstructions: unknown,
+): string | undefined {
+  if (
+    !EXPLICIT_INSTRUCTION_PATTERN.test(userRequest) ||
+    typeof parsedInstructions !== "string" ||
+    !parsedInstructions.trim()
+  ) {
+    return undefined;
+  }
+
+  // The outer model is the intent extractor in this flow, so keep its concise
+  // custom-requirement summary instead of echoing the entire original prompt
+  // into the native field. This value remains only a visible prefill; the
+  // user's confirmation dialog is authoritative. Bound it before scheduler
+  // validation so an overlong suggestion cannot block opening that dialog.
+  return normalizePresentationUserInstructions(parsedInstructions).slice(
+    0,
+    1_000,
+  );
+}
+
 /**
  * Keep the public presentation tool grounded in what the user actually asked
  * for. The hidden planner owns narrative and visual planning; the outer chat
@@ -107,11 +146,16 @@ export function normalizePresentationToolCall(
   userRequest: string,
   previousResults: readonly ToolExecutionResult[] = [],
 ): ToolCall {
-  if (toolCall.function.name !== PRESENTATION_TOOL_NAME) return toolCall;
+  const isLaunchCall = toolCall.function.name === PRESENTATION_LAUNCH_TOOL_NAME;
+  if (!isLaunchCall && toolCall.function.name !== PRESENTATION_TOOL_NAME) {
+    return toolCall;
+  }
 
-  const retryArguments = firstFailedPresentationArguments(previousResults);
-  if (retryArguments) {
-    return rewriteArguments(toolCall, retryArguments);
+  if (!isLaunchCall) {
+    const retryArguments = firstFailedPresentationArguments(previousResults);
+    if (retryArguments) {
+      return rewriteArguments(toolCall, retryArguments);
+    }
   }
 
   const parsed = parseArguments(toolCall);
@@ -120,6 +164,44 @@ export function normalizePresentationToolCall(
   const normalized: Record<string, unknown> = {};
   if (typeof parsed.sourceItemKey === "string" && parsed.sourceItemKey.trim()) {
     normalized.sourceItemKey = parsed.sourceItemKey.trim();
+  }
+
+  if (isLaunchCall) {
+    // The model still performs intent extraction. This boundary only removes
+    // optional style/instruction guesses that are not grounded in the user's
+    // request; it does not derive page counts or source identities itself.
+    const normalizedSourceItemKey =
+      typeof normalized.sourceItemKey === "string"
+        ? normalized.sourceItemKey
+        : undefined;
+    if (normalizedSourceItemKey && normalizedSourceItemKey.length <= 32) {
+      const sourceLibraryID = parsePositiveInteger(parsed.sourceLibraryID);
+      if (sourceLibraryID !== undefined) {
+        normalized.sourceLibraryID = sourceLibraryID;
+      }
+    } else if (normalizedSourceItemKey) {
+      // Item keys are identity values, not free text. Dropping an invalid
+      // overlong key is safer than truncating it into another paper.
+      delete normalized.sourceItemKey;
+    }
+    const slideCount = parsePresentationSlideCount(parsed.slideCount);
+    if (slideCount !== null) {
+      normalized.slideCount = slideCount;
+    }
+    if (
+      isPresentationDesignSystem(parsed.designSystem) &&
+      explicitlyRequestsDesignSystem(userRequest, parsed.designSystem)
+    ) {
+      normalized.designSystem = parsed.designSystem;
+    }
+    const instructions = normalizeLaunchInstructions(
+      userRequest,
+      parsed.instructions,
+    );
+    if (instructions) {
+      normalized.instructions = instructions;
+    }
+    return rewriteArguments(toolCall, normalized);
   }
 
   if (

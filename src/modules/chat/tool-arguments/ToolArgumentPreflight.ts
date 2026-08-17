@@ -103,6 +103,8 @@ const NUMBER_KEYS = new Set([
   "year_to",
   "offset",
   "maxCharacters",
+  "slideCount",
+  "sourceLibraryID",
 ]);
 
 const STRING_ARRAY_KEYS = new Set(["domain_filter"]);

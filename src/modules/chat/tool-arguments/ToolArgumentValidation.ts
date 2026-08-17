@@ -153,6 +153,8 @@ function repairPropertyValue(
       return repairStringValue(toolName, key, property, value);
     case "number":
       return repairNumberValue(value);
+    case "integer":
+      return repairNumberValue(value);
     case "boolean":
       return repairBooleanValue(value);
     case "array":
@@ -312,14 +314,41 @@ function validatePropertyType(
   value: unknown,
 ): string | null {
   switch (property.type) {
-    case "string":
-      return typeof value === "string"
-        ? null
-        : `expected string, got ${describeType(value)}`;
+    case "string": {
+      if (typeof value !== "string") {
+        return `expected string, got ${describeType(value)}`;
+      }
+      if (
+        property.minLength !== undefined &&
+        value.length < property.minLength
+      ) {
+        return `expected at least ${property.minLength} characters`;
+      }
+      if (
+        property.maxLength !== undefined &&
+        value.length > property.maxLength
+      ) {
+        return `expected at most ${property.maxLength} characters`;
+      }
+      return null;
+    }
     case "number":
-      return typeof value === "number" && Number.isFinite(value)
-        ? null
-        : `expected number, got ${describeType(value)}`;
+    case "integer": {
+      if (
+        typeof value !== "number" ||
+        !Number.isFinite(value) ||
+        (property.type === "integer" && !Number.isInteger(value))
+      ) {
+        return `expected ${property.type}, got ${describeType(value)}`;
+      }
+      if (property.minimum !== undefined && value < property.minimum) {
+        return `expected a value >= ${property.minimum}`;
+      }
+      if (property.maximum !== undefined && value > property.maximum) {
+        return `expected a value <= ${property.maximum}`;
+      }
+      return null;
+    }
     case "boolean":
       return typeof value === "boolean"
         ? null

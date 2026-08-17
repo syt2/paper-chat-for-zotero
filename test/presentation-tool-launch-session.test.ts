@@ -38,6 +38,17 @@ function createAllowedGuard() {
 
 async function runChatManagerBridgeLifecycle(
   outcome: "success" | "provider_error" | "abort",
+  scenario: {
+    currentItem?: boolean;
+    selectedPaper?: boolean;
+    content?: string;
+    previousMessages?: ChatMessage[];
+    expectedMentionSources?: Array<{
+      itemKey: string;
+      libraryID?: number;
+      title?: string;
+    }>;
+  } = {},
 ): Promise<void> {
   const runtime = globalThis as {
     Zotero?: unknown;
@@ -67,13 +78,14 @@ async function runChatManagerBridgeLifecycle(
     libraryID: 1,
     getField: () => "Paper A",
   } as unknown as Zotero.Item;
+  const hasCurrentItem = scenario.currentItem !== false;
   const session: ChatSession = {
     id: `chat-manager-ppt-${outcome}`,
     createdAt: 1,
     updatedAt: 1,
-    lastActiveItemKey: item.key,
-    lastActiveItemLibraryID: item.libraryID,
-    messages: [],
+    lastActiveItemKey: hasCurrentItem ? item.key : null,
+    lastActiveItemLibraryID: hasCurrentItem ? item.libraryID : undefined,
+    messages: scenario.previousMessages ? [...scenario.previousMessages] : [],
   };
   const insertedMessages: ChatMessage[] = [];
   const provider = {
@@ -104,9 +116,15 @@ async function runChatManagerBridgeLifecycle(
   });
 
   registerPresentationChatLaunchBridge({
-    canLaunch: (candidate) => candidate === item,
+    canLaunch: (candidate) =>
+      candidate === item ||
+      (candidate === null && scenario.selectedPaper === true),
     createSession: (candidate, location, options) => {
-      assert.strictEqual(candidate, item);
+      assert.strictEqual(candidate, hasCurrentItem ? item : null);
+      assert.deepEqual(
+        options?.mentionSources || [],
+        scenario.expectedMentionSources || [],
+      );
       capturedLocation = location;
       bridgeAbortSignal = options?.abortSignal;
       const finish = () => {
@@ -116,7 +134,11 @@ async function runChatManagerBridgeLifecycle(
       };
       bridgeAbortSignal?.addEventListener("abort", finish, { once: true });
       return {
-        source: Object.freeze({ itemKey: item.key, libraryID: item.libraryID }),
+        source: Object.freeze(
+          hasCurrentItem
+            ? { itemKey: item.key, libraryID: item.libraryID }
+            : {},
+        ),
         requestAuthorization: async () => ({
           allowed: false as const,
           reason: "turn_finished" as const,
@@ -135,8 +157,8 @@ async function runChatManagerBridgeLifecycle(
     manager.activeSessionAbortControllers = new Map();
     manager.paperChatRerollSessions = new Set();
     manager.streamingSessions = new Map();
-    manager.currentItemKey = item.key;
-    manager.currentItemLibraryID = item.libraryID;
+    manager.currentItemKey = hasCurrentItem ? item.key : null;
+    manager.currentItemLibraryID = hasCurrentItem ? item.libraryID : null;
     manager.pdfExtractor = {
       hasPdfAttachment: async () => false,
     };
@@ -164,7 +186,10 @@ async function runChatManagerBridgeLifecycle(
       return true;
     };
 
-    const send = manager.sendMessage("为这篇论文生成一个 PPT", { item });
+    const send = manager.sendMessage(
+      scenario.content || "为这篇论文生成一个 PPT",
+      hasCurrentItem ? { item } : {},
+    );
     await providerStarted;
     assert.equal(capturedLocation?.sessionId, session.id);
     assert.isTrue(
@@ -211,13 +236,19 @@ describe("presentation model launch session", function () {
     unregisterPresentationChatLaunchBridge();
   });
 
-  it("exposes only a low-risk, argument-free settings launcher", function () {
+  it("exposes a low-risk launcher with optional structured suggestions", function () {
     const definition = createPresentationLaunchToolDefinition();
     assert.equal(definition.function.name, "request_presentation");
-    assert.deepEqual(definition.function.parameters, {
-      type: "object",
-      properties: {},
-    });
+    assert.deepEqual(
+      Object.keys(definition.function.parameters.properties || {}).sort(),
+      [
+        "designSystem",
+        "instructions",
+        "slideCount",
+        "sourceItemKey",
+        "sourceLibraryID",
+      ],
+    );
     assert.include(
       definition.function.description,
       "native presentation settings",
@@ -334,7 +365,8 @@ describe("presentation model launch session", function () {
     );
 
     assert.include(launcherPrompt, "=== PRESENTATION LAUNCH FLOW ===");
-    assert.include(launcherPrompt, "call request_presentation with {}");
+    assert.include(launcherPrompt, "call request_presentation");
+    assert.include(launcherPrompt, "sourceLibraryID");
     assert.include(launcherPrompt, 'follow-up such as "重试下"');
     assert.include(
       launcherPrompt,
@@ -342,6 +374,30 @@ describe("presentation model launch session", function () {
     );
     assert.notInclude(unavailablePrompt, "=== PRESENTATION TOOL ===");
     assert.notInclude(unavailablePrompt, "=== PRESENTATION LAUNCH FLOW ===");
+  });
+
+  it("includes launcher guidance when a paper is supplied only by mention", function () {
+    const prompt = generatePaperContextPrompt(
+      undefined,
+      undefined,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      "unified",
+      "launcher",
+    );
+
+    assert.include(prompt, "=== PRESENTATION LAUNCH FLOW ===");
+    assert.include(prompt, "call request_presentation");
+  });
+
+  it("creates a launcher for the single Zotero selection without a reader paper", async function () {
+    await runChatManagerBridgeLifecycle("success", {
+      currentItem: false,
+      selectedPaper: true,
+      content: "为选中的论文生成一个 PPT",
+    });
   });
 
   it("mints one private authorization after confirmation and reuses it", async function () {
@@ -368,7 +424,60 @@ describe("presentation model launch session", function () {
     });
   });
 
-  it("uses the real scheduler to strip model settings and mint app-owned authorization", async function () {
+  it("does not let a second launcher call change the paper or settings", async function () {
+    const session = createPresentationToolLaunchSession({
+      coordinator: new PresentationLaunchCoordinator(1),
+      source: { itemKey: "PAPER-A", libraryID: 1 },
+      runGuard: () => createAllowedGuard(),
+    });
+
+    const first = await session.requestAuthorization({ slideCount: 10 });
+    const second = await session.requestAuthorization({ slideCount: 15 });
+
+    assert.isTrue(first.allowed);
+    assert.deepEqual(second, { allowed: false, reason: "already_active" });
+    session.finish();
+  });
+
+  it("passes model suggestions to the native guard while keeping the resolved source app-owned", async function () {
+    let suggestedSettings: unknown;
+    const session = createPresentationToolLaunchSession({
+      coordinator: new PresentationLaunchCoordinator(1),
+      source: { itemKey: "PAPER-A", libraryID: 1 },
+      resolveSource: (intent) => ({
+        allowed: true,
+        source: {
+          itemKey: intent.sourceItemKey || "PAPER-A",
+          libraryID: intent.sourceLibraryID || 1,
+        },
+      }),
+      runGuard: async (_focus, suggestions) => {
+        suggestedSettings = suggestions;
+        return createAllowedGuard();
+      },
+    });
+
+    const result = await session.requestAuthorization({
+      sourceItemKey: "PAPER-B",
+      sourceLibraryID: 5,
+      slideCount: 10,
+      designSystem: "deep-blue-atlas",
+      instructions: "Focus on the ablation study.",
+    });
+    assert.isTrue(result.allowed);
+    assert.deepEqual(suggestedSettings, {
+      slideCount: 10,
+      designSystem: "deep-blue-atlas",
+      userInstructions: "Focus on the ablation study.",
+    });
+    assert.deepEqual(session.getAuthorization()?.source, {
+      itemKey: "PAPER-B",
+      libraryID: 5,
+    });
+    session.finish();
+  });
+
+  it("uses the real scheduler to pass suggestions without letting them mint authorization", async function () {
     const originalZotero = (globalThis as { Zotero?: unknown }).Zotero;
     (globalThis as { Zotero?: unknown }).Zotero = {
       Prefs: {
@@ -420,12 +529,10 @@ describe("presentation model launch session", function () {
       });
 
       assert.equal(result.status, "completed");
-      assert.deepEqual(result.args, {});
-      assert.deepEqual(
-        result.policyTrace?.find((trace) => trace.policy === "argument_repair")
-          ?.data?.droppedKeys,
-        ["slideCount", "designSystem"],
-      );
+      assert.deepEqual(result.args, {
+        slideCount: 30,
+        designSystem: "model-invented",
+      });
       assert.deepEqual(
         launchSession.getAuthorization()?.settings,
         DEFAULT_PRESENTATION_LAUNCH_SETTINGS,
@@ -678,5 +785,34 @@ describe("presentation model launch session", function () {
 
   it("binds and releases the ChatManager launch session on abort", async function () {
     await runChatManagerBridgeLifecycle("abort");
+  });
+
+  it("creates a launcher without a current paper and preserves the explicit mention source", async function () {
+    await runChatManagerBridgeLifecycle("success", {
+      currentItem: false,
+      content:
+        "为 @[Mentioned paper](library:5,key:PAPER-B) 生成一份 10 页 PPT",
+      expectedMentionSources: [
+        { itemKey: "PAPER-B", libraryID: 5, title: "Mentioned paper" },
+      ],
+    });
+  });
+
+  it("recovers the mentioned paper for a short retry in the next turn", async function () {
+    await runChatManagerBridgeLifecycle("success", {
+      currentItem: false,
+      content: "重试下",
+      previousMessages: [
+        {
+          id: "previous-user",
+          role: "user",
+          content: "为 @[Mentioned paper](library:5,key:PAPER-B) 生成一份 PPT",
+          timestamp: 1,
+        },
+      ],
+      expectedMentionSources: [
+        { itemKey: "PAPER-B", libraryID: 5, title: "Mentioned paper" },
+      ],
+    });
   });
 });

@@ -19,7 +19,7 @@ export interface ToolDefinition {
 }
 
 export interface ToolParameterProperty {
-  type: "string" | "number" | "boolean" | "array" | "object";
+  type: "string" | "number" | "integer" | "boolean" | "array" | "object";
   description: string;
   enum?: string[];
   items?: ToolParameterProperty | { type: string };
@@ -28,6 +28,10 @@ export interface ToolParameterProperty {
   additionalProperties?: boolean;
   minItems?: number;
   maxItems?: number;
+  minLength?: number;
+  maxLength?: number;
+  minimum?: number;
+  maximum?: number;
 }
 
 // AI 返回的工具调用请求

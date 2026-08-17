@@ -315,6 +315,7 @@ export function mergePresentationPlanMetadata(
     // an internal planner response redirect export or attachment to another
     // Zotero item.
     sourceItemKey: intent.sourceItemKey,
+    sourceLibraryID: intent.sourceLibraryID,
     language: intent.language || planned.language,
     title: intent.title || planned.title,
     author:

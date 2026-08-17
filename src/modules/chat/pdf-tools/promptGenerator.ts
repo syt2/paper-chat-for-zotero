@@ -52,9 +52,10 @@ function getPresentationToolGuidance(mode: PresentationToolPromptMode): string {
   if (mode === "unavailable") return "";
   if (mode === "launcher") {
     return `=== PRESENTATION LAUNCH FLOW ===
-- request_presentation: When the user asks for a PPT, PowerPoint, slide deck, or presentation based on the current paper, call request_presentation with {}. Treat a short request such as "为这篇论文生成一个 PPT" as complete intent. Also call it for a short follow-up such as "重试下" when the preceding presentation attempt failed. Do not claim that presentation generation is unavailable while request_presentation is exposed.
+- request_presentation: When the user asks for a PPT, PowerPoint, slide deck, or presentation, call request_presentation. Treat a short request such as "为这篇论文生成一个 PPT" as complete intent. Also call it for a short follow-up such as "重试下" when the preceding presentation attempt failed. Do not claim that presentation generation is unavailable while request_presentation is exposed.
+- Pass only explicit structured suggestions from the user's request: slideCount when the user gives a page count, designSystem only when the user explicitly requests a matching visual style, and non-empty instructions only for stated custom requirements. Omit unspecified fields; never choose a default style or send instructions="". For "为这篇论文生成一个 10 页的 PPT", call request_presentation with exactly {"slideCount":10}. When the user references a machine-authored Zotero mention such as @[论文标题](library:2,key:ABC123), pass both sourceItemKey="ABC123" and sourceLibraryID=2. Do not infer a paper from an ordinary @word mention.
 - request_presentation opens PaperChat's app-owned native settings window. The plugin, not the model, checks cached token balance and asks the user to confirm the high token cost, slide count, visual style, and optional custom requirements. Never replace this flow with request_user_input, never invent those choices, and never ask the user to provide a long prompt.
-- The private presentation tool is intentionally hidden before confirmation. Do not call it in the same model response as request_presentation. If the launcher reports that the user confirmed and presentation appears in the following model round, call presentation immediately with only {"sourceItemKey":"<current itemKey>"}. The app-owned authorization freezes the confirmed settings and remains valid for the bounded internal retry attempts in that turn.
+- The private presentation tool is intentionally hidden before confirmation. Do not call it in the same model response as request_presentation. If the launcher reports that the user confirmed, call presentation in the following model round with only the authorized sourceItemKey. The app-owned authorization freezes the resolved paper and the settings the user confirmed, and remains valid for the bounded internal retry attempts in that turn.
 
 `;
   }
@@ -123,8 +124,7 @@ Currently, no paper is selected in the reader.
 Tool calling is disabled for this final synthesis iteration. Do not request any tools. Use only evidence already gathered in this turn and provide the final answer directly.
 
 === MENTION FORMAT ===
-Users may reference Zotero items using @[title](key:XXX) format in their messages.
-The "key" is the Zotero item key - use it directly when referring to prior evidence.
+Users may reference Zotero items using @[title](library:ID,key:XXX) format in their messages. Preserve both values for a presentation source. Legacy @[title](key:XXX) mentions remain readable but may be ambiguous across libraries.
 \n`;
     } else {
       prompt += `=== NO PAPER SELECTED ===
@@ -159,9 +159,9 @@ You can help the user by listing available papers with list_all_items, then usin
 For multi-paper comparisons, compose repeated atomic tool calls with explicit itemKeys instead of expecting a dedicated cross-paper tool.
 
 ${parallelToolCallingGuidance}
+${presentationToolGuidance}
 === MENTION FORMAT ===
-Users may reference Zotero items using @[title](key:XXX) format in their messages.
-The "key" is the Zotero item key - use it directly with tools (e.g., itemKey, noteKey).
+Users may reference Zotero items using @[title](library:ID,key:XXX) format in their messages. Preserve both values when a presentation launcher needs an explicit source. Legacy @[title](key:XXX) mentions remain readable but may be ambiguous across libraries.
 
 === IMPORTANT NOTES ===
 ${importantNotesTail}
@@ -211,8 +211,7 @@ ${importantNotesTail}
 Tool calling is disabled for this final synthesis iteration. Ignore the standard tool catalog for this turn and provide the final answer using only the evidence already gathered.
 
 === MENTION FORMAT ===
-Users may reference Zotero items using @[title](key:XXX) format in their messages.
-The "key" is the Zotero item key - use it directly when referring to prior evidence.
+Users may reference Zotero items using @[title](library:ID,key:XXX) format in their messages. Preserve both values for a presentation source. Legacy @[title](key:XXX) mentions remain readable but may be ambiguous across libraries.
 
 === IMPORTANT NOTES ===
 1. Do not request any tools in this iteration.
@@ -261,8 +260,7 @@ ${webSearchLine}
 
 ${parallelToolCallingGuidance}
 === MENTION FORMAT ===
-Users may reference Zotero items using @[title](key:XXX) format in their messages.
-The "key" is the Zotero item key - use it directly with tools (e.g., itemKey, noteKey).
+Users may reference Zotero items using @[title](library:ID,key:XXX) format in their messages. Preserve both values when a presentation launcher needs an explicit source. Legacy @[title](key:XXX) mentions remain readable but may be ambiguous across libraries.
 
 === IMPORTANT NOTES ===
 1. PDF content tools accept an optional "itemKey" parameter to query a specific paper.
