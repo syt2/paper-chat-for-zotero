@@ -12,6 +12,7 @@ import { getString } from "../../utils/locale";
 import { getErrorMessage } from "../../utils/common";
 import { buildScopeFromItems, type SessionScope } from "../chat/session-scope";
 import { getChatManager, showPanel } from "./chat-panel";
+import { getSingleSelectedCollection } from "./library-chat-scope-selection";
 
 const ITEM_MENU_ID = "paperchat-scope-selection-menuitem";
 const COLLECTION_MENU_ID = "paperchat-scope-collection-menuitem";
@@ -48,7 +49,7 @@ function scopeFromSelectedItems(): SessionScope | null {
 
 function scopeFromSelectedCollection(): SessionScope | null {
   const pane = Zotero.getActiveZoteroPane();
-  const collection = pane?.getSelectedCollection?.();
+  const collection = getSingleSelectedCollection(pane);
   if (!collection) {
     return null;
   }
