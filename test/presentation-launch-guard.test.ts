@@ -8,6 +8,7 @@ import {
   PRESENTATION_LITE_MINIMUM_REMAINING_TOKENS,
   PRESENTATION_MINIMUM_REMAINING_TOKENS,
   PRESENTATION_PRO_MINIMUM_REMAINING_TOKENS,
+  PRESENTATION_ULTRA_MINIMUM_REMAINING_TOKENS,
   type PresentationBalanceSnapshot,
   type PresentationLaunchGuardDialogs,
 } from "../src/modules/presentation/PresentationLaunchGuard.ts";
@@ -172,7 +173,23 @@ describe("presentation launch guard", function () {
     );
     assert.equal(
       getPresentationMinimumRemainingTokens("paperchat-ultra"),
-      PRESENTATION_MINIMUM_REMAINING_TOKENS,
+      PRESENTATION_ULTRA_MINIMUM_REMAINING_TOKENS,
+    );
+  });
+
+  it("blocks a 350,000-token Pro balance", async function () {
+    const harness = createGuardHarness({
+      paperChatTier: "paperchat-pro",
+      quota: 350_000,
+      subscriptionRemaining: 0,
+    });
+    assert.deepEqual(await harness.run(), {
+      allowed: false,
+      reason: "balance",
+    });
+    assert.equal(
+      harness.getInsufficientBalance()?.required,
+      PRESENTATION_PRO_MINIMUM_REMAINING_TOKENS,
     );
   });
 
@@ -214,6 +231,27 @@ describe("presentation launch guard", function () {
     const aboveThreshold = createGuardHarness({
       paperChatTier: "paperchat-pro",
       quota: PRESENTATION_PRO_MINIMUM_REMAINING_TOKENS + 1,
+    });
+    assert.isTrue((await aboveThreshold.run()).allowed);
+  });
+
+  it("requires more than one million cached tokens for Ultra", async function () {
+    const atThreshold = createGuardHarness({
+      paperChatTier: "paperchat-ultra",
+      quota: PRESENTATION_ULTRA_MINIMUM_REMAINING_TOKENS,
+    });
+    assert.deepEqual(await atThreshold.run(), {
+      allowed: false,
+      reason: "balance",
+    });
+    assert.equal(
+      atThreshold.getInsufficientBalance()?.required,
+      PRESENTATION_ULTRA_MINIMUM_REMAINING_TOKENS,
+    );
+
+    const aboveThreshold = createGuardHarness({
+      paperChatTier: "paperchat-ultra",
+      quota: PRESENTATION_ULTRA_MINIMUM_REMAINING_TOKENS + 1,
     });
     assert.isTrue((await aboveThreshold.run()).allowed);
   });

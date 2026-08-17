@@ -7,13 +7,14 @@ import type { PresentationLaunchSettings } from "./PresentationLaunchSettings";
 export const PRESENTATION_MINIMUM_REMAINING_TOKENS = 250_000;
 export const PRESENTATION_LITE_MINIMUM_REMAINING_TOKENS = 150_000;
 export const PRESENTATION_PRO_MINIMUM_REMAINING_TOKENS = 750_000;
+export const PRESENTATION_ULTRA_MINIMUM_REMAINING_TOKENS = 1_000_000;
 export const PRESENTATION_LAUNCH_PROMPT =
   "请直接使用 presentation 工具，基于当前论文生成一份 PPT。";
 
 /**
  * Return the cached-balance gate for the tier that will execute the PPT turn.
- * Lite and Pro use their product-specific gates. Unknown or omitted values
- * safely retain the established Standard threshold.
+ * Lite, Pro, and Ultra use their product-specific gates. Unknown or omitted
+ * values safely retain the established Standard threshold.
  */
 export function getPresentationMinimumRemainingTokens(
   paperChatTier?: PaperChatTier,
@@ -23,6 +24,9 @@ export function getPresentationMinimumRemainingTokens(
   }
   if (paperChatTier === "paperchat-pro") {
     return PRESENTATION_PRO_MINIMUM_REMAINING_TOKENS;
+  }
+  if (paperChatTier === "paperchat-ultra") {
+    return PRESENTATION_ULTRA_MINIMUM_REMAINING_TOKENS;
   }
   return PRESENTATION_MINIMUM_REMAINING_TOKENS;
 }
