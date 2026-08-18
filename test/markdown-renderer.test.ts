@@ -333,10 +333,23 @@ describe("markdown renderer source groups", function () {
         `<tool-call status="calling" expand-key="presentation-interrupted" presentation-phase="rendering" presentation-stage="drafting" presentation-message="正在生成幻灯片" presentation-started-at="${startedAt}" presentation-stage-started-at="${startedAt + 12_000}" presentation-updated-at="${startedAt + 20_000}">
 <tool-name>⏳ presentation</tool-name>
 <tool-status>调用中...</tool-status>
+<presentation-artifact tool-call-id="presentation-interrupted-tool-call" path="/deleted/draft.pptx" draft="true">
+<presentation-preview path="/deleted/slide-1.png"/>
+</presentation-artifact>
 </tool-call>`,
         "message-presentation-interrupted",
         {
           presentationInterruption: { endedAt: interruptedAt },
+          presentationArtifacts: new Map([
+            [
+              "presentation-interrupted",
+              {
+                toolCallId: "presentation-interrupted-tool-call",
+                localId: "presentation-interrupted",
+                isDraft: true,
+              },
+            ],
+          ]),
           presentationResumeAction: {
             label: "Resume presentation",
             busyLabel: "Resuming...",
@@ -345,6 +358,11 @@ describe("markdown renderer source groups", function () {
               throw new Error("resume failed");
             },
             onError: (error) => resumeErrors.push(error.message),
+          },
+          presentationArtifactAction: {
+            openLabel: "Open PPTX",
+            draftLabel: "Open current draft",
+            onOpen: async () => undefined,
           },
         },
       );
@@ -370,6 +388,13 @@ describe("markdown renderer source groups", function () {
         "true",
       );
       const resume = findByAttribute(root, "data-presentation-resume", "true");
+      const open = findByAttribute(root, "data-presentation-open", "true");
+      const preview = findByAttribute(
+        root,
+        "data-presentation-preview",
+        "true",
+      );
+      const path = findByAttribute(root, "data-presentation-path", "true");
 
       assert.equal(
         card?.getAttribute("data-presentation-card-status"),
@@ -393,6 +418,9 @@ describe("markdown renderer source groups", function () {
       assert.notProperty(activeStage?.children[0]?.style || {}, "animation");
       assert.include(activity?.children[1]?.textContent || "", "interrupted");
       assert.equal(resume?.textContent, "Resume presentation");
+      assert.isUndefined(open);
+      assert.isUndefined(preview);
+      assert.isUndefined(path);
 
       resume?.dispatch("click");
       resume?.dispatch("click");
@@ -404,6 +432,209 @@ describe("markdown renderer source groups", function () {
       assert.isNull(resume?.getAttribute("data-busy") || null);
       assert.isNull(resume?.getAttribute("disabled") || null);
       assert.equal(resume?.textContent, "Resume presentation");
+    } finally {
+      (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
+    }
+  });
+
+  it("projects an immediately cancelled presentation marker into a resumable card", function () {
+    const originalZotero = (globalThis as { Zotero?: unknown }).Zotero;
+    (globalThis as { Zotero?: unknown }).Zotero = {
+      getMainWindow: () => null,
+    };
+    const doc = new FakeDocument();
+    const root = new FakeElement(doc, "div");
+    const findByAttribute = (
+      node: FakeElement,
+      name: string,
+      value: string,
+    ): FakeElement | undefined => {
+      if (node.getAttribute(name) === value) return node;
+      for (const child of node.children) {
+        const found = findByAttribute(child, name, value);
+        if (found) return found;
+      }
+      return undefined;
+    };
+
+    try {
+      renderMarkdownToElement(
+        root as unknown as HTMLElement,
+        `<tool-call status="calling" expand-key="presentation-immediate-cancel">
+<tool-name>⏳ presentation</tool-name>
+<tool-status>Calling...</tool-status>
+</tool-call>`,
+        "message-presentation-immediate-cancel",
+        {
+          presentationInterruption: { endedAt: 2_000 },
+          presentationArtifacts: new Map([
+            [
+              "presentation-immediate-cancel",
+              {
+                toolCallId: "presentation-immediate-cancel-call",
+                localId: "presentation-immediate-cancel",
+                isDraft: true,
+              },
+            ],
+          ]),
+          presentationResumeAction: {
+            label: "Resume presentation",
+            busyLabel: "Resuming...",
+            onResume: async () => undefined,
+          },
+        },
+      );
+
+      const card = findByAttribute(
+        root,
+        "data-presentation-progress-card",
+        "true",
+      );
+      assert.equal(
+        card?.getAttribute("data-presentation-card-status"),
+        "interrupted",
+      );
+      assert.equal(
+        findByAttribute(root, "data-presentation-resume", "true")?.textContent,
+        "Resume presentation",
+      );
+      assert.isUndefined(
+        findByAttribute(root, "data-presentation-open", "true"),
+      );
+      assert.isUndefined(
+        findByAttribute(root, "data-presentation-artifact", "true"),
+      );
+    } finally {
+      (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
+    }
+  });
+
+  it("keeps a committed presentation completed when its turn is interrupted", function () {
+    const originalZotero = (globalThis as { Zotero?: unknown }).Zotero;
+    (globalThis as { Zotero?: unknown }).Zotero = {
+      getMainWindow: () => null,
+    };
+    const doc = new FakeDocument();
+    const root = new FakeElement(doc, "div");
+    const findByAttribute = (
+      node: FakeElement,
+      name: string,
+      value: string,
+    ): FakeElement | undefined => {
+      if (node.getAttribute(name) === value) return node;
+      for (const child of node.children) {
+        const found = findByAttribute(child, name, value);
+        if (found) return found;
+      }
+      return undefined;
+    };
+
+    try {
+      renderMarkdownToElement(
+        root as unknown as HTMLElement,
+        `<tool-call status="calling" expand-key="presentation-committed" presentation-phase="completed" presentation-stage="saving" presentation-message="Saved" presentation-started-at="1000" presentation-stage-started-at="1500" presentation-updated-at="2000">
+<tool-name>⏳ presentation</tool-name>
+<tool-status>Calling...</tool-status>
+</tool-call>`,
+        "message-presentation-committed",
+        {
+          presentationInterruption: { endedAt: 2_500 },
+          presentationArtifacts: new Map([
+            [
+              "presentation-committed",
+              {
+                toolCallId: "presentation-committed-call",
+                localId: "presentation-committed",
+                attachmentItemID: 42,
+                isDraft: false,
+              },
+            ],
+          ]),
+          presentationResumeAction: {
+            label: "Resume presentation",
+            busyLabel: "Resuming...",
+            onResume: async () => undefined,
+          },
+          presentationArtifactAction: {
+            openLabel: "Open PPTX",
+            draftLabel: "Open current draft",
+            onOpen: async () => undefined,
+          },
+        },
+      );
+
+      const card = findByAttribute(
+        root,
+        "data-presentation-progress-card",
+        "true",
+      );
+      assert.equal(
+        card?.getAttribute("data-presentation-card-status"),
+        "completed",
+      );
+      assert.equal(
+        findByAttribute(root, "data-presentation-open", "true")?.textContent,
+        "Open PPTX",
+      );
+      assert.isUndefined(
+        findByAttribute(root, "data-presentation-resume", "true"),
+      );
+    } finally {
+      (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
+    }
+  });
+
+  it("does not expose cancel for an attached presentation left in an active card", function () {
+    const originalZotero = (globalThis as { Zotero?: unknown }).Zotero;
+    (globalThis as { Zotero?: unknown }).Zotero = {
+      getMainWindow: () => null,
+    };
+    const doc = new FakeDocument();
+    const root = new FakeElement(doc, "div");
+    const findByAttribute = (
+      node: FakeElement,
+      name: string,
+      value: string,
+    ): FakeElement | undefined => {
+      if (node.getAttribute(name) === value) return node;
+      for (const child of node.children) {
+        const found = findByAttribute(child, name, value);
+        if (found) return found;
+      }
+      return undefined;
+    };
+    try {
+      renderMarkdownToElement(
+        root as unknown as HTMLElement,
+        `<tool-call status="calling" expand-key="presentation-attached" presentation-phase="attaching" presentation-stage="saving" presentation-message="Saving" presentation-started-at="1000" presentation-stage-started-at="1500" presentation-updated-at="2000">
+<tool-name>⏳ presentation</tool-name>
+<tool-status>Calling...</tool-status>
+</tool-call>`,
+        "message-presentation-attached-active",
+        {
+          presentationActiveToolCallIds: new Set(["presentation-attached"]),
+          presentationArtifacts: new Map([
+            [
+              "presentation-attached",
+              {
+                toolCallId: "presentation-attached-call",
+                localId: "presentation-attached",
+                attachmentItemID: 42,
+                isDraft: false,
+              },
+            ],
+          ]),
+          presentationCancelAction: {
+            label: "Cancel generation",
+            busyLabel: "Cancelling...",
+            onCancel: async () => undefined,
+          },
+        },
+      );
+
+      assert.isUndefined(
+        findByAttribute(root, "data-presentation-cancel", "true"),
+      );
     } finally {
       (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
     }
@@ -492,6 +723,7 @@ describe("markdown renderer source groups", function () {
     const doc = new FakeDocument();
     const root = new FakeElement(doc, "div");
     let cancelAttempts = 0;
+    let resumeAttempts = 0;
     const startedAt = Date.now() - 1_000;
     try {
       renderMarkdownToElement(
@@ -509,13 +741,26 @@ describe("markdown renderer source groups", function () {
               cancelAttempts += 1;
             },
           },
+          presentationInterruption: { endedAt: Date.now() },
+          presentationResumeAction: {
+            label: "Resume presentation",
+            busyLabel: "Resuming...",
+            onResume: () => {
+              resumeAttempts += 1;
+            },
+          },
         },
       );
       const hasCancel = (node: FakeElement): boolean =>
         node.getAttribute("data-presentation-cancel") === "true" ||
         node.children.some(hasCancel);
+      const hasResume = (node: FakeElement): boolean =>
+        node.getAttribute("data-presentation-resume") === "true" ||
+        node.children.some(hasResume);
       assert.isFalse(hasCancel(root));
+      assert.isFalse(hasResume(root));
       assert.equal(cancelAttempts, 0);
+      assert.equal(resumeAttempts, 0);
     } finally {
       (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
     }

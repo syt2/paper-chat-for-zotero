@@ -29,6 +29,7 @@ import {
   renderMarkdownToElement,
 } from "./MarkdownRenderer";
 import { isMaxIterationsNoticeContent } from "../../chat/agent-runtime/messages";
+import { isTerminalPresentationArtifact } from "../../chat/presentation-artifacts";
 import { selectChatMessagePresentations } from "../../chat/message-presentation";
 import { canSummarizeAssistantReply } from "./NoteSummaryActions";
 import { canQuoteAssistantReply } from "../../chat/quoted-messages";
@@ -464,7 +465,7 @@ export function getMessageMarkdownRenderOptions(
     streamingState === "in_progress"
       ? new Set(
           [...artifactsByToolCallId.entries()]
-            .filter(([, artifact]) => artifact.isDraft !== false)
+            .filter(([, artifact]) => !isTerminalPresentationArtifact(artifact))
             .map(([toolCallId]) => toolCallId),
         )
       : new Set<string>();

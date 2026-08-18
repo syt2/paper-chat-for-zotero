@@ -45,6 +45,12 @@ function hasControlCharacters(value: string): boolean {
   return false;
 }
 
+export function isTerminalPresentationArtifact(
+  artifact: PresentationToolCardArtifact,
+): boolean {
+  return artifact.isDraft === false || artifact.attachmentItemID !== undefined;
+}
+
 /**
  * Normalize the app-owned artifact side channel stored with an assistant
  * message. This establishes a bounded structural contract only; callers that
@@ -90,7 +96,19 @@ export function normalizePresentationArtifacts(
       raw.attachmentItemID > 0
         ? raw.attachmentItemID
         : undefined;
-    if (!path && previewPaths.length === 0) continue;
+    const isDraft = typeof raw.isDraft === "boolean" ? raw.isDraft : undefined;
+    const hasUsableArtifact =
+      Boolean(path) ||
+      previewPaths.length > 0 ||
+      attachmentItemID !== undefined;
+    // A cancelled draft intentionally keeps only its bounded app-owned
+    // identity. The interrupted progress card in message content binds to
+    // this marker before the renderer exposes the resume action.
+    const isIdentityOnlyDraft =
+      Boolean(localId) && isDraft === true && !hasUsableArtifact;
+    if (!hasUsableArtifact && !isIdentityOnlyDraft) {
+      continue;
+    }
 
     seenArtifactIds.add(artifactId);
     normalized.push({
@@ -99,7 +117,7 @@ export function normalizePresentationArtifacts(
       path,
       previewPaths: previewPaths.length > 0 ? previewPaths : undefined,
       attachmentItemID,
-      isDraft: typeof raw.isDraft === "boolean" ? raw.isDraft : undefined,
+      isDraft,
     });
   }
   return normalized;

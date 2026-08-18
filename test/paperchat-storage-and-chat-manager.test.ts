@@ -14,6 +14,7 @@ import {
   normalizeContextAutoCompactWindowTokens,
 } from "../src/modules/chat/ContextManager.ts";
 import { SessionStorageService } from "../src/modules/chat/SessionStorageService.ts";
+import { normalizePresentationArtifacts } from "../src/modules/chat/presentation-artifacts.ts";
 import {
   StorageDatabase,
   getStorageDatabase,
@@ -4735,12 +4736,22 @@ describe("paperchat storage and chat manager", function () {
   it("keeps an artifact-only presentation message when cancelling the current turn", async function () {
     const artifact = {
       toolCallId: "presentation-call-1",
+      localId: "presentation-call-1:presentation:1:1",
       path: "/tmp/paperchat/presentation-call-1/draft.pptx",
       previewPaths: [
         "/tmp/paperchat/presentation-call-1/generation-01-slide-01.png",
       ],
       isDraft: true,
     };
+    const presentationCard = [
+      '<tool-call status="calling" expand-key="presentation-call-1:presentation:1:1" presentation-phase="rendering" presentation-stage="drafting" presentation-message="Rendering" presentation-started-at="1000" presentation-stage-started-at="1500" presentation-updated-at="2000">',
+      "<tool-name>presentation</tool-name>",
+      "<tool-status>Calling...</tool-status>",
+      '<presentation-artifact tool-call-id="presentation-call-1" path="/tmp/paperchat/presentation-call-1/draft.pptx">',
+      '<presentation-preview path="/tmp/paperchat/presentation-call-1/generation-01-slide-01.png"/>',
+      "</presentation-artifact>",
+      "</tool-call>",
+    ].join("\n");
     const updates: Array<{
       content: string;
       streamingState?: string | null;
@@ -4750,14 +4761,7 @@ describe("paperchat storage and chat manager", function () {
     const assistantMessage: ChatMessage = {
       id: "assistant-presentation-cancel",
       role: "assistant",
-      content: [
-        '<tool-call status="calling">',
-        "<tool-name>presentation</tool-name>",
-        '<presentation-artifact tool-call-id="presentation-call-1" path="/tmp/paperchat/presentation-call-1/draft.pptx">',
-        '<presentation-preview path="/tmp/paperchat/presentation-call-1/generation-01-slide-01.png"/>',
-        "</presentation-artifact>",
-        "</tool-call>",
-      ].join("\n"),
+      content: presentationCard,
       presentationArtifacts: [artifact],
       streamingState: "in_progress",
       timestamp: 2,
@@ -4805,7 +4809,7 @@ describe("paperchat storage and chat manager", function () {
     assert.isTrue(await manager.cancelCurrentTurn());
     assert.deepEqual(deletedMessages, []);
     assert.deepEqual(session.messages, [assistantMessage]);
-    assert.equal(assistantMessage.content, "");
+    assert.equal(assistantMessage.content, presentationCard);
     assert.equal(assistantMessage.streamingState, "interrupted");
     assert.deepEqual(assistantMessage.presentationArtifacts, [
       {
@@ -4816,7 +4820,7 @@ describe("paperchat storage and chat manager", function () {
     ]);
     assert.deepEqual(updates, [
       {
-        content: "",
+        content: presentationCard,
         streamingState: "interrupted",
         presentationArtifacts: [
           {
@@ -4827,26 +4831,86 @@ describe("paperchat storage and chat manager", function () {
         ],
       },
     ]);
+    assert.deepEqual(
+      normalizePresentationArtifacts(assistantMessage.presentationArtifacts),
+      [
+        {
+          ...artifact,
+          path: undefined,
+          previewPaths: undefined,
+          attachmentItemID: undefined,
+        },
+      ],
+    );
   });
 
-  it("keeps a committed presentation artifact when cancelling after import", async function () {
-    const artifact = {
-      toolCallId: "presentation-committed-cancel",
-      path: "/tmp/paperchat/presentation-committed-cancel/deck.pptx",
-      previewPaths: [
-        "/tmp/paperchat/presentation-committed-cancel/generation-01-slide-01.png",
+  it("persists only bound identity markers and usable attachment-only artifacts", function () {
+    assert.deepEqual(
+      normalizePresentationArtifacts([
+        {
+          toolCallId: "presentation-bound-marker",
+          localId: "presentation-bound-marker:presentation:1:1",
+          isDraft: true,
+        },
+        {
+          toolCallId: "presentation-unbound-marker",
+          isDraft: true,
+        },
+        {
+          toolCallId: "presentation-attachment-only",
+          attachmentItemID: 42,
+          isDraft: false,
+        },
+      ]),
+      [
+        {
+          toolCallId: "presentation-bound-marker",
+          localId: "presentation-bound-marker:presentation:1:1",
+          path: undefined,
+          previewPaths: undefined,
+          attachmentItemID: undefined,
+          isDraft: true,
+        },
+        {
+          toolCallId: "presentation-attachment-only",
+          path: undefined,
+          previewPaths: undefined,
+          attachmentItemID: 42,
+          isDraft: false,
+        },
       ],
-      attachmentItemID: 42,
-      isDraft: false,
-    };
+    );
+  });
+
+  it("keeps completed and attached presentation artifacts when cancelling", async function () {
+    const artifacts = [
+      {
+        toolCallId: "presentation-completed-unattached-cancel",
+        path: "/tmp/paperchat/presentation-completed-unattached/deck.pptx",
+        previewPaths: [
+          "/tmp/paperchat/presentation-completed-unattached/slide-01.png",
+        ],
+        isDraft: false,
+      },
+      {
+        toolCallId: "presentation-attached-draft-cancel",
+        path: "/tmp/paperchat/presentation-attached-draft/deck.pptx",
+        previewPaths: [
+          "/tmp/paperchat/presentation-attached-draft/slide-01.png",
+        ],
+        attachmentItemID: 42,
+        isDraft: true,
+      },
+    ];
     const assistantMessage: ChatMessage = {
       id: "assistant-presentation-committed-cancel",
       role: "assistant",
       content: "",
-      presentationArtifacts: [artifact],
+      presentationArtifacts: artifacts,
       streamingState: "in_progress",
       timestamp: 2,
     };
+    const persistedArtifacts: unknown[] = [];
     const session: ChatSession = {
       id: "session-presentation-committed-cancel",
       createdAt: 1,
@@ -4863,14 +4927,23 @@ describe("paperchat storage and chat manager", function () {
       waitForPendingMutatingToolExecutions: async () => undefined,
     };
     manager.sessionStorage = {
-      updateMessageContent: async () => undefined,
+      updateMessageContent: async (
+        _sessionId: string,
+        _messageId: string,
+        _content: string,
+        _reasoning?: string,
+        options?: { presentationArtifacts?: unknown[] },
+      ) => {
+        persistedArtifacts.push(options?.presentationArtifacts);
+      },
       updateSessionMeta: async () => undefined,
     };
     manager.init = async () => undefined;
     manager.isSessionActive = () => false;
 
     assert.isTrue(await manager.cancelCurrentTurn());
-    assert.deepEqual(assistantMessage.presentationArtifacts, [artifact]);
+    assert.deepEqual(assistantMessage.presentationArtifacts, artifacts);
+    assert.deepEqual(persistedArtifacts, [artifacts]);
   });
 
   it("cleans calling tool cards during cancel even when the assistant message is no longer marked in_progress", async function () {

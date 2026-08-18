@@ -551,6 +551,13 @@ describe("chat message exact navigation", function () {
 <tool-name>⏳ presentation</tool-name>
 <tool-status>调用中...</tool-status>
 </tool-call>`,
+            presentationArtifacts: [
+              {
+                toolCallId: "presentation-interrupted-tool-call",
+                localId: "presentation-interrupted",
+                isDraft: true,
+              },
+            ],
             streamingState: "interrupted",
           }),
         ],

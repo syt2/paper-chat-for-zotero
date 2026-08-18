@@ -92,6 +92,7 @@ import {
   createInterruptedAssistantContextMessage,
   stripPendingAndIncompleteToolCallContent,
 } from "./interrupted-message";
+import { isTerminalPresentationArtifact } from "./presentation-artifacts";
 import { saveDebugContextSnapshot } from "./DebugContextExporter";
 import { MemoryManager } from "./memory/MemoryManager";
 import { SessionTitleService } from "./SessionTitleService";
@@ -3299,10 +3300,7 @@ export class ChatManager {
     artifacts: readonly PresentationToolCardArtifact[] | undefined,
   ): PresentationToolCardArtifact[] {
     return (artifacts || []).map((artifact) => {
-      if (
-        artifact.isDraft === false ||
-        artifact.attachmentItemID !== undefined
-      ) {
+      if (isTerminalPresentationArtifact(artifact)) {
         return artifact;
       }
       return {

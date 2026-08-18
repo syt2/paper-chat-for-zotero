@@ -13,6 +13,7 @@ import type { EvidenceRecord } from "../../../types/evidence";
 import type { PresentationToolCardArtifact } from "../../../types/chat";
 import type { PresentationCardProgress } from "../../presentation/contracts";
 import { normalizeEvidenceRecords } from "../../chat/evidence";
+import { isTerminalPresentationArtifact } from "../../chat/presentation-artifacts";
 import {
   getToolCallCardExpandKey,
   getToolCallGroupExpandKey,
@@ -507,6 +508,12 @@ function getToolCardStatusColor(
       : colors.statusError;
 }
 
+function normalizeToolCallName(toolName: string): string {
+  return unescapeXml(toolName)
+    .trim()
+    .replace(/^[^A-Za-z0-9_-]+/u, "");
+}
+
 export function stripIncompleteTrailingToolCall(content: string): string {
   const lastOpen = content.lastIndexOf("<tool-call");
   if (lastOpen === -1) {
@@ -604,38 +611,69 @@ function buildToolCallCardElement(
   presentationArtifact?: PresentationToolCardArtifact,
   options: MarkdownRenderOptions = {},
 ): HTMLElement {
-  if (entry.presentationProgress) {
-    const presentationToolCallId = entry.expandKey
-      ? unescapeXml(entry.expandKey)
-      : undefined;
-    const trustedPresentationArtifact = presentationToolCallId
-      ? presentationArtifact &&
-        (presentationArtifact.localId || presentationArtifact.toolCallId) ===
-          presentationToolCallId
-      : false;
-    const normalizedToolName = entry.toolName
-      .trim()
-      .replace(/^[^A-Za-z0-9_-]+/u, "");
+  const presentationToolCallId = entry.expandKey
+    ? unescapeXml(entry.expandKey)
+    : undefined;
+  const trustedPresentationArtifact = presentationToolCallId
+    ? presentationArtifact &&
+      (presentationArtifact.localId || presentationArtifact.toolCallId) ===
+        presentationToolCallId
+    : false;
+  const normalizedToolName = normalizeToolCallName(entry.toolName);
+  const presentationIsTerminal = Boolean(
+    presentationArtifact &&
+    trustedPresentationArtifact &&
+    isTerminalPresentationArtifact(presentationArtifact),
+  );
+  const presentationWasInterrupted =
+    entry.status === "calling" &&
+    options.presentationInterruption !== undefined &&
+    !presentationIsTerminal;
+  const isTrustedPresentationCard =
+    normalizedToolName === "presentation" && trustedPresentationArtifact;
+  const interruptedAt = Math.max(
+    1,
+    options.presentationInterruption?.endedAt || 1,
+  );
+  const presentationProgress =
+    entry.presentationProgress ||
+    (presentationWasInterrupted && isTrustedPresentationCard
+      ? ({
+          phase: "analyzing",
+          stage: "preparing",
+          message: "",
+          startedAt: interruptedAt,
+          stageStartedAt: interruptedAt,
+          updatedAt: interruptedAt,
+        } satisfies PresentationCardProgress)
+      : undefined);
+  if (presentationProgress) {
     const canCancelPresentation =
-      normalizedToolName === "presentation" &&
-      trustedPresentationArtifact &&
+      isTrustedPresentationCard &&
+      !presentationIsTerminal &&
       options.presentationActiveToolCallIds?.has(presentationToolCallId!);
-    const presentationWasInterrupted =
-      entry.status === "calling" &&
-      options.presentationInterruption !== undefined;
+    const canResumePresentation =
+      presentationWasInterrupted && isTrustedPresentationCard;
     return buildPresentationProgressCardElement(
       doc,
       {
-        status: presentationWasInterrupted ? "interrupted" : entry.status,
-        progress: entry.presentationProgress,
+        status: presentationIsTerminal
+          ? "completed"
+          : presentationWasInterrupted
+            ? "interrupted"
+            : entry.status,
+        progress: presentationProgress,
         errorText: unescapeXml(entry.toolResult || entry.statusText || ""),
         interruptedAt: options.presentationInterruption?.endedAt,
-        resumeAction: options.presentationResumeAction,
+        resumeAction: canResumePresentation
+          ? options.presentationResumeAction
+          : undefined,
         cancelAction: canCancelPresentation
           ? options.presentationCancelAction
           : undefined,
       },
-      presentationArtifact
+      presentationArtifact &&
+        hasRenderablePresentationArtifact(presentationArtifact)
         ? buildPresentationArtifactElement(
             doc,
             presentationArtifact,
@@ -918,6 +956,14 @@ function buildPresentationArtifactElement(
   return artifactContainer;
 }
 
+function hasRenderablePresentationArtifact(
+  artifact: PresentationToolCardArtifact,
+): boolean {
+  return Boolean(
+    artifact.path || artifact.attachmentItemID || artifact.previewPaths?.length,
+  );
+}
+
 function renderPresentationArtifacts(
   doc: Document,
   parent: HTMLElement,
@@ -928,7 +974,12 @@ function renderPresentationArtifacts(
     artifactKey,
     artifact,
   ] of options.presentationArtifacts?.entries() || []) {
-    if (renderedArtifactKeys.has(artifactKey)) continue;
+    if (
+      renderedArtifactKeys.has(artifactKey) ||
+      !hasRenderablePresentationArtifact(artifact)
+    ) {
+      continue;
+    }
     parent.appendChild(
       buildPresentationArtifactElement(doc, artifact, options),
     );
@@ -956,14 +1007,19 @@ function renderToolCallGroup(
       entry.expandKey ? unescapeXml(entry.expandKey) : undefined,
     );
   const buildEntryCard = (entry: ToolCallCardData): HTMLElement => {
-    const artifactKey =
-      entry.presentationProgress && entry.expandKey
-        ? unescapeXml(entry.expandKey)
-        : undefined;
-    const artifact = artifactKey
-      ? options.presentationArtifacts?.get(artifactKey)
+    const artifactKey = entry.expandKey
+      ? unescapeXml(entry.expandKey)
       : undefined;
-    if (artifact && artifactKey) {
+    const normalizedToolName = normalizeToolCallName(entry.toolName);
+    const artifact =
+      artifactKey && normalizedToolName === "presentation"
+        ? options.presentationArtifacts?.get(artifactKey)
+        : undefined;
+    const embedsPresentationArtifact =
+      Boolean(entry.presentationProgress) ||
+      (entry.status === "calling" &&
+        options.presentationInterruption !== undefined);
+    if (artifact && artifactKey && embedsPresentationArtifact) {
       renderedArtifactKeys.add(artifactKey);
     }
     return buildToolCallCardElement(
