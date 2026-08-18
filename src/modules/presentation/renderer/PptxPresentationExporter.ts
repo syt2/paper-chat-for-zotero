@@ -14,6 +14,7 @@ import { verifyRenderedPresentation } from "./PresentationRenderVerifier";
 import { renderPresentationPreviewSlides } from "./PresentationPreviewRenderer";
 import { applyDefaultFadeTransitions } from "./PresentationPptxTransitions";
 import { applyPresentationAnimations } from "./PresentationPptxAnimations";
+import { raceWithAbort, throwIfAborted } from "../../../utils/abort";
 
 export interface PresentationRenderWithPreviewResult {
   bytes: Uint8Array;
@@ -132,6 +133,7 @@ function assertPptxBytes(value: unknown): asserts value is Uint8Array {
 function createPresentationDocument(
   spec: RenderablePresentationRequest,
   options?: PresentationRendererValidationOptions,
+  abortSignal?: AbortSignal,
 ): {
   presentation: PptxGenJS;
   normalizedSpec: RenderablePresentationRequest;
@@ -176,7 +178,9 @@ function createPresentationDocument(
   const cover = presentation.addSlide();
   renderCover(context, cover, normalizedSpec);
 
+  throwIfAborted(abortSignal);
   normalizedSpec.slides.forEach((slideSpec, index) => {
+    throwIfAborted(abortSignal);
     const slide = presentation.addSlide();
     renderContentSlide(context, slide, normalizedSpec, slideSpec, index);
   });
@@ -188,18 +192,31 @@ async function writeAndVerifyPresentation(
   presentation: PptxGenJS,
   normalizedSpec: RenderablePresentationRequest,
   options?: PresentationRendererValidationOptions,
+  abortSignal?: AbortSignal,
 ): Promise<{ bytes: Uint8Array; verificationWarnings: string[] }> {
-  const rawBytes = await presentation.write({
-    outputType: "uint8array",
-    compression: true,
-  });
+  throwIfAborted(abortSignal);
+  const rawBytes = await raceWithAbort(
+    () =>
+      presentation.write({
+        outputType: "uint8array",
+        compression: true,
+      }),
+    abortSignal,
+  );
+  throwIfAborted(abortSignal);
   assertPptxBytes(rawBytes);
   let bytes = rawBytes;
   const transitionWarnings: string[] = [];
   try {
-    bytes = await applyDefaultFadeTransitions(rawBytes);
+    throwIfAborted(abortSignal);
+    bytes = await raceWithAbort(
+      () => applyDefaultFadeTransitions(rawBytes),
+      abortSignal,
+    );
+    throwIfAborted(abortSignal);
     assertPptxBytes(bytes);
   } catch (error) {
+    throwIfAborted(abortSignal);
     bytes = rawBytes;
     transitionWarnings.push(
       `Presentation was exported without the default fade transition: ${
@@ -209,10 +226,16 @@ async function writeAndVerifyPresentation(
   }
   const animationWarnings: string[] = [];
   try {
-    const animated = await applyPresentationAnimations(bytes);
+    throwIfAborted(abortSignal);
+    const animated = await raceWithAbort(
+      () => applyPresentationAnimations(bytes),
+      abortSignal,
+    );
+    throwIfAborted(abortSignal);
     bytes = animated.bytes;
     animationWarnings.push(...animated.warnings);
   } catch (error) {
+    throwIfAborted(abortSignal);
     // Element timing is an optional enhancement. Keep the valid static deck
     // when an archive/parser/viewer edge case prevents timing injection.
     animationWarnings.push(
@@ -221,11 +244,14 @@ async function writeAndVerifyPresentation(
       }`,
     );
   }
-  const verificationWarnings = await verifyRenderedPresentation(
-    bytes,
-    normalizedSpec,
-    { strict: options?.strictValidation },
+  const verificationWarnings = await raceWithAbort(
+    () =>
+      verifyRenderedPresentation(bytes, normalizedSpec, {
+        strict: options?.strictValidation,
+      }),
+    abortSignal,
   );
+  throwIfAborted(abortSignal);
   return {
     bytes,
     verificationWarnings: [
@@ -239,15 +265,18 @@ async function writeAndVerifyPresentation(
 export async function renderPresentation(
   spec: RenderablePresentationRequest,
   options?: PresentationRendererValidationOptions,
+  abortSignal?: AbortSignal,
 ): Promise<Uint8Array> {
   const { presentation, normalizedSpec } = createPresentationDocument(
     spec,
     options,
+    abortSignal,
   );
   const { bytes } = await writeAndVerifyPresentation(
     presentation,
     normalizedSpec,
     options,
+    abortSignal,
   );
   return bytes;
 }
@@ -255,14 +284,19 @@ export async function renderPresentation(
 export async function renderPresentationWithPreview(
   spec: RenderablePresentationRequest,
   options?: PresentationRendererValidationOptions,
+  abortSignal?: AbortSignal,
 ): Promise<PresentationRenderWithPreviewResult> {
   const { presentation, normalizedSpec, visualWarnings } =
-    createPresentationDocument(spec, options);
-  const previewSlides = await renderPresentationPreviewSlides(presentation);
+    createPresentationDocument(spec, options, abortSignal);
+  const previewSlides = await renderPresentationPreviewSlides(
+    presentation,
+    abortSignal,
+  );
   const { bytes, verificationWarnings } = await writeAndVerifyPresentation(
     presentation,
     normalizedSpec,
     options,
+    abortSignal,
   );
   return {
     bytes,

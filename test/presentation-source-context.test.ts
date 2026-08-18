@@ -260,6 +260,68 @@ describe("presentation source context", function () {
     }
   });
 
+  it("forwards current-turn cancellation into presentation generation", async function () {
+    const runtime = globalThis as any;
+    const previousZtoolkit = runtime.ztoolkit;
+    runtime.ztoolkit = { log: () => undefined };
+    const manager = new PdfToolManager() as any;
+    manager.extractAndParsePaper = async () => ({
+      metadata: { title: "Paper" },
+      sections: [],
+      fullText: "Evidence",
+      pages: [],
+      pageCount: 1,
+    });
+    const abortController = new AbortController();
+    let plannerCalls = 0;
+    let thrown: unknown;
+
+    try {
+      await manager.executeToolCall(
+        {
+          id: "cancel-presentation",
+          type: "function" as const,
+          function: {
+            name: "presentation",
+            arguments: JSON.stringify({ sourceItemKey: "CURRENT1" }),
+          },
+        },
+        undefined,
+        { sourceItemKey: "CURRENT1" },
+        "CURRENT1",
+        {
+          paperSource: { itemKey: "CURRENT1", libraryID: 1 },
+          presentationAuthorization: createPresentationLaunchAuthorization({
+            itemKey: "CURRENT1",
+            libraryID: 1,
+          }),
+          presentationPlanner: async () => {
+            plannerCalls += 1;
+            abortController.abort();
+            return {
+              title: "Cancelled deck",
+              sourceItemKey: "CURRENT1",
+              slides: [
+                {
+                  title: "Evidence",
+                  metrics: [{ value: "1", label: "result" }],
+                },
+              ],
+            } as any;
+          },
+        },
+        abortController.signal,
+      );
+    } catch (error) {
+      thrown = error;
+    } finally {
+      runtime.ztoolkit = previousZtoolkit;
+    }
+
+    assert.equal(plannerCalls, 1);
+    assert.equal((thrown as { name?: string } | undefined)?.name, "AbortError");
+  });
+
   it("consumes one authorization after a successful full-deck attempt", function () {
     const authorization = createPresentationLaunchAuthorization({
       itemKey: "CURRENT1",
@@ -274,6 +336,28 @@ describe("presentation source context", function () {
     assert.deepEqual(beginPresentationAuthorizationAttempt(authorization), {
       allowed: false,
       reason: "already_completed",
+    });
+  });
+
+  it("refunds a cancelled authorization attempt", function () {
+    const authorization = createPresentationLaunchAuthorization({
+      itemKey: "CURRENT1",
+      libraryID: 1,
+    });
+
+    assert.deepEqual(beginPresentationAuthorizationAttempt(authorization), {
+      allowed: true,
+      attempt: 1,
+    });
+    finishPresentationAuthorizationAttempt(authorization, "cancelled");
+    assert.deepEqual(beginPresentationAuthorizationAttempt(authorization), {
+      allowed: true,
+      attempt: 1,
+    });
+    finishPresentationAuthorizationAttempt(authorization, "cancelled");
+    assert.deepEqual(beginPresentationAuthorizationAttempt(authorization), {
+      allowed: true,
+      attempt: 1,
     });
   });
 

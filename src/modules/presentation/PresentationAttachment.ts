@@ -4,6 +4,8 @@ const PPTX_CONTENT_TYPE =
 export interface PresentationAttachmentResult {
   status: "attached" | "not_attached";
   path: string;
+  /** True when Zotero created an item but cleanup/path verification failed. */
+  attachmentCommitted?: boolean;
   itemID?: number;
   itemKey?: string;
   parentItemID?: number;
@@ -89,8 +91,9 @@ export async function attachPresentationToZotero(options: {
   }
 
   let imported: Zotero.Item | undefined;
+  let target: ReturnType<typeof resolveAttachmentTarget> | undefined;
   try {
-    const target = resolveAttachmentTarget(
+    target = resolveAttachmentTarget(
       options.sourceItemKey,
       options.sourceLibraryID,
     );
@@ -142,16 +145,33 @@ export async function attachPresentationToZotero(options: {
       mode: target.parent ? "child" : "top_level",
     };
   } catch (error) {
+    let cleanupSucceeded = true;
     if (imported) {
       try {
         await imported.eraseTx();
       } catch (cleanupError) {
+        cleanupSucceeded = false;
         if (typeof ztoolkit !== "undefined") {
           ztoolkit.log(
             `[presentation] Could not remove an incomplete Zotero PPTX attachment: ${String(cleanupError)}`,
           );
         }
       }
+    }
+    if (imported && !cleanupSucceeded) {
+      return {
+        status: "not_attached",
+        path: options.outputPath,
+        attachmentCommitted: true,
+        itemID: imported.id,
+        itemKey: imported.key,
+        libraryID: imported.libraryID || target?.libraryID,
+        mode: target?.parent ? "child" : "top_level",
+        parentItemID: target?.parent?.id,
+        warning: `Zotero created an attachment, but its file path could not be verified and cleanup failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      };
     }
     return {
       status: "not_attached",

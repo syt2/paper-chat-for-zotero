@@ -460,6 +460,14 @@ export function getMessageMarkdownRenderOptions(
       artifact,
     ]),
   );
+  const presentationActiveToolCallIds =
+    streamingState === "in_progress"
+      ? new Set(
+          [...artifactsByToolCallId.entries()]
+            .filter(([, artifact]) => artifact.isDraft !== false)
+            .map(([toolCallId]) => toolCallId),
+        )
+      : new Set<string>();
   const presentationInterruption =
     streamingState === "interrupted"
       ? {
@@ -473,6 +481,7 @@ export function getMessageMarkdownRenderOptions(
       ? {
           evidenceRecords,
           presentationArtifacts: artifactsByToolCallId,
+          presentationActiveToolCallIds,
           presentationInterruption,
         }
       : undefined;
@@ -483,6 +492,7 @@ export function getMessageMarkdownRenderOptions(
           ...markdown,
           evidenceRecords,
           presentationArtifacts: artifactsByToolCallId,
+          presentationActiveToolCallIds,
         }
       : markdown;
   }
@@ -490,6 +500,7 @@ export function getMessageMarkdownRenderOptions(
     ...markdown,
     evidenceRecords,
     presentationArtifacts: artifactsByToolCallId,
+    presentationActiveToolCallIds,
     presentationInterruption,
     blockquoteAction: undefined,
     sourceGroupAction: undefined,

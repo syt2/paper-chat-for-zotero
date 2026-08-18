@@ -13,6 +13,12 @@ import {
   type PixelCrop,
 } from "./PresentationFigureCropper";
 import { formatPresentationAuthors } from "./PresentationMetadata";
+import {
+  createAbortError,
+  isAbortRequested,
+  raceWithAbort,
+  throwIfAborted,
+} from "../../utils/abort";
 
 const READER_INIT_TIMEOUT_MS = 8_000;
 const PDF_RENDER_TIMEOUT_MS = 20_000;
@@ -94,6 +100,7 @@ interface PresentationMediaResolutionContext {
   standalonePageCache: Map<string, Promise<ReaderRealmRenderResult | null>>;
   sourceItemKey?: string;
   sourceLibraryID?: number;
+  abortSignal?: AbortSignal;
 }
 
 // Visual repair may call the presentation tool several times in one turn.
@@ -105,6 +112,7 @@ const sharedStandalonePageCache = new Map<
   string,
   Promise<ReaderRealmRenderResult | null>
 >();
+const sharedStandalonePagePendingKeys = new Set<string>();
 
 export class PresentationResolvedMediaDuplicateError extends Error {
   readonly issues: string[];
@@ -441,15 +449,19 @@ export function resolvePresentationViewportTransform(
 }
 
 export function resolveWithin<T>(
-  promise: Promise<T>,
+  promise: PromiseLike<T>,
   timeoutMs: number,
   onTimeout?: () => void | Promise<void>,
+  abortSignal?: AbortSignal,
+  onAbort?: () => void | Promise<void>,
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     let settled = false;
+    let listenerRegistrationAttempted = false;
     const timeoutID = setTimeout(async () => {
       if (settled) return;
       settled = true;
+      cleanup();
       try {
         await onTimeout?.();
       } catch {
@@ -458,20 +470,64 @@ export function resolveWithin<T>(
       }
       reject(new Error(`PDF rendering timed out after ${timeoutMs}ms.`));
     }, timeoutMs);
-    promise.then(
+    const cleanup = () => {
+      if (timeoutID !== undefined) clearTimeout(timeoutID);
+      if (abortSignal && listenerRegistrationAttempted) {
+        try {
+          abortSignal.removeEventListener("abort", abortHandler);
+        } catch {
+          // See raceWithAbort: a Firefox wrapper may not expose callable DOM
+          // event methods to this realm.
+        }
+        listenerRegistrationAttempted = false;
+      }
+    };
+    const abortHandler = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      // The abort event is authoritative even when the wrapped signal's
+      // `aborted` getter cannot be read from this compartment.
+      reject(createAbortError(abortSignal));
+      // Cancellation hooks are best-effort and must never delay the caller's
+      // rejection (a PDF.js cancel method can itself await cleanup).
+      void Promise.resolve()
+        .then(() => onAbort?.())
+        .catch(() => undefined);
+    };
+    // Observe the source promise before touching the signal. If a wrapped
+    // signal rejects addEventListener, a later PDF.js rejection still cannot
+    // become an unhandled rejection.
+    Promise.resolve(promise).then(
       (value) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timeoutID);
+        cleanup();
         resolve(value);
       },
       (error) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timeoutID);
+        cleanup();
         reject(error);
       },
     );
+    if (abortSignal) {
+      try {
+        listenerRegistrationAttempted = true;
+        abortSignal.addEventListener("abort", abortHandler, { once: true });
+        if (isAbortRequested(abortSignal)) abortHandler();
+      } catch {
+        // Continue observing the operation. The caller's explicit abort
+        // checks still make cancellation visible even without a listener.
+        try {
+          if (isAbortRequested(abortSignal)) abortHandler();
+        } catch {
+          // The signal may be an Xray wrapper whose aborted getter is also
+          // unavailable in this realm. The source promise remains observed.
+        }
+      }
+    }
   });
 }
 
@@ -536,7 +592,9 @@ export function resolvePresentationSourceAuthor(
 async function resolvePdfAttachment(
   itemKey: string,
   libraryID?: number,
+  abortSignal?: AbortSignal,
 ): Promise<Zotero.Item> {
+  throwIfAborted(abortSignal);
   const item = getItemByKey(itemKey, libraryID);
   if (!item) {
     throw new Error(`No Zotero item was found for key "${itemKey}".`);
@@ -550,7 +608,12 @@ async function resolvePdfAttachment(
     );
   }
   for (const attachmentID of item.getAttachments?.() || []) {
-    const attachment = await Zotero.Items.getAsync(attachmentID);
+    throwIfAborted(abortSignal);
+    const attachment = await raceWithAbort(
+      () => Promise.resolve(Zotero.Items.getAsync(attachmentID)),
+      abortSignal,
+    );
+    throwIfAborted(abortSignal);
     if (attachment?.isPDFAttachment?.()) {
       return attachment;
     }
@@ -589,15 +652,22 @@ function findOpenReader(
 async function resolveReader(
   attachment: Zotero.Item,
   pageNumber: number,
+  abortSignal?: AbortSignal,
 ): Promise<_ZoteroTypes.ReaderInstance> {
+  throwIfAborted(abortSignal);
   const existing = findOpenReader(attachment.id);
   if (existing) return existing;
 
-  const opened = await Zotero.Reader.open(
-    attachment.id,
-    { pageIndex: pageNumber - 1 },
-    { openInBackground: true, allowDuplicate: false },
+  const opened = await raceWithAbort(
+    () =>
+      Zotero.Reader.open(
+        attachment.id,
+        { pageIndex: pageNumber - 1 },
+        { openInBackground: true, allowDuplicate: false },
+      ),
+    abortSignal,
   );
+  throwIfAborted(abortSignal);
   const reader = opened || findOpenReader(attachment.id);
   if (!reader) {
     throw new Error(
@@ -609,9 +679,15 @@ async function resolveReader(
 
 async function waitForReader(
   reader: _ZoteroTypes.ReaderInstance,
+  abortSignal?: AbortSignal,
 ): Promise<void> {
   if (reader._isReaderInitialized || !reader._initPromise) return;
-  await resolveWithin(reader._initPromise, READER_INIT_TIMEOUT_MS);
+  await resolveWithin(
+    reader._initPromise,
+    READER_INIT_TIMEOUT_MS,
+    undefined,
+    abortSignal,
+  );
 }
 
 function readerWindows(reader: _ZoteroTypes.ReaderInstance): PdfReaderWindow[] {
@@ -655,16 +731,18 @@ function unwrapPdfPage(page: PdfPageLike): PdfPageLike {
 
 async function resolvePdfDocument(
   reader: _ZoteroTypes.ReaderInstance,
+  abortSignal?: AbortSignal,
 ): Promise<{
   document: PdfDocumentLike;
   ownerDocument: Document;
   ownerWindow: PdfReaderWindow;
 }> {
-  await waitForReader(reader);
+  await waitForReader(reader, abortSignal);
   const deadline = Date.now() + READER_INIT_TIMEOUT_MS;
   let observedWindowCount = 0;
   let observedApplication = false;
   do {
+    throwIfAborted(abortSignal);
     const windows = readerWindows(reader);
     observedWindowCount = Math.max(observedWindowCount, windows.length);
     for (const readerWindow of windows) {
@@ -679,12 +757,18 @@ async function resolvePdfDocument(
         };
       }
       if (application.initializedPromise) {
-        await Promise.race([
-          Promise.resolve(application.initializedPromise).catch(
-            () => undefined,
-          ),
-          waitForReaderTick(Math.min(100, Math.max(1, deadline - Date.now()))),
-        ]);
+        await raceWithAbort(
+          () =>
+            Promise.race([
+              Promise.resolve(application.initializedPromise).catch(
+                () => undefined,
+              ),
+              waitForReaderTick(
+                Math.min(100, Math.max(1, deadline - Date.now())),
+              ),
+            ]),
+          abortSignal,
+        );
       }
       if (application.pdfDocument) {
         return {
@@ -695,7 +779,7 @@ async function resolvePdfDocument(
       }
     }
     if (Date.now() >= deadline) break;
-    await waitForReaderTick(50);
+    await raceWithAbort(() => waitForReaderTick(50), abortSignal);
   } while (Date.now() < deadline);
   throw new Error(
     `The Zotero PDF reader did not expose a loaded PDF document after ${READER_INIT_TIMEOUT_MS}ms (windows=${observedWindowCount}, application=${observedApplication ? "yes" : "no"}).`,
@@ -857,7 +941,9 @@ export function measureCanvasInkRatio(
 async function renderPageInReaderRealm(
   ownerWindow: PdfReaderWindow,
   pageNumber: number,
+  abortSignal?: AbortSignal,
 ): Promise<ReaderRealmRenderResult | null> {
+  throwIfAborted(abortSignal);
   const targetWindow =
     ownerWindow.wrappedJSObject || (ownerWindow as PdfReaderWindow);
   const FunctionConstructor = targetWindow.Function;
@@ -865,12 +951,41 @@ async function renderPageInReaderRealm(
 
   const createRenderer = FunctionConstructor(`
     "use strict";
-    return async function renderPaperChatPdfPage(pageNumber, timeoutMs) {
+    return async function renderPaperChatPdfPage(pageNumber, timeoutMs, abortSignal) {
       let stage = "document";
       let canvas;
       let viewportDimensions = "no-viewport";
       let renderTask;
       let timeoutID;
+      let abortListener;
+      let abortRequested = false;
+      const cancelRender = function() {
+        abortRequested = true;
+        try {
+          if (renderTask && typeof renderTask.cancel === "function") renderTask.cancel();
+        } catch (_) {}
+      };
+      try {
+        if (abortSignal && typeof abortSignal.addEventListener === "function") {
+          abortListener = cancelRender;
+          abortSignal.addEventListener("abort", abortListener, { once: true });
+          try {
+            if (abortSignal.aborted) cancelRender();
+          } catch (_) {
+            // Keep the listener installed. The abort event remains authoritative
+            // when a Firefox wrapper hides the aborted getter.
+          }
+        }
+      } catch (_) {
+        if (abortSignal && abortListener) {
+          try {
+            if (typeof abortSignal.removeEventListener === "function") {
+              abortSignal.removeEventListener("abort", abortListener);
+            }
+          } catch (_) {}
+        }
+        abortListener = undefined;
+      }
       const work = (async function() {
         try {
           const application = globalThis.PDFViewerApplication;
@@ -878,6 +993,7 @@ async function renderPageInReaderRealm(
             throw new Error("PDFViewerApplication.pdfDocument is unavailable.");
           }
           const page = await application.pdfDocument.getPage(pageNumber);
+          if (abortRequested) throw new Error("PDF rendering was cancelled.");
           stage = "viewport";
           const baseViewport = page.getViewport({ scale: 1 });
           const scale = Math.max(1, Math.min(3, ${TARGET_LONG_EDGE} / Math.max(baseViewport.width, baseViewport.height)));
@@ -893,7 +1009,9 @@ async function renderPageInReaderRealm(
           context.fillRect(0, 0, canvas.width, canvas.height);
           stage = "pdfjs-render";
           renderTask = page.render({ canvas: canvas, canvasContext: context, viewport: viewport });
+          if (abortRequested) cancelRender();
           await (renderTask && renderTask.promise ? renderTask.promise : renderTask);
+          if (abortRequested) throw new Error("PDF rendering was cancelled.");
 
           stage = "pixel-inspection";
           const pixelData = context.getImageData(0, 0, canvas.width, canvas.height).data;
@@ -934,9 +1052,7 @@ async function renderPageInReaderRealm(
       })();
       const timeout = new Promise(function(_resolve, reject) {
         timeoutID = setTimeout(function() {
-          try {
-            if (renderTask && typeof renderTask.cancel === "function") renderTask.cancel();
-          } catch (_) {}
+          cancelRender();
           reject(new Error("PDF rendering timed out after " + timeoutMs + "ms."));
         }, timeoutMs);
       });
@@ -944,16 +1060,31 @@ async function renderPageInReaderRealm(
         return await Promise.race([work, timeout]);
       } finally {
         if (timeoutID) clearTimeout(timeoutID);
+        if (abortSignal && abortListener) {
+          try {
+            if (typeof abortSignal.removeEventListener === "function") {
+              abortSignal.removeEventListener("abort", abortListener);
+            }
+          } catch (_) {
+            // A cross-compartment signal may reject removal even after the
+            // render has settled. The outer resolver still owns cancellation
+            // state and treats this as best-effort cleanup.
+          }
+        }
       }
     };
   `) as () => (
     pageNumber: number,
     timeoutMs: number,
+    abortSignal?: AbortSignal,
   ) => Promise<ReaderRealmRenderResult>;
   const render = createRenderer();
   const rawResult = await resolveWithin(
-    Promise.resolve(render(pageNumber, PDF_RENDER_TIMEOUT_MS)),
+    Promise.resolve(render(pageNumber, PDF_RENDER_TIMEOUT_MS, abortSignal)),
     PDF_RENDER_TIMEOUT_MS + READER_INIT_TIMEOUT_MS,
+    undefined,
+    abortSignal,
+    () => undefined,
   );
   const result = unwrapCompartmentValue(rawResult);
   return {
@@ -970,11 +1101,22 @@ async function renderPageInReaderRealm(
 async function renderPageWithStandalonePdfJs(
   attachment: Zotero.Item,
   pageNumber: number,
+  abortSignal?: AbortSignal,
 ): Promise<ReaderRealmRenderResult | null> {
+  throwIfAborted(abortSignal);
   if (standalonePdfPageRendererForTests) {
-    return standalonePdfPageRendererForTests(attachment, pageNumber);
+    return resolveWithin(
+      standalonePdfPageRendererForTests(attachment, pageNumber),
+      PDF_RENDER_TIMEOUT_MS,
+      undefined,
+      abortSignal,
+    );
   }
-  const pdfPath = await attachment.getFilePathAsync?.();
+  const pdfPath = await raceWithAbort(
+    () => attachment.getFilePathAsync?.() || Promise.resolve(undefined),
+    abortSignal,
+  );
+  throwIfAborted(abortSignal);
   const mainWindow = Zotero.getMainWindow();
   if (!pdfPath || !mainWindow) return null;
   const targetWindow = waiveCompartmentValue(mainWindow) as Window & {
@@ -984,17 +1126,58 @@ async function renderPageWithStandalonePdfJs(
   if (typeof FunctionConstructor !== "function") return null;
   const createRenderer = FunctionConstructor(`
     "use strict";
-    return async function renderPaperChatStandalonePdfPage(pdfPath, pageNumber, targetLongEdge, timeoutMs) {
+    return async function renderPaperChatStandalonePdfPage(pdfPath, pageNumber, targetLongEdge, timeoutMs, abortSignal) {
       let stage = "import PDF.js";
       let loadingTask;
       let renderTask;
       let timeoutID;
+      let abortListener;
+      let abortRequested = false;
+      let loadingTaskDestroyStarted = false;
+      const destroyLoadingTask = function() {
+        if (loadingTaskDestroyStarted || !loadingTask || typeof loadingTask.destroy !== "function") return;
+        loadingTaskDestroyStarted = true;
+        try {
+          const cleanup = loadingTask.destroy();
+          if (cleanup && typeof cleanup.catch === "function") cleanup.catch(function() {});
+        } catch (_) {}
+      };
+      const cancelRender = function() {
+        abortRequested = true;
+        try {
+          if (renderTask && typeof renderTask.cancel === "function") renderTask.cancel();
+        } catch (_) {}
+        destroyLoadingTask();
+      };
+      try {
+        if (abortSignal && typeof abortSignal.addEventListener === "function") {
+          abortListener = cancelRender;
+          abortSignal.addEventListener("abort", abortListener, { once: true });
+          try {
+            if (abortSignal.aborted) cancelRender();
+          } catch (_) {
+            // Keep the listener installed; the outer resolver can still
+            // observe the abort event when this getter is Xray-wrapped.
+          }
+        }
+      } catch (_) {
+        if (abortSignal && abortListener) {
+          try {
+            if (typeof abortSignal.removeEventListener === "function") {
+              abortSignal.removeEventListener("abort", abortListener);
+            }
+          } catch (_) {}
+        }
+        abortListener = undefined;
+      }
       const work = (async function() {
         try {
           const pdfjs = await import("resource://zotero/reader/pdf/build/pdf.mjs");
+          if (abortRequested) throw new Error("PDF rendering was cancelled.");
           pdfjs.GlobalWorkerOptions.workerSrc = "resource://zotero/reader/pdf/build/pdf.worker.mjs";
           stage = "read PDF";
           const bytes = await IOUtils.read(pdfPath);
+          if (abortRequested) throw new Error("PDF rendering was cancelled.");
           stage = "load document";
           loadingTask = pdfjs.getDocument({
             data: bytes,
@@ -1003,9 +1186,12 @@ async function renderPageWithStandalonePdfJs(
             isImageDecoderSupported: false,
             useWorkerFetch: false
           });
+          if (abortRequested) cancelRender();
           const pdfDocument = await loadingTask.promise;
+          if (abortRequested) throw new Error("PDF rendering was cancelled.");
           stage = "load page";
           const page = await pdfDocument.getPage(pageNumber);
+          if (abortRequested) throw new Error("PDF rendering was cancelled.");
           const baseViewport = page.getViewport({ scale: 1 });
           const scale = Math.max(1, Math.min(3, targetLongEdge / Math.max(baseViewport.width, baseViewport.height)));
           const viewport = page.getViewport({ scale: scale });
@@ -1018,7 +1204,9 @@ async function renderPageWithStandalonePdfJs(
           context.fillStyle = "#FFFFFF";
           context.fillRect(0, 0, canvas.width, canvas.height);
           renderTask = page.render({ canvasContext: context, viewport: viewport });
+          if (abortRequested) cancelRender();
           await (renderTask && renderTask.promise ? renderTask.promise : renderTask);
+          if (abortRequested) throw new Error("PDF rendering was cancelled.");
           stage = "inspect pixels";
           const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
           const step = Math.max(1, Math.floor(Math.sqrt((canvas.width * canvas.height) / 60000)));
@@ -1050,9 +1238,7 @@ async function renderPageWithStandalonePdfJs(
       })();
       const timeout = new Promise(function(_resolve, reject) {
         timeoutID = setTimeout(function() {
-          try {
-            if (renderTask && typeof renderTask.cancel === "function") renderTask.cancel();
-          } catch (_) {}
+          cancelRender();
           reject(new Error("PDF rendering timed out after " + timeoutMs + "ms."));
         }, timeoutMs);
       });
@@ -1060,9 +1246,16 @@ async function renderPageWithStandalonePdfJs(
         return await Promise.race([work, timeout]);
       } finally {
         if (timeoutID) clearTimeout(timeoutID);
-        if (loadingTask && loadingTask.destroy) {
-          try { await loadingTask.destroy(); } catch (_) {}
+        if (abortSignal && abortListener) {
+          try {
+            if (typeof abortSignal.removeEventListener === "function") {
+              abortSignal.removeEventListener("abort", abortListener);
+            }
+          } catch (_) {
+            // See the reader-realm renderer cleanup above.
+          }
         }
+        destroyLoadingTask();
       }
     };
   `) as () => (
@@ -1070,13 +1263,22 @@ async function renderPageWithStandalonePdfJs(
     page: number,
     targetLongEdge: number,
     timeoutMs: number,
+    abortSignal?: AbortSignal,
   ) => Promise<string>;
   const render = createRenderer();
   const encoded = await resolveWithin(
     Promise.resolve(
-      render(pdfPath, pageNumber, TARGET_LONG_EDGE, PDF_RENDER_TIMEOUT_MS),
+      render(
+        pdfPath,
+        pageNumber,
+        TARGET_LONG_EDGE,
+        PDF_RENDER_TIMEOUT_MS,
+        abortSignal,
+      ),
     ),
     PDF_RENDER_TIMEOUT_MS + READER_INIT_TIMEOUT_MS,
+    undefined,
+    abortSignal,
   );
   const parsed = JSON.parse(
     String(unwrapCompartmentValue(encoded)),
@@ -1104,24 +1306,59 @@ async function getStandalonePdfPage(
       context.standalonePageCache.size >=
       MAX_SHARED_STANDALONE_PAGE_CACHE_ENTRIES
     ) {
-      const oldestKey = context.standalonePageCache.keys().next().value;
-      if (oldestKey) context.standalonePageCache.delete(oldestKey);
+      // Never evict a still-running PDF.js task. Eviction only removes the
+      // reference from the bounded cache, so evicting pending work would let
+      // repeated cancelled turns accumulate untracked renders. If every slot
+      // is busy, keep this call signal-bound and let its own cancellation stop
+      // the underlying task instead of adding another shared in-flight entry.
+      const evictableKey = [...context.standalonePageCache.keys()].find(
+        (candidate) => !sharedStandalonePagePendingKeys.has(candidate),
+      );
+      if (evictableKey) {
+        context.standalonePageCache.delete(evictableKey);
+      } else {
+        return resolveWithin(
+          renderPageWithStandalonePdfJs(
+            attachment,
+            pageNumber,
+            context.abortSignal,
+          ),
+          PDF_RENDER_TIMEOUT_MS + READER_INIT_TIMEOUT_MS,
+          undefined,
+          context.abortSignal,
+        );
+      }
     }
+    // The shared cache owns the underlying PDF.js task, not the lifetime of
+    // one presentation call. A cancelled caller must not poison a pending
+    // render for a later visual-repair/resume attempt.
     pending = renderPageWithStandalonePdfJs(attachment, pageNumber);
     context.standalonePageCache.set(key, pending);
+    sharedStandalonePagePendingKeys.add(key);
+    void pending.then(
+      (result) => {
+        sharedStandalonePagePendingKeys.delete(key);
+        if (!result && context.standalonePageCache.get(key) === pending) {
+          context.standalonePageCache.delete(key);
+        }
+      },
+      () => {
+        sharedStandalonePagePendingKeys.delete(key);
+        if (context.standalonePageCache.get(key) === pending) {
+          context.standalonePageCache.delete(key);
+        }
+      },
+    );
   }
-  try {
-    const result = await pending;
-    if (!result && context.standalonePageCache.get(key) === pending) {
-      context.standalonePageCache.delete(key);
-    }
-    return result;
-  } catch (error) {
-    if (context.standalonePageCache.get(key) === pending) {
-      context.standalonePageCache.delete(key);
-    }
-    throw error;
-  }
+  // Keep a still-pending signal-independent task in the cache. The settlement
+  // handler above removes only failed/null results; this avoids starting a
+  // duplicate PDF.js render while the cancelled one unwinds.
+  return resolveWithin(
+    pending,
+    PDF_RENDER_TIMEOUT_MS + READER_INIT_TIMEOUT_MS,
+    undefined,
+    context.abortSignal,
+  );
 }
 
 function resolvePdfPageBounds(page: PdfPageLike): number[] | null {
@@ -1143,7 +1380,9 @@ async function renderPageWithZoteroRegionRenderer(
   reader: _ZoteroTypes.ReaderInstance,
   page: PdfPageLike,
   pageNumber: number,
+  abortSignal?: AbortSignal,
 ): Promise<string | null> {
+  throwIfAborted(abortSignal);
   const bounds = resolvePdfPageBounds(page);
   if (!bounds) return null;
   const internalReader = waiveCompartmentValue(
@@ -1177,6 +1416,8 @@ async function renderPageWithZoteroRegionRenderer(
       const rawImages = await resolveWithin(
         Promise.resolve(renderer.renderRegionCrops(pageNumber - 1, [bounds])),
         PDF_RENDER_TIMEOUT_MS,
+        undefined,
+        abortSignal,
       );
       const images = waiveCompartmentValue(rawImages) as {
         0?: unknown;
@@ -1189,6 +1430,7 @@ async function renderPageWithZoteroRegionRenderer(
         return data;
       }
     } catch (error) {
+      throwIfAborted(abortSignal);
       lastError = error;
     }
   }
@@ -1201,7 +1443,9 @@ async function decodeImageDataToCanvas(
   width: number,
   height: number,
   ownerDocument: Document,
+  abortSignal?: AbortSignal,
 ): Promise<HTMLCanvasElement> {
+  throwIfAborted(abortSignal);
   const ImageConstructor = waiveCompartmentValue(
     ownerDocument.defaultView,
   )?.Image;
@@ -1209,32 +1453,60 @@ async function decodeImageDataToCanvas(
     throw new Error("Zotero could not decode the rendered PDF page image.");
   }
   const image = new ImageConstructor();
-  await resolveWithin(
-    new Promise<void>((resolve, reject) => {
-      image.onload = () => resolve();
-      image.onerror = () =>
-        reject(new Error("Zotero failed to load the rendered PDF page image."));
-      image.src = data;
-    }),
-    PDF_RENDER_TIMEOUT_MS,
-  );
-  const decodedWidth =
-    Number((image as HTMLImageElement).naturalWidth) ||
-    Number((image as HTMLImageElement).width) ||
-    width;
-  const decodedHeight =
-    Number((image as HTMLImageElement).naturalHeight) ||
-    Number((image as HTMLImageElement).height) ||
-    height;
-  const canvas = createCanvas(ownerDocument, decodedWidth, decodedHeight);
-  const context = canvas.getContext("2d", { alpha: false });
-  if (!context) {
-    throw new Error("Zotero could not create a decoded PDF page canvas.");
+  try {
+    await resolveWithin(
+      new Promise<void>((resolve, reject) => {
+        image.onload = () => resolve();
+        image.onerror = () =>
+          reject(
+            new Error("Zotero failed to load the rendered PDF page image."),
+          );
+        image.src = data;
+      }),
+      PDF_RENDER_TIMEOUT_MS,
+      () => {
+        try {
+          image.src = "";
+        } catch {
+          // Best-effort image decode cancellation.
+        }
+      },
+      abortSignal,
+      () => {
+        try {
+          image.src = "";
+        } catch {
+          // Best-effort image decode cancellation.
+        }
+      },
+    );
+    throwIfAborted(abortSignal);
+    const decodedWidth =
+      Number((image as HTMLImageElement).naturalWidth) ||
+      Number((image as HTMLImageElement).width) ||
+      width;
+    const decodedHeight =
+      Number((image as HTMLImageElement).naturalHeight) ||
+      Number((image as HTMLImageElement).height) ||
+      height;
+    const canvas = createCanvas(ownerDocument, decodedWidth, decodedHeight);
+    const context = canvas.getContext("2d", { alpha: false });
+    if (!context) {
+      throw new Error("Zotero could not create a decoded PDF page canvas.");
+    }
+    context.fillStyle = "#FFFFFF";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    return canvas;
+  } finally {
+    image.onload = null;
+    image.onerror = null;
+    try {
+      image.src = "";
+    } catch {
+      // Some wrapped browser Image objects reject writes after teardown.
+    }
   }
-  context.fillStyle = "#FFFFFF";
-  context.fillRect(0, 0, canvas.width, canvas.height);
-  context.drawImage(image, 0, 0, canvas.width, canvas.height);
-  return canvas;
 }
 
 function viewportFromReaderRealm(
@@ -1330,12 +1602,21 @@ function projectEmbeddedCaptionLine(
 async function extractCaptionLines(
   page: PdfPageLike,
   viewport: PdfViewportLike,
+  abortSignal?: AbortSignal,
 ): Promise<CaptionLine[]> {
   if (!page.getTextContent) return [];
-  const textContent = await page.getTextContent();
+  throwIfAborted(abortSignal);
+  const textContent = await resolveWithin(
+    page.getTextContent(),
+    PDF_RENDER_TIMEOUT_MS,
+    undefined,
+    abortSignal,
+  );
+  throwIfAborted(abortSignal);
   const rawItems = Array.isArray(textContent.items) ? textContent.items : [];
   const items: CaptionLine[] = [];
   for (const rawItem of rawItems) {
+    throwIfAborted(abortSignal);
     const transform = readPresentationNumericTuple(rawItem.transform, 6);
     const text = typeof rawItem.str === "string" ? rawItem.str.trim() : "";
     if (!text || !transform) continue;
@@ -1433,7 +1714,9 @@ function mergeCaptionItems(
 export async function extractPresentationCaptionSnapshotInReaderRealm(
   ownerWindow: PdfReaderWindow,
   pageNumber: number,
+  abortSignal?: AbortSignal,
 ): Promise<ReaderRealmCaptionSnapshot | null> {
+  throwIfAborted(abortSignal);
   const targetWindow =
     ownerWindow.wrappedJSObject || (ownerWindow as PdfReaderWindow);
   const FunctionConstructor = targetWindow.Function;
@@ -1480,6 +1763,8 @@ export async function extractPresentationCaptionSnapshotInReaderRealm(
   const encoded = await resolveWithin(
     Promise.resolve(extract(pageNumber)),
     PDF_RENDER_TIMEOUT_MS,
+    undefined,
+    abortSignal,
   );
   const parsed = JSON.parse(String(unwrapCompartmentValue(encoded))) as {
     viewportWidth?: unknown;
@@ -1645,15 +1930,19 @@ async function findAnchoredCaption(
   requestedPage: number,
   pageCount: number | undefined,
   captionHint: string,
+  abortSignal?: AbortSignal,
 ): Promise<AnchoredCaptionLocation | undefined> {
   for (const pageNumber of neighboringPageCandidates(
     requestedPage,
     pageCount,
   )) {
+    throwIfAborted(abortSignal);
     const page = unwrapPdfPage(
       await resolveWithin(
         pdfDocument.getPage(pageNumber),
         PDF_RENDER_TIMEOUT_MS,
+        undefined,
+        abortSignal,
       ),
     );
     let snapshot: ReaderRealmCaptionSnapshot | null = null;
@@ -1662,8 +1951,10 @@ async function findAnchoredCaption(
       snapshot = await extractPresentationCaptionSnapshotInReaderRealm(
         ownerWindow,
         pageNumber,
+        abortSignal,
       );
     } catch (error) {
+      throwIfAborted(abortSignal);
       captionFallbackReason = String(error);
       logPresentationWarning(
         `Could not extract caption geometry in the PDF reader realm on page ${pageNumber}; using the cross-realm fallback (${String(error)}).`,
@@ -1672,7 +1963,12 @@ async function findAnchoredCaption(
     const viewport = snapshot ? null : page.getViewport({ scale: 1 });
     const lines = snapshot
       ? mergeCaptionItems(snapshot.items, snapshot.viewportWidth)
-      : await extractCaptionLines(page, viewport as PdfViewportLike);
+      : await extractCaptionLines(
+          page,
+          viewport as PdfViewportLike,
+          abortSignal,
+        );
+    throwIfAborted(abortSignal);
     // PDF.js commonly emits a formal label such as "Figure 2:" as one text
     // item and the rest of the caption as adjacent items. Prefer the merged
     // line geometry so a full-width scientific figure is not misclassified as
@@ -1884,13 +2180,18 @@ async function refineCaptionCrop(
   candidate: PixelCrop,
   textLines: CaptionLine[],
   preferNonText: boolean,
+  abortSignal?: AbortSignal,
 ): Promise<PixelCrop> {
+  throwIfAborted(abortSignal);
   if (page.getOperatorList) {
     try {
       const operatorList = await resolveWithin(
         page.getOperatorList(),
         PDF_RENDER_TIMEOUT_MS,
+        undefined,
+        abortSignal,
       );
+      throwIfAborted(abortSignal);
       const rasterCrop = selectRasterFigureCrop(
         extractPaintedImageBounds(operatorList, viewport),
         candidate,
@@ -1906,6 +2207,7 @@ async function refineCaptionCrop(
       );
     }
   }
+  throwIfAborted(abortSignal);
   return (
     refineFigureCropFromPixels(pageCanvas, candidate, {
       textRegions: textLines,
@@ -2020,6 +2322,7 @@ async function renderPaperFigure(
     standalonePageCache: sharedStandalonePageCache,
   },
 ): Promise<ResolvedPresentationFigure> {
+  throwIfAborted(context.abortSignal);
   const itemKey = figure.itemKey || defaultItemKey;
   if (!itemKey) {
     throw new Error(
@@ -2028,13 +2331,24 @@ async function renderPaperFigure(
   }
   const sourceLibraryID =
     itemKey === context.sourceItemKey ? context.sourceLibraryID : undefined;
-  const attachment = await resolvePdfAttachment(itemKey, sourceLibraryID);
-  const reader = await resolveReader(attachment, figure.page);
+  const attachment = await resolvePdfAttachment(
+    itemKey,
+    sourceLibraryID,
+    context.abortSignal,
+  );
+  throwIfAborted(context.abortSignal);
+  const reader = await resolveReader(
+    attachment,
+    figure.page,
+    context.abortSignal,
+  );
+  throwIfAborted(context.abortSignal);
   const {
     document: pdfDocument,
     ownerDocument,
     ownerWindow,
-  } = await resolvePdfDocument(reader);
+  } = await resolvePdfDocument(reader, context.abortSignal);
+  throwIfAborted(context.abortSignal);
   // PDFPageProxy belongs to the reader iframe. Keep every fallback canvas in
   // that same DOM realm so PDF.js never has to call getContext across a
   // Firefox compartment boundary. Plugin-side canvas access is waived by
@@ -2072,7 +2386,9 @@ async function renderPaperFigure(
       figure.page,
       Number.isSafeInteger(pageCount) && pageCount > 0 ? pageCount : undefined,
       figure.captionHint,
+      context.abortSignal,
     );
+    throwIfAborted(context.abortSignal);
     if (!anchoredCaption) {
       logPresentationWarning(
         `Caption "${figure.captionHint}" was not found as an anchored figure/table caption on PDF page ${figure.page} or its neighboring pages; rendering the requested page and deferring the crop decision to the visual reviewer.`,
@@ -2090,8 +2406,11 @@ async function renderPaperFigure(
     await resolveWithin(
       pdfDocument.getPage(resolvedPageNumber),
       PDF_RENDER_TIMEOUT_MS,
+      undefined,
+      context.abortSignal,
     ),
   );
+  throwIfAborted(context.abortSignal);
   let standaloneRender: ReaderRealmRenderResult | null = null;
   try {
     standaloneRender = await getStandalonePdfPage(
@@ -2099,7 +2418,9 @@ async function renderPaperFigure(
       attachment,
       resolvedPageNumber,
     );
+    throwIfAborted(context.abortSignal);
   } catch (error) {
+    throwIfAborted(context.abortSignal);
     const reason = error instanceof Error ? error.message : String(error);
     cropTrace.push(`standalone-pdfjs-fallback=${reason}`);
     logPresentationWarning(
@@ -2113,8 +2434,11 @@ async function renderPaperFigure(
         reader,
         page,
         resolvedPageNumber,
+        context.abortSignal,
       );
+      throwIfAborted(context.abortSignal);
     } catch (error) {
+      throwIfAborted(context.abortSignal);
       const reason = error instanceof Error ? error.message : String(error);
       cropTrace.push(`zotero-region-fallback=${reason}`);
       logPresentationWarning(
@@ -2128,8 +2452,11 @@ async function renderPaperFigure(
       readerRealmRender = await renderPageInReaderRealm(
         ownerWindow,
         resolvedPageNumber,
+        context.abortSignal,
       );
+      throwIfAborted(context.abortSignal);
     } catch (error) {
+      throwIfAborted(context.abortSignal);
       const reason = error instanceof Error ? error.message : String(error);
       cropTrace.push(`reader-realm-fallback=${reason}`);
       logPresentationWarning(
@@ -2147,7 +2474,9 @@ async function renderPaperFigure(
       standaloneRender.width,
       standaloneRender.height,
       canvasDocument,
+      context.abortSignal,
     );
+    throwIfAborted(context.abortSignal);
     pageInkRatio = standaloneRender.inkRatio;
     cropTrace.push("render=standalone-zotero-pdfjs");
   } else if (zoteroRegionRenderData) {
@@ -2156,7 +2485,9 @@ async function renderPaperFigure(
       0,
       0,
       canvasDocument,
+      context.abortSignal,
     );
+    throwIfAborted(context.abortSignal);
     const baseViewport = page.getViewport({ scale: 1 });
     const scale = Math.max(
       0.01,
@@ -2172,7 +2503,9 @@ async function renderPaperFigure(
       readerRealmRender.width,
       readerRealmRender.height,
       canvasDocument,
+      context.abortSignal,
     );
+    throwIfAborted(context.abortSignal);
     pageInkRatio = readerRealmRender.inkRatio;
   } else {
     const baseViewport = page.getViewport({ scale: 1 });
@@ -2185,17 +2518,17 @@ async function renderPaperFigure(
     );
     viewport = page.getViewport({ scale });
     pageCanvas = createCanvas(canvasDocument, viewport.width, viewport.height);
-    const context = pageCanvas.getContext("2d", { alpha: false });
-    if (!context) {
+    const canvasContext = pageCanvas.getContext("2d", { alpha: false });
+    if (!canvasContext) {
       throw new Error("Zotero could not create a PDF rendering canvas.");
     }
-    context.fillStyle = "#FFFFFF";
-    context.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
+    canvasContext.fillStyle = "#FFFFFF";
+    canvasContext.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
     const rawRenderTask = page.render(
       createPdfRenderOptions(
         ownerWindow,
         pageCanvas,
-        context as CanvasRenderingContext2D,
+        canvasContext as CanvasRenderingContext2D,
         viewport,
       ),
     );
@@ -2205,11 +2538,22 @@ async function renderPaperFigure(
         ? unwrapCompartmentValue(renderTask.promise) || Promise.resolve()
         : Promise.resolve(renderTask);
     try {
-      await resolveWithin(renderPromise, PDF_RENDER_TIMEOUT_MS, () => {
-        const cancel = (renderTask as { cancel?: () => void } | null)?.cancel;
-        cancel?.call(renderTask);
-      });
+      await resolveWithin(
+        renderPromise,
+        PDF_RENDER_TIMEOUT_MS,
+        () => {
+          const cancel = (renderTask as { cancel?: () => void } | null)?.cancel;
+          cancel?.call(renderTask);
+        },
+        context.abortSignal,
+        () => {
+          const cancel = (renderTask as { cancel?: () => void } | null)?.cancel;
+          cancel?.call(renderTask);
+        },
+      );
+      throwIfAborted(context.abortSignal);
     } catch (error) {
+      throwIfAborted(context.abortSignal);
       const reason = error instanceof Error ? error.message : String(error);
       throw new Error(
         `Direct PDF.js rendering failed for page ${resolvedPageNumber}: ${reason}; ${cropTrace.join("; ")}`,
@@ -2248,9 +2592,10 @@ async function renderPaperFigure(
             (standaloneRender || readerRealmRender)?.scale,
           )
         : findCaptionLine(
-            await extractCaptionLines(page, viewport),
+            await extractCaptionLines(page, viewport, context.abortSignal),
             figure.captionHint,
           );
+      throwIfAborted(context.abortSignal);
       if (!caption) {
         logPresentationWarning(
           explicitCaptionLabel
@@ -2287,7 +2632,8 @@ async function renderPaperFigure(
                 (standaloneRender || readerRealmRender)?.scale,
               ),
             )
-          : await extractCaptionLines(page, viewport);
+          : await extractCaptionLines(page, viewport, context.abortSignal);
+        throwIfAborted(context.abortSignal);
         const candidate = applyPresentationCropWidthHint(
           derivePresentationCaptionCrop(
             caption,
@@ -2308,7 +2654,9 @@ async function renderPaperFigure(
           candidate,
           pageTextLines,
           explicitCaptionLabel?.kind !== "table",
+          context.abortSignal,
         );
+        throwIfAborted(context.abortSignal);
         cropTrace.push(
           `refined=${Math.round(refinedCrop.width)}x${Math.round(refinedCrop.height)}`,
         );
@@ -2404,6 +2752,7 @@ async function renderPaperFigure(
       `Resolved ${figure.captionHint} to ${outputCanvas.width}×${outputCanvas.height}; ${cropTrace.join(";")}`,
     );
   }
+  throwIfAborted(context.abortSignal);
   return {
     ...figure,
     page: resolvedPageNumber,
@@ -2418,11 +2767,14 @@ async function renderPaperFigure(
 export async function resolvePresentationMedia(
   request: PresentationRequest,
   sourceLibraryID?: number,
+  abortSignal?: AbortSignal,
 ): Promise<RenderablePresentationRequest> {
+  throwIfAborted(abortSignal);
   const context: PresentationMediaResolutionContext = {
     standalonePageCache: sharedStandalonePageCache,
     sourceItemKey: request.sourceItemKey,
     sourceLibraryID,
+    abortSignal,
   };
   const {
     author: requestedAuthor,
@@ -2459,6 +2811,7 @@ export async function resolvePresentationMedia(
         context,
       )
     : undefined;
+  throwIfAborted(abortSignal);
   const coverFigures = requestedCoverFigures
     ? await Promise.all(
         requestedCoverFigures.map((figure) =>
@@ -2466,8 +2819,10 @@ export async function resolvePresentationMedia(
         ),
       )
     : undefined;
+  throwIfAborted(abortSignal);
   const slides: RenderablePresentationSlide[] = [];
   for (const slide of requestedSlides) {
+    throwIfAborted(abortSignal);
     const { figure, figures, ...slideWithoutFigures } = slide;
     slides.push({
       ...slideWithoutFigures,
@@ -2490,6 +2845,7 @@ export async function resolvePresentationMedia(
           }
         : {}),
     });
+    throwIfAborted(abortSignal);
   }
   const resolved: RenderablePresentationRequest = {
     ...rest,
@@ -2500,6 +2856,7 @@ export async function resolvePresentationMedia(
     slides,
   };
   const duplicateIssues = validateResolvedPresentationMedia(resolved);
+  throwIfAborted(abortSignal);
   if (duplicateIssues.length > 0) {
     throw new PresentationResolvedMediaDuplicateError(
       duplicateIssues,

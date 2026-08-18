@@ -196,6 +196,38 @@ describe("tool scheduler execution hooks", function () {
     assert.equal(receivedAbortSignal, abortController.signal);
   });
 
+  it("propagates an aborted tool instead of turning it into a retryable failure", async function () {
+    const { ToolScheduler } =
+      await import("../src/modules/chat/tool-scheduler/ToolScheduler.ts");
+    const abortController = new AbortController();
+    const scheduler = new ToolScheduler(async () => {
+      abortController.abort();
+      const error = new Error("Operation aborted.");
+      error.name = "AbortError";
+      throw error;
+    });
+
+    let thrown: unknown;
+    try {
+      await scheduler.execute({
+        toolCall: {
+          id: "tool-aborted",
+          type: "function",
+          function: {
+            name: "get_item_metadata",
+            arguments: JSON.stringify({ itemKey: "ITEM-ABORTED" }),
+          },
+        },
+        sessionId: "session-aborted",
+        abortSignal: abortController.signal,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    assert.equal((thrown as { name?: string } | undefined)?.name, "AbortError");
+  });
+
   it("keeps the request-scoped item key after unrelated UI context changes", async function () {
     const { ToolScheduler } =
       await import("../src/modules/chat/tool-scheduler/ToolScheduler.ts");

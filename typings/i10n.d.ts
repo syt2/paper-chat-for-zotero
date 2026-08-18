@@ -161,6 +161,8 @@ export type FluentMessageId =
   | 'paperchat-chat-presentation-open'
   | 'paperchat-chat-presentation-open-draft'
   | 'paperchat-chat-presentation-open-failed'
+  | 'paperchat-chat-presentation-progress-cancel'
+  | 'paperchat-chat-presentation-progress-cancelling'
   | 'paperchat-chat-presentation-progress-current'
   | 'paperchat-chat-presentation-progress-elapsed'
   | 'paperchat-chat-presentation-progress-interrupted'

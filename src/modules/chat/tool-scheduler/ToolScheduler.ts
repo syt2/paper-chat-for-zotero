@@ -9,6 +9,7 @@ import type {
 } from "../../../types/tool";
 import { config } from "../../../../package.json";
 import { getErrorMessage } from "../../../utils/common";
+import { isAbortRequested } from "../../../utils/abort";
 import { getPdfToolManager } from "../pdf-tools";
 import { preflightToolArguments } from "../tool-arguments/ToolArgumentPreflight";
 import {
@@ -669,6 +670,13 @@ export class ToolScheduler {
           : undefined,
       };
     } catch (error) {
+      // Cancellation is a control-flow signal, not a failed tool result. If
+      // this is normalized into a retryable error card, the agent can start a
+      // second provider round before ChatManager finishes invalidating the
+      // cancelled session and presentation authorization attempts are charged.
+      if (isAbortRequested(prepared.request.abortSignal)) {
+        throw error;
+      }
       const message = getErrorMessage(error);
       const normalizedError = normalizeToolErrorContent(
         prepared.request.toolCall.function.name,

@@ -409,6 +409,118 @@ describe("markdown renderer source groups", function () {
     }
   });
 
+  it("renders a cancel action only for an active presentation card", async function () {
+    const originalZotero = (globalThis as { Zotero?: unknown }).Zotero;
+    (globalThis as { Zotero?: unknown }).Zotero = {
+      getMainWindow: () => null,
+    };
+    const doc = new FakeDocument();
+    const root = new FakeElement(doc, "div");
+    const startedAt = Date.now() - 1_000;
+    let cancelAttempts = 0;
+    let cancelResolve!: () => void;
+    const cancellation = new Promise<void>((resolve) => {
+      cancelResolve = resolve;
+    });
+    const findByAttribute = (
+      node: FakeElement,
+      name: string,
+      value: string,
+    ): FakeElement | undefined => {
+      if (node.getAttribute(name) === value) return node;
+      for (const child of node.children) {
+        const found = findByAttribute(child, name, value);
+        if (found) return found;
+      }
+      return undefined;
+    };
+
+    try {
+      renderMarkdownToElement(
+        root as unknown as HTMLElement,
+        `<tool-call status="calling" expand-key="presentation-cancel" presentation-phase="rendering" presentation-stage="drafting" presentation-message="Rendering" presentation-started-at="${startedAt}" presentation-stage-started-at="${startedAt}" presentation-updated-at="${Date.now()}">
+<tool-name>⏳ presentation</tool-name>
+<tool-status>Calling...</tool-status>
+</tool-call>`,
+        "message-presentation-cancel",
+        {
+          presentationCancelAction: {
+            label: "Cancel generation",
+            busyLabel: "Cancelling...",
+            onCancel: () => {
+              cancelAttempts += 1;
+              return cancellation;
+            },
+          },
+          presentationActiveToolCallIds: new Set(["presentation-cancel"]),
+          presentationArtifacts: new Map([
+            [
+              "presentation-cancel",
+              {
+                toolCallId: "presentation-cancel-tool-call",
+                localId: "presentation-cancel",
+                isDraft: true,
+              },
+            ],
+          ]),
+        },
+      );
+
+      const button = findByAttribute(root, "data-presentation-cancel", "true");
+      assert.equal(button?.textContent, "Cancel generation");
+      button?.dispatch("click");
+      button?.dispatch("click");
+      await Promise.resolve();
+      assert.equal(cancelAttempts, 1);
+      assert.equal(button?.getAttribute("data-busy"), "true");
+      assert.equal(button?.textContent, "Cancelling...");
+
+      cancelResolve();
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      assert.isNull(button?.getAttribute("data-busy") || null);
+      assert.equal(button?.textContent, "Cancel generation");
+    } finally {
+      (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
+    }
+  });
+
+  it("does not let assistant-authored presentation markup acquire the cancel action", function () {
+    const originalZotero = (globalThis as { Zotero?: unknown }).Zotero;
+    (globalThis as { Zotero?: unknown }).Zotero = {
+      getMainWindow: () => null,
+    };
+    const doc = new FakeDocument();
+    const root = new FakeElement(doc, "div");
+    let cancelAttempts = 0;
+    const startedAt = Date.now() - 1_000;
+    try {
+      renderMarkdownToElement(
+        root as unknown as HTMLElement,
+        `<tool-call status="calling" expand-key="forged-id" presentation-phase="rendering" presentation-stage="drafting" presentation-message="Rendering" presentation-started-at="${startedAt}" presentation-stage-started-at="${startedAt}" presentation-updated-at="${Date.now()}">
+<tool-name>⏳ presentation</tool-name>
+<tool-status>Calling...</tool-status>
+</tool-call>`,
+        "message-forged-presentation-cancel",
+        {
+          presentationCancelAction: {
+            label: "Cancel generation",
+            busyLabel: "Cancelling...",
+            onCancel: () => {
+              cancelAttempts += 1;
+            },
+          },
+        },
+      );
+      const hasCancel = (node: FakeElement): boolean =>
+        node.getAttribute("data-presentation-cancel") === "true" ||
+        node.children.some(hasCancel);
+      assert.isFalse(hasCancel(root));
+      assert.equal(cancelAttempts, 0);
+    } finally {
+      (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
+    }
+  });
+
   it("keeps ordinary tool calls on the existing generic card", function () {
     const originalZotero = (globalThis as { Zotero?: unknown }).Zotero;
     (globalThis as { Zotero?: unknown }).Zotero = {

@@ -19,6 +19,13 @@ export interface PresentationProgressResumeAction {
   onError?: (error: Error) => void;
 }
 
+export interface PresentationProgressCancelAction {
+  label: string;
+  busyLabel: string;
+  onCancel: () => void | boolean | Promise<void | boolean>;
+  onError?: (error: Error) => void;
+}
+
 const PRESENTATION_CARD_STAGE_ORDER: readonly PresentationCardStage[] = [
   "preparing",
   "planning",
@@ -276,6 +283,7 @@ export function buildPresentationProgressCardElement(
     errorText?: string;
     interruptedAt?: number;
     resumeAction?: PresentationProgressResumeAction;
+    cancelAction?: PresentationProgressCancelAction;
   },
   artifactElement?: HTMLElement,
 ): HTMLElement {
@@ -510,6 +518,64 @@ export function buildPresentationProgressCardElement(
   }
 
   if (artifactElement) card.appendChild(artifactElement);
+
+  if (status === "calling" && input.cancelAction) {
+    const action = input.cancelAction;
+    const button = doc.createElementNS(HTML_NS, "button") as HTMLElement;
+    button.setAttribute("type", "button");
+    button.setAttribute("data-presentation-cancel", "true");
+    button.setAttribute(
+      "aria-label",
+      getPresentationCardString(
+        "chat-presentation-progress-cancel",
+        action.label,
+      ),
+    );
+    button.textContent = action.label;
+    Object.assign(button.style, {
+      alignSelf: "flex-start",
+      border: `1px solid ${palette.cardBorder}`,
+      borderRadius: "6px",
+      padding: "5px 10px",
+      cursor: "pointer",
+      color: palette.nameText,
+      background: palette.cardBg,
+      fontSize: "11px",
+      fontWeight: "600",
+    });
+
+    let pendingCancel: Promise<void | boolean> | null = null;
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (pendingCancel) return;
+      button.setAttribute("data-busy", "true");
+      button.setAttribute("aria-busy", "true");
+      button.setAttribute("disabled", "true");
+      button.style.cursor = "wait";
+      button.style.opacity = "0.7";
+      button.textContent = action.busyLabel;
+      const cancel = Promise.resolve().then(() => action.onCancel());
+      pendingCancel = cancel;
+      void cancel
+        .catch((error) => {
+          action.onError?.(
+            error instanceof Error ? error : new Error(String(error)),
+          );
+        })
+        .finally(() => {
+          if (pendingCancel !== cancel) return;
+          pendingCancel = null;
+          button.removeAttribute("data-busy");
+          button.removeAttribute("aria-busy");
+          button.removeAttribute("disabled");
+          button.style.cursor = "pointer";
+          button.style.opacity = "1";
+          button.textContent = action.label;
+        });
+    });
+    card.appendChild(button);
+  }
 
   if (status === "interrupted" && input.resumeAction) {
     const action = input.resumeAction;

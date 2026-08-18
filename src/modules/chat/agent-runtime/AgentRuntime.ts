@@ -19,6 +19,7 @@ import type {
 } from "../../../types/tool";
 import type { ToolCallingProvider } from "../../../types/provider";
 import { getErrorMessage } from "../../../utils/common";
+import { isAbortRequested } from "../../../utils/abort";
 import { getPref } from "../../../utils/prefs";
 import { isAbortError, SessionRunInvalidatedError } from "../errors";
 import type { SessionStorageService } from "../SessionStorageService";
@@ -762,7 +763,8 @@ export class AgentRuntime {
       if (
         error instanceof SessionRunInvalidatedError ||
         (isAbortError(error) &&
-          !this.callbacks.isSessionTracked(sendingSession, sessionRunId))
+          (isAbortRequested(abortSignal) ||
+            !this.callbacks.isSessionTracked(sendingSession, sessionRunId)))
       ) {
         return;
       }
@@ -1083,7 +1085,8 @@ export class AgentRuntime {
       if (
         error instanceof SessionRunInvalidatedError ||
         (isAbortError(error) &&
-          !this.callbacks.isSessionTracked(sendingSession, sessionRunId))
+          (isAbortRequested(abortSignal) ||
+            !this.callbacks.isSessionTracked(sendingSession, sessionRunId)))
       ) {
         return;
       }
@@ -1807,6 +1810,16 @@ export class AgentRuntime {
 
           const localId = presentationLocalIds.get(toolCall) || toolCall.id;
           pendingDisplayToolCalls.set(localId, toolCall);
+          if (toolName === "presentation") {
+            // Create an app-owned identity before the first progress update so
+            // the UI can bind cancellation to this live tool call. The marker
+            // has no file path and therefore cannot create an open action.
+            upsertPresentationArtifact({
+              toolCallId: toolCall.id,
+              localId,
+              isDraft: true,
+            });
+          }
           this.executionPlanManager.addOrUpdateToolStep(
             sendingSession,
             currentMessages,

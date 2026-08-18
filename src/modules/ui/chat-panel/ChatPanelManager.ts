@@ -627,6 +627,8 @@ interface ChatMessageRenderCallbacks {
   onSummarizeReplyError?: (error: Error) => void;
   onResumePresentation?: () => void | boolean | Promise<void | boolean>;
   onResumePresentationError?: (error: Error) => void;
+  onCancelPresentation?: () => void | boolean | Promise<void | boolean>;
+  onCancelPresentationError?: (error: Error) => void;
   onMarkdownError?: (message: string) => void;
   onRenderComplete?: () => void;
 }
@@ -648,6 +650,14 @@ function renderMessageElementsWithMarkdownActions(
       busyLabel: getString("chat-presentation-progress-resuming"),
       onResume: callbacks.onResumePresentation,
       onError: callbacks.onResumePresentationError,
+    };
+  }
+  if (callbacks.onCancelPresentation) {
+    markdown.presentationCancelAction = {
+      label: getString("chat-presentation-progress-cancel"),
+      busyLabel: getString("chat-presentation-progress-cancelling"),
+      onCancel: callbacks.onCancelPresentation,
+      onError: callbacks.onCancelPresentationError,
     };
   }
   renderMessageElementsBase(
@@ -1822,6 +1832,11 @@ async function refreshChatForContainer(container: HTMLElement): Promise<void> {
               summarizeReplyToNote(refreshContext, assistantMessageId)
           : undefined,
         onSummarizeReplyError: (error) => {
+          refreshContext.appendError(error.message);
+        },
+        onCancelPresentation: () =>
+          session ? manager.cancelSessionTurn(session.id) : false,
+        onCancelPresentationError: (error) => {
           refreshContext.appendError(error.message);
         },
         onMarkdownError: refreshContext.appendError,
@@ -3382,6 +3397,15 @@ function createContext(container: HTMLElement): ChatPanelContext {
                 context.appendError(
                   `${getString("chat-presentation-progress-resume-failed")}: ${error.message}`,
                 );
+              },
+              onCancelPresentation: () =>
+                session ? manager.cancelSessionTurn(session.id) : false,
+              onCancelPresentationError: (error) => {
+                ztoolkit.log(
+                  "[ChatPanel] Failed to cancel presentation:",
+                  error,
+                );
+                context.appendError(error.message);
               },
               onMarkdownError: context.appendError,
               onRenderComplete,

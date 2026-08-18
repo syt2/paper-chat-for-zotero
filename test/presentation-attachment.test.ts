@@ -238,4 +238,40 @@ describe("presentation Zotero attachment", function () {
     assert.include(result.warning, "without a readable file path");
     assert.equal(eraseCount, 1);
   });
+
+  it("marks an imported attachment as committed when cleanup also fails", async function () {
+    let eraseCount = 0;
+    let importCount = 0;
+    runtime.Zotero = {
+      Libraries: { userLibraryID: 1, getAll: () => [] },
+      Items: { getByLibraryAndKey: () => false, get: () => false },
+      Attachments: {
+        importFromFile: async () => {
+          importCount += 1;
+          return {
+            id: 100,
+            key: "ORPHAN01",
+            libraryID: 1,
+            getFilePathAsync: async () => null,
+            eraseTx: async () => {
+              eraseCount += 1;
+              throw new Error("synthetic erase failure");
+            },
+          };
+        },
+      },
+    };
+
+    const result = await attachPresentationToZotero({
+      outputPath: "/paper-chat/presentations/deck.pptx",
+      presentationTitle: "Generated deck",
+    });
+
+    assert.equal(result.status, "not_attached");
+    assert.equal(result.attachmentCommitted, true);
+    assert.equal(result.itemID, 100);
+    assert.include(result.warning, "cleanup failed");
+    assert.equal(importCount, 1);
+    assert.equal(eraseCount, 1);
+  });
 });

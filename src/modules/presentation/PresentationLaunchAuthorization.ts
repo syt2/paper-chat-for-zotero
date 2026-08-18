@@ -99,7 +99,7 @@ export function beginPresentationAuthorizationAttempt(
 /** Finish the currently running attempt and decide whether one retry remains. */
 export function finishPresentationAuthorizationAttempt(
   authorization: PresentationLaunchAuthorization,
-  outcome: "completed" | "retryable_failure" | "terminal_failure",
+  outcome: "completed" | "retryable_failure" | "terminal_failure" | "cancelled",
 ): void {
   const state = authorizationStates.get(authorization);
   if (!state || state.status !== "running") return;
@@ -115,6 +115,15 @@ export function finishPresentationAuthorizationAttempt(
     authorizationStates.set(authorization, {
       status: "terminal_failure",
       attempts: state.attempts,
+    });
+    return;
+  }
+  if (outcome === "cancelled") {
+    // A user cancellation is not a failed generation attempt. Return the
+    // capability to ready while refunding the slot consumed by begin().
+    authorizationStates.set(authorization, {
+      status: "ready",
+      attempts: Math.max(0, state.attempts - 1),
     });
     return;
   }

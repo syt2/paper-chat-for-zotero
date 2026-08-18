@@ -34,7 +34,7 @@ export function getPresentationRenderer(): PresentationRendererApi {
     );
   }
   return {
-    renderPresentation(spec) {
+    renderPresentation(spec, abortSignal) {
       const runtime = globalThis as unknown as {
         Components?: {
           utils?: {
@@ -46,9 +46,9 @@ export function getPresentationRenderer(): PresentationRendererApi {
       const rendererSpec = cloneInto
         ? (cloneInto(spec, target) as typeof spec)
         : (JSON.parse(JSON.stringify(spec)) as typeof spec);
-      return renderer.renderPresentation(rendererSpec);
+      return renderer.renderPresentation(rendererSpec, abortSignal);
     },
-    renderPresentationWithPreview(spec) {
+    renderPresentationWithPreview(spec, abortSignal) {
       if (typeof renderer.renderPresentationWithPreview !== "function") {
         throw new Error(
           "PaperChat presentation renderer bundle does not support visual previews.",
@@ -65,7 +65,7 @@ export function getPresentationRenderer(): PresentationRendererApi {
       const rendererSpec = cloneInto
         ? (cloneInto(spec, target) as typeof spec)
         : (JSON.parse(JSON.stringify(spec)) as typeof spec);
-      return renderer.renderPresentationWithPreview(rendererSpec);
+      return renderer.renderPresentationWithPreview(rendererSpec, abortSignal);
     },
   };
 }

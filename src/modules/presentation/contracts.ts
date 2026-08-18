@@ -67,6 +67,7 @@ export interface PresentationCapabilityTestOptions {
   mediaResolver?: (
     request: PresentationRequest,
     sourceLibraryID?: number,
+    abortSignal?: AbortSignal,
   ) => Promise<RenderablePresentationRequest>;
 }
 
@@ -77,16 +78,24 @@ export interface PresentationRenderWithPreviewResult {
 }
 
 export interface PresentationRendererApi {
-  renderPresentation(spec: RenderablePresentationRequest): Promise<Uint8Array>;
+  renderPresentation(
+    spec: RenderablePresentationRequest,
+    abortSignal?: AbortSignal,
+  ): Promise<Uint8Array>;
   renderPresentationWithPreview(
     spec: RenderablePresentationRequest,
+    abortSignal?: AbortSignal,
   ): Promise<PresentationRenderWithPreviewResult>;
 }
 
 export interface PresentationRendererBundleApi {
-  renderPresentation(spec: RenderablePresentationRequest): Promise<Uint8Array>;
+  renderPresentation(
+    spec: RenderablePresentationRequest,
+    abortSignal?: AbortSignal,
+  ): Promise<Uint8Array>;
   renderPresentationWithPreview?: (
     spec: RenderablePresentationRequest,
+    abortSignal?: AbortSignal,
   ) => Promise<PresentationRenderWithPreviewResult>;
 }
 

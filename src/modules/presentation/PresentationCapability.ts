@@ -6,6 +6,11 @@ import {
   getDataPath,
   getErrorMessage,
 } from "../../utils/common";
+import {
+  isAbortRequested,
+  raceWithAbort,
+  throwIfAborted,
+} from "../../utils/abort";
 import { getPresentationRenderer } from "./PresentationRendererLoader";
 import { attachPresentationToZotero } from "./PresentationAttachment";
 import {
@@ -101,10 +106,13 @@ function getPresentationProgressMessages(
 async function atomicWritePresentationFile(
   path: string,
   bytes: Uint8Array,
+  onStagingPath?: (path: string) => void,
 ): Promise<void> {
+  const tmpPath = `${path}.tmp-${generateShortId()}`;
+  onStagingPath?.(tmpPath);
   await IOUtils.write(path, bytes, {
     flush: true,
-    tmpPath: `${path}.tmp-${generateShortId()}`,
+    tmpPath,
   });
 }
 
@@ -203,7 +211,10 @@ async function persistPresentationPreviewFiles(
   renderGeneration: number,
   presentationsRoot: string,
   onPersisted?: (path: string) => void,
+  abortSignal?: AbortSignal,
+  onStagingPath?: (path: string) => void,
 ): Promise<string[]> {
+  throwIfAborted(abortSignal);
   const generation = String(renderGeneration).padStart(2, "0");
   const previewPaths = previewSlides.map((_previewSlide, index) =>
     PathUtils.join(
@@ -223,12 +234,18 @@ async function persistPresentationPreviewFiles(
   if (!previewPaths.length) return [];
 
   await IOUtils.makeDirectory(previewFolder, { createAncestors: true });
+  throwIfAborted(abortSignal);
   for (const [index, previewSlide] of previewSlides.entries()) {
+    throwIfAborted(abortSignal);
+    // Register the destination before writing it. If the write is interrupted
+    // halfway through, cancellation cleanup still knows which file to remove.
+    onPersisted?.(previewPaths[index]);
     await atomicWritePresentationFile(
       previewPaths[index],
       decodePngDataUrl(previewSlide),
+      onStagingPath,
     );
-    onPersisted?.(previewPaths[index]);
+    throwIfAborted(abortSignal);
   }
   return previewPaths;
 }
@@ -260,6 +277,77 @@ async function cleanupUnreferencedPresentationPreviews(
           `[presentation] Could not remove an unreferenced preview; export remains successful: ${path}: ${getErrorMessage(error)}`,
         );
       }
+    }
+  }
+}
+
+async function cleanupCancelledPresentationDraft(
+  outputPath: string | undefined,
+  persistedPreviewPaths: ReadonlySet<string>,
+  presentationsRoot: string | undefined,
+  previewFolder?: string,
+  retainedPreviewPaths: readonly string[] = [],
+  stagingPaths: ReadonlySet<string> = new Set(),
+  pendingPaths: ReadonlySet<string> = new Set(),
+): Promise<void> {
+  await cleanupUnreferencedPresentationPreviews(
+    persistedPreviewPaths,
+    retainedPreviewPaths,
+    presentationsRoot,
+  );
+  if (!presentationsRoot || typeof IOUtils.remove !== "function") {
+    return;
+  }
+  const pathsToRemove = new Set<string>([
+    ...(outputPath ? [outputPath] : []),
+    ...stagingPaths,
+    ...pendingPaths,
+  ]);
+  for (const path of pathsToRemove) {
+    if (!isPathInsidePresentationRoot(path, presentationsRoot)) continue;
+    try {
+      if (
+        typeof IOUtils.exists !== "function" ||
+        (await IOUtils.exists(path))
+      ) {
+        await IOUtils.remove(path);
+      }
+    } catch (cleanupError) {
+      if (typeof ztoolkit !== "undefined") {
+        ztoolkit.log(
+          `[presentation] Could not remove the cancelled staging file: ${path}: ${getErrorMessage(cleanupError)}`,
+        );
+      }
+    }
+  }
+  if (
+    previewFolder &&
+    previewFolder !== presentationsRoot &&
+    isPathInsidePresentationRoot(previewFolder, presentationsRoot)
+  ) {
+    try {
+      if (
+        typeof IOUtils.exists !== "function" ||
+        (await IOUtils.exists(previewFolder))
+      ) {
+        await IOUtils.remove(previewFolder, { recursive: true });
+      }
+    } catch (cleanupError) {
+      if (typeof ztoolkit !== "undefined") {
+        ztoolkit.log(
+          `[presentation] Could not remove the cancelled preview folder: ${previewFolder}: ${getErrorMessage(cleanupError)}`,
+        );
+      }
+    }
+  }
+  if (
+    outputPath &&
+    !isPathInsidePresentationRoot(outputPath, presentationsRoot)
+  ) {
+    if (typeof ztoolkit !== "undefined") {
+      ztoolkit.log(
+        `[presentation] Refused to remove a cancelled PPTX outside the presentations root: ${outputPath}`,
+      );
     }
   }
 }
@@ -432,7 +520,9 @@ export async function executePresentationCapability(
   onProgress?: PresentationProgressCallback,
   testOptions?: PresentationCapabilityTestOptions,
   sourceContext?: PresentationSourceContext,
+  abortSignal?: AbortSignal,
 ): Promise<string> {
+  throwIfAborted(abortSignal);
   const strictQuality = shouldUseStrictPresentationQualityGate(testOptions);
   const mediaResolver = testOptions?.mediaResolver || resolvePresentationMedia;
   const progressLanguage = resolvePresentationLanguage(args.language);
@@ -448,7 +538,9 @@ export async function executePresentationCapability(
       "phase" | "message"
     > = {},
     message = progressMessages[phase],
+    allowAborted = false,
   ): Promise<void> => {
+    if (!allowAborted) throwIfAborted(abortSignal);
     if (!onProgress) return;
     try {
       await onProgress({
@@ -458,7 +550,9 @@ export async function executePresentationCapability(
         total: PRESENTATION_PROGRESS_ORDER.length,
         ...update,
       });
+      if (!allowAborted) throwIfAborted(abortSignal);
     } catch (error) {
+      if (!allowAborted) throwIfAborted(abortSignal);
       if (typeof ztoolkit !== "undefined") {
         ztoolkit.log(
           `[presentation] Progress callback failed during ${phase}: ${getErrorMessage(error)}`,
@@ -515,7 +609,11 @@ export async function executePresentationCapability(
         mergePresentationPlanMetadata(planned, intent, paper);
       resolvedIntent = intent;
       mergePlannedIntent = mergeIntent;
-      let planned = await planner({ intent, paper });
+      let planned = await raceWithAbort(
+        () => planner({ intent, paper }),
+        abortSignal,
+      );
+      throwIfAborted(abortSignal);
       planningRounds += 1;
       requestInput = mergeIntent(planned);
       let validation = validatePresentationCandidate(
@@ -524,14 +622,19 @@ export async function executePresentationCapability(
       );
       if (!validation.request) {
         await emitProgress("repairing");
-        planned = await planner({
-          intent,
-          paper,
-          repair: {
-            issues: validation.issues,
-            previousDraft: planned,
-          },
-        });
+        planned = await raceWithAbort(
+          () =>
+            planner({
+              intent,
+              paper,
+              repair: {
+                issues: validation.issues,
+                previousDraft: planned,
+              },
+            }),
+          abortSignal,
+        );
+        throwIfAborted(abortSignal);
         planningRounds += 1;
         requestInput = mergeIntent(planned);
         validation = validatePresentationCandidate(requestInput, strictQuality);
@@ -545,14 +648,19 @@ export async function executePresentationCapability(
         const originalIssues = validation.issues;
         try {
           await emitProgress("repairing");
-          const improved = await planner({
-            intent,
-            paper,
-            repair: {
-              issues: originalIssues,
-              previousDraft: planned,
-            },
-          });
+          const improved = await raceWithAbort(
+            () =>
+              planner({
+                intent,
+                paper,
+                repair: {
+                  issues: originalIssues,
+                  previousDraft: planned,
+                },
+              }),
+            abortSignal,
+          );
+          throwIfAborted(abortSignal);
           planningRounds += 1;
           const improvedInput = mergeIntent(improved);
           const improvedValidation = validatePresentationCandidate(
@@ -575,6 +683,7 @@ export async function executePresentationCapability(
             };
           }
         } catch (error) {
+          throwIfAborted(abortSignal);
           requestInput = usableRequest;
           validation = {
             request: usableRequest,
@@ -605,6 +714,7 @@ export async function executePresentationCapability(
       planningQualityWarnings.push(...validation.issues);
       requestInput = validation.request;
     } catch (error) {
+      throwIfAborted(abortSignal);
       return formatPresentationError({
         summary: "Presentation internal planning failed.",
         retryable: true,
@@ -651,6 +761,7 @@ export async function executePresentationCapability(
     issues: string[],
     previousDraft: PresentationRequest,
   ): Promise<PresentationRequest | undefined> => {
+    throwIfAborted(abortSignal);
     if (!planner || !paper || !resolvedIntent || !mergePlannedIntent) {
       return undefined;
     }
@@ -680,16 +791,22 @@ export async function executePresentationCapability(
     ];
     let planned: PresentationRequest;
     try {
-      planned = await planner({
-        intent: resolvedIntent,
-        paper,
-        repair: {
-          issues: [...issues, ...invariantIssues].slice(0, 12),
-          previousDraft,
-        },
-      });
+      planned = await raceWithAbort(
+        () =>
+          planner({
+            intent: resolvedIntent,
+            paper,
+            repair: {
+              issues: [...issues, ...invariantIssues].slice(0, 12),
+              previousDraft,
+            },
+          }),
+        abortSignal,
+      );
+      throwIfAborted(abortSignal);
       planningRounds += 1;
     } catch (error) {
+      throwIfAborted(abortSignal);
       throw new Error(
         `Presentation ${kind} repair planning failed: ${getErrorMessage(error)}`,
       );
@@ -700,20 +817,26 @@ export async function executePresentationCapability(
     );
     if (!repairedValidation.request) {
       try {
-        planned = await planner({
-          intent: resolvedIntent,
-          paper,
-          repair: {
-            issues: [
-              `The previous full ${kind} repair was still invalid. Correct every validation issue below without dropping valid evidence or changing the requested language/design system.`,
-              ...repairedValidation.issues,
-              ...invariantIssues,
-            ].slice(0, 12),
-            previousDraft: planned,
-          },
-        });
+        planned = await raceWithAbort(
+          () =>
+            planner({
+              intent: resolvedIntent,
+              paper,
+              repair: {
+                issues: [
+                  `The previous full ${kind} repair was still invalid. Correct every validation issue below without dropping valid evidence or changing the requested language/design system.`,
+                  ...repairedValidation.issues,
+                  ...invariantIssues,
+                ].slice(0, 12),
+                previousDraft: planned,
+              },
+            }),
+          abortSignal,
+        );
+        throwIfAborted(abortSignal);
         planningRounds += 1;
       } catch (error) {
+        throwIfAborted(abortSignal);
         throw new Error(
           `Presentation ${kind} validation repair planning failed: ${getErrorMessage(error)}`,
         );
@@ -733,8 +856,27 @@ export async function executePresentationCapability(
 
   let persistedPresentationPath: string | undefined;
   let persistedPresentationPreviewPaths: string[] = [];
+  let persistedPresentationPreviewFolder: string | undefined;
   let persistedPresentationsRoot: string | undefined;
   const persistedPresentationPreviewHistory = new Set<string>();
+  const presentationStagingPaths = new Set<string>();
+  const pendingPresentationPaths = new Set<string>();
+  let committedAttachment:
+    | Awaited<ReturnType<typeof attachPresentationToZotero>>
+    | undefined;
+  let serializePresentationAttachment:
+    | ((
+        attachment: Awaited<ReturnType<typeof attachPresentationToZotero>>,
+        summaryOverride?: string,
+      ) => string)
+    | undefined;
+  const isCommittedAttachment = (
+    attachment:
+      | Awaited<ReturnType<typeof attachPresentationToZotero>>
+      | undefined,
+  ): attachment is Awaited<ReturnType<typeof attachPresentationToZotero>> =>
+    attachment?.status === "attached" ||
+    attachment?.attachmentCommitted === true;
   try {
     const renderer = getPresentationRenderer();
     let presentationsRoot: string | undefined;
@@ -743,6 +885,16 @@ export async function executePresentationCapability(
     let previewPaths: string[] = [];
     let hasPersistedDraft = false;
     let renderGeneration = 0;
+    const writeTrackedPresentationFile = async (
+      path: string,
+      bytesToWrite: Uint8Array,
+    ): Promise<void> => {
+      pendingPresentationPaths.add(path);
+      await atomicWritePresentationFile(path, bytesToWrite, (stagingPath) =>
+        presentationStagingPaths.add(stagingPath),
+      );
+      pendingPresentationPaths.delete(path);
+    };
     let visualReviewStatus: "passed" | "warnings" | "not_requested" =
       visualReviewer ? "passed" : "not_requested";
     let visualReviewSummary: string | undefined;
@@ -778,12 +930,14 @@ export async function executePresentationCapability(
       previewFolder: string;
       presentationsRoot: string;
     }> => {
+      throwIfAborted(abortSignal);
       if (!outputPath || !previewFolder || !presentationsRoot) {
         presentationsRoot = getDataPath(PRESENTATIONS_FOLDER);
         persistedPresentationsRoot = presentationsRoot;
         await IOUtils.makeDirectory(presentationsRoot, {
           createAncestors: true,
         });
+        throwIfAborted(abortSignal);
         const requestedBase = request.fileName?.replace(/\.pptx$/i, "");
         const fileBase = sanitizeFileBase(requestedBase || request.title);
         const outputStem = `${fileBase}-${Date.now()}-${generateShortId()}`;
@@ -792,6 +946,7 @@ export async function executePresentationCapability(
           presentationsRoot,
           `${outputStem}-previews`,
         );
+        persistedPresentationPreviewFolder = previewFolder;
       }
       return { outputPath, previewFolder, presentationsRoot };
     };
@@ -800,14 +955,20 @@ export async function executePresentationCapability(
       rendered: PresentationRenderWithPreviewResult,
     ): Promise<void> => {
       const paths = await ensureOutputPaths();
+      throwIfAborted(abortSignal);
       await emitProgress("exporting", {
         pptxPath: hasPersistedDraft ? paths.outputPath : undefined,
         previewPaths: previewPaths.length ? [...previewPaths] : undefined,
         isDraft: true,
       });
-      await atomicWritePresentationFile(paths.outputPath, rendered.bytes);
+      await writeTrackedPresentationFile(paths.outputPath, rendered.bytes);
+      // The write itself is the staging commit. Register the path before the
+      // next cancellation check so an abort in this tiny window can clean the
+      // file instead of leaving an orphaned PPTX on disk.
       hasPersistedDraft = true;
       persistedPresentationPath = paths.outputPath;
+      throwIfAborted(abortSignal);
+      const previewStagingPaths = new Set<string>();
       try {
         previewPaths = await persistPresentationPreviewFiles(
           paths.previewFolder,
@@ -815,13 +976,38 @@ export async function executePresentationCapability(
           renderGeneration,
           paths.presentationsRoot,
           (path) => persistedPresentationPreviewHistory.add(path),
+          abortSignal,
+          (path) => {
+            previewStagingPaths.add(path);
+            presentationStagingPaths.add(path);
+          },
         );
+        throwIfAborted(abortSignal);
       } catch (error) {
+        throwIfAborted(abortSignal);
+        // Preview persistence is fail-open, but a rejected atomic write can
+        // leave its caller-supplied temporary path behind. Clean only the
+        // preview write's paths here so export can continue without leaking a
+        // staging file into the presentations directory.
+        const summary = `Presentation preview persistence failed; exported the editable PPTX without previews: ${getErrorMessage(error)}`;
+        acceptReleaseVisualWarning(summary);
+        await cleanupCancelledPresentationDraft(
+          undefined,
+          persistedPresentationPreviewHistory,
+          paths.presentationsRoot,
+          undefined,
+          // Keep the previous draft's previews on disk until the revised deck
+          // is approved. A later visual-review rejection may restore that
+          // draft and must not publish paths that this cleanup already removed.
+          previewPaths,
+          previewStagingPaths,
+        );
+        for (const stagingPath of previewStagingPaths) {
+          presentationStagingPaths.delete(stagingPath);
+        }
         previewPaths = [];
         if (typeof ztoolkit !== "undefined") {
-          ztoolkit.log(
-            `[presentation] PPTX draft was saved, but preview persistence failed: ${getErrorMessage(error)}`,
-          );
+          ztoolkit.log(`[presentation] ${summary}`);
         }
       }
       persistedPresentationPreviewPaths = [...previewPaths];
@@ -840,10 +1026,12 @@ export async function executePresentationCapability(
       bytes: Uint8Array;
       previewPaths: string[];
     }): Promise<void> => {
+      throwIfAborted(abortSignal);
       if (!outputPath) {
         throw new Error("Presentation draft path was unavailable for restore.");
       }
-      await atomicWritePresentationFile(outputPath, snapshot.bytes);
+      await writeTrackedPresentationFile(outputPath, snapshot.bytes);
+      throwIfAborted(abortSignal);
       bytes = snapshot.bytes;
       previewPaths = [...snapshot.previewPaths];
       persistedPresentationPreviewPaths = [...snapshot.previewPaths];
@@ -860,6 +1048,7 @@ export async function executePresentationCapability(
       request: PresentationRequest;
       renderableRequest: Awaited<ReturnType<typeof resolvePresentationMedia>>;
     }> => {
+      throwIfAborted(abortSignal);
       await emitProgress("resolving_media", {
         pptxPath: hasPersistedDraft ? outputPath : undefined,
         previewPaths: previewPaths.length ? [...previewPaths] : undefined,
@@ -868,12 +1057,14 @@ export async function executePresentationCapability(
       try {
         return {
           request: candidate,
-          renderableRequest: await mediaResolver(
-            candidate,
-            sourceContext?.libraryID,
+          renderableRequest: await raceWithAbort(
+            () =>
+              mediaResolver(candidate, sourceContext?.libraryID, abortSignal),
+            abortSignal,
           ),
         };
       } catch (error) {
+        throwIfAborted(abortSignal);
         if (!(error instanceof PresentationResolvedMediaDuplicateError)) {
           throw error;
         }
@@ -902,6 +1093,7 @@ export async function executePresentationCapability(
             candidate,
           );
         } catch (repairError) {
+          throwIfAborted(abortSignal);
           if (strictQuality) throw repairError;
           return acceptDuplicateMedia(
             candidate,
@@ -920,12 +1112,14 @@ export async function executePresentationCapability(
         try {
           return {
             request: repaired,
-            renderableRequest: await mediaResolver(
-              repaired,
-              sourceContext?.libraryID,
+            renderableRequest: await raceWithAbort(
+              () =>
+                mediaResolver(repaired, sourceContext?.libraryID, abortSignal),
+              abortSignal,
             ),
           };
         } catch (repairedError) {
+          throwIfAborted(abortSignal);
           if (
             !(repairedError instanceof PresentationResolvedMediaDuplicateError)
           ) {
@@ -951,6 +1145,7 @@ export async function executePresentationCapability(
       candidate: Awaited<ReturnType<typeof resolvePresentationMedia>>,
       expectedContentSlides: number,
     ) => {
+      throwIfAborted(abortSignal);
       renderGeneration += 1;
       await emitProgress(
         "rendering",
@@ -965,13 +1160,21 @@ export async function executePresentationCapability(
       );
       let rendered: PresentationRenderWithPreviewResult;
       try {
-        rendered = await renderer.renderPresentationWithPreview(candidate);
+        rendered = await raceWithAbort(
+          () => renderer.renderPresentationWithPreview(candidate, abortSignal),
+          abortSignal,
+        );
+        throwIfAborted(abortSignal);
       } catch (error) {
+        throwIfAborted(abortSignal);
         if (strictQuality) throw error;
         const summary = `Presentation preview rendering failed; exported the editable PPTX without previews: ${getErrorMessage(error)}`;
         acceptReleaseVisualWarning(summary);
         rendered = {
-          bytes: await renderer.renderPresentation(candidate),
+          bytes: await raceWithAbort(
+            () => renderer.renderPresentation(candidate, abortSignal),
+            abortSignal,
+          ),
           previewSlides: [],
           visualWarnings: [summary],
         };
@@ -998,6 +1201,37 @@ export async function executePresentationCapability(
     let renderableRequest = resolved.renderableRequest;
     let bytes: Uint8Array;
     let visualReviewRounds = 0;
+    serializePresentationAttachment = (
+      attachment: Awaited<ReturnType<typeof attachPresentationToZotero>>,
+      summaryOverride?: string,
+    ): string =>
+      JSON.stringify({
+        status: summaryOverride
+          ? "completed_with_warnings"
+          : visualReviewSummary?.startsWith(
+                "Exported with non-blocking visual review warnings:",
+              )
+            ? "completed_with_warnings"
+            : "completed",
+        path: attachment.path,
+        draftPath: attachment.path,
+        previewPaths,
+        fileName: PathUtils.filename(outputPath || attachment.path),
+        slideCount: request.slides.length + 1,
+        bytes: bytes.length,
+        editable: true,
+        runtime: "PaperChat XPI",
+        visualReview: summaryOverride ? "warnings" : visualReviewStatus,
+        visualReviewSummary: summaryOverride || visualReviewSummary,
+        visualReviewRounds,
+        planningRounds,
+        attachmentStatus: attachment.status,
+        attachmentItemID: attachment.itemID,
+        attachmentItemKey: attachment.itemKey,
+        attachmentParentItemID: attachment.parentItemID,
+        attachmentMode: attachment.mode,
+        attachmentWarning: attachment.warning,
+      });
     if (planningQualityWarnings.length > 0) {
       acceptReleaseVisualWarning(
         `Planning quality diagnostics remain after best-effort repair: ${planningQualityWarnings
@@ -1021,17 +1255,22 @@ export async function executePresentationCapability(
           previewPaths: [...previewPaths],
           isDraft: true,
         });
-        draftReview = await visualReviewer({
-          stage: "draft",
-          title: request.title,
-          outline: appendPresentationVisualWarnings(
-            buildPresentationVisualReviewOutline(renderableRequest),
-            draft.visualWarnings,
-          ),
-          previewSlides: draft.previewSlides,
-        });
+        draftReview = await raceWithAbort(
+          () =>
+            visualReviewer({
+              stage: "draft",
+              title: request.title,
+              outline: appendPresentationVisualWarnings(
+                buildPresentationVisualReviewOutline(renderableRequest),
+                draft.visualWarnings,
+              ),
+              previewSlides: draft.previewSlides,
+            }),
+          abortSignal,
+        );
         visualReviewRounds += 1;
       } catch (reviewError) {
+        throwIfAborted(abortSignal);
         const summary = `Presentation visual quality review failed before export: ${getErrorMessage(reviewError)}`;
         if (strictQuality) throw new Error(summary);
         acceptReleaseVisualWarning(summary);
@@ -1086,17 +1325,22 @@ export async function executePresentationCapability(
                 previewPaths: [...previewPaths],
                 isDraft: true,
               });
-              finalReview = await visualReviewer({
-                stage: "final",
-                title: request.title,
-                outline: appendPresentationVisualWarnings(
-                  buildPresentationVisualReviewOutline(renderableRequest),
-                  revised.visualWarnings,
-                ),
-                previewSlides: revised.previewSlides,
-              });
+              finalReview = await raceWithAbort(
+                () =>
+                  visualReviewer({
+                    stage: "final",
+                    title: request.title,
+                    outline: appendPresentationVisualWarnings(
+                      buildPresentationVisualReviewOutline(renderableRequest),
+                      revised.visualWarnings,
+                    ),
+                    previewSlides: revised.previewSlides,
+                  }),
+                abortSignal,
+              );
               visualReviewRounds += 1;
             } catch (reviewError) {
+              throwIfAborted(abortSignal);
               const summary = `Final presentation visual quality review failed before export: ${getErrorMessage(reviewError)}`;
               if (strictQuality) throw new Error(summary);
               acceptReleaseVisualWarning(summary);
@@ -1112,6 +1356,7 @@ export async function executePresentationCapability(
               );
             }
           } catch (revisionError) {
+            throwIfAborted(abortSignal);
             const summary = `Presentation visual revision could not produce a replacement deck: ${getErrorMessage(revisionError)}`;
             if (strictQuality) throw new Error(summary);
             acceptReleaseVisualWarning(summary);
@@ -1132,6 +1377,7 @@ export async function executePresentationCapability(
             request,
           );
         } catch (repairError) {
+          throwIfAborted(abortSignal);
           const summary = `Presentation visual structural repair failed after a usable deck was already rendered: ${getErrorMessage(repairError)}`;
           if (strictQuality) {
             throw new Error(summary);
@@ -1173,17 +1419,22 @@ export async function executePresentationCapability(
                 previewPaths: [...previewPaths],
                 isDraft: true,
               });
-              repairedReview = await visualReviewer({
-                stage: "draft",
-                title: request.title,
-                outline: appendPresentationVisualWarnings(
-                  buildPresentationVisualReviewOutline(renderableRequest),
-                  repaired.visualWarnings,
-                ),
-                previewSlides: repaired.previewSlides,
-              });
+              repairedReview = await raceWithAbort(
+                () =>
+                  visualReviewer({
+                    stage: "draft",
+                    title: request.title,
+                    outline: appendPresentationVisualWarnings(
+                      buildPresentationVisualReviewOutline(renderableRequest),
+                      repaired.visualWarnings,
+                    ),
+                    previewSlides: repaired.previewSlides,
+                  }),
+                abortSignal,
+              );
               visualReviewRounds += 1;
             } catch (reviewError) {
+              throwIfAborted(abortSignal);
               const summary = `Presentation visual review failed after structural repair: ${getErrorMessage(reviewError)}`;
               if (strictQuality) throw new Error(summary);
               acceptReleaseVisualWarning(summary);
@@ -1233,17 +1484,24 @@ export async function executePresentationCapability(
                     previewPaths: [...previewPaths],
                     isDraft: true,
                   });
-                  terminalReview = await visualReviewer({
-                    stage: "final",
-                    title: request.title,
-                    outline: appendPresentationVisualWarnings(
-                      buildPresentationVisualReviewOutline(renderableRequest),
-                      repaired.visualWarnings,
-                    ),
-                    previewSlides: repaired.previewSlides,
-                  });
+                  terminalReview = await raceWithAbort(
+                    () =>
+                      visualReviewer({
+                        stage: "final",
+                        title: request.title,
+                        outline: appendPresentationVisualWarnings(
+                          buildPresentationVisualReviewOutline(
+                            renderableRequest,
+                          ),
+                          repaired.visualWarnings,
+                        ),
+                        previewSlides: repaired.previewSlides,
+                      }),
+                    abortSignal,
+                  );
                   visualReviewRounds += 1;
                 } catch (reviewError) {
+                  throwIfAborted(abortSignal);
                   const summary = `Terminal visual review failed after the bounded structural-repair patch: ${getErrorMessage(reviewError)}`;
                   if (strictQuality) throw new Error(summary);
                   acceptReleaseVisualWarning(summary);
@@ -1277,6 +1535,7 @@ export async function executePresentationCapability(
               );
             }
           } catch (repairRenderError) {
+            throwIfAborted(abortSignal);
             if (strictQuality) throw repairRenderError;
             request = lastUsableRequest;
             renderableRequest = lastUsableRenderableRequest;
@@ -1288,12 +1547,17 @@ export async function executePresentationCapability(
       }
     } else {
       await emitProgress("rendering");
-      bytes = await renderer.renderPresentation(renderableRequest);
+      bytes = await raceWithAbort(
+        () => renderer.renderPresentation(renderableRequest, abortSignal),
+        abortSignal,
+      );
+      throwIfAborted(abortSignal);
       const paths = await ensureOutputPaths();
       await emitProgress("exporting", { isDraft: true });
-      await atomicWritePresentationFile(paths.outputPath, bytes);
+      await writeTrackedPresentationFile(paths.outputPath, bytes);
       hasPersistedDraft = true;
       persistedPresentationPath = paths.outputPath;
+      throwIfAborted(abortSignal);
       await emitProgress(
         "rendering",
         { pptxPath: paths.outputPath, previewPaths: [], isDraft: true },
@@ -1303,6 +1567,7 @@ export async function executePresentationCapability(
     if (!hasPersistedDraft || !outputPath) {
       throw new Error("Presentation renderer completed without a saved PPTX.");
     }
+    throwIfAborted(abortSignal);
     await cleanupUnreferencedPresentationPreviews(
       persistedPresentationPreviewHistory,
       previewPaths,
@@ -1319,75 +1584,149 @@ export async function executePresentationCapability(
       sourceItemKey: request.sourceItemKey,
       sourceLibraryID: sourceContext?.libraryID,
     });
+    // Zotero import is the irreversible side-effect boundary. Once it has
+    // succeeded, cancellation cannot safely roll it back; finish and report
+    // the committed attachment instead of creating a duplicate on retry.
+    if (isCommittedAttachment(attachment)) {
+      committedAttachment = attachment;
+    } else {
+      throwIfAborted(abortSignal);
+    }
     if (attachment.warning) {
       acceptReleaseVisualWarning(attachment.warning);
     }
 
-    await emitProgress("completed", {
-      pptxPath: attachment.path,
-      previewPaths: [...previewPaths],
-      isDraft: false,
-    });
+    await emitProgress(
+      "completed",
+      {
+        pptxPath: attachment.path,
+        previewPaths: [...previewPaths],
+        isDraft: false,
+      },
+      progressMessages.completed,
+      isCommittedAttachment(attachment),
+    );
 
-    return JSON.stringify({
-      status: visualReviewSummary?.startsWith(
-        "Exported with non-blocking visual review warnings:",
-      )
-        ? "completed_with_warnings"
-        : "completed",
-      path: attachment.path,
-      draftPath: attachment.path,
-      previewPaths,
-      fileName: PathUtils.filename(outputPath),
-      slideCount: request.slides.length + 1,
-      bytes: bytes.length,
-      editable: true,
-      runtime: "PaperChat XPI",
-      visualReview: visualReviewStatus,
-      visualReviewSummary,
-      visualReviewRounds,
-      planningRounds,
-      attachmentStatus: attachment.status,
-      attachmentItemID: attachment.itemID,
-      attachmentItemKey: attachment.itemKey,
-      attachmentParentItemID: attachment.parentItemID,
-      attachmentMode: attachment.mode,
-      attachmentWarning: attachment.warning,
-    });
+    return serializePresentationAttachment(attachment);
   } catch (error) {
     const detail = getErrorMessage(error);
     if (typeof ztoolkit !== "undefined") {
       ztoolkit.log(`[presentation] Generation failed: ${detail}`);
     }
-    if (!strictQuality && persistedPresentationPath) {
-      await cleanupUnreferencedPresentationPreviews(
+    // Only the turn-owned signal proves that the user requested cancellation.
+    // A renderer/PDF dependency may also use the generic AbortError name for
+    // its own timeout or cleanup; treating that as a user cancel would delete
+    // a valid persisted draft and skip the normal recovery path.
+    const cancellationRequested = isAbortRequested(abortSignal);
+    if (cancellationRequested) {
+      if (isCommittedAttachment(committedAttachment)) {
+        // A post-import callback/serialization failure must not trigger a
+        // second import of the already committed attachment.
+        await emitProgress(
+          "completed",
+          {
+            pptxPath: committedAttachment.path,
+            previewPaths: persistedPresentationPreviewPaths,
+            isDraft: false,
+          },
+          progressMessages.completed,
+          true,
+        );
+        return serializePresentationAttachment!(committedAttachment);
+      }
+      await cleanupCancelledPresentationDraft(
+        persistedPresentationPath,
         persistedPresentationPreviewHistory,
-        persistedPresentationPreviewPaths,
         persistedPresentationsRoot,
+        persistedPresentationPreviewFolder,
+        undefined,
+        presentationStagingPaths,
+        pendingPresentationPaths,
       );
-      await emitProgress("attaching", {
-        pptxPath: persistedPresentationPath,
-        previewPaths: persistedPresentationPreviewPaths,
-        isDraft: true,
-      });
+      if (isAbortRequested(abortSignal)) throwIfAborted(abortSignal);
+      throw error;
+    }
+    if (
+      pendingPresentationPaths.size > 0 ||
+      presentationStagingPaths.size > 0
+    ) {
+      // A failed non-cancelled write must not be mistaken for a usable draft,
+      // and any partial destination/temp files must not survive the error path.
+      // The output path may also be the last successfully persisted draft
+      // during a visual-repair rewrite. Keep that atomically committed file
+      // available for the best-effort recovery branch below.
+      const failedPendingPaths = new Set(
+        [...pendingPresentationPaths].filter(
+          (path) => path !== persistedPresentationPath,
+        ),
+      );
+      await cleanupCancelledPresentationDraft(
+        undefined,
+        persistedPresentationPreviewHistory,
+        persistedPresentationsRoot,
+        persistedPresentationPath
+          ? undefined
+          : persistedPresentationPreviewFolder,
+        persistedPresentationPreviewPaths,
+        presentationStagingPaths,
+        failedPendingPaths,
+      );
+    }
+    if (isCommittedAttachment(committedAttachment)) {
+      return serializePresentationAttachment!(committedAttachment);
+    }
+    if (!strictQuality && persistedPresentationPath) {
       let recoveredAttachment;
       try {
+        await cleanupUnreferencedPresentationPreviews(
+          persistedPresentationPreviewHistory,
+          persistedPresentationPreviewPaths,
+          persistedPresentationsRoot,
+        );
+        await emitProgress("attaching", {
+          pptxPath: persistedPresentationPath,
+          previewPaths: persistedPresentationPreviewPaths,
+          isDraft: true,
+        });
         recoveredAttachment = await attachPresentationToZotero({
           outputPath: persistedPresentationPath,
           presentationTitle: request.title,
           sourceItemKey: request.sourceItemKey,
           sourceLibraryID: sourceContext?.libraryID,
         });
+        if (isCommittedAttachment(recoveredAttachment)) {
+          committedAttachment = recoveredAttachment;
+        } else {
+          throwIfAborted(abortSignal);
+        }
       } catch (attachmentError) {
+        if (isAbortRequested(abortSignal)) {
+          await cleanupCancelledPresentationDraft(
+            persistedPresentationPath,
+            persistedPresentationPreviewHistory,
+            persistedPresentationsRoot,
+            persistedPresentationPreviewFolder,
+            undefined,
+            presentationStagingPaths,
+            pendingPresentationPaths,
+          );
+          if (isAbortRequested(abortSignal)) throwIfAborted(abortSignal);
+          throw attachmentError;
+        }
         const attachmentWarning = `PPTX was generated and remains available at ${persistedPresentationPath}, but Zotero could not attach the recovered draft: ${getErrorMessage(attachmentError)}`;
         if (typeof ztoolkit !== "undefined") {
           ztoolkit.log(`[presentation] ${attachmentWarning}`);
         }
-        await emitProgress("completed", {
-          pptxPath: persistedPresentationPath,
-          previewPaths: persistedPresentationPreviewPaths,
-          isDraft: false,
-        });
+        await emitProgress(
+          "completed",
+          {
+            pptxPath: persistedPresentationPath,
+            previewPaths: persistedPresentationPreviewPaths,
+            isDraft: false,
+          },
+          progressMessages.completed,
+          true,
+        );
         return JSON.stringify({
           status: "completed_with_warnings",
           path: persistedPresentationPath,
@@ -1403,11 +1742,41 @@ export async function executePresentationCapability(
           attachmentWarning,
         });
       }
-      await emitProgress("completed", {
-        pptxPath: recoveredAttachment.path,
-        previewPaths: persistedPresentationPreviewPaths,
-        isDraft: false,
-      });
+      if (isCommittedAttachment(committedAttachment)) {
+        await emitProgress(
+          "completed",
+          {
+            pptxPath: committedAttachment.path,
+            previewPaths: persistedPresentationPreviewPaths,
+            isDraft: false,
+          },
+          progressMessages.completed,
+          true,
+        );
+        return serializePresentationAttachment!(committedAttachment);
+      }
+      try {
+        throwIfAborted(abortSignal);
+        await emitProgress("completed", {
+          pptxPath: recoveredAttachment.path,
+          previewPaths: persistedPresentationPreviewPaths,
+          isDraft: false,
+        });
+      } catch (completionError) {
+        if (isAbortRequested(abortSignal)) {
+          await cleanupCancelledPresentationDraft(
+            persistedPresentationPath,
+            persistedPresentationPreviewHistory,
+            persistedPresentationsRoot,
+            persistedPresentationPreviewFolder,
+            undefined,
+            presentationStagingPaths,
+            pendingPresentationPaths,
+          );
+          if (isAbortRequested(abortSignal)) throwIfAborted(abortSignal);
+        }
+        throw completionError;
+      }
       return JSON.stringify({
         status: "completed_with_warnings",
         path: recoveredAttachment.path,

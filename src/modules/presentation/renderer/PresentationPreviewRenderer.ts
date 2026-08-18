@@ -1,3 +1,5 @@
+import { raceWithAbort, throwIfAborted } from "../../../utils/abort";
+
 const SLIDE_WIDTH_INCHES = 13.333;
 const SLIDE_HEIGHT_INCHES = 7.5;
 const PREVIEW_WIDTH = 1600;
@@ -378,9 +380,13 @@ function resolveSlideBackgroundColor(slide: UnknownRecord): string {
   return normalizeColor(background.color || background.fill, "#ffffff");
 }
 
-export function renderPresentationSlideSvgs(presentation: unknown): string[] {
+export function renderPresentationSlideSvgs(
+  presentation: unknown,
+  abortSignal?: AbortSignal,
+): string[] {
   const slides = asArray(asRecord(presentation)._slides).map(asRecord);
   return slides.map((slide) => {
+    throwIfAborted(abortSignal);
     const backgroundColor = resolveSlideBackgroundColor(slide);
     const body = asArray(slide._slideObjects)
       .map(asRecord)
@@ -395,7 +401,11 @@ function runtimeWindow(): Window | null {
   return null;
 }
 
-async function renderSvgToPng(svg: string): Promise<string> {
+async function renderSvgToPng(
+  svg: string,
+  abortSignal?: AbortSignal,
+): Promise<string> {
+  throwIfAborted(abortSignal);
   const targetWindow = runtimeWindow();
   const document = targetWindow?.document;
   const ImageConstructor = targetWindow?.Image;
@@ -415,14 +425,20 @@ async function renderSvgToPng(svg: string): Promise<string> {
   context.fillRect(0, 0, PREVIEW_WIDTH, PREVIEW_HEIGHT);
   const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
   const url = URL.createObjectURL(blob);
+  let image: InstanceType<typeof ImageConstructor> | undefined;
   try {
-    const image = new ImageConstructor();
-    await new Promise<void>((resolve, reject) => {
-      image.onload = () => resolve();
-      image.onerror = () =>
-        reject(new Error("Presentation preview SVG could not be decoded."));
-      image.src = url;
-    });
+    image = new ImageConstructor();
+    await raceWithAbort(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          image.onload = () => resolve();
+          image.onerror = () =>
+            reject(new Error("Presentation preview SVG could not be decoded."));
+          image.src = url;
+        }),
+      abortSignal,
+    );
+    throwIfAborted(abortSignal);
     context.drawImage(image, 0, 0, PREVIEW_WIDTH, PREVIEW_HEIGHT);
     const data = canvas.toDataURL("image/png");
     if (!data.startsWith("data:image/png;base64,")) {
@@ -430,17 +446,31 @@ async function renderSvgToPng(svg: string): Promise<string> {
     }
     return data;
   } finally {
+    if (image) {
+      image.onload = null;
+      image.onerror = null;
+      try {
+        // Stop a still-pending decode when cancellation wins the race and
+        // release the Blob-backed image resource before the next slide starts.
+        image.src = "";
+      } catch {
+        // Some wrapped browser Image objects reject writes after teardown.
+      }
+    }
     URL.revokeObjectURL(url);
   }
 }
 
 export async function renderPresentationPreviewSlides(
   presentation: unknown,
+  abortSignal?: AbortSignal,
 ): Promise<string[]> {
-  const svgs = renderPresentationSlideSvgs(presentation);
+  const svgs = renderPresentationSlideSvgs(presentation, abortSignal);
   const previews: string[] = [];
   for (const svg of svgs) {
-    previews.push(await renderSvgToPng(svg));
+    throwIfAborted(abortSignal);
+    previews.push(await renderSvgToPng(svg, abortSignal));
   }
+  throwIfAborted(abortSignal);
   return previews;
 }

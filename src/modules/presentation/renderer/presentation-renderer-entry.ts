@@ -6,12 +6,14 @@ import {
 
 export function renderPresentation(
   spec: RenderablePresentationRequest,
+  abortSignal?: AbortSignal,
 ): Promise<Uint8Array> {
-  return renderPresentationSpec(spec);
+  return renderPresentationSpec(spec, undefined, abortSignal);
 }
 
 export function renderPresentationWithPreview(
   spec: RenderablePresentationRequest,
+  abortSignal?: AbortSignal,
 ) {
-  return renderPresentationWithPreviewSpec(spec);
+  return renderPresentationWithPreviewSpec(spec, undefined, abortSignal);
 }

@@ -58,6 +58,7 @@ import { getString } from "../../utils/locale";
 import { getPref } from "../../utils/prefs";
 import {
   createAbortController,
+  isAbortRequested,
   type ManagedAbortController,
 } from "../../utils/abort";
 import {
@@ -2568,7 +2569,8 @@ export class ChatManager {
         }
         if (
           isAbortError(error) &&
-          !this.isSessionTracked(sendingSession, sessionRunId)
+          (isAbortRequested(abortSignal) ||
+            !this.isSessionTracked(sendingSession, sessionRunId))
         ) {
           return true;
         }
@@ -3094,7 +3096,8 @@ export class ChatManager {
       }
       if (
         isAbortError(error) &&
-        !this.isSessionTracked(sendingSession, sessionRunId)
+        (isAbortRequested(abortSignal) ||
+          !this.isSessionTracked(sendingSession, sessionRunId))
       ) {
         return null;
       }

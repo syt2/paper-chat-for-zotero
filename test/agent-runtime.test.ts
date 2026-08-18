@@ -2591,6 +2591,83 @@ describe("agent runtime plan semantics", function () {
     }
   });
 
+  it("does not turn a user-aborted tool into a failed turn while the run is still tracked", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    const session = createSession();
+    const assistantMessage: ChatMessage = {
+      id: "assistant-aborted-tool-tracked",
+      role: "assistant",
+      content: "",
+      timestamp: 2,
+    };
+    session.messages.push(assistantMessage);
+    const abortController = new AbortController();
+    abortController.abort();
+    let failedTurnEvents = 0;
+    const runtime = new AgentRuntime(
+      {
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        saveSession: async () => undefined,
+      } as any,
+      {
+        isSessionActive: () => false,
+        // ChatManager deliberately keeps the run tracked while it waits for
+        // a mutating tool to unwind after the cancel button is pressed.
+        isSessionTracked: () => true,
+        formatToolCallCard: () => "",
+        generateId: () => "aborted-tool-generated",
+        onRuntimeEvent: (event: AgentRuntimeEvent) => {
+          if (event.type === "turn_failed") failedTurnEvents += 1;
+        },
+      } as any,
+      {
+        createExecutionBatches: (requests: any[]) => [requests],
+        executeBatch: async () => {
+          const error = new Error("Operation aborted.");
+          error.name = "AbortError";
+          throw error;
+        },
+      },
+    ) as any;
+    runtime.getMaxIterations = () => 2;
+
+    try {
+      await runtime.executeNonStreamingToolLoop({
+        provider: {
+          config: { id: "openai", type: "openai", defaultModel: "gpt" },
+          chatCompletionWithTools: async () => ({
+            content: "",
+            toolCalls: [
+              {
+                id: "aborted-tool-call",
+                type: "function" as const,
+                function: {
+                  name: "get_item_metadata",
+                  arguments: JSON.stringify({ itemKey: "ABORTED" }),
+                },
+              },
+            ],
+          }),
+        },
+        currentMessages: session.messages,
+        assistantMessage,
+        pdfWasAttached: false,
+        summaryTriggered: false,
+        tools: [createToolDefinition("get_item_metadata")],
+        sendingSession: session,
+        abortSignal: abortController.signal,
+      });
+
+      assert.equal(failedTurnEvents, 0);
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
+  });
+
   it("keeps hosted web_search available after the local search budget is exhausted", async function () {
     const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
     (globalThis as { ztoolkit?: unknown }).ztoolkit = {
@@ -4620,15 +4697,19 @@ describe("agent runtime plan semantics", function () {
             previewPaths: ["/safe/slide-01.png"],
             isDraft: true,
           });
-          assert.deepInclude(
-            persistedPresentationArtifacts.flat(),
-            {
-              toolCallId: "presentation-progress-call",
-              localId: "presentation-progress-call:presentation:1:1",
-              path: "/safe/presentation-draft.pptx",
-              previewPaths: ["/safe/slide-01.png"],
-              isDraft: true,
-            },
+          assert.isTrue(
+            persistedPresentationArtifacts
+              .flat()
+              .some(
+                (artifact) =>
+                  artifact.toolCallId === "presentation-progress-call" &&
+                  artifact.localId ===
+                    "presentation-progress-call:presentation:1:1" &&
+                  artifact.path === "/safe/presentation-draft.pptx" &&
+                  JSON.stringify(artifact.previewPaths) ===
+                    JSON.stringify(["/safe/slide-01.png"]) &&
+                  artifact.isDraft === true,
+              ),
             "the file milestone must reach storage before the renderer continues",
           );
           await requests[0].executionContext.presentationProgress({

@@ -36,6 +36,152 @@ describe("presentation media resolver", function () {
     assert.include((thrown as Error).message, "timed out after 1ms");
   });
 
+  it("rejects promptly on cancellation while observing the source render", async function () {
+    const controller = new AbortController();
+    let rejectSource!: (error: Error) => void;
+    let abortCalls = 0;
+    const source = new Promise<never>((_resolve, reject) => {
+      rejectSource = reject;
+    });
+    const execution = resolveWithin(
+      source,
+      1_000,
+      undefined,
+      controller.signal,
+      () => {
+        abortCalls += 1;
+      },
+    );
+
+    controller.abort();
+    let thrown: unknown;
+    try {
+      await execution;
+    } catch (error) {
+      thrown = error;
+    }
+    assert.instanceOf(thrown, Error);
+    assert.equal((thrown as Error).name, "AbortError");
+    rejectSource(new Error("late PDF render failure"));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(abortCalls, 1);
+  });
+
+  it("does not start a late reader-realm render after cancellation during page loading", async function () {
+    const runtime = globalThis as any;
+    const previousZotero = runtime.Zotero;
+    const previousDocument = runtime.document;
+    const previousApplication = runtime.PDFViewerApplication;
+    const controller = new AbortController();
+    let resolveInnerPage!: (page: unknown) => void;
+    let markInnerPageStarted!: () => void;
+    const innerPageStarted = new Promise<void>((resolve) => {
+      markInnerPageStarted = resolve;
+    });
+    const delayedInnerPage = new Promise<unknown>((resolve) => {
+      resolveInnerPage = resolve;
+    });
+    let getPageCalls = 0;
+    let renderCalls = 0;
+    const page = {
+      getViewport: ({ scale }: { scale: number }) => ({
+        width: 600 * scale,
+        height: 800 * scale,
+        transform: [scale, 0, 0, -scale, 0, 800 * scale],
+      }),
+      render: () => {
+        renderCalls += 1;
+        return { promise: Promise.resolve() };
+      },
+    };
+    const pdfDocument = {
+      numPages: 1,
+      getPage: async () => {
+        getPageCalls += 1;
+        if (getPageCalls === 1) return page;
+        markInnerPageStarted();
+        return delayedInnerPage;
+      },
+    };
+    const ownerDocument = {
+      createElement: () => ({
+        width: 0,
+        height: 0,
+        getContext: () => ({
+          fillStyle: "",
+          fillRect: () => undefined,
+          getImageData: () => ({ data: [] }),
+        }),
+        toDataURL: () => "data:image/png;base64,ZmFrZQ==",
+      }),
+      querySelectorAll: () => [],
+    };
+    const reader = {
+      itemID: 42,
+      _isReaderInitialized: true,
+      _iframeWindow: {
+        document: ownerDocument,
+        Function,
+        PDFViewerApplication: { pdfDocument },
+      },
+    };
+    const attachment = {
+      id: 42,
+      key: "ABORTLATE1",
+      libraryID: 1,
+      isPDFAttachment: () => true,
+      getFilePathAsync: async () => undefined,
+    };
+    runtime.document = ownerDocument;
+    runtime.PDFViewerApplication = { pdfDocument };
+    runtime.Zotero = {
+      Libraries: { userLibraryID: 1 },
+      Items: { getByLibraryAndKey: () => attachment },
+      getMainWindow: () => ({ Zotero_Tabs: { selectedID: "reader" } }),
+      Reader: {
+        getByTabID: () => reader,
+        _readers: [reader],
+        open: async () => reader,
+      },
+    };
+
+    try {
+      const execution = resolvePresentationMedia(
+        {
+          title: "Cancelled reader render",
+          sourceItemKey: attachment.key,
+          slides: [
+            {
+              title: "Cancellation should stop the reader realm",
+              figure: { page: 1, mode: "page" },
+            },
+          ],
+        },
+        undefined,
+        controller.signal,
+      );
+      await innerPageStarted;
+      controller.abort();
+      let thrown: unknown;
+      try {
+        await execution;
+      } catch (error) {
+        thrown = error;
+      }
+      assert.equal(
+        (thrown as { name?: string } | undefined)?.name,
+        "AbortError",
+      );
+      resolveInnerPage(page);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(renderCalls, 0);
+    } finally {
+      runtime.Zotero = previousZotero;
+      runtime.document = previousDocument;
+      runtime.PDFViewerApplication = previousApplication;
+    }
+  });
+
   it("rejects two different gallery anchors that resolve to identical pixels", function () {
     const sharedData = "data:image/png;base64,c2FtZS1jcm9w";
     const issues = validateResolvedPresentationMedia({

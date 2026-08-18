@@ -1313,6 +1313,111 @@ describe("presentation visual review", function () {
     }
   });
 
+  it("keeps the previous preview files when revised preview persistence fails before rollback", async function () {
+    const runtime = globalThis as any;
+    const previousZotero = runtime.Zotero;
+    const previousServices = runtime.Services;
+    const previousIOUtils = runtime.IOUtils;
+    const previousPathUtils = runtime.PathUtils;
+    const target: Record<string, unknown> = {};
+    const removedPaths: string[] = [];
+    let renderCount = 0;
+    runtime.Zotero = {
+      DataDirectory: { dir: "/zotero-data" },
+      getMainWindow: () => target,
+    };
+    runtime.Services = {
+      scriptloader: {
+        loadSubScript: () => {
+          target[PRESENTATION_RENDERER_GLOBAL] = {
+            renderPresentation: async () =>
+              new Uint8Array([0x50, 0x4b, 3, renderCount || 1]),
+            renderPresentationWithPreview: async () => {
+              renderCount += 1;
+              return {
+                bytes: new Uint8Array([0x50, 0x4b, 3, renderCount]),
+                previewSlides: [
+                  "data:image/png;base64,AAAA",
+                  "data:image/png;base64,BBBB",
+                ],
+              };
+            },
+          };
+        },
+      },
+    };
+    runtime.IOUtils = {
+      makeDirectory: async () => undefined,
+      write: async (path: string, bytes: Uint8Array) => {
+        if (path.includes("generation-02-slide-01.png")) {
+          throw new Error("synthetic revised preview write failure");
+        }
+        return bytes.length;
+      },
+      remove: async (path: string) => {
+        removedPaths.push(path);
+      },
+    };
+    runtime.PathUtils = {
+      join: (...parts: string[]) => parts.join("/"),
+      filename: (path: string) => path.split("/").pop(),
+    };
+    let reviewRound = 0;
+    try {
+      resetPresentationRendererForTests();
+      const result = await executePresentationCapability(
+        {
+          title: "Preview rollback deck",
+          slides: [
+            {
+              title: "The usable original claim",
+              metrics: [{ value: "24%", label: "relative improvement" }],
+            },
+          ],
+        },
+        async ({ stage }) => {
+          reviewRound += 1;
+          if (reviewRound === 1) {
+            assert.equal(stage, "draft");
+            return {
+              verdict: "revise",
+              summary: "Try one bounded title repair.",
+              patches: [{ slideNumber: 2, title: "Revised claim" }],
+            };
+          }
+          assert.equal(stage, "final");
+          return {
+            verdict: "reject",
+            summary: "Restore the first usable draft.",
+          };
+        },
+      );
+
+      if (result.startsWith("Error:")) throw new Error(result);
+      const payload = JSON.parse(result);
+      assert.equal(payload.status, "completed_with_warnings");
+      assert.match(
+        payload.previewPaths[0],
+        /-previews\/generation-01-slide-01\.png$/,
+      );
+      assert.isFalse(
+        removedPaths.some((path) => path.includes("generation-01-slide-")),
+      );
+      assert.isTrue(
+        removedPaths.some((path) =>
+          path.includes("generation-02-slide-01.png"),
+        ),
+      );
+      assert.isTrue(removedPaths.some((path) => path.includes(".tmp-")));
+    } finally {
+      resetPresentationRendererForTests();
+      runtime.Zotero = previousZotero;
+      runtime.Services = previousServices;
+      runtime.IOUtils = previousIOUtils;
+      runtime.PathUtils = previousPathUtils;
+    }
+  });
+
   it("restores the last usable production deck when final visual review throws", async function () {
     const runtime = globalThis as any;
     const previousEnv = runtime.__env__;

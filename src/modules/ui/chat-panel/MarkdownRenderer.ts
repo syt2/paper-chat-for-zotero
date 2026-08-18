@@ -24,6 +24,7 @@ import { openAgentMaxPlanningIterationsSettings } from "../../preferences/naviga
 import {
   buildPresentationProgressCardElement,
   parsePresentationCardProgress,
+  type PresentationProgressCancelAction,
   type PresentationProgressResumeAction,
 } from "./PresentationProgressCard";
 
@@ -408,6 +409,13 @@ export interface MarkdownRenderOptions {
   };
   /** App-owned action for starting a new PPT attempt after interruption. */
   presentationResumeAction?: PresentationProgressResumeAction;
+  /** App-owned action for stopping the active PPT turn. */
+  presentationCancelAction?: PresentationProgressCancelAction;
+  /**
+   * Local IDs of presentation tool calls that are live in the current turn.
+   * A cancel button is never projected from assistant-authored markup alone.
+   */
+  presentationActiveToolCallIds?: ReadonlySet<string>;
   presentationArtifactAction?: {
     openLabel: string;
     draftLabel: string;
@@ -597,6 +605,21 @@ function buildToolCallCardElement(
   options: MarkdownRenderOptions = {},
 ): HTMLElement {
   if (entry.presentationProgress) {
+    const presentationToolCallId = entry.expandKey
+      ? unescapeXml(entry.expandKey)
+      : undefined;
+    const trustedPresentationArtifact = presentationToolCallId
+      ? presentationArtifact &&
+        (presentationArtifact.localId || presentationArtifact.toolCallId) ===
+          presentationToolCallId
+      : false;
+    const normalizedToolName = entry.toolName
+      .trim()
+      .replace(/^[^A-Za-z0-9_-]+/u, "");
+    const canCancelPresentation =
+      normalizedToolName === "presentation" &&
+      trustedPresentationArtifact &&
+      options.presentationActiveToolCallIds?.has(presentationToolCallId!);
     const presentationWasInterrupted =
       entry.status === "calling" &&
       options.presentationInterruption !== undefined;
@@ -608,6 +631,9 @@ function buildToolCallCardElement(
         errorText: unescapeXml(entry.toolResult || entry.statusText || ""),
         interruptedAt: options.presentationInterruption?.endedAt,
         resumeAction: options.presentationResumeAction,
+        cancelAction: canCancelPresentation
+          ? options.presentationCancelAction
+          : undefined,
       },
       presentationArtifact
         ? buildPresentationArtifactElement(

@@ -1952,6 +1952,252 @@ describe("presentation capability", function () {
     }
   });
 
+  it("stops promptly when the current turn is cancelled during rendering", async function () {
+    const runtime = globalThis as any;
+    const previousZotero = runtime.Zotero;
+    const previousServices = runtime.Services;
+    const target: Record<string, unknown> = {};
+    const abortController = new AbortController();
+    let markRenderStarted!: () => void;
+    const renderStarted = new Promise<void>((resolve) => {
+      markRenderStarted = resolve;
+    });
+    const installRenderer = () => {
+      target[PRESENTATION_RENDERER_GLOBAL] = {
+        renderPresentation: async () => {
+          markRenderStarted();
+          return new Promise<Uint8Array>(() => undefined);
+        },
+      };
+    };
+    runtime.Zotero = { getMainWindow: () => target };
+    runtime.Services = {
+      scriptloader: { loadSubScript: installRenderer },
+    };
+
+    try {
+      resetPresentationRendererForTests();
+      installRenderer();
+      const execution = executePresentationCapability(
+        VALID_REQUEST,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        abortController.signal,
+      );
+      await renderStarted;
+      abortController.abort();
+      const outcome = await Promise.race([
+        execution.then(
+          () => ({ status: "resolved" as const, error: undefined }),
+          (error: unknown) => ({ status: "rejected" as const, error }),
+        ),
+        new Promise<{ status: "timeout"; error: undefined }>((resolve) => {
+          setTimeout(
+            () => resolve({ status: "timeout", error: undefined }),
+            500,
+          );
+        }),
+      ]);
+
+      assert.equal(outcome.status, "rejected");
+      assert.equal(
+        (outcome.error as { name?: string } | undefined)?.name,
+        "AbortError",
+      );
+    } finally {
+      resetPresentationRendererForTests();
+      runtime.Zotero = previousZotero;
+      runtime.Services = previousServices;
+    }
+  });
+
+  it("does not recover or attach a persisted draft after cancellation", async function () {
+    const runtime = globalThis as any;
+    const previousZotero = runtime.Zotero;
+    const previousServices = runtime.Services;
+    const previousIOUtils = runtime.IOUtils;
+    const previousPathUtils = runtime.PathUtils;
+    const target: Record<string, unknown> = {};
+    const abortController = new AbortController();
+    const writes: Array<{ path: string; options?: { tmpPath?: string } }> = [];
+    const removed: Array<{ path: string; options?: { recursive?: boolean } }> =
+      [];
+    let attachmentAttempts = 0;
+    runtime.Zotero = {
+      DataDirectory: { dir: "/zotero-data" },
+      getMainWindow: () => target,
+      Attachments: {
+        importFromFile: async () => {
+          attachmentAttempts += 1;
+          throw new Error("attachment should not run after cancellation");
+        },
+      },
+    };
+    runtime.Services = {
+      scriptloader: {
+        loadSubScript: () => {
+          target[PRESENTATION_RENDERER_GLOBAL] = {
+            renderPresentation: async () =>
+              new Uint8Array([0x50, 0x4b, 0x03, 0x04]),
+            renderPresentationWithPreview: async () => ({
+              bytes: new Uint8Array([0x50, 0x4b, 0x03, 0x04]),
+              previewSlides: [
+                "data:image/png;base64,AA==",
+                "data:image/png;base64,AA==",
+              ],
+            }),
+          };
+        },
+      },
+    };
+    runtime.IOUtils = {
+      makeDirectory: async () => undefined,
+      exists: async () => true,
+      write: async (
+        path: string,
+        _bytes: Uint8Array,
+        options?: { tmpPath?: string },
+      ) => {
+        writes.push({ path, options });
+      },
+      remove: async (path: string, options?: { recursive?: boolean }) => {
+        removed.push({ path, options });
+      },
+    };
+    runtime.PathUtils = {
+      join: (...parts: string[]) => parts.join("/"),
+      filename: (path: string) => path.split("/").pop(),
+    };
+    let thrown: unknown;
+
+    try {
+      resetPresentationRendererForTests();
+      await executePresentationCapability(
+        VALID_REQUEST,
+        async () => {
+          abortController.abort();
+          throw new Error("synthetic review cancellation");
+        },
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        abortController.signal,
+      );
+    } catch (error) {
+      thrown = error;
+    } finally {
+      resetPresentationRendererForTests();
+      runtime.Zotero = previousZotero;
+      runtime.Services = previousServices;
+      runtime.IOUtils = previousIOUtils;
+      runtime.PathUtils = previousPathUtils;
+    }
+
+    assert.equal((thrown as { name?: string } | undefined)?.name, "AbortError");
+    assert.isTrue(writes.some(({ path }) => path.endsWith(".pptx")));
+    assert.isTrue(removed.some(({ path }) => path.endsWith(".pptx")));
+    assert.isTrue(
+      removed.some(
+        ({ path, options }) =>
+          path.includes("-previews") && options?.recursive === true,
+      ),
+    );
+    assert.isTrue(removed.some(({ path }) => path.endsWith(".png")));
+    assert.isTrue(removed.some(({ path }) => path.includes(".tmp-")));
+    assert.equal(attachmentAttempts, 0);
+  });
+
+  it("cleans a failed preview staging path while keeping the PPTX export fail-open", async function () {
+    const runtime = globalThis as any;
+    const previousZotero = runtime.Zotero;
+    const previousServices = runtime.Services;
+    const previousIOUtils = runtime.IOUtils;
+    const previousPathUtils = runtime.PathUtils;
+    const target: Record<string, unknown> = {};
+    const removed: Array<{ path: string; options?: unknown }> = [];
+    const writes: Array<{ path: string; options?: { tmpPath?: string } }> = [];
+    runtime.Zotero = {
+      DataDirectory: { dir: "/zotero-data" },
+      getMainWindow: () => target,
+    };
+    runtime.Services = {
+      scriptloader: {
+        loadSubScript: () => {
+          target[PRESENTATION_RENDERER_GLOBAL] = {
+            renderPresentation: async () =>
+              new Uint8Array([0x50, 0x4b, 0x03, 0x04]),
+            renderPresentationWithPreview: async () => ({
+              bytes: new Uint8Array([0x50, 0x4b, 0x03, 0x04]),
+              // VALID_REQUEST has one content slide plus the cover, so the
+              // preview set must contain both images before persistence starts.
+              previewSlides: [
+                "data:image/png;base64,AA==",
+                "data:image/png;base64,AA==",
+              ],
+            }),
+          };
+        },
+      },
+    };
+    runtime.IOUtils = {
+      makeDirectory: async () => undefined,
+      exists: async () => true,
+      write: async (
+        path: string,
+        _bytes: Uint8Array,
+        options?: { tmpPath?: string },
+      ) => {
+        writes.push({ path, options });
+        if (path.endsWith("slide-01.png")) {
+          throw new Error("synthetic preview write failure");
+        }
+      },
+      remove: async (path: string, options?: unknown) => {
+        removed.push({ path, options });
+      },
+    };
+    runtime.PathUtils = {
+      join: (...parts: string[]) => parts.join("/"),
+      filename: (path: string) => path.split("/").pop(),
+    };
+
+    try {
+      resetPresentationRendererForTests();
+      const result = await executePresentationCapability(
+        VALID_REQUEST,
+        async () => ({ verdict: "pass", summary: "synthetic pass" }),
+      );
+      const payload = JSON.parse(result);
+      assert.equal(payload.status, "completed_with_warnings");
+      assert.deepEqual(payload.previewPaths, []);
+      assert.isTrue(writes.some(({ path }) => path.endsWith(".pptx")));
+      const failedPreviewWrite = writes.find(({ path }) =>
+        path.endsWith("slide-01.png"),
+      );
+      assert.isDefined(failedPreviewWrite?.options?.tmpPath);
+      assert.isTrue(
+        removed.some(
+          ({ path }) => path === failedPreviewWrite?.options?.tmpPath,
+        ),
+      );
+      assert.isTrue(
+        removed.some(({ path }) => path === failedPreviewWrite?.path),
+      );
+    } finally {
+      resetPresentationRendererForTests();
+      runtime.Zotero = previousZotero;
+      runtime.Services = previousServices;
+      runtime.IOUtils = previousIOUtils;
+      runtime.PathUtils = previousPathUtils;
+    }
+  });
+
   it("reports output failures without leaving a partial success result", async function () {
     const runtime = globalThis as any;
     const previousZotero = runtime.Zotero;
@@ -2065,6 +2311,8 @@ describe("presentation capability", function () {
     const previousPathUtils = runtime.PathUtils;
     const target: Record<string, unknown> = {};
     const libraryIDs: Array<number | undefined> = [];
+    const abortSignals: Array<AbortSignal | undefined> = [];
+    const abortController = new AbortController();
     runtime.Zotero = {
       DataDirectory: { dir: "/zotero-data" },
       getMainWindow: () => target,
@@ -2103,8 +2351,9 @@ describe("presentation capability", function () {
         } as any,
         undefined,
         {
-          mediaResolver: async (request, sourceLibraryID) => {
+          mediaResolver: async (request, sourceLibraryID, abortSignal) => {
             libraryIDs.push(sourceLibraryID);
+            abortSignals.push(abortSignal);
             throw new PresentationResolvedMediaDuplicateError(
               ["synthetic duplicate crop"],
               request as any,
@@ -2112,14 +2361,20 @@ describe("presentation capability", function () {
           },
         },
         { itemKey: "SHARED01", libraryID: 5 },
+        abortController.signal,
       );
       const payload = JSON.parse(result);
 
       assert.equal(payload.status, "completed_with_warnings");
       assert.include(payload.visualReviewSummary, "synthetic duplicate crop");
       assert.deepEqual(libraryIDs, [5, 5]);
+      assert.deepEqual(abortSignals, [
+        abortController.signal,
+        abortController.signal,
+      ]);
 
       libraryIDs.length = 0;
+      abortSignals.length = 0;
       const strictResult = await executePresentationCapability(
         VALID_REQUEST,
         undefined,
@@ -2128,8 +2383,9 @@ describe("presentation capability", function () {
         undefined,
         {
           strictQualityGate: true,
-          mediaResolver: async (request, sourceLibraryID) => {
+          mediaResolver: async (request, sourceLibraryID, abortSignal) => {
             libraryIDs.push(sourceLibraryID);
+            abortSignals.push(abortSignal);
             throw new PresentationResolvedMediaDuplicateError(
               ["synthetic duplicate crop"],
               request as any,
@@ -2141,6 +2397,7 @@ describe("presentation capability", function () {
       assert.match(strictResult, /^Error: Presentation generation failed/);
       assert.include(strictResult, "synthetic duplicate crop");
       assert.deepEqual(libraryIDs, [5]);
+      assert.deepEqual(abortSignals, [undefined]);
     } finally {
       resetPresentationRendererForTests();
       runtime.Zotero = previousZotero;

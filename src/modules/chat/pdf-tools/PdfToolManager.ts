@@ -115,6 +115,11 @@ import {
 } from "./libraryExecutors";
 import { getErrorMessage } from "../../../utils/common";
 import {
+  isAbortRequested,
+  raceWithAbort,
+  throwIfAborted,
+} from "../../../utils/abort";
+import {
   createPresentationLaunchToolDefinition,
   createPresentationToolDefinition,
   executePresentationCapability,
@@ -267,7 +272,9 @@ export class PdfToolManager {
     itemKey: string,
     includeNativeOutline: boolean = false,
     libraryID?: number,
+    abortSignal?: AbortSignal,
   ): Promise<PaperStructureExtended | null> {
+    throwIfAborted(abortSignal);
     const cacheKey = Number.isSafeInteger(libraryID)
       ? `${libraryID}:${itemKey}`
       : itemKey;
@@ -279,12 +286,15 @@ export class PdfToolManager {
         await this.enrichWithNativeOutline(
           cached.structure,
           cached.attachmentItemID,
+          abortSignal,
         );
       }
+      throwIfAborted(abortSignal);
       return cached.structure;
     }
 
     const item = this.getItemByKey(itemKey, libraryID);
+    throwIfAborted(abortSignal);
     if (!item) {
       return null;
     }
@@ -300,12 +310,17 @@ export class PdfToolManager {
       item.isPDFAttachment()
     ) {
       try {
-        const pdfText = await item.attachmentText;
+        const pdfText = await raceWithAbort(
+          () => item.attachmentText,
+          abortSignal,
+        );
+        throwIfAborted(abortSignal);
         if (pdfText) {
           structure = this.parsePaperStructure(pdfText);
           attachmentItemID = item.id;
         }
       } catch (error) {
+        throwIfAborted(abortSignal);
         ztoolkit.log(
           `[PdfToolManager] Error extracting PDF text for ${itemKey}:`,
           getErrorMessage(error),
@@ -322,6 +337,7 @@ export class PdfToolManager {
       try {
         const attachmentIDs = item.getAttachments();
         for (const attachmentID of attachmentIDs) {
+          throwIfAborted(abortSignal);
           const attachment = Zotero.Items.get(attachmentID);
           if (
             attachment &&
@@ -329,7 +345,11 @@ export class PdfToolManager {
             attachment.isPDFAttachment()
           ) {
             // 提取 PDF 文本
-            const pdfText = await attachment.attachmentText;
+            const pdfText = await raceWithAbort(
+              () => attachment.attachmentText,
+              abortSignal,
+            );
+            throwIfAborted(abortSignal);
             if (pdfText) {
               structure = this.parsePaperStructure(pdfText);
               attachmentItemID = attachment.id;
@@ -338,6 +358,7 @@ export class PdfToolManager {
           }
         }
       } catch (error) {
+        throwIfAborted(abortSignal);
         ztoolkit.log(
           `[PdfToolManager] Error getting attachments for ${itemKey}:`,
           getErrorMessage(error),
@@ -348,8 +369,13 @@ export class PdfToolManager {
     // 缓存结果
     if (structure && attachmentItemID !== null) {
       if (includeNativeOutline) {
-        await this.enrichWithNativeOutline(structure, attachmentItemID);
+        await this.enrichWithNativeOutline(
+          structure,
+          attachmentItemID,
+          abortSignal,
+        );
       }
+      throwIfAborted(abortSignal);
       this.addToCache(cacheKey, attachmentItemID, structure);
     }
 
@@ -362,23 +388,35 @@ export class PdfToolManager {
   private async enrichWithNativeOutline(
     structure: PaperStructureExtended,
     attachmentItemID: number,
+    abortSignal?: AbortSignal,
   ): Promise<void> {
+    throwIfAborted(abortSignal);
     if (structure.nativeOutline?.length) return;
 
     let request = this.nativeOutlineRequests.get(attachmentItemID);
     if (!request) {
       request = extractNativeOutline(attachmentItemID);
       this.nativeOutlineRequests.set(attachmentItemID, request);
+      // The shared request belongs to the attachment, not to one cancellable
+      // caller. Keep it available while the underlying extraction unwinds so
+      // a second caller does not start a duplicate reader traversal after the
+      // first caller aborts.
+      void request.then(
+        () => {
+          if (this.nativeOutlineRequests.get(attachmentItemID) === request) {
+            this.nativeOutlineRequests.delete(attachmentItemID);
+          }
+        },
+        () => {
+          if (this.nativeOutlineRequests.get(attachmentItemID) === request) {
+            this.nativeOutlineRequests.delete(attachmentItemID);
+          }
+        },
+      );
     }
 
-    let extraction: NativeOutlineExtraction | null;
-    try {
-      extraction = await request;
-    } finally {
-      if (this.nativeOutlineRequests.get(attachmentItemID) === request) {
-        this.nativeOutlineRequests.delete(attachmentItemID);
-      }
-    }
+    const extraction = await raceWithAbort(() => request, abortSignal);
+    throwIfAborted(abortSignal);
     if (!extraction) return;
 
     structure.nativeOutline = extraction.outline;
@@ -1912,6 +1950,7 @@ export class PdfToolManager {
         }
         const sourceContext = presentationAuthorization.source;
         const sourceItemKey = sourceContext.itemKey;
+        throwIfAborted(abortSignal);
         const attempt = beginPresentationAuthorizationAttempt(
           presentationAuthorization,
         );
@@ -1924,6 +1963,7 @@ export class PdfToolManager {
                 sourceItemKey,
                 true,
                 sourceContext?.libraryID,
+                abortSignal,
               )
             : fallbackStructure
               ? this.ensureExtendedStructure(fallbackStructure)
@@ -1954,6 +1994,7 @@ export class PdfToolManager {
             executionContext?.presentationProgress,
             undefined,
             sourceContext,
+            abortSignal,
           );
           finishPresentationAuthorizationAttempt(
             presentationAuthorization,
@@ -1961,9 +2002,10 @@ export class PdfToolManager {
           );
           return result;
         } catch (error) {
+          const cancelled = isAbortRequested(abortSignal);
           finishPresentationAuthorizationAttempt(
             presentationAuthorization,
-            "retryable_failure",
+            cancelled ? "cancelled" : "retryable_failure",
           );
           throw error;
         }
