@@ -3289,6 +3289,31 @@ export class ChatManager {
   }
 
   /**
+   * A cancelled presentation removes its uncommitted files from disk. Keep
+   * the app-owned card identity for the interrupted UI, but do not persist
+   * file references that would render a dead preview or open action. A
+   * completed attachment (or a generated, unattached-but-available result)
+   * is terminal and must remain usable.
+   */
+  private clearCancelledPresentationDraftArtifacts(
+    artifacts: readonly PresentationToolCardArtifact[] | undefined,
+  ): PresentationToolCardArtifact[] {
+    return (artifacts || []).map((artifact) => {
+      if (
+        artifact.isDraft === false ||
+        artifact.attachmentItemID !== undefined
+      ) {
+        return artifact;
+      }
+      return {
+        ...artifact,
+        path: undefined,
+        previewPaths: undefined,
+      };
+    });
+  }
+
+  /**
    * 流式 Tool Calling - 边输出边调用工具
    * 实现类似 Claude Code 的效果：实时显示文本和工具调用状态
    */
@@ -3548,6 +3573,10 @@ export class ChatManager {
       message.sourceItemKeys = sourceItemKeys.length
         ? sourceItemKeys
         : undefined;
+      message.presentationArtifacts =
+        this.clearCancelledPresentationDraftArtifacts(
+          message.presentationArtifacts,
+        );
       message.streamingState = "interrupted";
       message.timestamp = now;
       await this.sessionStorage.updateMessageContent(

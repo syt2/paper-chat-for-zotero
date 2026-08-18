@@ -4807,14 +4807,70 @@ describe("paperchat storage and chat manager", function () {
     assert.deepEqual(session.messages, [assistantMessage]);
     assert.equal(assistantMessage.content, "");
     assert.equal(assistantMessage.streamingState, "interrupted");
-    assert.deepEqual(assistantMessage.presentationArtifacts, [artifact]);
+    assert.deepEqual(assistantMessage.presentationArtifacts, [
+      {
+        ...artifact,
+        path: undefined,
+        previewPaths: undefined,
+      },
+    ]);
     assert.deepEqual(updates, [
       {
         content: "",
         streamingState: "interrupted",
-        presentationArtifacts: [artifact],
+        presentationArtifacts: [
+          {
+            ...artifact,
+            path: undefined,
+            previewPaths: undefined,
+          },
+        ],
       },
     ]);
+  });
+
+  it("keeps a committed presentation artifact when cancelling after import", async function () {
+    const artifact = {
+      toolCallId: "presentation-committed-cancel",
+      path: "/tmp/paperchat/presentation-committed-cancel/deck.pptx",
+      previewPaths: [
+        "/tmp/paperchat/presentation-committed-cancel/generation-01-slide-01.png",
+      ],
+      attachmentItemID: 42,
+      isDraft: false,
+    };
+    const assistantMessage: ChatMessage = {
+      id: "assistant-presentation-committed-cancel",
+      role: "assistant",
+      content: "",
+      presentationArtifacts: [artifact],
+      streamingState: "in_progress",
+      timestamp: 2,
+    };
+    const session: ChatSession = {
+      id: "session-presentation-committed-cancel",
+      createdAt: 1,
+      updatedAt: 2,
+      lastActiveItemKey: null,
+      messages: [assistantMessage],
+    };
+    const manager = Object.create(ChatManager.prototype) as any;
+    manager.currentSession = session;
+    manager.activeSessionRunIds = new Map([[session.id, 1]]);
+    manager.activeSessionAbortControllers = new Map();
+    manager.streamingSessions = new Map([[session.id, session]]);
+    manager.agentRuntime = {
+      waitForPendingMutatingToolExecutions: async () => undefined,
+    };
+    manager.sessionStorage = {
+      updateMessageContent: async () => undefined,
+      updateSessionMeta: async () => undefined,
+    };
+    manager.init = async () => undefined;
+    manager.isSessionActive = () => false;
+
+    assert.isTrue(await manager.cancelCurrentTurn());
+    assert.deepEqual(assistantMessage.presentationArtifacts, [artifact]);
   });
 
   it("cleans calling tool cards during cancel even when the assistant message is no longer marked in_progress", async function () {
