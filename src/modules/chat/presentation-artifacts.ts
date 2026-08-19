@@ -96,6 +96,16 @@ export function normalizePresentationArtifacts(
       raw.attachmentItemID > 0
         ? raw.attachmentItemID
         : undefined;
+    // Keep this bounded rather than applying a Zotero-key format check here:
+    // the lookup boundary below remains authoritative and older test/session
+    // data may contain non-canonical fixture keys.
+    const sourceItemKey = readBoundedIdentifier(raw.sourceItemKey);
+    const sourceLibraryID =
+      typeof raw.sourceLibraryID === "number" &&
+      Number.isSafeInteger(raw.sourceLibraryID) &&
+      raw.sourceLibraryID > 0
+        ? raw.sourceLibraryID
+        : undefined;
     const isDraft = typeof raw.isDraft === "boolean" ? raw.isDraft : undefined;
     const hasUsableArtifact =
       Boolean(path) ||
@@ -114,6 +124,8 @@ export function normalizePresentationArtifacts(
     normalized.push({
       toolCallId,
       ...(localId ? { localId } : {}),
+      ...(sourceItemKey ? { sourceItemKey } : {}),
+      ...(sourceLibraryID !== undefined ? { sourceLibraryID } : {}),
       path,
       previewPaths: previewPaths.length > 0 ? previewPaths : undefined,
       attachmentItemID,

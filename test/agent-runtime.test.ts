@@ -4708,6 +4708,8 @@ describe("agent runtime plan semantics", function () {
                   artifact.path === "/safe/presentation-draft.pptx" &&
                   JSON.stringify(artifact.previewPaths) ===
                     JSON.stringify(["/safe/slide-01.png"]) &&
+                  artifact.sourceItemKey === "ITEM-1" &&
+                  artifact.sourceLibraryID === 5 &&
                   artifact.isDraft === true,
               ),
             "the file milestone must reach storage before the renderer continues",

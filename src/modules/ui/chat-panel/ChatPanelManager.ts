@@ -587,13 +587,17 @@ function isTrustedPresentationPreviewPath(filePath: string): boolean {
 
 function getItemByLibraryKey(
   itemKey: string | null | undefined,
-  libraryID: number = Zotero.Libraries.userLibraryID,
+  libraryID?: number,
 ): Zotero.Item | null {
   if (!itemKey) {
     return null;
   }
+  const resolvedLibraryID = libraryID ?? Zotero.Libraries?.userLibraryID;
+  if (!Number.isSafeInteger(resolvedLibraryID)) {
+    return null;
+  }
   return (
-    (Zotero.Items.getByLibraryAndKey(libraryID, itemKey) as
+    (Zotero.Items.getByLibraryAndKey(resolvedLibraryID, itemKey) as
       | Zotero.Item
       | false) || null
   );
@@ -613,6 +617,33 @@ function getQuoteNavigationItem(
   );
 }
 
+/** Resolve the paper that owns a specific assistant presentation task. */
+function getPresentationItemForMessage(
+  message: ChatMessage | null | undefined,
+  session: ChatSession | null | undefined,
+): Zotero.Item | null {
+  if (!message) return null;
+
+  for (const artifact of message.presentationArtifacts || []) {
+    const item = getItemByLibraryKey(
+      artifact.sourceItemKey,
+      artifact.sourceLibraryID ?? session?.lastActiveItemLibraryID,
+    );
+    const paper = resolvePresentationPaperFromCandidates(item);
+    if (paper) return paper;
+  }
+
+  // Older messages predate source metadata on presentation artifacts. The
+  // assistant message still records the trusted source key, so use it before
+  // falling back to whatever paper is currently selected in Zotero.
+  for (const itemKey of message.sourceItemKeys || []) {
+    const item = getItemByLibraryKey(itemKey, session?.lastActiveItemLibraryID);
+    const paper = resolvePresentationPaperFromCandidates(item);
+    if (paper) return paper;
+  }
+  return null;
+}
+
 interface ChatMessageRenderCallbacks {
   retryableErrorMessageId?: string;
   onRetry?: () => void | Promise<void>;
@@ -625,9 +656,13 @@ interface ChatMessageRenderCallbacks {
   onNavigateToQuotedMessage?: (quote: QuotedMessageRef) => void | Promise<void>;
   onSummarizeReply?: (assistantMessageId: string) => void | Promise<void>;
   onSummarizeReplyError?: (error: Error) => void;
-  onResumePresentation?: () => void | boolean | Promise<void | boolean>;
+  onResumePresentation?: (
+    assistantMessageId: string,
+  ) => void | boolean | Promise<void | boolean>;
   onResumePresentationError?: (error: Error) => void;
-  onCancelPresentation?: () => void | boolean | Promise<void | boolean>;
+  onCancelPresentation?: (
+    assistantMessageId: string,
+  ) => void | boolean | Promise<void | boolean>;
   onCancelPresentationError?: (error: Error) => void;
   onMarkdownError?: (message: string) => void;
   onRenderComplete?: () => void;
@@ -648,7 +683,7 @@ function renderMessageElementsWithMarkdownActions(
     markdown.presentationResumeAction = {
       label: getString("chat-presentation-progress-resume"),
       busyLabel: getString("chat-presentation-progress-resuming"),
-      onResume: callbacks.onResumePresentation,
+      onResume: () => callbacks.onResumePresentation?.(""),
       onError: callbacks.onResumePresentationError,
     };
   }
@@ -656,7 +691,7 @@ function renderMessageElementsWithMarkdownActions(
     markdown.presentationCancelAction = {
       label: getString("chat-presentation-progress-cancel"),
       busyLabel: getString("chat-presentation-progress-cancelling"),
-      onCancel: callbacks.onCancelPresentation,
+      onCancel: () => callbacks.onCancelPresentation?.(""),
       onError: callbacks.onCancelPresentationError,
     };
   }
@@ -670,6 +705,10 @@ function renderMessageElementsWithMarkdownActions(
     callbacks.onRerollError,
     {
       markdown,
+      onResumePresentation: callbacks.onResumePresentation,
+      onResumePresentationError: callbacks.onResumePresentationError,
+      onCancelPresentation: callbacks.onCancelPresentation,
+      onCancelPresentationError: callbacks.onCancelPresentationError,
       onRetry: callbacks.onRetry,
       onRetryError: callbacks.onRetryError,
       onFork: callbacks.onFork,
@@ -1834,6 +1873,8 @@ async function refreshChatForContainer(container: HTMLElement): Promise<void> {
         onSummarizeReplyError: (error) => {
           refreshContext.appendError(error.message);
         },
+        onResumePresentation: (assistantMessageId) =>
+          refreshContext.launchPresentation(assistantMessageId),
         onCancelPresentation: () =>
           session ? manager.cancelSessionTurn(session.id) : false,
         onCancelPresentationError: (error) => {
@@ -2101,20 +2142,30 @@ function setupChatManagerCallbacks(
     },
     onStreamingUpdate: (content, messageId) => {
       if (container) {
+        const streamingMarkdown = createChatMarkdownRenderOptions({
+          getCurrentItem: () =>
+            getQuoteNavigationItem(
+              manager.getActiveSession(),
+              moduleCurrentItem,
+            ),
+          appendError: context.appendError,
+          enableSourceActions: false,
+        });
+        streamingMarkdown.presentationCancelAction = {
+          label: getString("chat-presentation-progress-cancel"),
+          busyLabel: getString("chat-presentation-progress-cancelling"),
+          onCancel: () => {
+            const session = manager.getActiveSession();
+            return session ? manager.cancelSessionTurn(session.id) : false;
+          },
+          onError: (error) => context.appendError(error.message),
+        };
         scheduleStreamingTextRender(
           container,
           manager,
           content,
           messageId,
-          createChatMarkdownRenderOptions({
-            getCurrentItem: () =>
-              getQuoteNavigationItem(
-                manager.getActiveSession(),
-                moduleCurrentItem,
-              ),
-            appendError: context.appendError,
-            enableSourceActions: false,
-          }),
+          streamingMarkdown,
         );
       }
     },
@@ -3278,20 +3329,28 @@ function createContext(container: HTMLElement): ChatPanelContext {
       }
     },
     summarizeConversationToNote: () => summarizeConversationToNote(context),
-    launchPresentation: async () => {
+    launchPresentation: async (assistantMessageId?: string) => {
       const session = manager.getActiveSession();
+      const taskMessage = assistantMessageId
+        ? session?.messages.find(
+            (message) =>
+              message.id === assistantMessageId && message.role === "assistant",
+          )
+        : undefined;
       const sessionItem = session?.lastActiveItemKey
         ? getItemByLibraryKey(
             session.lastActiveItemKey,
             session.lastActiveItemLibraryID,
           )
         : null;
-      const item = resolvePresentationPaperFromCandidates(
-        sessionItem,
-        moduleCurrentItem,
-        getActiveReaderItem(),
-        getSingleSelectedPresentationPaper(),
-      );
+      const item = assistantMessageId
+        ? getPresentationItemForMessage(taskMessage, session)
+        : resolvePresentationPaperFromCandidates(
+            sessionItem,
+            moduleCurrentItem,
+            getActiveReaderItem(),
+            getSingleSelectedPresentationPaper(),
+          );
       if (!item) {
         Services.prompt.alert(
           Zotero.getMainWindow() as unknown as mozIDOMWindowProxy,
@@ -3388,7 +3447,8 @@ function createContext(container: HTMLElement): ChatPanelContext {
               onSummarizeReplyError: (error) => {
                 context.appendError(error.message);
               },
-              onResumePresentation: () => context.launchPresentation(),
+              onResumePresentation: (assistantMessageId) =>
+                context.launchPresentation(assistantMessageId),
               onResumePresentationError: (error) => {
                 ztoolkit.log(
                   "[ChatPanel] Failed to resume presentation:",

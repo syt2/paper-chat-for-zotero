@@ -244,6 +244,10 @@ export interface PresentationToolCardArtifact {
   toolCallId: string;
   /** App-local identity; provider protocol still uses the original toolCallId. */
   localId?: string;
+  /** Zotero paper bound to the presentation task. */
+  sourceItemKey?: string;
+  /** Library containing sourceItemKey. */
+  sourceLibraryID?: number;
   path?: string;
   previewPaths?: string[];
   attachmentItemID?: number;

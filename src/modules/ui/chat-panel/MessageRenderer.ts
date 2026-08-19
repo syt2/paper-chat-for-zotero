@@ -437,6 +437,14 @@ interface ExecutionBannerState {
 
 export interface MessageRenderOptions {
   markdown?: MarkdownRenderOptions;
+  onResumePresentation?: (
+    assistantMessageId: string,
+  ) => void | boolean | Promise<void | boolean>;
+  onResumePresentationError?: (error: Error) => void;
+  onCancelPresentation?: (
+    assistantMessageId: string,
+  ) => void | boolean | Promise<void | boolean>;
+  onCancelPresentationError?: (error: Error) => void;
   onRetry?: () => void | Promise<void>;
   onRetryError?: (error: Error) => void;
   onFork?: (assistantMessageId: string) => void | Promise<void>;
@@ -936,16 +944,41 @@ export function createMessageElement(
       msg.presentationArtifacts,
       msg.timestamp,
     );
+    const messageMarkdownOptions = markdownOptions
+      ? { ...markdownOptions }
+      : markdownOptions;
+    if (
+      messageMarkdownOptions?.presentationResumeAction &&
+      renderOptions.onResumePresentation
+    ) {
+      const action = messageMarkdownOptions.presentationResumeAction;
+      messageMarkdownOptions.presentationResumeAction = {
+        ...action,
+        onResume: () => renderOptions.onResumePresentation!(msg.id),
+        onError: renderOptions.onResumePresentationError || action.onError,
+      };
+    }
+    if (
+      messageMarkdownOptions?.presentationCancelAction &&
+      renderOptions.onCancelPresentation
+    ) {
+      const action = messageMarkdownOptions.presentationCancelAction;
+      messageMarkdownOptions.presentationCancelAction = {
+        ...action,
+        onCancel: () => renderOptions.onCancelPresentation!(msg.id),
+        onError: renderOptions.onCancelPresentationError || action.onError,
+      };
+    }
     const hasCanonicalMaxIterationsNotice =
       msg.role === "assistant" &&
       msg.streamingState === undefined &&
       isMaxIterationsNoticeContent(msg.content);
     const trustedMarkdownOptions = hasCanonicalMaxIterationsNotice
       ? {
-          ...markdownOptions,
+          ...messageMarkdownOptions,
           enableAgentMaxPlanningIterationsSettingsLink: true,
         }
-      : markdownOptions;
+      : messageMarkdownOptions;
     if (msg.streamingState === "in_progress") {
       renderMarkdownToElement(
         content,

@@ -568,8 +568,8 @@ describe("chat message exact navigation", function () {
         {
           markdown: {
             presentationResumeAction: {
-              label: "恢复制作",
-              busyLabel: "正在恢复…",
+              label: "重新制作",
+              busyLabel: "正在重新制作…",
               onResume: async () => undefined,
             },
           },
@@ -588,12 +588,140 @@ describe("chat message exact navigation", function () {
         "interrupted",
       );
       assert.equal(elapsed?.textContent, "Elapsed 00:45");
-      assert.equal(resume?.textContent, "恢复制作");
+      assert.equal(resume?.textContent, "重新制作");
       assert.isNull(
         history.querySelector(
           '[data-presentation-indeterminate-progress="true"]',
         ),
       );
+    } finally {
+      (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
+    }
+  });
+
+  it("binds presentation resume to the clicked assistant message", async function () {
+    const originalZotero = (globalThis as { Zotero?: unknown }).Zotero;
+    (globalThis as { Zotero?: unknown }).Zotero = {
+      getMainWindow: () => null,
+    };
+    const doc = new FakeDocument();
+    const history = new FakeElement(doc, "div");
+    history.scrollHeight = 100;
+    history.clientHeight = 100;
+    let resumedMessageId: string | null = null;
+
+    try {
+      renderMessages(
+        asElement(history),
+        null,
+        [
+          message("assistant-presentation-resume-target", {
+            role: "assistant",
+            timestamp: 1_045_000,
+            content: `<tool-call status="calling" expand-key="presentation-resume-target" presentation-phase="rendering" presentation-stage="drafting" presentation-message="正在生成幻灯片" presentation-started-at="1000000" presentation-stage-started-at="1010000" presentation-updated-at="1020000">
+<tool-name>⏳ presentation</tool-name>
+<tool-status>调用中...</tool-status>
+</tool-call>`,
+            presentationArtifacts: [
+              {
+                toolCallId: "presentation-resume-target-tool-call",
+                localId: "presentation-resume-target",
+                isDraft: true,
+              },
+            ],
+            streamingState: "interrupted",
+          }),
+        ],
+        darkTheme,
+        undefined,
+        undefined,
+        undefined,
+        {
+          markdown: {
+            presentationResumeAction: {
+              label: "重新制作",
+              busyLabel: "正在重新制作…",
+              onResume: async () => undefined,
+            },
+          },
+          onResumePresentation: async (assistantMessageId) => {
+            resumedMessageId = assistantMessageId;
+          },
+        },
+      );
+
+      const resume = history.querySelector('[data-presentation-resume="true"]');
+      resume?.listeners.get("click")?.[0]?.({
+        preventDefault: () => undefined,
+        stopPropagation: () => undefined,
+      });
+      await Promise.resolve();
+      assert.equal(resumedMessageId, "assistant-presentation-resume-target");
+    } finally {
+      (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
+    }
+  });
+
+  it("keeps the card cancel action during streaming message renders", async function () {
+    const originalZotero = (globalThis as { Zotero?: unknown }).Zotero;
+    (globalThis as { Zotero?: unknown }).Zotero = {
+      getMainWindow: () => null,
+    };
+    const doc = new FakeDocument();
+    const history = new FakeElement(doc, "div");
+    history.scrollHeight = 100;
+    history.clientHeight = 100;
+    let cancelledMessageId: string | null = null;
+
+    try {
+      renderMessages(
+        asElement(history),
+        null,
+        [
+          message("assistant-presentation-cancel-target", {
+            role: "assistant",
+            content: `<tool-call status="calling" expand-key="presentation-cancel-target" presentation-phase="rendering" presentation-stage="drafting" presentation-message="正在生成幻灯片" presentation-started-at="1000000" presentation-stage-started-at="1010000" presentation-updated-at="1020000">
+<tool-name>⏳ presentation</tool-name>
+<tool-status>调用中...</tool-status>
+</tool-call>`,
+            presentationArtifacts: [
+              {
+                toolCallId: "presentation-cancel-target-tool-call",
+                localId: "presentation-cancel-target",
+                isDraft: true,
+              },
+            ],
+            streamingState: "in_progress",
+          }),
+        ],
+        darkTheme,
+        undefined,
+        undefined,
+        undefined,
+        {
+          markdown: {
+            presentationActiveToolCallIds: new Set([
+              "presentation-cancel-target",
+            ]),
+            presentationCancelAction: {
+              label: "取消制作",
+              busyLabel: "正在取消…",
+              onCancel: async () => undefined,
+            },
+          },
+          onCancelPresentation: async (assistantMessageId) => {
+            cancelledMessageId = assistantMessageId;
+          },
+        },
+      );
+
+      const cancel = history.querySelector('[data-presentation-cancel="true"]');
+      cancel?.listeners.get("click")?.[0]?.({
+        preventDefault: () => undefined,
+        stopPropagation: () => undefined,
+      });
+      await Promise.resolve();
+      assert.equal(cancelledMessageId, "assistant-presentation-cancel-target");
     } finally {
       (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
     }

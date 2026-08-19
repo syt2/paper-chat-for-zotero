@@ -1500,6 +1500,15 @@ export class AgentRuntime {
       normalizedToolCalls,
       iteration,
     );
+    const activePresentationAuthorization =
+      presentationAuthorization ||
+      presentationLaunchSession?.getAuthorization();
+    const presentationSource =
+      activePresentationAuthorization?.source ||
+      presentationLaunchSession?.source ||
+      (currentItemKey && Number.isSafeInteger(currentItemLibraryID)
+        ? { itemKey: currentItemKey, libraryID: currentItemLibraryID }
+        : undefined);
     const createPresentationProgress =
       (presentationCall: ToolCall, localId: string) =>
       async (
@@ -1541,9 +1550,6 @@ export class AgentRuntime {
           },
         );
       };
-    const activePresentationAuthorization =
-      presentationAuthorization ||
-      presentationLaunchSession?.getAuthorization();
     const executionContext: ToolSchedulerExecutionContext | undefined =
       currentItemKey ||
       presentationLaunchSession ||
@@ -1727,6 +1733,8 @@ export class AgentRuntime {
         artifacts[index] = {
           ...previous,
           ...artifact,
+          sourceItemKey: artifact.sourceItemKey || previous.sourceItemKey,
+          sourceLibraryID: artifact.sourceLibraryID || previous.sourceLibraryID,
           path: artifact.path || previous.path,
           previewPaths: artifact.previewPaths || previous.previewPaths,
           attachmentItemID:
@@ -1817,6 +1825,8 @@ export class AgentRuntime {
             upsertPresentationArtifact({
               toolCallId: toolCall.id,
               localId,
+              sourceItemKey: presentationSource?.itemKey,
+              sourceLibraryID: presentationSource?.libraryID,
               isDraft: true,
             });
           }
