@@ -34,172 +34,37 @@ describe("reading loop service", function () {
     prefEnvironment.restore();
   });
 
-  it("waits for a stable selection before creating a simplified suggestion", function () {
+  it("does not inspect PDF selections or create selection tasks while polling", async function () {
     const service = new ReadingLoopService();
     (service as any).currentPaperKey = "paper-key";
-
-    const originalNow = Date.now;
-    let now = 1000;
-    Date.now = () => now;
-    try {
-      const selectedText =
-        "The dataset improves performance in experiments with a stronger baseline.";
-
-      service.handleTextSelected(selectedText);
-      assert.equal(service.getSnapshot().state, "idle");
-      assert.isUndefined(service.getSnapshot().activeSuggestion);
-
-      now += 1000;
-      service.handleTextSelected(selectedText);
-      assert.equal(service.getSnapshot().state, "idle");
-
-      now += 1001;
-      service.handleTextSelected(selectedText);
-      const suggestion = service.getSnapshot().activeSuggestion;
-      assert.equal(suggestion?.kind, "explain_selection");
-      assert.equal(suggestion?.payload?.selectedText, selectedText);
-    } finally {
-      Date.now = originalNow;
-      service.destroy();
-    }
-  });
-
-  it("resets the selection delay when selected text changes or clears", function () {
-    const service = new ReadingLoopService();
-    (service as any).currentPaperKey = "paper-key";
-
-    const originalNow = Date.now;
-    let now = 5000;
-    Date.now = () => now;
-    try {
-      service.handleTextSelected("first selected passage");
-
-      now += 1500;
-      service.handleTextSelected("second selected passage");
-      assert.equal(service.getSnapshot().state, "idle");
-
-      now += 600;
-      service.handleSelectionCleared();
-      service.handleTextSelected("second selected passage");
-      assert.equal(service.getSnapshot().state, "idle");
-
-      now += 2100;
-      service.handleTextSelected("second selected passage");
-      assert.equal(
-        service.getSnapshot().activeSuggestion?.kind,
-        "explain_selection",
-      );
-    } finally {
-      Date.now = originalNow;
-      service.destroy();
-    }
-  });
-
-  it("removes an unaccepted selection suggestion when the selection clears", function () {
-    const service = new ReadingLoopService();
-    (service as any).currentPaperKey = "paper-key";
-
-    const originalNow = Date.now;
-    let now = 8000;
-    Date.now = () => now;
-    try {
-      const selectedText =
-        "A selected passage that should disappear when cleared.";
-      service.handleTextSelected(selectedText);
-      now += 2100;
-      service.handleTextSelected(selectedText);
-
-      assert.equal(
-        service.getSnapshot().activeSuggestion?.kind,
-        "explain_selection",
-      );
-
-      service.handleSelectionCleared();
-
-      assert.isUndefined(service.getSnapshot().activeSuggestion);
-      assert.equal(service.getSnapshot().state, "idle");
-    } finally {
-      Date.now = originalNow;
-      service.destroy();
-    }
-  });
-
-  it("keeps an already running selection task when the selection clears", function () {
-    const service = new ReadingLoopService();
-    (service as any).currentPaperKey = "paper-key";
-
-    const originalNow = Date.now;
-    let now = 12000;
-    Date.now = () => now;
-    try {
-      const selectedText = "A selected passage whose task is already running.";
-      service.handleTextSelected(selectedText);
-      now += 2100;
-      service.handleTextSelected(selectedText);
-
-      const suggestion = service.getSnapshot().activeSuggestion;
-      assert.isDefined(suggestion);
-      const expiresAt = suggestion!.expiresAt;
-      (service as any).activeSuggestion = {
-        ...suggestion,
-        status: "running",
-      };
-
-      service.handleSelectionCleared();
-
-      assert.equal(service.getSnapshot().activeSuggestion?.status, "running");
-      assert.equal(
-        service.getSnapshot().activeSuggestion?.expiresAt,
-        expiresAt,
-      );
-    } finally {
-      Date.now = originalNow;
-      service.destroy();
-    }
-  });
-
-  it("persists suggestion history and suppresses the same selection reason", function () {
+    (service as any).getActiveReaderItem = () =>
+      ({ key: "paper-key" }) as Zotero.Item;
+    (service as any).handleReaderProgressSignals = () => undefined;
     const { prefStore } = prefEnvironment;
-    const originalNow = Date.now;
-    let now = 10000;
-    Date.now = () => now;
+    const runtime = globalThis as { ztoolkit?: unknown };
+    const originalZtoolkit = runtime.ztoolkit;
+    let selectionReadCount = 0;
+    runtime.ztoolkit = {
+      log: () => undefined,
+      Reader: {
+        getReader: async () => ({}),
+        getSelectedText: () => {
+          selectionReadCount++;
+          return "Selected text that must not trigger PaperChat";
+        },
+      },
+    };
 
     try {
-      const selectedText = "This selected passage should only prompt once.";
-      const firstService = new ReadingLoopService();
-      (firstService as any).currentPaperKey = "paper-key";
+      await (service as any).pollReaderState();
 
-      firstService.handleTextSelected(selectedText);
-      now += 2100;
-      firstService.handleTextSelected(selectedText);
-
-      const firstSuggestion = firstService.getSnapshot().activeSuggestion;
-      assert.equal(firstSuggestion?.kind, "explain_selection");
-      assert.isString(
-        prefStore.get(`${PREFS_PREFIX}.readingLoopHistory`) as string,
-      );
-
-      firstService.destroy();
-      now += 10 * 60 * 1000;
-
-      const secondService = new ReadingLoopService();
-      (secondService as any).currentPaperKey = "paper-key";
-      secondService.handleTextSelected(selectedText);
-      now += 2100;
-      secondService.handleTextSelected(selectedText);
-
-      assert.isUndefined(secondService.getSnapshot().activeSuggestion);
-
-      secondService.handleTextSelected("A different selected passage is new.");
-      now += 2100;
-      secondService.handleTextSelected("A different selected passage is new.");
-      assert.equal(
-        secondService.getSnapshot().activeSuggestion?.kind,
-        "explain_selection",
-      );
-      secondService.destroy();
+      assert.equal(selectionReadCount, 0);
+      assert.equal(service.getSnapshot().state, "idle");
+      assert.isUndefined(service.getSnapshot().activeSuggestion);
+      assert.isUndefined(prefStore.get(`${PREFS_PREFIX}.readingLoopHistory`));
     } finally {
-      Date.now = originalNow;
+      runtime.ztoolkit = originalZtoolkit;
+      service.destroy();
     }
   });
 
@@ -413,13 +278,15 @@ describe("reading loop service", function () {
         };
       });
 
-      const selectedText = "This completion status should be persisted.";
-      service.handleTextSelected(selectedText);
-      now += 2100;
-      service.handleTextSelected(selectedText);
+      const item = { key: "paper-key" } as Zotero.Item;
+      service.handleChatMessageSent("为什么这里不对？", item);
+      now += 1000;
+      service.handleChatMessageSent("how should I read this?", item);
+      now += 1000;
+      service.handleChatMessageSent("这个公式是什么意思？", item);
 
       const suggestion = service.getSnapshot().activeSuggestion;
-      assert.equal(suggestion?.kind, "explain_selection");
+      assert.equal(suggestion?.kind, "followup_questions");
       await service.acceptSuggestion(suggestion!.id);
       assert.equal(service.getSnapshot().state, "completed");
       assert.isNumber(service.getSnapshot().activeSuggestion?.expiresAt);

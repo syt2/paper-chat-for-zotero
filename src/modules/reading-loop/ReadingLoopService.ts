@@ -8,11 +8,9 @@ import type {
   ReadingSuggestionKind,
 } from "./ReadingLoopTypes";
 
-const SELECTION_POLL_INTERVAL_MS = 800;
+const READER_STATE_POLL_INTERVAL_MS = 800;
 const SUGGESTION_BADGE_COOLDOWN_MS = 5 * 60 * 1000;
 const DISMISS_SILENCE_MS = 30 * 60 * 1000;
-const MAX_SELECTED_TEXT_LENGTH = 4000;
-const SELECTION_SUGGESTION_DELAY_MS = 2 * 1000;
 const COMPLETED_SUGGESTION_VISIBLE_MS = 6 * 1000;
 const HIGHLIGHT_SESSION_THRESHOLD = 3;
 const HIGHLIGHT_TOTAL_THRESHOLD = 5;
@@ -41,7 +39,6 @@ type DismissState = {
 };
 
 type PaperActivityState = {
-  selectionCount: number;
   highlightCount: number;
   progressChangeCount: number;
   pageDwellCount: number;
@@ -54,12 +51,6 @@ type ReaderPageState = {
   pageCount: number;
   pageStartedAt: number;
   suggestedDwellKeys: Set<string>;
-};
-
-type PendingSelectionState = {
-  itemKey: string;
-  text: string;
-  firstSeenAt: number;
 };
 
 type PendingProgressBucketState = {
@@ -80,10 +71,8 @@ export class ReadingLoopService {
   private activeSuggestion: ReadingSuggestion | undefined;
   private listeners = new Set<ReadingLoopListener>();
   private executor: ReadingLoopExecutor | null = null;
-  private selectionPollTimer: ReturnType<typeof setInterval> | null = null;
+  private readerStatePollTimer: ReturnType<typeof setInterval> | null = null;
   private itemNotifierID: string | null = null;
-  private lastSelectionText = "";
-  private pendingSelection: PendingSelectionState | null = null;
   private highlightSessionCounts = new Map<string, number>();
   private lastCreatedByKind = new Map<string, number>();
   private dismissStates = new Map<string, DismissState>();
@@ -104,14 +93,14 @@ export class ReadingLoopService {
     }
     this.initialized = true;
     this.refreshEnabledFromPrefs();
-    this.startSelectionPolling();
+    this.startReaderStatePolling();
     this.registerItemNotifier();
   }
 
   destroy(): void {
-    if (this.selectionPollTimer) {
-      clearInterval(this.selectionPollTimer);
-      this.selectionPollTimer = null;
+    if (this.readerStatePollTimer) {
+      clearInterval(this.readerStatePollTimer);
+      this.readerStatePollTimer = null;
     }
     if (this.itemNotifierID) {
       Zotero.Notifier.unregisterObserver(this.itemNotifierID);
@@ -122,8 +111,6 @@ export class ReadingLoopService {
     this.currentItem = null;
     this.currentPaperKey = null;
     this.activeSuggestion = undefined;
-    this.lastSelectionText = "";
-    this.pendingSelection = null;
     this.currentReaderSessionId = null;
     this.highlightSessionCounts.clear();
     this.lastCreatedByKind.clear();
@@ -178,13 +165,10 @@ export class ReadingLoopService {
     this.currentItem = item;
     this.currentPaperKey = paperKey;
     this.beginReaderSession(paperKey);
-    this.lastSelectionText = "";
-    this.pendingSelection = null;
-
     if (
       this.activeSuggestion &&
-      ((paperKey && this.activeSuggestion.itemKey !== paperKey) ||
-        this.isSelectionSuggestion(this.activeSuggestion.kind))
+      paperKey &&
+      this.activeSuggestion.itemKey !== paperKey
     ) {
       this.activeSuggestion = undefined;
       this.notify();
@@ -192,75 +176,6 @@ export class ReadingLoopService {
 
     if (paperKey) {
       this.maybeSuggestExistingHighlightDigest(paperKey);
-    }
-  }
-
-  handleTextSelected(text: string): void {
-    if (!this.enabled || !this.currentPaperKey) {
-      return;
-    }
-
-    const normalized = this.normalizeSelection(text);
-    if (normalized.length < 3) {
-      this.handleSelectionCleared();
-      return;
-    }
-    if (normalized === this.lastSelectionText) {
-      return;
-    }
-
-    const now = Date.now();
-    const pending = this.pendingSelection;
-    if (
-      !pending ||
-      pending.text !== normalized ||
-      pending.itemKey !== this.currentPaperKey
-    ) {
-      this.pendingSelection = {
-        itemKey: this.currentPaperKey,
-        text: normalized,
-        firstSeenAt: now,
-      };
-      this.clearPendingSelectionSuggestion(normalized);
-      return;
-    }
-    if (now - pending.firstSeenAt < SELECTION_SUGGESTION_DELAY_MS) {
-      return;
-    }
-
-    this.pendingSelection = null;
-    this.lastSelectionText = normalized;
-    const classified = this.classifySelection(normalized);
-    this.recordPaperActivity(this.currentPaperKey, "selectionCount");
-
-    this.createSuggestion({
-      kind: classified.kind,
-      itemKey: this.currentPaperKey,
-      title: classified.title,
-      reason: classified.reason,
-      triggerSignature: `selection:${normalized.length}:${this.hashText(
-        normalized,
-      )}`,
-      payload: {
-        selectedText: normalized.slice(0, MAX_SELECTED_TEXT_LENGTH),
-        selectedTextLength: normalized.length,
-      },
-      expiresAt: Date.now() + 2 * 60 * 1000,
-    });
-  }
-
-  handleSelectionCleared(): void {
-    this.pendingSelection = null;
-    this.lastSelectionText = "";
-    if (!this.activeSuggestion) {
-      return;
-    }
-
-    if (this.isSelectionSuggestion(this.activeSuggestion.kind)) {
-      if (this.activeSuggestion.status === "suggested") {
-        this.activeSuggestion = undefined;
-        this.notify();
-      }
     }
   }
 
@@ -469,7 +384,7 @@ export class ReadingLoopService {
       this.activeSuggestion.kind === input.kind &&
       this.activeSuggestion.status === "suggested"
     ) {
-      if (this.isCreationCoolingDown(input.kind, kindKey, now)) {
+      if (this.isCreationCoolingDown(kindKey, now)) {
         return false;
       }
       this.activeSuggestion = {
@@ -487,7 +402,7 @@ export class ReadingLoopService {
       return true;
     }
 
-    if (this.isCreationCoolingDown(input.kind, kindKey, now)) {
+    if (this.isCreationCoolingDown(kindKey, now)) {
       return false;
     }
 
@@ -573,15 +488,15 @@ export class ReadingLoopService {
     }
   }
 
-  private startSelectionPolling(): void {
-    if (this.selectionPollTimer) {
+  private startReaderStatePolling(): void {
+    if (this.readerStatePollTimer) {
       return;
     }
-    this.selectionPollTimer = setInterval(() => {
+    this.readerStatePollTimer = setInterval(() => {
       this.pollReaderState().catch((error) => {
         ztoolkit.log("[ReadingLoop] Poll failed:", error);
       });
-    }, SELECTION_POLL_INTERVAL_MS);
+    }, READER_STATE_POLL_INTERVAL_MS);
   }
 
   private async pollReaderState(): Promise<void> {
@@ -604,15 +519,6 @@ export class ReadingLoopService {
       return;
     }
     this.handleReaderProgressSignals();
-
-    const selectedText = await this.readActivePdfSelection();
-    if (selectedText) {
-      this.handleTextSelected(selectedText);
-    } else if (this.lastSelectionText) {
-      this.handleSelectionCleared();
-    } else if (this.pendingSelection) {
-      this.handleSelectionCleared();
-    }
   }
 
   private expireStaleSuggestion(): void {
@@ -660,105 +566,6 @@ export class ReadingLoopService {
     } catch {
       return null;
     }
-  }
-
-  private async readActivePdfSelection(): Promise<string> {
-    try {
-      const reader =
-        (await ztoolkit.Reader.getReader().catch(() => null)) ||
-        this.getActiveReader();
-      const toolkitSelectedText = reader
-        ? ztoolkit.Reader.getSelectedText(reader)
-        : "";
-      const iframeWindow = reader?._iframeWindow;
-      const pdfViewerDocument =
-        iframeWindow?.PDFViewerApplication?.pdfViewer?.container?.ownerDocument;
-      const mainWindow = Zotero.getMainWindow();
-      const selectedText =
-        toolkitSelectedText ||
-        iframeWindow?.getSelection?.()?.toString() ||
-        iframeWindow?.document?.getSelection?.()?.toString() ||
-        pdfViewerDocument?.getSelection?.()?.toString() ||
-        mainWindow?.getSelection?.()?.toString() ||
-        mainWindow?.document?.getSelection?.()?.toString() ||
-        "";
-      return this.normalizeSelection(selectedText);
-    } catch {
-      return "";
-    }
-  }
-
-  private normalizeSelection(text: string): string {
-    return text.replace(/\s+/g, " ").trim();
-  }
-
-  private classifySelection(text: string): {
-    kind: ReadingSuggestionKind;
-    title: string;
-    reason: string;
-  } {
-    if (text.length > 800) {
-      return {
-        kind: "save_selection_note",
-        title: "保存选中文本到笔记",
-        reason: "来自较长 PDF 选中文本",
-      };
-    }
-
-    if (this.looksLikeVisualReference(text)) {
-      return {
-        kind: "explain_visual_context",
-        title: "解释这处图表线索",
-        reason: "来自当前 PDF 选中的图表/图片线索",
-      };
-    }
-
-    if (this.looksLikeFormula(text)) {
-      return {
-        kind: "explain_formula",
-        title: "解释当前公式",
-        reason: "来自当前 PDF 选中的公式或符号",
-      };
-    }
-
-    if (this.looksLikeCitation(text)) {
-      return {
-        kind: "trace_reference",
-        title: "追踪这处引用线索",
-        reason: "来自当前 PDF 选中的引用或参考文献",
-      };
-    }
-
-    return {
-      kind: "explain_selection",
-      title: "解释当前选中文本",
-      reason: "来自当前 PDF 选中文本",
-    };
-  }
-
-  private looksLikeVisualReference(text: string): boolean {
-    return /\b(fig(?:ure)?|table|scheme|algorithm|image|panel)\s*\.?\s*\d+[a-z]?\b/i.test(
-      text,
-    );
-  }
-
-  private looksLikeFormula(text: string): boolean {
-    return (
-      /\b(eq(?:uation)?|formula)\s*\.?\s*\(?\d+[a-z]?\)?\b/i.test(text) ||
-      /[=≈≃≤≥∑∫√∞±×÷∂∇α-ωΑ-Ω]/u.test(text)
-    );
-  }
-
-  private looksLikeCitation(text: string): boolean {
-    return (
-      /\[(?:\d{1,3}|[A-Z][A-Za-z-]+(?:\s+et\s+al\.)?)(?:\s*[,;]\s*(?:\d{1,3}|[A-Z][A-Za-z-]+(?:\s+et\s+al\.)?))*\]/.test(
-        text,
-      ) ||
-      /\b[A-Z][A-Za-z-]+(?:\s+et\s+al\.)?,\s*(?:19|20)\d{2}\b/.test(text) ||
-      /\((?:[A-Z][A-Za-z-]+(?:\s+et\s+al\.)?,\s*)?(?:19|20)\d{2}[a-z]?\)/.test(
-        text,
-      )
-    );
   }
 
   private looksLikeQuestionOrConfusion(text: string): boolean {
@@ -937,7 +744,6 @@ export class ReadingLoopService {
 
     const activity = this.paperActivityStates.get(this.currentPaperKey);
     const shouldSuggest =
-      (activity?.selectionCount || 0) > 0 ||
       (activity?.highlightCount || 0) > 0 ||
       (activity?.pageDwellCount || 0) >= 2;
     if (!shouldSuggest) {
@@ -968,20 +774,12 @@ export class ReadingLoopService {
     const activeDurationMs = now - this.currentItemStartedAt;
     const hasMeaningfulActivity =
       activeDurationMs >= CLOSE_CHECKPOINT_MIN_ACTIVITY_MS ||
-      (activity?.selectionCount || 0) > 0 ||
       (activity?.highlightCount || 0) > 0 ||
       (activity?.progressChangeCount || 0) > 0 ||
       (activity?.pageDwellCount || 0) > 0 ||
       (activity?.questionSignalCount || 0) > 0;
     if (!hasMeaningfulActivity) {
       return;
-    }
-
-    const clearedStaleSelection =
-      this.activeSuggestion?.itemKey === paperKey &&
-      this.isSelectionSuggestion(this.activeSuggestion.kind);
-    if (clearedStaleSelection) {
-      this.activeSuggestion = undefined;
     }
 
     this.createSuggestion({
@@ -996,9 +794,6 @@ export class ReadingLoopService {
         activity,
       },
     });
-    if (clearedStaleSelection && !this.activeSuggestion) {
-      this.notify();
-    }
   }
 
   private readActiveReaderProgress(): {
@@ -1124,28 +919,7 @@ export class ReadingLoopService {
     return `${itemKey}:${kind}`;
   }
 
-  private shouldApplyCreationCooldown(kind: ReadingSuggestionKind): boolean {
-    return !this.isSelectionSuggestion(kind);
-  }
-
-  private isSelectionSuggestion(kind: ReadingSuggestionKind): boolean {
-    return [
-      "explain_selection",
-      "save_selection_note",
-      "explain_visual_context",
-      "explain_formula",
-      "trace_reference",
-    ].includes(kind);
-  }
-
-  private isCreationCoolingDown(
-    kind: ReadingSuggestionKind,
-    kindKey: string,
-    now: number,
-  ): boolean {
-    if (!this.shouldApplyCreationCooldown(kind)) {
-      return false;
-    }
+  private isCreationCoolingDown(kindKey: string, now: number): boolean {
     const lastCreatedAt = this.lastCreatedByKind.get(kindKey);
     if (typeof lastCreatedAt !== "number") {
       return false;
@@ -1192,18 +966,6 @@ export class ReadingLoopService {
     }
   }
 
-  private clearPendingSelectionSuggestion(nextText: string): void {
-    if (
-      this.activeSuggestion?.status === "suggested" &&
-      this.isSelectionSuggestion(this.activeSuggestion.kind) &&
-      this.activeSuggestion.payload?.selectedText !== nextText
-    ) {
-      this.activeSuggestion = undefined;
-      this.lastSelectionText = "";
-      this.notify();
-    }
-  }
-
   private recordPaperActivity(
     paperKey: string,
     field: keyof Omit<PaperActivityState, "lastActiveAt">,
@@ -1235,7 +997,6 @@ export class ReadingLoopService {
 
   private createEmptyPaperActivityState(): PaperActivityState {
     return {
-      selectionCount: 0,
       highlightCount: 0,
       progressChangeCount: 0,
       pageDwellCount: 0,
@@ -1278,15 +1039,6 @@ export class ReadingLoopService {
       ? String(parsedDate).padStart(13, "0")
       : String(rawDate);
     return `${datePart}:${String(candidate.key || candidate.id || "")}`;
-  }
-
-  private hashText(text: string): string {
-    let hash = 2166136261;
-    for (let index = 0; index < text.length; index++) {
-      hash ^= text.charCodeAt(index);
-      hash = Math.imul(hash, 16777619);
-    }
-    return (hash >>> 0).toString(36);
   }
 
   private openNoteByKey(noteKey: string): void {
