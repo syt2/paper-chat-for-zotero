@@ -193,7 +193,7 @@ describe("AI summary automatic trigger", function () {
     assert.equal(scheduled, 1);
   });
 
-  it("accepts an independent PDF from the item list and PDF reader", function () {
+  it("accepts an independent PDF from the item list", function () {
     const service = serviceModule.getAISummaryService() as any;
     const pdf = {
       id: 27,
@@ -210,10 +210,27 @@ describe("AI summary automatic trigger", function () {
     };
 
     assert.strictEqual(service.getSummaryTargetItem(pdf), pdf);
-    assert.strictEqual(
-      service.getParentItemFromReader({ itemID: pdf.id }),
-      pdf,
-    );
+  });
+
+  it("does not register AI summary actions in PDF reader context menus", function () {
+    const service = serviceModule.getAISummaryService() as any;
+    const registeredReaderEvents: string[] = [];
+    (globalThis as any).Zotero = {
+      Notifier: {
+        registerObserver: () => "ai-summary-observer",
+        unregisterObserver: () => undefined,
+      },
+      Reader: {
+        registerEventListener: (event: string) => {
+          registeredReaderEvents.push(event);
+        },
+        unregisterEventListener: () => undefined,
+      },
+    };
+
+    service.init();
+
+    assert.deepEqual(registeredReaderEvents, []);
   });
 
   it("schedules an independent PDF when automatic summaries are enabled", async function () {

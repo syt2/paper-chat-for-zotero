@@ -18,7 +18,6 @@ import {
 import { ANALYTICS_EVENTS, getAnalyticsService } from "../analytics";
 import { getProviderManager } from "../providers";
 
-type AISummaryRequestSource = "item_context_menu" | "reader_context_menu";
 const MAX_CONTEXT_MENU_SUMMARY_ITEMS = 10;
 
 // 任务状态
@@ -62,21 +61,16 @@ class AISummaryService {
   ) => void;
   private onOpenTaskWindow?: () => void;
 
-  // Reader 事件监听器引用，用于取消注册
-  private readerViewMenuHandler?: (event: any) => void;
-  private readerAnnotationMenuHandler?: (event: any) => void;
-
   private initialized: boolean = false;
 
   /**
-   * 初始化服务（notifier + Reader 菜单，在 onStartup 中调用）
+   * 初始化服务（notifier，在 onStartup 中调用）
    */
   init(): void {
     if (this.initialized) return;
     this.initialized = true;
     this.isDestroyed = false;
     this.registerItemNotifier();
-    this.registerReaderContextMenu();
     ztoolkit.log("[AISummaryService] Initialized");
   }
 
@@ -112,7 +106,7 @@ class AISummaryService {
               }
             }
           }
-          this.trackSummaryRequested("quick", "item_context_menu", {
+          this.trackSummaryRequested("quick", {
             requestedItemCount: queuedCount,
           });
           this.onOpenTaskWindow?.();
@@ -180,7 +174,7 @@ class AISummaryService {
               }
             }
           }
-          this.trackSummaryRequested("deep", "item_context_menu", {
+          this.trackSummaryRequested("deep", {
             requestedItemCount: queuedCount,
           });
           this.onOpenTaskWindow?.();
@@ -242,7 +236,6 @@ class AISummaryService {
     this.initialized = false;
     this.isDestroyed = true;
     this.unregisterItemNotifier();
-    this.unregisterReaderContextMenu();
     this.clearAllPendingTimers();
     // 清空回调，防止销毁后仍被调用
     this.onTaskUpdate = undefined;
@@ -497,23 +490,12 @@ class AISummaryService {
   /**
    * 手动添加条目到队列（右键菜单使用）
    */
-  addItemToQueue(item: Zotero.Item, source?: AISummaryRequestSource): boolean {
-    const queued = this.addToQueue(item, "quick");
-    if (queued && source) {
-      this.trackSummaryRequested("quick", source, { requestedItemCount: 1 });
-    }
-    return queued;
+  addItemToQueue(item: Zotero.Item): boolean {
+    return this.addToQueue(item, "quick");
   }
 
-  addDeepItemToQueue(
-    item: Zotero.Item,
-    source?: AISummaryRequestSource,
-  ): boolean {
-    const queued = this.addToQueue(item, "deep");
-    if (queued && source) {
-      this.trackSummaryRequested("deep", source, { requestedItemCount: 1 });
-    }
-    return queued;
+  addDeepItemToQueue(item: Zotero.Item): boolean {
+    return this.addToQueue(item, "deep");
   }
 
   /**
@@ -625,40 +607,8 @@ class AISummaryService {
     );
   }
 
-  private appendReaderSummaryMenuItems(
-    append: (options: { label: string; onCommand: () => void }) => void,
-    parentItem: Zotero.Item,
-  ): void {
-    if (this.isSummaryQueueActive()) return;
-
-    append({
-      label: getString("aisummary-menu-generate"),
-      onCommand: () => {
-        if (this.isSummaryQueueActive()) return;
-        this.addItemToQueue(parentItem, "reader_context_menu");
-        this.onOpenTaskWindow?.();
-      },
-    });
-
-    const config = getAISummaryManager().getConfig();
-    if (
-      !this.hasDeepSummary(parentItem) &&
-      (!config.filterHasPdf || this.hasPdfAttachment(parentItem))
-    ) {
-      append({
-        label: getString("aisummary-menu-generate-deep"),
-        onCommand: () => {
-          if (this.isSummaryQueueActive()) return;
-          this.addDeepItemToQueue(parentItem, "reader_context_menu");
-          this.onOpenTaskWindow?.();
-        },
-      });
-    }
-  }
-
   private trackSummaryRequested(
     mode: AISummaryMode,
-    source: AISummaryRequestSource,
     props: { requestedItemCount: number },
   ): void {
     if (props.requestedItemCount <= 0) return;
@@ -668,7 +618,7 @@ class AISummaryService {
         ? ANALYTICS_EVENTS.aiSummaryDeepRequested
         : ANALYTICS_EVENTS.aiSummaryQuickRequested,
       {
-        source,
+        source: "item_context_menu",
         itemCount: props.requestedItemCount,
         provider: getProviderManager().getActiveProviderId(),
       },
@@ -690,95 +640,6 @@ class AISummaryService {
    */
   private notifyUpdate(): void {
     this.onTaskUpdate?.(this.taskQueue, this.taskHistory);
-  }
-
-  /**
-   * 注册 PDF 阅读器右键菜单（通过 Zotero.Reader API，不依赖 ztoolkit）
-   */
-  private registerReaderContextMenu(): void {
-    // 检查 Zotero.Reader API 是否可用
-    if (!Zotero.Reader?.registerEventListener) {
-      ztoolkit.log(
-        "[AISummaryService] Zotero.Reader.registerEventListener not available",
-      );
-      return;
-    }
-
-    // PDF 阅读器视图右键菜单（选中文本或空白处右键）
-    this.readerViewMenuHandler = (event: {
-      append: (options: { label: string; onCommand: () => void }) => void;
-      reader: { itemID?: number };
-    }) => {
-      const { append, reader } = event;
-
-      const parentItem = this.getParentItemFromReader(reader);
-      if (!parentItem) return;
-
-      this.appendReaderSummaryMenuItems(append, parentItem);
-    };
-
-    Zotero.Reader.registerEventListener(
-      "createViewContextMenu",
-      this.readerViewMenuHandler,
-      addon.data.config.addonRef,
-    );
-
-    // PDF 阅读器标注右键菜单（标注上右键）
-    this.readerAnnotationMenuHandler = (event: {
-      append: (options: { label: string; onCommand: () => void }) => void;
-      reader: { itemID?: number };
-    }) => {
-      const { append, reader } = event;
-
-      const parentItem = this.getParentItemFromReader(reader);
-      if (!parentItem) return;
-
-      this.appendReaderSummaryMenuItems(append, parentItem);
-    };
-
-    Zotero.Reader.registerEventListener(
-      "createAnnotationContextMenu",
-      this.readerAnnotationMenuHandler,
-      addon.data.config.addonRef,
-    );
-
-    ztoolkit.log("[AISummaryService] Reader context menu registered");
-  }
-
-  /**
-   * 取消注册 PDF 阅读器右键菜单
-   */
-  private unregisterReaderContextMenu(): void {
-    if (!Zotero.Reader?.unregisterEventListener) return;
-
-    if (this.readerViewMenuHandler) {
-      Zotero.Reader.unregisterEventListener(
-        "createViewContextMenu",
-        this.readerViewMenuHandler,
-      );
-      this.readerViewMenuHandler = undefined;
-    }
-    if (this.readerAnnotationMenuHandler) {
-      Zotero.Reader.unregisterEventListener(
-        "createAnnotationContextMenu",
-        this.readerAnnotationMenuHandler,
-      );
-      this.readerAnnotationMenuHandler = undefined;
-    }
-
-    ztoolkit.log("[AISummaryService] Reader context menu unregistered");
-  }
-
-  /** Resolve the Reader PDF to its paper, or keep an independent PDF. */
-  private getParentItemFromReader(reader: {
-    itemID?: number;
-  }): Zotero.Item | null {
-    if (!reader.itemID) return null;
-
-    const item = Zotero.Items.get(reader.itemID);
-    if (!item) return null;
-
-    return this.getSummaryTargetItem(item);
   }
 }
 
