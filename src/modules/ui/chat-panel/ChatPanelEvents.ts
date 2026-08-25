@@ -3,9 +3,10 @@
  */
 
 import { config } from "../../../../package.json";
+import { graphemeSegments } from "unicode-segmenter/grapheme";
 import type { ChatPanelContext, AttachmentState, SessionInfo } from "./types";
 import { createElement, copyToClipboard } from "./ChatPanelBuilder";
-import { getCurrentTheme } from "./ChatPanelTheme";
+import { darkTheme, getCurrentTheme } from "./ChatPanelTheme";
 import {
   createHistoryDropdownState,
   refreshHistoryDropdownSearch,
@@ -178,7 +179,33 @@ export function updateConversationNoteSummaryButton(
 interface AttachmentPreviewActions {
   onRemoveImage?: (index: number) => void;
   onRemoveQuote?: (index: number) => void;
+  onRemoveSelectedText?: () => void;
+  onPinSelectedText?: () => void;
+  onRemovePinnedSelectedText?: (index: number) => void;
   onNavigateQuote?: (quote: QuotedMessageRef) => void | Promise<void>;
+}
+
+const SELECTION_ATTACHMENT_PREVIEW_LIMIT = 20;
+
+export function formatSelectedTextAttachmentLabel(
+  text: string,
+  label = "Selection",
+): string {
+  const normalized = text.trim().replace(/\s+/g, " ");
+  const characters = Array.from(
+    graphemeSegments(normalized),
+    ({ segment }) => segment,
+  );
+  if (characters.length <= SELECTION_ATTACHMENT_PREVIEW_LIMIT) {
+    return `${label}: ${normalized}`;
+  }
+
+  const visibleCharacters = SELECTION_ATTACHMENT_PREVIEW_LIMIT - 3;
+  const prefixLength = Math.ceil(visibleCharacters / 2);
+  const suffixLength = Math.floor(visibleCharacters / 2);
+  return `${label}: ${characters.slice(0, prefixLength).join("")}...${characters
+    .slice(-suffixLength)
+    .join("")}`;
 }
 
 function clearPendingQuotedMessages(context: ChatPanelContext): void {
@@ -755,6 +782,7 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
         messageInput.value.trim() ||
         draft.pendingImages.length ||
         draft.pendingFiles.length ||
+        draft.pinnedSelectedTexts?.length ||
         draft.pendingSelectedText ||
         draft.pendingQuotedMessages.length
       ) {
@@ -1669,6 +1697,23 @@ export function updateAttachmentsPreviewDisplay(
     return label;
   };
 
+  const addCompactButtonFeedback = (button: HTMLElement): void => {
+    button.addEventListener("mouseenter", () => {
+      button.style.background = theme.hoverBg;
+    });
+    button.addEventListener("mouseleave", () => {
+      button.style.background = "transparent";
+    });
+    button.addEventListener("focus", () => {
+      button.style.outline = `2px solid ${theme.inputFocusBorderColor}`;
+      button.style.outlineOffset = "1px";
+    });
+    button.addEventListener("blur", () => {
+      button.style.outline = "";
+      button.style.outlineOffset = "";
+    });
+  };
+
   const createRemoveButton = (
     label: string,
     onRemove: () => void,
@@ -1706,7 +1751,39 @@ export function updateAttachmentsPreviewDisplay(
     removeBtn.addEventListener("mouseleave", () => {
       removeBtn.style.opacity = "0.7";
     });
+    addCompactButtonFeedback(removeBtn);
     return removeBtn;
+  };
+
+  const createPinButton = (onPin: () => void): HTMLElement => {
+    const pinBtn = createElement(
+      doc,
+      "button",
+      {
+        flex: "0 0 auto",
+        width: "18px",
+        height: "18px",
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "transparent",
+        border: "none",
+        padding: "0",
+        cursor: "pointer",
+        fontSize: "12px",
+        color: theme.textSecondary,
+        lineHeight: "1",
+      },
+      { type: "button", "aria-label": getString("chat-pin-selected-text") },
+    );
+    pinBtn.textContent = "📌";
+    pinBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onPin();
+    });
+    addCompactButtonFeedback(pinBtn);
+    return pinBtn;
   };
 
   attachmentState.pendingQuotedMessages.forEach((quote, index) => {
@@ -1746,9 +1823,69 @@ export function updateAttachmentsPreviewDisplay(
     attachmentsPreview.appendChild(tag);
   });
 
+  const selectionLabel = getString("chat-selected-text-label");
+  const pinnedSelectedTexts = attachmentState.pinnedSelectedTexts || [];
+  pinnedSelectedTexts.forEach((selectedText, index) => {
+    const tag = createTag();
+    tag.setAttribute("class", "pinned-selected-text");
+    tag.setAttribute("title", selectedText);
+    // A pinned passage is durable context, while the regular selection is
+    // still replaceable. Give it a warm, persistent treatment so the two
+    // states remain distinguishable even after the pin action disappears.
+    tag.style.background =
+      theme === darkTheme ? "rgba(245, 158, 11, 0.16)" : "#fff7ed";
+    tag.style.borderColor =
+      theme === darkTheme ? "rgba(245, 158, 11, 0.5)" : "#fed7aa";
+    const pinIndicator = createElement(
+      doc,
+      "span",
+      {
+        flex: "0 0 auto",
+        color: theme === darkTheme ? "#fbbf24" : "#c2410c",
+        fontSize: "11px",
+        lineHeight: "1",
+      },
+      { "aria-hidden": "true" },
+    );
+    pinIndicator.textContent = "📌";
+    tag.appendChild(pinIndicator);
+    tag.appendChild(
+      createLabel(
+        formatSelectedTextAttachmentLabel(selectedText, selectionLabel),
+      ),
+    );
+    if (actions.onRemovePinnedSelectedText) {
+      tag.appendChild(
+        createRemoveButton(getString("chat-remove-selected-text"), () =>
+          actions.onRemovePinnedSelectedText?.(index),
+        ),
+      );
+    }
+    attachmentsPreview.appendChild(tag);
+  });
+
   if (attachmentState.pendingSelectedText) {
     const tag = createTag();
-    tag.appendChild(createLabel("Selection"));
+    tag.setAttribute("class", "pending-selected-text");
+    tag.setAttribute("title", attachmentState.pendingSelectedText);
+    tag.appendChild(
+      createLabel(
+        formatSelectedTextAttachmentLabel(
+          attachmentState.pendingSelectedText,
+          selectionLabel,
+        ),
+      ),
+    );
+    if (actions.onPinSelectedText) {
+      tag.appendChild(createPinButton(actions.onPinSelectedText));
+    }
+    if (actions.onRemoveSelectedText) {
+      tag.appendChild(
+        createRemoveButton(getString("chat-remove-selected-text"), () =>
+          actions.onRemoveSelectedText?.(),
+        ),
+      );
+    }
     attachmentsPreview.appendChild(tag);
   }
 
@@ -1800,6 +1937,7 @@ export function updateAttachmentsPreviewDisplay(
     attachmentState.pendingQuotedMessages.length +
     attachmentState.pendingImages.length +
     attachmentState.pendingFiles.length +
+    pinnedSelectedTexts.length +
     (attachmentState.pendingSelectedText ? 1 : 0);
   attachmentsPreview.style.display = attachmentCount > 0 ? "flex" : "none";
 }
@@ -2073,7 +2211,10 @@ async function sendMessage(
         attachmentState.pendingFiles.length > 0
           ? attachmentState.pendingFiles
           : undefined,
-      selectedText: attachmentState.pendingSelectedText || undefined,
+      selectedTexts: [
+        ...(attachmentState.pinnedSelectedTexts || []),
+        attachmentState.pendingSelectedText,
+      ].filter((text): text is string => !!text),
       quotedMessages:
         attachmentState.pendingQuotedMessages.length > 0
           ? attachmentState.pendingQuotedMessages

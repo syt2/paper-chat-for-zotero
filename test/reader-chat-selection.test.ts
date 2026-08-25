@@ -1,5 +1,8 @@
 import { assert } from "chai";
-import { collectAnnotationText } from "../src/modules/ui/reader-chat-selection.ts";
+import {
+  collectAnnotationText,
+  getSelectionEntryPosition,
+} from "../src/modules/ui/reader-chat-selection.ts";
 
 type FakeAnnotation = {
   annotationText?: string;
@@ -77,5 +80,27 @@ describe("reader chat selection", function () {
 
     attachment = false;
     assert.equal(collectAnnotationText({ itemID: 7 }, ["A1"]), "");
+  });
+
+  it("places the selection entry to the right of the selected line", function () {
+    assert.deepEqual(
+      getSelectionEntryPosition(
+        { left: 100, right: 160, top: 40, height: 22 },
+        500,
+        400,
+      ),
+      { left: 164, top: 42 },
+    );
+  });
+
+  it("moves the selection entry to the left when the right edge has no room", function () {
+    assert.deepEqual(
+      getSelectionEntryPosition(
+        { left: 470, right: 496, top: 380, height: 22 },
+        500,
+        400,
+      ),
+      { left: 448, top: 382 },
+    );
   });
 });

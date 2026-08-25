@@ -129,6 +129,11 @@ import {
 import { isAbortError, SessionRunInvalidatedError } from "./errors";
 import { ANALYTICS_EVENTS, getAnalyticsService } from "../analytics";
 import { providerSupportsToolCalling } from "../providers/provider-capabilities";
+import {
+  formatSelectedTextsForPrompt,
+  normalizeSelectedTexts,
+  serializeSelectedTexts,
+} from "./selected-text-format";
 import type {
   ChatHistoryMessagePage,
   ChatHistorySearchPage,
@@ -1728,6 +1733,10 @@ export class ChatManager {
 
     const item = options.item;
     const hasCurrentItem = item !== null && item !== undefined && item.id !== 0;
+    const selectedTexts = normalizeSelectedTexts(
+      options.selectedTexts,
+      options.selectedText,
+    );
     const itemKey = hasCurrentItem ? item!.key : null;
     const itemTitle = hasCurrentItem ? getItemTitleSmart(item!) : null;
     ztoolkit.log(
@@ -1849,7 +1858,7 @@ export class ChatManager {
       attach_pdf: !!options.attachPdf,
       image_count: options.images?.length || 0,
       file_count: options.files?.length || 0,
-      has_selected_text: !!options.selectedText,
+      has_selected_text: selectedTexts.length > 0,
     });
 
     try {
@@ -1971,14 +1980,6 @@ export class ChatManager {
       // 构建最终消息内容
       let finalContent = content;
 
-      // 处理选中文本
-      if (options.selectedText) {
-        const prefix = hasCurrentItem
-          ? "[Selected text from PDF]"
-          : "[Selected text]";
-        finalContent = `${prefix}:\n"${options.selectedText}"\n\n[Question]:\n${content}`;
-      }
-
       // PDF 附件相关
       let pdfAttachment:
         | { data: string; mimeType: string; name: string }
@@ -2057,6 +2058,13 @@ export class ChatManager {
         finalContent = `${filesContent}\n\n[Question]:\n${content}`;
       }
 
+      // Compose selections last so PDF/file context cannot overwrite them.
+      if (selectedTexts.length > 0) {
+        const questionAndAttachments =
+          finalContent === content ? `[Question]:\n${content}` : finalContent;
+        finalContent = `${formatSelectedTextsForPrompt(selectedTexts)}\n\n${questionAndAttachments}`;
+      }
+
       // 创建用户消息
       const wasDraftSession = !reusedUserMessage
         ? this.isDraftSession(sendingSession)
@@ -2071,7 +2079,10 @@ export class ChatManager {
         quotedMessages: quotedMessages.length > 0 ? quotedMessages : undefined,
         timestamp: Date.now(),
         pdfContext: pdfWasAttached,
-        selectedText: options.selectedText,
+        selectedText:
+          selectedTexts.length > 0
+            ? serializeSelectedTexts(selectedTexts)
+            : undefined,
       };
 
       if (!reusedUserMessage) {

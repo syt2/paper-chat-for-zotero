@@ -31,6 +31,7 @@ function turn(
       attachmentState: {
         pendingImages: [],
         pendingFiles: [],
+        pinnedSelectedTexts: [],
         pendingSelectedText: null,
         pendingQuotedMessages: [],
       },

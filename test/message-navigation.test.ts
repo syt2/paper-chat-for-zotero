@@ -22,9 +22,17 @@ import {
   shouldResetSummaryButtonBusyState,
 } from "../src/modules/ui/chat-panel/NoteSummaryActions.ts";
 import {
+  formatSelectedTextAttachmentLabel,
   syncSessionNavigationState,
   updateAttachmentsPreviewDisplay,
 } from "../src/modules/ui/chat-panel/ChatPanelEvents.ts";
+import {
+  formatSelectedTextsForDisplay,
+  formatSelectedTextsForPrompt,
+  normalizeSelectedTexts,
+  serializeSelectedTexts,
+  splitSelectedTexts,
+} from "../src/modules/chat/selected-text-format.ts";
 
 interface RectInit {
   top: number;
@@ -287,6 +295,7 @@ describe("chat message exact navigation", function () {
           mimeType: "text/plain",
         },
       ],
+      pinnedSelectedTexts: [],
       pendingSelectedText: "keep selected text",
       pendingQuotedMessages: [
         {
@@ -1020,6 +1029,7 @@ describe("chat message exact navigation", function () {
           },
         ],
         pendingFiles: [],
+        pinnedSelectedTexts: [],
         pendingSelectedText: null,
       },
       {
@@ -1064,6 +1074,153 @@ describe("chat message exact navigation", function () {
       stopPropagation: () => undefined,
     });
     assert.deepEqual(removedImages, [0]);
+  });
+
+  it("renders one removable selected-text preview with both ends of long text", function () {
+    const doc = new FakeDocument();
+    const preview = new FakeElement(doc, "div");
+    const container = new AttachmentPreviewContainer(doc, preview);
+    let removedSelections = 0;
+    const selectedText =
+      "The opening of this selected passage has useful context, but the ending carries the conclusion.";
+
+    updateAttachmentsPreviewDisplay(
+      asElement(container),
+      {
+        pendingQuotedMessages: [],
+        pendingImages: [],
+        pendingFiles: [],
+        pinnedSelectedTexts: [],
+        pendingSelectedText: selectedText,
+      },
+      {
+        onRemoveSelectedText: () => {
+          removedSelections += 1;
+        },
+      },
+    );
+
+    assert.equal(preview.style.display, "flex");
+    assert.lengthOf(preview.children, 1);
+    const selectionTag = preview.children[0];
+    assert.equal(selectionTag.getAttribute("class"), "pending-selected-text");
+    assert.include(
+      selectionTag.children[0].textContent,
+      "paperchat-chat-selected-text-label: The openi",
+    );
+    assert.include(selectionTag.children[0].textContent, "clusion.");
+    selectionTag.children[1].listeners.get("click")?.[0]?.({
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+    });
+    assert.equal(removedSelections, 1);
+  });
+
+  it("limits selected-text previews to 20 characters around a middle ellipsis", function () {
+    assert.equal(
+      formatSelectedTextAttachmentLabel("  First line\nsecond line  "),
+      "Selection: First lin...ond line",
+    );
+    assert.equal(
+      formatSelectedTextAttachmentLabel("12345678😀abcdefghijkl"),
+      "Selection: 12345678😀...efghijkl",
+    );
+  });
+
+  it("uses the translated selection label supplied by the panel", function () {
+    assert.equal(
+      formatSelectedTextAttachmentLabel("short text", "选区"),
+      "选区: short text",
+    );
+  });
+
+  it("renders pinned selections alongside one pinnable current selection", function () {
+    const doc = new FakeDocument();
+    const preview = new FakeElement(doc, "div");
+    const container = new AttachmentPreviewContainer(doc, preview);
+    const removedPinnedSelections: number[] = [];
+    let pinCurrentSelection = 0;
+
+    updateAttachmentsPreviewDisplay(
+      asElement(container),
+      {
+        pendingQuotedMessages: [],
+        pendingImages: [],
+        pendingFiles: [],
+        pinnedSelectedTexts: ["Keep this passage"],
+        pendingSelectedText: "Add this passage next",
+      },
+      {
+        onPinSelectedText: () => {
+          pinCurrentSelection += 1;
+        },
+        onRemovePinnedSelectedText: (index) => {
+          removedPinnedSelections.push(index);
+        },
+      },
+    );
+
+    assert.lengthOf(preview.children, 2);
+    assert.equal(
+      preview.children[0].getAttribute("class"),
+      "pinned-selected-text",
+    );
+    assert.equal(
+      preview.children[1].getAttribute("class"),
+      "pending-selected-text",
+    );
+    assert.equal(preview.children[0].style.background, "#fff7ed");
+    assert.equal(preview.children[0].children[0].textContent, "📌");
+    preview.children[0].children[2].listeners.get("click")?.[0]?.({
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+    });
+    preview.children[1].children[1].listeners.get("click")?.[0]?.({
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+    });
+    assert.deepEqual(removedPinnedSelections, [0]);
+    assert.equal(pinCurrentSelection, 1);
+  });
+
+  it("sends and displays pinned selections as distinct numbered blocks", function () {
+    const selections = normalizeSelectedTexts(
+      ["Pinned evidence", "Current evidence"],
+      undefined,
+    );
+    assert.equal(
+      formatSelectedTextsForPrompt(selections),
+      '[Selection 1]:\n"Pinned evidence"\n\n[Selection 2]:\n"Current evidence"',
+    );
+    assert.equal(
+      formatSelectedTextsForDisplay(
+        serializeSelectedTexts(selections),
+        "Compare them",
+      ),
+      "[Selection 1]:\nPinned evidence\n\n[Selection 2]:\nCurrent evidence\n\nCompare them",
+    );
+    assert.equal(
+      formatSelectedTextsForDisplay(
+        serializeSelectedTexts(["Only evidence"]),
+        "Explain it",
+      ),
+      "[Selection 1]:\nOnly evidence\n\nExplain it",
+    );
+  });
+
+  it("round-trips selection text without delimiter collisions", function () {
+    const selections = [
+      'alpha\n\n---\n\nbeta with "quotes" and 中文',
+      "second passage",
+    ];
+    assert.deepEqual(
+      splitSelectedTexts(serializeSelectedTexts(selections)),
+      selections,
+    );
+    assert.deepEqual(splitSelectedTexts(selections[0]), [selections[0]]);
+    assert.deepEqual(normalizeSelectedTexts(["   "], " fallback "), [
+      "fallback",
+    ]);
   });
 
   it("summarizes only usable conversation messages", function () {

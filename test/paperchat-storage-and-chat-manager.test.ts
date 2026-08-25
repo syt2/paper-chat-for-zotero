@@ -15,6 +15,7 @@ import {
 } from "../src/modules/chat/ContextManager.ts";
 import { SessionStorageService } from "../src/modules/chat/SessionStorageService.ts";
 import { normalizePresentationArtifacts } from "../src/modules/chat/presentation-artifacts.ts";
+import { splitSelectedTexts } from "../src/modules/chat/selected-text-format.ts";
 import {
   StorageDatabase,
   getStorageDatabase,
@@ -5452,6 +5453,114 @@ describe("paperchat storage and chat manager", function () {
       session.messages.map((message) => message.id),
       ["assistant-reasoning-only"],
     );
+  });
+
+  it("sends and persists every selected passage with file context", async function () {
+    const providerManager = getProviderManager() as any;
+    const originalGetActiveProviderId = providerManager.getActiveProviderId;
+    const originalExecuteWithRetry = providerManager.executeWithRetry;
+    const contextManager = getContextManager() as any;
+    const originalCompactBeforeSendIfNeeded =
+      contextManager.compactBeforeSendIfNeeded;
+    const originalFilterMessages = contextManager.filterMessages;
+    const session: ChatSession = {
+      id: "session-multi-selection",
+      title: "Selection test",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      messages: [],
+    };
+    let providerMessages: ChatMessage[] = [];
+    const provider = {
+      config: { id: "provider-multi-selection" },
+      getName: () => "provider-multi-selection",
+      isReady: () => true,
+      supportsPdfUpload: () => false,
+      streamChatCompletion: (
+        messages: ChatMessage[],
+        callbacks: { onComplete: (content: string) => void },
+      ) => {
+        providerMessages = messages;
+        callbacks.onComplete("done");
+      },
+    };
+
+    providerManager.getActiveProviderId = () => provider.config.id;
+    providerManager.executeWithRetry = async (
+      _provider: typeof provider,
+      operation: () => Promise<unknown>,
+    ) => operation();
+    contextManager.compactBeforeSendIfNeeded = async () => false;
+    contextManager.filterMessages = (targetSession: ChatSession) => ({
+      messages: [...targetSession.messages],
+      summaryTriggered: false,
+    });
+
+    try {
+      const manager = Object.create(ChatManager.prototype) as any;
+      manager.currentSession = session;
+      manager.activeSessionRunIds = new Map();
+      manager.sessionRunCounters = new Map();
+      manager.activeSessionAbortControllers = new Map();
+      manager.streamingSessions = new Map();
+      manager.currentItemKey = null;
+      manager.init = async () => undefined;
+      manager.getActiveProvider = () => provider;
+      manager.isSessionActive = () => false;
+      manager.sessionStorage = {
+        insertMessage: async () => undefined,
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        deleteMessage: async () => undefined,
+      };
+
+      const selections = [
+        "Pinned evidence",
+        "Current evidence\n\n---\n\nwith divider",
+      ];
+      assert.isTrue(
+        await manager.sendMessage("Compare them", {
+          selectedTexts: selections,
+          files: [
+            {
+              type: "text",
+              name: "notes.txt",
+              content: "File context",
+              mimeType: "text/plain",
+            },
+          ],
+        }),
+      );
+
+      const providerUserMessage = providerMessages.find(
+        (message) => message.role === "user",
+      );
+      assert.include(
+        providerUserMessage?.content,
+        '[Selection 1]:\n"Pinned evidence"',
+      );
+      assert.include(
+        providerUserMessage?.content,
+        '[Selection 2]:\n"Current evidence\n\n---\n\nwith divider"',
+      );
+      assert.include(providerUserMessage?.content, "[File: notes.txt]");
+      assert.include(providerUserMessage?.content, "[Question]:\nCompare them");
+
+      const persistedUserMessage = session.messages.find(
+        (message) => message.role === "user",
+      );
+      assert.deepEqual(
+        splitSelectedTexts(persistedUserMessage?.selectedText || ""),
+        selections,
+      );
+    } finally {
+      providerManager.getActiveProviderId = originalGetActiveProviderId;
+      providerManager.executeWithRetry = originalExecuteWithRetry;
+      contextManager.compactBeforeSendIfNeeded =
+        originalCompactBeforeSendIfNeeded;
+      contextManager.filterMessages = originalFilterMessages;
+    }
   });
 
   it("keeps the most substantial partial across same-provider retry failures", async function () {

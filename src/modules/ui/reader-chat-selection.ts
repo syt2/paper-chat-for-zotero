@@ -7,6 +7,60 @@
 
 export type ReaderLike = { itemID?: number };
 
+export type SelectionRect = {
+  left: number;
+  right: number;
+  top: number;
+  height: number;
+};
+
+export const FLOATING_SELECTION_ENTRY_SIZE = 18;
+const FLOATING_SELECTION_ENTRY_GAP = 4;
+
+/**
+ * Position the compact PaperChat entry beside the final visible line of a
+ * reader selection. If it would fall off the right edge, place it to the left.
+ */
+export function getSelectionEntryPosition(
+  rect: SelectionRect,
+  viewportWidth: number,
+  viewportHeight: number,
+): { left: number; top: number } | null {
+  if (
+    !Number.isFinite(rect.left) ||
+    !Number.isFinite(rect.right) ||
+    !Number.isFinite(rect.top) ||
+    !Number.isFinite(rect.height) ||
+    viewportWidth < FLOATING_SELECTION_ENTRY_SIZE ||
+    viewportHeight < FLOATING_SELECTION_ENTRY_SIZE
+  ) {
+    return null;
+  }
+
+  const maxLeft = viewportWidth - FLOATING_SELECTION_ENTRY_SIZE;
+  const rightSideLeft = rect.right + FLOATING_SELECTION_ENTRY_GAP;
+  const left =
+    rightSideLeft <= maxLeft
+      ? rightSideLeft
+      : Math.max(
+          0,
+          Math.min(
+            maxLeft,
+            rect.left -
+              FLOATING_SELECTION_ENTRY_GAP -
+              FLOATING_SELECTION_ENTRY_SIZE,
+          ),
+        );
+  const top = Math.max(
+    0,
+    Math.min(
+      viewportHeight - FLOATING_SELECTION_ENTRY_SIZE,
+      rect.top + (rect.height - FLOATING_SELECTION_ENTRY_SIZE) / 2,
+    ),
+  );
+  return { left, top };
+}
+
 /**
  * Collect the text of the annotations a context menu was opened on.
  *

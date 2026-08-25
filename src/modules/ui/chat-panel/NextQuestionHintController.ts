@@ -4,6 +4,7 @@ import {
   type ManagedAbortController,
 } from "../../../utils/abort";
 import { getNextQuestionHintService } from "../../chat/next-question-hint";
+import { getSelectedTextContext } from "../../chat/selected-text-format";
 import type { ChatMessage } from "../../../types/chat";
 import type {
   NextQuestionHint,
@@ -619,7 +620,9 @@ function readItemTags(item: Zotero.Item): string[] {
 function getRecentSelectedText(messages: ChatMessage[]): string | null {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
-    const selectedText = message.selectedText?.trim();
+    const selectedText = message.selectedText
+      ? getSelectedTextContext(message.selectedText)
+      : "";
     if (message.role === "user" && !message.apiOnly && selectedText) {
       return selectedText;
     }

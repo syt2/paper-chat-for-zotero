@@ -550,6 +550,8 @@ export interface SendMessageOptions {
   images?: ImageAttachment[];
   files?: FileAttachment[];
   selectedText?: string;
+  /** Multiple selected passages, sent as independent Selection N blocks. */
+  selectedTexts?: string[];
   quotedMessages?: QuotedMessageRef[];
 }
 

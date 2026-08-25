@@ -1,5 +1,6 @@
 import { assert } from "chai";
 import type { ChatMessage } from "../src/types/chat";
+import { serializeSelectedTexts } from "../src/modules/chat/selected-text-format";
 import {
   FIELD_BOUNDARY_TOKEN,
   buildVisibleSearchSegments,
@@ -419,6 +420,27 @@ Before tool.<tool-call status="completed"><tool-result>HIDDEN</tool-result></too
       assert.equal(document.displayText.match(/Selected evidence/g)?.length, 1);
       assert.notInclude(document.displayText, "[Question]");
       assert.notInclude(document.displayText, "[Selected");
+    });
+
+    it("indexes every passage from versioned multi-selection storage", function () {
+      const document = projectMessage(
+        message("user", "[Question]:\nCompare them", {
+          selectedText: serializeSelectedTexts([
+            "Pinned evidence",
+            "Current evidence",
+          ]),
+        }),
+      );
+
+      assert.equal(
+        document.displayText,
+        "Pinned evidence\n\nCurrent evidence\n\nCompare them",
+      );
+      assert.equal(
+        document.normalizedText,
+        `pinned evidence${FIELD_BOUNDARY_TOKEN}current evidence${FIELD_BOUNDARY_TOKEN}compare them`,
+      );
+      assert.notInclude(document.displayText, "paperchat-selections-v1");
     });
 
     it("never falls back to hidden context when a final question marker is empty", function () {

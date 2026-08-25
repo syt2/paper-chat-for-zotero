@@ -22,6 +22,7 @@ import type {
 } from "../../../types/tool";
 import { chatColors } from "../../../utils/colors";
 import type { ThemeColors } from "./types";
+import { formatSelectedTextsForDisplay } from "../../chat/selected-text-format";
 import { HTML_NS } from "./types";
 import {
   formatMarkdownForMessageCopy,
@@ -922,7 +923,10 @@ export function createMessageElement(
   if (msg.role === "user") {
     // Format user message for display
     const displayContent = msg.selectedText
-      ? `[Selected]: ${msg.selectedText}\n\n${msg.content.split("[Question]:").pop()?.trim() || msg.content}`
+      ? formatSelectedTextsForDisplay(
+          msg.selectedText,
+          msg.content.split("[Question]:").pop()?.trim() || msg.content,
+        )
       : msg.content.includes("[Question]:")
         ? msg.content.split("[Question]:").pop()?.trim() || msg.content
         : msg.content;

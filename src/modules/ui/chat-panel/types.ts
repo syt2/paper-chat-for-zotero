@@ -65,6 +65,8 @@ export interface SessionInfo {
 export interface AttachmentState {
   pendingImages: import("../../../types/chat").ImageAttachment[];
   pendingFiles: import("../../../types/chat").FileAttachment[];
+  /** Selections explicitly retained while the current selection changes. */
+  pinnedSelectedTexts: string[];
   pendingSelectedText: string | null;
   pendingQuotedMessages: QuotedMessageRef[];
 }

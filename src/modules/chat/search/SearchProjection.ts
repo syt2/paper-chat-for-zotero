@@ -2,13 +2,14 @@ import MarkdownIt from "markdown-it";
 import { graphemeSegments } from "unicode-segmenter/grapheme";
 import type { ChatMessage } from "../../../types/chat";
 import { normalizeQuotedMessageRefs } from "../quoted-messages";
+import { splitSelectedTexts } from "../selected-text-format";
 import type { SearchHighlightRange } from "./SearchTypes";
 
 /**
  * Increment this whenever visible extraction or normalization semantics change.
  * Rows processed by an older projector remain in the backfill work set.
  */
-export const CURRENT_SEARCH_VERSION = 2;
+export const CURRENT_SEARCH_VERSION = 3;
 
 /** Reserved inside stored documents so a phrase cannot cross field boundaries. */
 export const FIELD_BOUNDARY_TOKEN = "\u001f";
@@ -971,8 +972,12 @@ function getVisibleUserSearchFields(
   for (const quote of normalizeQuotedMessageRefs(message.quotedMessages)) {
     fields.push({ kind: "sourceText", text: quote.preview });
   }
-  const selectedText = message.selectedText?.trim() || "";
-  if (selectedText) fields.push({ kind: "sourceText", text: selectedText });
+  const selectedTexts = message.selectedText
+    ? splitSelectedTexts(message.selectedText)
+    : [];
+  for (const selectedText of selectedTexts) {
+    fields.push({ kind: "sourceText", text: selectedText });
+  }
   const question = extractVisibleQuestion(message.content);
   if (question) fields.push({ kind: "text", text: question });
   return fields;

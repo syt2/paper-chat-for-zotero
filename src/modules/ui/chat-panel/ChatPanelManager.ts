@@ -1148,6 +1148,7 @@ function removeStaleSidebarContainers(doc: Document): void {
 // Attachment state
 let pendingImages: ImageAttachment[] = [];
 let pendingFiles: FileAttachment[] = [];
+let pinnedSelectedTexts: string[] = [];
 let pendingSelectedText: string | null = null;
 let pendingQuotedMessages: QuotedMessageRef[] = [];
 
@@ -2319,6 +2320,37 @@ export function showPanel(source: ChatPanelOpenSource = "unknown"): void {
   });
 }
 
+/**
+ * Open PaperChat with one PDF selection attached after the panel has finished
+ * its asynchronous initialization.
+ */
+export function showPanelWithSelectedText(
+  text: string,
+  source: ChatPanelOpenSource = "reader_selection",
+): void {
+  const trimmed = text.trim();
+  if (!trimmed) return;
+
+  const previousSelectedText = pendingSelectedText;
+  addSelectedTextAttachment(trimmed);
+  try {
+    showPanel(source);
+  } catch (error) {
+    pendingSelectedText = previousSelectedText;
+    syncPendingAttachmentsPreviews();
+    throw error;
+  }
+  if (!isPanelShown()) {
+    pendingSelectedText = previousSelectedText;
+    syncPendingAttachmentsPreviews();
+    return;
+  }
+
+  runWhenPanelReady(() => {
+    addSelectedTextAttachment(trimmed);
+  });
+}
+
 function getVisibleChatContainer(): HTMLElement | null {
   return currentPanelMode === "floating" ? floatingContainer : chatContainer;
 }
@@ -3188,6 +3220,7 @@ function cloneAttachmentState(state: AttachmentState): AttachmentState {
   return {
     pendingImages: [...state.pendingImages],
     pendingFiles: [...state.pendingFiles],
+    pinnedSelectedTexts: [...(state.pinnedSelectedTexts || [])],
     pendingSelectedText: state.pendingSelectedText,
     pendingQuotedMessages: [...state.pendingQuotedMessages],
   };
@@ -3199,6 +3232,7 @@ function renderPendingAttachmentsPreview(container: HTMLElement): void {
     {
       pendingImages,
       pendingFiles,
+      pinnedSelectedTexts,
       pendingSelectedText,
       pendingQuotedMessages,
     },
@@ -3214,6 +3248,23 @@ function renderPendingAttachmentsPreview(container: HTMLElement): void {
         if (index < 0 || index >= pendingQuotedMessages.length) return;
         pendingQuotedMessages = pendingQuotedMessages.filter(
           (_quote, quoteIndex) => quoteIndex !== index,
+        );
+        syncPendingAttachmentsPreviews(container);
+      },
+      onRemoveSelectedText: () => {
+        pendingSelectedText = null;
+        syncPendingAttachmentsPreviews(container);
+      },
+      onPinSelectedText: () => {
+        if (!pendingSelectedText) return;
+        pinnedSelectedTexts = [...pinnedSelectedTexts, pendingSelectedText];
+        pendingSelectedText = null;
+        syncPendingAttachmentsPreviews(container);
+      },
+      onRemovePinnedSelectedText: (index) => {
+        if (index < 0 || index >= pinnedSelectedTexts.length) return;
+        pinnedSelectedTexts = pinnedSelectedTexts.filter(
+          (_text, textIndex) => textIndex !== index,
         );
         syncPendingAttachmentsPreviews(container);
       },
@@ -3297,6 +3348,7 @@ function createContext(container: HTMLElement): ChatPanelContext {
       cloneAttachmentState({
         pendingImages,
         pendingFiles,
+        pinnedSelectedTexts,
         pendingSelectedText,
         pendingQuotedMessages,
       }),
@@ -3304,12 +3356,14 @@ function createContext(container: HTMLElement): ChatPanelContext {
       const nextState = cloneAttachmentState(state);
       pendingImages = nextState.pendingImages;
       pendingFiles = nextState.pendingFiles;
+      pinnedSelectedTexts = nextState.pinnedSelectedTexts;
       pendingSelectedText = nextState.pendingSelectedText;
       pendingQuotedMessages = nextState.pendingQuotedMessages;
     },
     clearAttachments: () => {
       pendingImages = [];
       pendingFiles = [];
+      pinnedSelectedTexts = [];
       pendingSelectedText = null;
       pendingQuotedMessages = [];
     },
@@ -3620,6 +3674,7 @@ export async function unregisterAll(): Promise<void> {
   // Clear attachment state
   pendingImages = [];
   pendingFiles = [];
+  pinnedSelectedTexts = [];
   pendingSelectedText = null;
   pendingQuotedMessages = [];
   moduleCurrentItem = null;
@@ -3630,6 +3685,10 @@ export async function unregisterAll(): Promise<void> {
  * Add selected text as attachment
  */
 export function addSelectedTextAttachment(text: string): void {
-  pendingSelectedText = text;
-  syncPendingAttachmentsPreviews(chatContainer || undefined);
+  // A reader selection is a single context source: replacing it keeps the
+  // outbound request unambiguous and prevents stale passages from accumulating.
+  const trimmed = text.trim();
+  if (!trimmed) return;
+  pendingSelectedText = trimmed;
+  syncPendingAttachmentsPreviews();
 }

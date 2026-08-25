@@ -2,6 +2,7 @@ import type { ChatMessage, ChatSession } from "../../../types/chat";
 import type { AIProvider } from "../../../types/provider";
 import { getProviderManager } from "../../providers";
 import { createAbortController } from "../../../utils/abort";
+import { getSelectedTextContext } from "../selected-text-format";
 
 export interface NextQuestionHint {
   id: string;
@@ -215,7 +216,10 @@ class NextQuestionHintService {
         )
       : "";
     const selectedText = truncate(
-      readingContext?.selectedText || userMessage.selectedText || "",
+      readingContext?.selectedText ||
+        (userMessage.selectedText
+          ? getSelectedTextContext(userMessage.selectedText)
+          : ""),
       MAX_SELECTED_TEXT_CHARS,
     );
     const userText = truncate(
