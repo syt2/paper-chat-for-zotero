@@ -16,6 +16,46 @@ export type SelectionRect = {
 
 export const FLOATING_SELECTION_ENTRY_SIZE = 18;
 const FLOATING_SELECTION_ENTRY_GAP = 4;
+export const MIN_SELECTION_ENTRY_TEXT_LENGTH = 5;
+
+export function isSelectionEntryTextEligible(text: string): boolean {
+  return text.trim().length >= MIN_SELECTION_ENTRY_TEXT_LENGTH;
+}
+
+export type SelectionEntryRefreshAction = "reposition" | "replace";
+
+/**
+ * Keep an entry anchored while the same passage is being reflowed, but replace
+ * it as soon as the user selects a different passage. Returning early for a
+ * different text leaves the old button stranded beside the previous passage.
+ */
+export function getSelectionEntryRefreshAction(
+  currentText: string,
+  nextText: string,
+): SelectionEntryRefreshAction {
+  return currentText === nextText ? "reposition" : "replace";
+}
+
+/**
+ * Pick the visually final selected line rather than trusting PDF.js range
+ * order. Its range rectangles can be returned in document/DOM order even
+ * when the selected text wraps or the selection was dragged backwards.
+ */
+export function getSelectionEntryRect(
+  rects: SelectionRect[],
+): SelectionRect | null {
+  return rects.reduce<SelectionRect | null>((chosen, rect) => {
+    if (!chosen) return rect;
+    const verticalDelta = rect.top - chosen.top;
+    if (
+      verticalDelta > 1 ||
+      (Math.abs(verticalDelta) <= 1 && rect.right > chosen.right)
+    ) {
+      return rect;
+    }
+    return chosen;
+  }, null);
+}
 
 /**
  * Position the compact PaperChat entry beside the final visible line of a

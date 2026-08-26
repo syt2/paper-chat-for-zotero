@@ -20,7 +20,10 @@ import type { ChatPanelOpenSource } from "./chat-panel/ChatPanelManager";
 import {
   collectAnnotationText,
   FLOATING_SELECTION_ENTRY_SIZE,
+  getSelectionEntryRefreshAction,
+  getSelectionEntryRect,
   getSelectionEntryPosition,
+  isSelectionEntryTextEligible,
   type ReaderLike,
   type SelectionRect,
 } from "./reader-chat-selection";
@@ -31,12 +34,33 @@ type AnnotationMenuEvent = {
   reader: ReaderLike;
 };
 
+type SelectionPopupEvent = {
+  doc: Document;
+  params: {
+    annotation?: {
+      text?: string;
+      position?: PdfAnnotationPosition;
+    };
+  };
+  reader: ReaderLike;
+};
+
+type PdfAnnotationPosition = {
+  pageIndex: number;
+  rects?: number[][];
+  nextPageRects?: number[][];
+};
+
 let annotationMenuHandler: ((event: AnnotationMenuEvent) => void) | undefined;
+let selectionPopupHandler: ((event: SelectionPopupEvent) => void) | undefined;
 let readerWatchTimer: ReturnType<typeof setInterval> | undefined;
 let watchedPdfDocument: Document | undefined;
 let dismissedSelectionSignature = "";
 let selectionRefreshFrame: number | undefined;
 let selectionRefreshWindow: Window | undefined;
+let lastSelectionPointer:
+  | { doc: Document; x: number; y: number; at: number }
+  | undefined;
 
 const READER_DOCUMENT_POLL_INTERVAL_MS = 500;
 
@@ -45,6 +69,7 @@ type FloatingSelectionEntry = {
   doc: Document;
   text: string;
   signature: string;
+  source: "selection" | "popup";
 };
 
 let floatingSelectionEntry: FloatingSelectionEntry | undefined;
@@ -54,6 +79,7 @@ type ReaderWithPdfWindow = ReaderLike & {
   _internalReader?: {
     _lastView?: {
       _iframeWindow?: Window;
+      getClientRectForPopup?: (position: PdfAnnotationPosition) => number[];
     };
   };
 };
@@ -98,18 +124,68 @@ function getSelectionRect(doc: Document): {
   const range = selection.getRangeAt(selection.rangeCount - 1);
   const viewportWidth = doc.defaultView?.innerWidth || 0;
   const viewportHeight = doc.defaultView?.innerHeight || 0;
-  const rects = Array.from(range.getClientRects() || []).filter(
-    (rect) =>
-      rect.width > 0 &&
-      rect.height > 0 &&
-      rect.right >= 0 &&
-      rect.left <= viewportWidth &&
-      rect.bottom >= 0 &&
-      rect.top <= viewportHeight,
+  const isVisibleRect = (rect: DOMRect, allowCollapsedWidth = false) =>
+    (allowCollapsedWidth ? rect.width >= 0 : rect.width > 0) &&
+    rect.height > 0 &&
+    rect.right >= 0 &&
+    rect.left <= viewportWidth &&
+    rect.bottom >= 0 &&
+    rect.top <= viewportHeight;
+  const rects = Array.from(range.getClientRects() || []).filter((rect) =>
+    isVisibleRect(rect),
   );
-  const rect = rects.at(-1);
+  const rect = getSelectionEntryRect(rects);
   if (!rect) return null;
   return { text, rect };
+}
+
+function getPopupSelectionRect(
+  event: SelectionPopupEvent,
+): { doc: Document; rect: SelectionRect } | null {
+  const position = event.params.annotation?.position;
+  const view = (event.reader as ReaderWithPdfWindow)._internalReader?._lastView;
+  const doc = view?._iframeWindow?.document;
+  const getClientRectForPopup = view?.getClientRectForPopup;
+  if (!doc) return null;
+
+  const pointer = lastSelectionPointer;
+  if (pointer?.doc === doc && Date.now() - pointer.at < 2000) {
+    return {
+      doc,
+      rect: {
+        left: pointer.x,
+        right: pointer.x,
+        top: pointer.y - FLOATING_SELECTION_ENTRY_SIZE / 2,
+        height: FLOATING_SELECTION_ENTRY_SIZE,
+      },
+    };
+  }
+  if (!position || !getClientRectForPopup) return null;
+
+  const rects: SelectionRect[] = [];
+  const addRects = (pageIndex: number, sourceRects: number[][] | undefined) => {
+    for (const sourceRect of sourceRects || []) {
+      const rawRect = getClientRectForPopup.call(view, {
+        pageIndex,
+        rects: [sourceRect],
+      });
+      if (!Array.isArray(rawRect) || rawRect.length < 4) continue;
+      const [left, top, right, bottom] = rawRect.map(Number);
+      if (
+        ![left, top, right, bottom].every(Number.isFinite) ||
+        right <= left ||
+        bottom <= top
+      ) {
+        continue;
+      }
+      rects.push({ left, right, top, height: bottom - top });
+    }
+  };
+  addRects(position.pageIndex, position.rects);
+  addRects(position.pageIndex + 1, position.nextPageRects);
+
+  const rect = getSelectionEntryRect(rects);
+  return rect ? { doc, rect } : null;
 }
 
 function getPdfSelectionDocument(reader: ReaderLike): Document | null {
@@ -117,7 +193,24 @@ function getPdfSelectionDocument(reader: ReaderLike): Document | null {
   const documents = [
     readerWithPdfWindow._internalReader?._lastView?._iframeWindow?.document,
     readerWithPdfWindow._iframeWindow?.document,
-  ].filter((doc): doc is Document => !!doc);
+  ].filter(
+    (doc, index, all): doc is Document => !!doc && all.indexOf(doc) === index,
+  );
+
+  const hasSelection = (doc: Document): boolean => {
+    try {
+      return !!doc.getSelection()?.toString().trim();
+    } catch {
+      return false;
+    }
+  };
+  const focusedSelection = documents.find(
+    (doc) => doc.defaultView?.document.hasFocus() && hasSelection(doc),
+  );
+  if (focusedSelection) return focusedSelection;
+  const activeSelection = documents.find(hasSelection);
+  if (activeSelection) return activeSelection;
+
   const currentDocument = documents.find(
     (doc) => doc === watchedPdfDocument && !!doc.defaultView,
   );
@@ -182,8 +275,13 @@ function positionFloatingSelectionEntry(
 function showFloatingSelectionEntry(
   doc: Document,
   selection = getSelectionRect(doc),
+  source: FloatingSelectionEntry["source"] = "selection",
 ): void {
-  if (!selection || !doc.body) {
+  if (
+    !selection ||
+    !isSelectionEntryTextEligible(selection.text) ||
+    !doc.body
+  ) {
     removeFloatingSelectionEntry();
     return;
   }
@@ -227,6 +325,7 @@ function showFloatingSelectionEntry(
     doc,
     text: selection.text,
     signature: getSelectionSignature(selection),
+    source,
   };
   let didActivate = false;
   const activateSelection = (event: Event) => {
@@ -264,7 +363,7 @@ function showFloatingSelectionEntry(
 
 function refreshFloatingSelectionEntry(doc: Document): void {
   const selection = getSelectionRect(doc);
-  if (!selection) {
+  if (!selection || !isSelectionEntryTextEligible(selection.text)) {
     dismissedSelectionSignature = "";
     removeFloatingSelectionEntry();
     return;
@@ -277,7 +376,21 @@ function refreshFloatingSelectionEntry(doc: Document): void {
 
   const entry = floatingSelectionEntry;
   if (entry?.doc === doc) {
-    positionFloatingSelectionEntry(entry, selection);
+    if (entry.source === "popup") {
+      return;
+    }
+    // Zotero may replace the native range while opening its annotation
+    // palette. Do not move an entry captured for a different visible passage
+    // until that passage is explicitly reselected.
+    if (
+      getSelectionEntryRefreshAction(entry.text, selection.text) ===
+      "reposition"
+    ) {
+      positionFloatingSelectionEntry(entry, selection);
+      return;
+    }
+    removeFloatingSelectionEntry();
+    showFloatingSelectionEntry(doc, selection);
     return;
   }
 
@@ -302,6 +415,11 @@ function watchActivePdfSelection(): void {
       handlePdfSelectionChange,
       true,
     );
+    watchedPdfDocument.removeEventListener(
+      "pointerup",
+      handlePdfPointerUp,
+      true,
+    );
   }
   watchedPdfDocument = doc || undefined;
   dismissedSelectionSignature = "";
@@ -310,6 +428,7 @@ function watchActivePdfSelection(): void {
 
   doc.addEventListener("selectionchange", handlePdfSelectionChange);
   doc.addEventListener("scroll", handlePdfSelectionChange, true);
+  doc.addEventListener("pointerup", handlePdfPointerUp, true);
   refreshFloatingSelectionEntry(doc);
 }
 
@@ -324,6 +443,23 @@ function handlePdfSelectionChange(): void {
     selectionRefreshWindow = undefined;
     if (watchedPdfDocument === doc) refreshFloatingSelectionEntry(doc);
   });
+}
+
+function handlePdfPointerUp(event: PointerEvent): void {
+  const doc = watchedPdfDocument;
+  if (
+    !doc ||
+    !Number.isFinite(event.clientX) ||
+    !Number.isFinite(event.clientY)
+  ) {
+    return;
+  }
+  lastSelectionPointer = {
+    doc,
+    x: event.clientX,
+    y: event.clientY,
+    at: Date.now(),
+  };
 }
 
 export function registerReaderChatEntries(): void {
@@ -349,6 +485,29 @@ export function registerReaderChatEntries(): void {
       },
     });
   };
+
+  selectionPopupHandler = (event: SelectionPopupEvent) => {
+    const text = event.params?.annotation?.text?.trim();
+    if (!text || !isSelectionEntryTextEligible(text)) return;
+    const popupSelection = getPopupSelectionRect(event);
+    if (popupSelection) {
+      showFloatingSelectionEntry(
+        popupSelection.doc,
+        { rect: popupSelection.rect, text },
+        "popup",
+      );
+      return;
+    }
+    const doc = getPdfSelectionDocument(event.reader);
+    const selection = doc ? getSelectionRect(doc) : null;
+    if (doc && selection) showFloatingSelectionEntry(doc, selection, "popup");
+  };
+
+  Zotero.Reader.registerEventListener(
+    "renderTextSelectionPopup",
+    selectionPopupHandler as never,
+    addon.data.config.addonRef,
+  );
 
   Zotero.Reader.registerEventListener(
     "createAnnotationContextMenu",
@@ -381,12 +540,27 @@ export function unregisterReaderChatEntries(): void {
       handlePdfSelectionChange,
       true,
     );
+    watchedPdfDocument.removeEventListener(
+      "pointerup",
+      handlePdfPointerUp,
+      true,
+    );
     watchedPdfDocument = undefined;
   }
+  lastSelectionPointer = undefined;
   dismissedSelectionSignature = "";
   if (!Zotero.Reader?.unregisterEventListener) {
     annotationMenuHandler = undefined;
+    selectionPopupHandler = undefined;
     return;
+  }
+
+  if (selectionPopupHandler) {
+    Zotero.Reader.unregisterEventListener(
+      "renderTextSelectionPopup",
+      selectionPopupHandler as never,
+    );
+    selectionPopupHandler = undefined;
   }
 
   if (annotationMenuHandler) {

@@ -1,7 +1,10 @@
 import { assert } from "chai";
 import {
   collectAnnotationText,
+  getSelectionEntryRefreshAction,
+  getSelectionEntryRect,
   getSelectionEntryPosition,
+  isSelectionEntryTextEligible,
 } from "../src/modules/ui/reader-chat-selection.ts";
 
 type FakeAnnotation = {
@@ -91,6 +94,56 @@ describe("reader chat selection", function () {
       ),
       { left: 164, top: 42 },
     );
+  });
+
+  it("uses the visually final selected line instead of range order", function () {
+    const selectedTextRect = { left: 100, right: 160, top: 40, height: 22 };
+    const pdfJsHelperRect = { left: 0, right: 500, top: 0, height: 400 };
+
+    assert.deepEqual(
+      getSelectionEntryRect([pdfJsHelperRect, selectedTextRect]),
+      selectedTextRect,
+    );
+  });
+
+  it("falls back to the final selection rect when no endpoint rect exists", function () {
+    const finalRect = { left: 100, right: 160, top: 40, height: 22 };
+
+    assert.deepEqual(getSelectionEntryRect([finalRect]), finalRect);
+    assert.isNull(getSelectionEntryRect([]));
+  });
+
+  it("anchors a multiline selection to its visually final line", function () {
+    const firstLine = { left: 100, right: 300, top: 40, height: 22 };
+    const finalLine = { left: 100, right: 160, top: 64, height: 22 };
+    assert.deepEqual(getSelectionEntryRect([finalLine, firstLine]), finalLine);
+  });
+
+  it("uses the rightmost fragment when the final line has multiple rects", function () {
+    const leftFragment = { left: 100, right: 140, top: 64, height: 22 };
+    const rightFragment = { left: 145, right: 190, top: 64, height: 22 };
+
+    assert.deepEqual(
+      getSelectionEntryRect([rightFragment, leftFragment]),
+      rightFragment,
+    );
+  });
+
+  it("repositions the entry for the same text and replaces it for new text", function () {
+    assert.equal(
+      getSelectionEntryRefreshAction("same passage", "same passage"),
+      "reposition",
+    );
+    assert.equal(
+      getSelectionEntryRefreshAction("old passage", "new passage"),
+      "replace",
+    );
+  });
+
+  it("only allows selection entries for text longer than four characters", function () {
+    assert.isFalse(isSelectionEntryTextEligible("abcd"));
+    assert.isTrue(isSelectionEntryTextEligible("abcde"));
+    assert.isFalse(isSelectionEntryTextEligible("  a  "));
   });
 
   it("moves the selection entry to the left when the right edge has no room", function () {

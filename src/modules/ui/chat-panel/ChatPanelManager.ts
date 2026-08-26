@@ -2346,9 +2346,12 @@ export function showPanelWithSelectedText(
     return;
   }
 
-  runWhenPanelReady(() => {
-    addSelectedTextAttachment(trimmed);
-  });
+  // A freshly created panel already has its attachment-preview DOM even while
+  // auth, storage, and the active session are still initializing. Render the
+  // selection immediately instead of making the first click wait for the full
+  // async initialization chain. initializeChatContentCommon() will sync the
+  // same source-of-truth state again when initialization finishes.
+  syncPendingAttachmentsPreviews();
 }
 
 function getVisibleChatContainer(): HTMLElement | null {
