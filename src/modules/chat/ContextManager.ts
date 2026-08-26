@@ -14,7 +14,12 @@ import type {
 import type { ModelInfo, ProviderConfig } from "../../types/provider";
 import { getPref } from "../../utils/prefs";
 import { getProviderManager } from "../providers";
-import { getModelRoutingMeta } from "../preferences/ModelsFetcher";
+import {
+  getModelRoutingDefaults,
+  getModelRoutingMeta,
+} from "../preferences/ModelsFetcher";
+import { getConfiguredPaperChatModels } from "../providers/PaperChatLightweightProvider";
+import { PaperChatProvider } from "../providers/PaperChatProvider";
 import { createInterruptedAssistantContextMessage } from "./interrupted-message";
 import {
   applyQuotedMessagesToModelRequest,
@@ -217,6 +222,30 @@ function getPaperChatRoutingModelInfo(
     contextWindow: meta?.contextWindow,
     maxOutput: meta?.maxOutput,
   };
+}
+
+function getSummaryProvider() {
+  const providerManager = getProviderManager();
+  const activeProvider = providerManager.getActiveProvider();
+  const activeConfig = activeProvider?.config;
+  if (!activeProvider || activeConfig?.type !== "paperchat") {
+    return activeProvider;
+  }
+
+  const configuredModel = getModelRoutingDefaults().contextSummaryModel;
+  if (!configuredModel) {
+    return activeProvider;
+  }
+
+  const availableModels = getConfiguredPaperChatModels(activeConfig);
+  if (!availableModels.includes(configuredModel)) {
+    return activeProvider;
+  }
+
+  return new PaperChatProvider({
+    ...activeConfig,
+    resolvedModelOverride: configuredModel,
+  });
 }
 
 export function normalizeContextAutoCompactWindowTokens(
@@ -430,7 +459,7 @@ class ContextManager {
     try {
       ztoolkit.log("[ContextManager] Starting summary generation...");
 
-      const provider = getProviderManager().getActiveProvider();
+      const provider = getSummaryProvider();
       if (!provider || !provider.isReady()) {
         ztoolkit.log("[ContextManager] Provider not ready, skipping summary");
         return false;

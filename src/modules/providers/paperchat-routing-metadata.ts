@@ -21,10 +21,39 @@ export interface PaperChatModelRoutingMeta {
   };
 }
 
+export interface PaperChatModelRoutingDefaults {
+  contextSummaryModel?: string;
+  sessionTitleModel?: string;
+}
+
 export type PaperChatModelRoutingMetaMap = Record<
   string,
   PaperChatModelRoutingMeta
 >;
+
+export function parseModelRoutingDefaults(
+  value: unknown,
+): PaperChatModelRoutingDefaults {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const rawDefaults = (value as { defaults?: unknown }).defaults;
+  if (
+    !rawDefaults ||
+    typeof rawDefaults !== "object" ||
+    Array.isArray(rawDefaults)
+  ) {
+    return {};
+  }
+  const defaults = rawDefaults as Record<string, unknown>;
+  const result: PaperChatModelRoutingDefaults = {};
+  for (const key of ["contextSummaryModel", "sessionTitleModel"] as const) {
+    if (typeof defaults[key] === "string" && defaults[key].trim()) {
+      result[key] = defaults[key].trim();
+    }
+  }
+  return result;
+}
 
 const TIER_CODE_TO_TIER: Record<number, PaperChatTier> = {
   1: "paperchat-lite",

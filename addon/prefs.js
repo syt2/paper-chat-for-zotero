@@ -19,6 +19,7 @@ pref("userSubscriptionJson", "");
 pref("paperchatModelsCache", "");
 pref("paperchatRatiosCache", "");
 pref("paperchatRoutingConfigCache", "");
+pref("paperchatRoutingDefaultsCache", "");
 pref("paperchatTierState", "");
 pref("paperchatSuppressHighTierWarning", false);
 pref("paperchatPresentationSlideCount", 6);

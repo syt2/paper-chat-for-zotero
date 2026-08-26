@@ -13,6 +13,7 @@ import {
   getContextManager,
   normalizeContextAutoCompactWindowTokens,
 } from "../src/modules/chat/ContextManager.ts";
+import { SessionTitleService } from "../src/modules/chat/SessionTitleService.ts";
 import { SessionStorageService } from "../src/modules/chat/SessionStorageService.ts";
 import { normalizePresentationArtifacts } from "../src/modules/chat/presentation-artifacts.ts";
 import { splitSelectedTexts } from "../src/modules/chat/selected-text-format.ts";
@@ -34,7 +35,10 @@ import {
   destroyProviderManager,
   getProviderManager,
 } from "../src/modules/providers/ProviderManager.ts";
-import { loadCachedRatios } from "../src/modules/preferences/ModelsFetcher.ts";
+import {
+  clearPaperchatModelCaches,
+  loadCachedRatios,
+} from "../src/modules/preferences/ModelsFetcher.ts";
 import type { ChatMessage, ChatSession } from "../src/types/chat";
 import type { ToolDefinition } from "../src/types/tool";
 import type { ManagedAbortController } from "../src/utils/abort.ts";
@@ -140,6 +144,47 @@ describe("paperchat storage and chat manager", function () {
     (globalThis as any).Ci = originalCi;
     (globalThis as any).addon = originalAddon;
   });
+
+  function setRoutingDefaults(defaults: Record<string, string>): void {
+    prefStore.set(
+      `${PREFS_PREFIX}.paperchatRoutingDefaultsCache`,
+      JSON.stringify({ defaults }),
+    );
+    loadCachedRatios();
+  }
+
+  function configurePaperChatRouting(defaults: Record<string, string>): void {
+    const models = [
+      "session-model",
+      "summary-model",
+      "title-model",
+      "lite-model",
+    ];
+    prefStore.set(`${PREFS_PREFIX}.apiKey`, "test-key");
+    prefStore.set(`${PREFS_PREFIX}.userId`, 1);
+    prefStore.set(`${PREFS_PREFIX}.username`, "tester");
+    prefStore.set(
+      `${PREFS_PREFIX}.paperchatModelsCache`,
+      JSON.stringify(models),
+    );
+    prefStore.set(
+      `${PREFS_PREFIX}.paperchatRatiosCache`,
+      JSON.stringify({
+        "session-model": 1,
+        "summary-model": 1,
+        "title-model": 2,
+        "lite-model": 0.25,
+      }),
+    );
+    prefStore.set(`${PREFS_PREFIX}.paperchatRoutingConfigCache`, "{}");
+    setRoutingDefaults(defaults);
+    destroyAuthManager();
+    getProviderManager().updateProviderConfig("paperchat", {
+      availableModels: models,
+      defaultModel: "session-model",
+      resolvedModelOverride: "session-model",
+    });
+  }
 
   it("retries the active provider four times without switching providers", async function () {
     const providerManager = getProviderManager() as any;
@@ -1364,6 +1409,109 @@ describe("paperchat storage and chat manager", function () {
       assert.equal(session.messages[6].streamingState, "interrupted");
     } finally {
       providerManager.getActiveProvider = originalGetActiveProvider;
+    }
+  });
+
+  it("uses the configured summary model and falls back to the active session model", async function () {
+    prefStore.set(`${PREFS_PREFIX}.contextMaxRecentPairs`, 1);
+    configurePaperChatRouting({ contextSummaryModel: "summary-model" });
+    const requestedModels: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { model?: string };
+      requestedModels.push(body.model || "");
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "Generated summary" } }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+
+    const createSession = (id: string): ChatSession => ({
+      id,
+      createdAt: 1,
+      updatedAt: 6,
+      lastActiveItemKey: null,
+      messages: [
+        { id: `${id}-u1`, role: "user", content: "One", timestamp: 1 },
+        { id: `${id}-a1`, role: "assistant", content: "Two", timestamp: 2 },
+        { id: `${id}-u2`, role: "user", content: "Three", timestamp: 3 },
+        { id: `${id}-a2`, role: "assistant", content: "Four", timestamp: 4 },
+        { id: `${id}-u3`, role: "user", content: "Five", timestamp: 5 },
+        { id: `${id}-a3`, role: "assistant", content: "Six", timestamp: 6 },
+      ],
+    });
+
+    try {
+      assert.isTrue(
+        await getContextManager().generateSummaryAsync(
+          createSession("configured-summary"),
+        ),
+      );
+
+      setRoutingDefaults({ contextSummaryModel: "missing-model" });
+      assert.isTrue(
+        await getContextManager().generateSummaryAsync(
+          createSession("fallback-summary"),
+        ),
+      );
+
+      assert.deepEqual(requestedModels, ["summary-model", "session-model"]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearPaperchatModelCaches();
+    }
+  });
+
+  it("uses the configured title model and falls back to lightweight routing", async function () {
+    configurePaperChatRouting({ sessionTitleModel: "title-model" });
+    const requestedModels: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { model?: string };
+      requestedModels.push(body.model || "");
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "Generated title" } }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+
+    const createSession = (id: string): ChatSession => ({
+      id,
+      createdAt: 1,
+      updatedAt: 2,
+      lastActiveItemKey: null,
+      messages: [
+        { id: `${id}-user`, role: "user", content: "Question", timestamp: 1 },
+        {
+          id: `${id}-assistant`,
+          role: "assistant",
+          content: "Answer",
+          timestamp: 2,
+        },
+      ],
+    });
+
+    try {
+      const service = new SessionTitleService();
+      assert.equal(
+        await service.generateTitle(createSession("configured-title")),
+        "Generated title",
+      );
+
+      setRoutingDefaults({ sessionTitleModel: "missing-model" });
+      assert.equal(
+        await service.generateTitle(createSession("fallback-title")),
+        "Generated title",
+      );
+
+      assert.deepEqual(requestedModels, ["title-model", "lite-model"]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearPaperchatModelCaches();
     }
   });
 

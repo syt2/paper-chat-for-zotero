@@ -13,6 +13,7 @@ export interface PaperChatLightweightProviderOptions {
   maxTokens: number;
   temperature: number;
   systemPrompt?: string;
+  modelId?: string;
 }
 
 export function createPaperChatLightweightProvider(
@@ -28,6 +29,9 @@ export function createPaperChatLightweightProvider(
   const ratios = getModelRatios();
   const pools = deriveTierPools(availableModels, ratios, getModelRoutingMeta());
   const modelId =
+    (options.modelId && availableModels.includes(options.modelId)
+      ? options.modelId
+      : undefined) ||
     pickLowestRatioModel(pools["paperchat-lite"], ratios) ||
     pickLowestRatioModel(availableModels, ratios);
   if (!modelId) {
@@ -44,7 +48,7 @@ export function createPaperChatLightweightProvider(
   return new PaperChatProvider(lightweightConfig);
 }
 
-function getConfiguredPaperChatModels(
+export function getConfiguredPaperChatModels(
   config: PaperChatProviderConfig,
 ): string[] {
   const cachedModels = getPref("paperchatModelsCache") as string;

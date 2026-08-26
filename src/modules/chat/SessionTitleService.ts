@@ -3,6 +3,7 @@ import type { AIProvider } from "../../types/provider";
 import { getErrorMessage } from "../../utils/common";
 import { getProviderManager } from "../providers";
 import { createPaperChatLightweightProvider } from "../providers/PaperChatLightweightProvider";
+import { getModelRoutingDefaults } from "../preferences/ModelsFetcher";
 
 const TITLE_SYSTEM_PROMPT =
   "Generate a concise title for this chat session. Return only the title, with no quotes, no markdown, and no trailing punctuation. Use the conversation language when obvious. Limit to 8 English words or 16 Chinese characters.";
@@ -66,6 +67,7 @@ function createPaperChatTitleProvider(): AIProvider | null {
     maxTokens: TITLE_MAX_TOKENS,
     temperature: 0.2,
     systemPrompt: "",
+    modelId: getModelRoutingDefaults().sessionTitleModel,
   });
 }
 

@@ -12,13 +12,16 @@ import {
 } from "../providers/PaperChatUrls";
 import {
   parseModelRoutingConfig,
+  parseModelRoutingDefaults,
   type PaperChatModelRoutingMeta,
+  type PaperChatModelRoutingDefaults,
 } from "../providers/paperchat-routing-metadata";
 import { getEffectivePricingModelRatio } from "./paperchat-effective-ratio";
 
 // Store model ratios for PaperChat
 let paperchatModelRatios: Record<string, number> = {};
 let paperchatModelRoutingMeta: Record<string, PaperChatModelRoutingMeta> = {};
+let paperchatModelRoutingDefaults: PaperChatModelRoutingDefaults = {};
 let paperchatModelCacheGeneration = 0;
 
 /** Special value stored in pref("model") to indicate auto-selection (cheapest) */
@@ -54,9 +57,11 @@ export function clearPaperchatModelCaches(): void {
   paperchatModelCacheGeneration += 1;
   paperchatModelRatios = {};
   paperchatModelRoutingMeta = {};
+  paperchatModelRoutingDefaults = {};
   setPref("paperchatModelsCache", "");
   setPref("paperchatRatiosCache", "");
   setPref("paperchatRoutingConfigCache", "");
+  setPref("paperchatRoutingDefaultsCache", "");
 }
 
 /**
@@ -146,6 +151,24 @@ export function loadCachedRatios(): void {
       // ignore parse error
     }
   }
+
+  paperchatModelRoutingDefaults = {};
+  const cachedRoutingDefaults = getPref(
+    "paperchatRoutingDefaultsCache",
+  ) as string;
+  if (cachedRoutingDefaults) {
+    try {
+      paperchatModelRoutingDefaults = parseModelRoutingDefaults(
+        JSON.parse(cachedRoutingDefaults),
+      );
+    } catch {
+      // ignore parse error
+    }
+  }
+}
+
+export function getModelRoutingDefaults(): PaperChatModelRoutingDefaults {
+  return paperchatModelRoutingDefaults;
 }
 
 function getPricingModelName(
@@ -237,8 +260,11 @@ export async function fetchPaperchatRoutingMeta(): Promise<void> {
       return;
     }
     const parsed = parseModelRoutingConfig(result);
+    const defaults = parseModelRoutingDefaults(result);
     paperchatModelRoutingMeta = parsed;
+    paperchatModelRoutingDefaults = defaults;
     setPref("paperchatRoutingConfigCache", JSON.stringify(parsed));
+    setPref("paperchatRoutingDefaultsCache", JSON.stringify({ defaults }));
     ztoolkit.log(
       "[Preferences] Loaded routing metadata for",
       Object.keys(parsed).length,

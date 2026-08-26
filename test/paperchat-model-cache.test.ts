@@ -3,6 +3,7 @@ import {
   clearPaperchatModelCaches,
   fetchPaperchatRoutingMeta,
   getModelRatios,
+  getModelRoutingDefaults,
   getModelRoutingMeta,
   loadCachedRatios,
 } from "../src/modules/preferences/ModelsFetcher";
@@ -26,6 +27,10 @@ describe("PaperChat model cache", function () {
         `${PREFS_PREFIX}paperchatRoutingConfigCache`,
         '{"model-a":{"upstreamModelId":"upstream-a"}}',
       ],
+      [
+        `${PREFS_PREFIX}paperchatRoutingDefaultsCache`,
+        '{"defaults":{"contextSummaryModel":"model-a"}}',
+      ],
     ]);
     (globalThis as any).Zotero = {
       Prefs: {
@@ -46,6 +51,9 @@ describe("PaperChat model cache", function () {
     loadCachedRatios();
     assert.deepEqual(getModelRatios(), { "model-a": 2 });
     assert.hasAllKeys(getModelRoutingMeta(), ["model-a"]);
+    assert.deepEqual(getModelRoutingDefaults(), {
+      contextSummaryModel: "model-a",
+    });
 
     clearPaperchatModelCaches();
 
@@ -55,6 +63,10 @@ describe("PaperChat model cache", function () {
     assert.equal(prefStore.get(`${PREFS_PREFIX}paperchatRatiosCache`), "");
     assert.equal(
       prefStore.get(`${PREFS_PREFIX}paperchatRoutingConfigCache`),
+      "",
+    );
+    assert.equal(
+      prefStore.get(`${PREFS_PREFIX}paperchatRoutingDefaultsCache`),
       "",
     );
   });
@@ -83,6 +95,33 @@ describe("PaperChat model cache", function () {
     assert.equal(
       prefStore.get(`${PREFS_PREFIX}paperchatRoutingConfigCache`),
       "",
+    );
+  });
+
+  it("fetches and caches routing defaults with the model metadata", async function () {
+    (globalThis as any).fetch = async () =>
+      new Response(
+        JSON.stringify({
+          defaults: {
+            contextSummaryModel: "model-a",
+            sessionTitleModel: "model-b",
+          },
+          models: {
+            "model-a": { tier: "standard" },
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+
+    await fetchPaperchatRoutingMeta();
+
+    assert.deepEqual(getModelRoutingDefaults(), {
+      contextSummaryModel: "model-a",
+      sessionTitleModel: "model-b",
+    });
+    assert.equal(
+      prefStore.get(`${PREFS_PREFIX}paperchatRoutingDefaultsCache`),
+      '{"defaults":{"contextSummaryModel":"model-a","sessionTitleModel":"model-b"}}',
     );
   });
 });
