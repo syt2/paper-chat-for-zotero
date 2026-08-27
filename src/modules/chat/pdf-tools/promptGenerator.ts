@@ -146,7 +146,7 @@ ${webSearchLine}
 - get_recent: List recently added items
 - search_notes: Search across note contents
 - create_note: Create a Zotero note when approved by the user or current approval policy
-- append_to_note: Append findings to an existing noteKey or the dedicated "PaperChat Notes" child note when approved; content defaults to plain text, use format=html only for trusted Zotero note HTML
+- append_to_note: Append findings to an existing noteKey or the dedicated "PaperChat Notes" child note when approved; content defaults to safe Markdown with editable LaTeX math, use format=html only for trusted Zotero note HTML
 - batch_update_tags: Update tags on multiple items when approved; pass itemKeys to target exactly the papers you analyzed
 - update_item_metadata: Correct bibliographic fields (year, DOI, ...) on an item when approved
 - link_related_items: Link items as related when approved
@@ -251,7 +251,7 @@ ${webSearchLine}
 - get_recent: List recently added items
 - search_notes: Search across note contents
 - create_note: Create a Zotero note when approved by the user or current approval policy
-- append_to_note: Append findings to an existing noteKey or the dedicated "PaperChat Notes" child note when approved; content defaults to plain text, use format=html only for trusted Zotero note HTML
+- append_to_note: Append findings to an existing noteKey or the dedicated "PaperChat Notes" child note when approved; content defaults to safe Markdown with editable LaTeX math, use format=html only for trusted Zotero note HTML
 - batch_update_tags: Update tags on multiple items when approved; pass itemKeys to target exactly the papers you analyzed
 - update_item_metadata: Correct bibliographic fields (year, DOI, ...) on an item when approved
 - link_related_items: Link items as related when approved

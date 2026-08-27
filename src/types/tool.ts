@@ -585,14 +585,14 @@ export interface SearchNotesArgs {
 // 创建笔记的参数
 export interface CreateNoteArgs extends BaseToolArgs {
   content: string; // 笔记内容
-  format?: "plain" | "html"; // 默认 plain；只有 html 时原样写入
+  format?: "plain" | "html"; // plain 是兼容名称：安全渲染 Markdown；只有 html 时原样写入
   tags?: string; // 逗号分隔的标签
 }
 
 // 追加到笔记的参数
 export interface AppendToNoteArgs extends BaseToolArgs {
   content: string; // 要追加的内容
-  format?: "plain" | "html"; // 默认 plain；只有 html 时原样写入
+  format?: "plain" | "html"; // plain 是兼容名称：安全渲染 Markdown；只有 html 时原样写入
   noteKey?: string; // 可选，指定已有 Zotero 笔记 key
   tags?: string; // 新建笔记时添加的逗号分隔标签
 }

@@ -32,6 +32,7 @@ import type {
   AddItemArgs,
 } from "../../../types/tool";
 import { getErrorMessage, getItemTitleSmart } from "../../../utils/common";
+import { markdownToNoteHtml } from "../../../utils/markdownToNoteHtml";
 
 const PAPERCHAT_NOTES_TITLE = "PaperChat Notes";
 
@@ -80,14 +81,7 @@ function noteContentToHtml(
   if (format === "html") {
     return content;
   }
-  return content
-    .split(/\n{2,}/)
-    .map((paragraph) => paragraph.trim())
-    .filter(Boolean)
-    .map(
-      (paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, "<br/>")}</p>`,
-    )
-    .join("\n");
+  return markdownToNoteHtml(content);
 }
 
 function resolveParentItemForNote(itemKey: string): Zotero.Item | string {

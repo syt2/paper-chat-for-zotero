@@ -1059,13 +1059,13 @@ export class PdfToolManager {
               content: {
                 type: "string",
                 description:
-                  "The note content. Required. Interpreted as plain text unless format is explicitly html.",
+                  "The note content. Required. Defaults to safe Markdown; inline LaTeX in $...$ or \\(...\\), and standalone display LaTeX in $$...$$ or \\[...\\], becomes editable Zotero math.",
               },
               format: {
                 type: "string",
                 enum: ["plain", "html"],
                 description:
-                  "Content format. Defaults to plain, which escapes HTML. Use html only when content is trusted Zotero note HTML.",
+                  "Content format. Defaults to plain (legacy name), which safely renders Markdown and escapes raw HTML. Use html only for trusted Zotero note HTML.",
               },
               tags: {
                 type: "string",
@@ -1094,13 +1094,13 @@ export class PdfToolManager {
               content: {
                 type: "string",
                 description:
-                  "The content to append. Required. Interpreted as plain text unless format is explicitly html.",
+                  "The content to append. Required. Defaults to safe Markdown; inline LaTeX in $...$ or \\(...\\), and standalone display LaTeX in $$...$$ or \\[...\\], becomes editable Zotero math.",
               },
               format: {
                 type: "string",
                 enum: ["plain", "html"],
                 description:
-                  "Content format. Defaults to plain, which escapes HTML. Use html only when content is trusted Zotero note HTML.",
+                  "Content format. Defaults to plain (legacy name), which safely renders Markdown and escapes raw HTML. Use html only for trusted Zotero note HTML.",
               },
               tags: {
                 type: "string",
