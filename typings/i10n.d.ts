@@ -157,6 +157,7 @@ export type FluentMessageId =
   | 'paperchat-chat-open-settings'
   | 'paperchat-chat-open-source'
   | 'paperchat-chat-open-source-failed'
+  | 'paperchat-chat-output-truncated'
   | 'paperchat-chat-panel-title'
   | 'paperchat-chat-pin-selected-text'
   | 'paperchat-chat-presentation-open'

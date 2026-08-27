@@ -4,11 +4,11 @@
 
 import type {
   ChatMessage,
-  HostedWebSearchCall,
   StreamCallbacks,
   StreamToolCallingCallbacks,
+  StreamToolCallingResult,
 } from "./chat";
-import type { ToolDefinition, ToolCall } from "./tool";
+import type { ToolDefinition } from "./tool";
 
 /**
  * Model capabilities
@@ -286,6 +286,8 @@ export type ProviderFactory = (config: ProviderConfig) => AIProvider;
  * Tool Calling Provider interface
  * Extends AIProvider with tool calling capabilities
  */
+export type ToolCallingCompletionResult = StreamToolCallingResult;
+
 export interface ToolCallingProvider extends AIProvider {
   /** 非流式 tool calling */
   chatCompletionWithTools(
@@ -293,14 +295,7 @@ export interface ToolCallingProvider extends AIProvider {
     tools?: ToolDefinition[],
     signal?: AbortSignal,
     options?: ToolCallingOptions,
-  ): Promise<{
-    content: string;
-    reasoning?: string;
-    toolCalls?: ToolCall[];
-    hostedWebSearches?: HostedWebSearchCall[];
-    /** Provider returned tool protocol even though this round disabled tools. */
-    suppressedToolCall?: boolean;
-  }>;
+  ): Promise<ToolCallingCompletionResult>;
 
   /** 流式 tool calling（可选，部分 provider 可能不支持） */
   streamChatCompletionWithTools?(

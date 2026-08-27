@@ -7,6 +7,7 @@ import type {
   HostedWebSearchCall,
   PresentationToolCardArtifact,
   StreamToolCallingCallbacks,
+  ToolCallingStopReason,
 } from "../../../types/chat";
 import type {
   PaperStructure,
@@ -88,7 +89,13 @@ import {
   collectToolEvidenceRecords,
   sanitizeEvidenceReferences,
 } from "../evidence";
-import { getMaxIterationsMessage } from "./messages";
+import { getMaxIterationsMessage, getOutputTruncationNotice } from "./messages";
+import {
+  MAX_OUTPUT_TRUNCATION_CONTINUATIONS,
+  OUTPUT_CONTINUATION_TOOL_PROTOCOL_ERROR,
+  continueTruncatedOutput,
+  shouldContinueTruncatedOutput,
+} from "./outputTruncationContinuation";
 import {
   SEARCH_SCOPE_TOOL_NAME,
   advanceSearchScopeAfterResults,
@@ -165,6 +172,9 @@ type ProviderRequestExecutor = <T>(
   operation: () => Promise<T>,
   onProviderRerouted?: () => void,
 ) => Promise<T>;
+
+const executeProviderRequestOnce: ProviderRequestExecutor = (operation) =>
+  operation();
 
 interface RuntimeExecutionOptions {
   provider: ToolCallingProvider;
@@ -600,12 +610,24 @@ export class AgentRuntime {
           result.stopReason,
         );
 
+        const roundAllowsHostedWebSearch =
+          !iterationControl.forceFinalAnswer &&
+          iterationControl.toolsForRound.some(
+            (tool) => tool.function.name === "web_search",
+          );
+        if (!roundAllowsHostedWebSearch && !!result.hostedWebSearches?.length) {
+          result.suppressedToolCall = true;
+        }
+        const acceptedHostedWebSearches =
+          roundAllowsHostedWebSearch && !result.suppressedToolCall
+            ? result.hostedWebSearches || []
+            : [];
         this.upsertHostedWebSearchResults(
           sendingSession,
-          result.hostedWebSearches || [],
+          acceptedHostedWebSearches,
         );
         const hostedWebSearchDisplay = this.formatHostedWebSearchDisplay(
-          result.hostedWebSearches || [],
+          acceptedHostedWebSearches,
         );
 
         if (
@@ -729,7 +751,8 @@ export class AgentRuntime {
           iterationControl.forceFinalAnswer &&
           (result.suppressedToolCall ||
             !!result.toolCalls?.length ||
-            !(result.content || "").trim())
+            (!(result.content || "").trim() &&
+              !shouldContinueTruncatedOutput(result)))
         ) {
           ztoolkit.log(
             `[${logPrefix}] Final synthesis round did not produce a terminal answer; falling back to max-iterations message`,
@@ -747,6 +770,60 @@ export class AgentRuntime {
           return;
         }
 
+        let acceptedContinuationReasoning = assistantMessage.reasoning;
+        const continuedOutput = await continueTruncatedOutput({
+          initialResult: result,
+          displayBeforeRound: accumulatedDisplay,
+          currentMessages,
+          generateId: () => this.callbacks.generateId(),
+          getSupplementalDisplay: (round) =>
+            round === result ? hostedWebSearchDisplay : "",
+          beforeContinuation: async (
+            continuationDisplay,
+            _round,
+            continuation,
+          ) => {
+            this.ensureSessionTracked(sendingSession, sessionRunId);
+            acceptedContinuationReasoning = assistantMessage.reasoning;
+            assistantMessage.content = continuationDisplay;
+            assistantMessage.streamingState = "in_progress";
+            await this.messageCheckpointer.flush(
+              sendingSession,
+              sessionRunId,
+              assistantMessage,
+              "in_progress",
+            );
+            ztoolkit.log(
+              `[${logPrefix}] Output hit max_tokens; auto-continuing (${continuation}/${MAX_OUTPUT_TRUNCATION_CONTINUATIONS})`,
+            );
+          },
+          requestNext: async (continuationDisplay) => {
+            const round = await this.runStreamingRound(
+              provider,
+              currentMessages,
+              [],
+              sendingSession,
+              sessionRunId,
+              abortSignal,
+              assistantMessage,
+              continuationDisplay,
+              iteration,
+              "none",
+              executeProviderRequestOnce,
+              () => undefined,
+              true,
+            );
+            this.ensureSessionTracked(sendingSession, sessionRunId);
+            return round;
+          },
+        });
+        if (continuedOutput.unexpectedToolProtocol) {
+          assistantMessage.content = continuedOutput.accumulatedDisplay;
+          assistantMessage.reasoning =
+            acceptedContinuationReasoning || undefined;
+          throw new Error(OUTPUT_CONTINUATION_TOOL_PROTOCOL_ERROR);
+        }
+
         await this.finalizeCompletedTurn({
           sendingSession,
           sessionRunId,
@@ -755,9 +832,10 @@ export class AgentRuntime {
           pdfWasAttached,
           summaryTriggered,
           accumulatedDisplay:
-            accumulatedDisplay +
-            hostedWebSearchDisplay +
-            (result.content || ""),
+            continuedOutput.accumulatedDisplay +
+            (continuedOutput.outputStillTruncated
+              ? getOutputTruncationNotice()
+              : ""),
           iteration,
         });
         return;
@@ -932,12 +1010,24 @@ export class AgentRuntime {
           result.toolCalls?.length || 0,
         );
 
+        const roundAllowsHostedWebSearch =
+          !iterationControl.forceFinalAnswer &&
+          iterationControl.toolsForRound.some(
+            (tool) => tool.function.name === "web_search",
+          );
+        if (!roundAllowsHostedWebSearch && !!result.hostedWebSearches?.length) {
+          result.suppressedToolCall = true;
+        }
+        const acceptedHostedWebSearches =
+          roundAllowsHostedWebSearch && !result.suppressedToolCall
+            ? result.hostedWebSearches || []
+            : [];
         this.upsertHostedWebSearchResults(
           sendingSession,
-          result.hostedWebSearches || [],
+          acceptedHostedWebSearches,
         );
         const hostedWebSearchDisplay = this.formatHostedWebSearchDisplay(
-          result.hostedWebSearches || [],
+          acceptedHostedWebSearches,
         );
 
         if (
@@ -1061,7 +1151,8 @@ export class AgentRuntime {
           iterationControl.forceFinalAnswer &&
           (result.suppressedToolCall ||
             !!result.toolCalls?.length ||
-            !(result.content || "").trim())
+            (!(result.content || "").trim() &&
+              !shouldContinueTruncatedOutput(result)))
         ) {
           ztoolkit.log(
             `[${logPrefix}] Final synthesis round did not produce a terminal answer; falling back to max-iterations message`,
@@ -1079,6 +1170,52 @@ export class AgentRuntime {
           return;
         }
 
+        let accumulatedReasoning = assistantMessage.reasoning || "";
+        const continuedOutput = await continueTruncatedOutput({
+          initialResult: result,
+          displayBeforeRound: accumulatedDisplay,
+          currentMessages,
+          generateId: () => this.callbacks.generateId(),
+          getSupplementalDisplay: (round) =>
+            round === result ? hostedWebSearchDisplay : "",
+          beforeContinuation: async (
+            continuationDisplay,
+            round,
+            continuation,
+          ) => {
+            this.ensureSessionTracked(sendingSession, sessionRunId);
+            accumulatedReasoning += round.reasoning || "";
+            assistantMessage.content = continuationDisplay;
+            assistantMessage.reasoning = accumulatedReasoning || undefined;
+            assistantMessage.streamingState = "in_progress";
+            await this.messageCheckpointer.flush(
+              sendingSession,
+              sessionRunId,
+              assistantMessage,
+              "in_progress",
+            );
+            ztoolkit.log(
+              `[${logPrefix}] Output hit max_tokens; auto-continuing (${continuation}/${MAX_OUTPUT_TRUNCATION_CONTINUATIONS})`,
+            );
+          },
+          requestNext: async (_continuationDisplay) => {
+            const round = await provider.chatCompletionWithTools(
+              currentMessages,
+              [],
+              abortSignal,
+              { toolChoice: "none" },
+            );
+            this.ensureSessionTracked(sendingSession, sessionRunId);
+            return round;
+          },
+        });
+        if (continuedOutput.unexpectedToolProtocol) {
+          assistantMessage.content = continuedOutput.accumulatedDisplay;
+          throw new Error(OUTPUT_CONTINUATION_TOOL_PROTOCOL_ERROR);
+        }
+        accumulatedReasoning += continuedOutput.result.reasoning || "";
+        assistantMessage.reasoning = accumulatedReasoning || undefined;
+
         await this.finalizeCompletedTurn({
           sendingSession,
           sessionRunId,
@@ -1087,9 +1224,10 @@ export class AgentRuntime {
           pdfWasAttached,
           summaryTriggered,
           accumulatedDisplay:
-            accumulatedDisplay +
-            hostedWebSearchDisplay +
-            (result.content || ""),
+            continuedOutput.accumulatedDisplay +
+            (continuedOutput.outputStillTruncated
+              ? getOutputTruncationNotice()
+              : ""),
           iteration,
         });
         return;
@@ -1170,13 +1308,15 @@ export class AgentRuntime {
     toolChoice: "auto" | "none",
     executeProviderRequest: ProviderRequestExecutor,
     onProviderRerouted: () => void,
+    deferStreamingUpdatesUntilComplete = false,
   ): Promise<{
     content: string;
     reasoning?: string;
     toolCalls?: ToolCall[];
     hostedWebSearches?: HostedWebSearchCall[];
     suppressedToolCall?: boolean;
-    stopReason: string;
+    incompleteToolProtocol?: boolean;
+    stopReason: ToolCallingStopReason;
   }> {
     const reasoningBeforeRound = assistantMessage.reasoning || "";
     const failedAttemptState: {
@@ -1190,8 +1330,13 @@ export class AgentRuntime {
         toolCalls?: ToolCall[];
         hostedWebSearches?: HostedWebSearchCall[];
         suppressedToolCall?: boolean;
-        stopReason: string;
+        incompleteToolProtocol?: boolean;
+        stopReason: ToolCallingStopReason;
       }>((resolve, reject) => {
+        const exposeToolProtocol = toolChoice !== "none";
+        const allowHostedWebSearch =
+          exposeToolProtocol &&
+          tools.some((tool) => tool.function.name === "web_search");
         const pendingToolCalls = new Map<
           number,
           { id: string; name: string; arguments: string }
@@ -1202,12 +1347,15 @@ export class AgentRuntime {
         >();
         let roundContent = "";
         let roundReasoning = "";
-        let stopReason = "end_turn";
+        let stopReason: ToolCallingStopReason = "end_turn";
 
         assistantMessage.content = displayBeforeThisRound;
         assistantMessage.reasoning = reasoningBeforeRound || undefined;
 
         const buildDraftToolCallDisplay = (): string => {
+          if (!exposeToolProtocol) {
+            return "";
+          }
           const ordered = [...pendingToolCalls.entries()].sort(
             ([leftIndex], [rightIndex]) => leftIndex - rightIndex,
           );
@@ -1222,13 +1370,17 @@ export class AgentRuntime {
             .join("");
         };
 
-        const buildHostedWebSearchDisplay = (): string =>
-          this.formatHostedWebSearchDisplay(
+        const buildHostedWebSearchDisplay = (): string => {
+          if (!allowHostedWebSearch) {
+            return "";
+          }
+          return this.formatHostedWebSearchDisplay(
             [...hostedWebSearches.entries()].map(([id, search]) => ({
               id,
               ...search,
             })),
           );
+        };
 
         const getPersistedStreamingContent = (): string =>
           displayBeforeThisRound + roundContent;
@@ -1240,6 +1392,9 @@ export class AgentRuntime {
           buildDraftToolCallDisplay();
 
         const updateAssistantStreamingContent = (): string | undefined => {
+          if (deferStreamingUpdatesUntilComplete) {
+            return undefined;
+          }
           if (!this.callbacks.isSessionTracked(sendingSession, sessionRunId)) {
             return undefined;
           }
@@ -1265,13 +1420,15 @@ export class AgentRuntime {
           for (const [id, search] of hostedWebSearches) {
             hostedWebSearches.set(id, { ...search, status: "error" });
           }
-          this.upsertHostedWebSearchResults(
-            sendingSession,
-            [...hostedWebSearches.entries()].map(([id, search]) => ({
-              id,
-              ...search,
-            })),
-          );
+          if (allowHostedWebSearch) {
+            this.upsertHostedWebSearchResults(
+              sendingSession,
+              [...hostedWebSearches.entries()].map(([id, search]) => ({
+                id,
+                ...search,
+              })),
+            );
+          }
           const failedAttempt = {
             content: buildHostedWebSearchDisplay() + roundContent,
             reasoning: roundReasoning,
@@ -1299,6 +1456,9 @@ export class AgentRuntime {
             }
             roundContent += text;
             const uiContent = updateAssistantStreamingContent();
+            if (deferStreamingUpdatesUntilComplete) {
+              return;
+            }
             this.emitRuntimeEvent<"text_delta">(
               sendingSession,
               sessionRunId,
@@ -1318,6 +1478,9 @@ export class AgentRuntime {
               return;
             }
             roundReasoning += text;
+            if (deferStreamingUpdatesUntilComplete) {
+              return;
+            }
             const fullReasoning = reasoningBeforeRound + roundReasoning;
             assistantMessage.reasoning = fullReasoning;
             assistantMessage.streamingState = "in_progress";
@@ -1418,20 +1581,91 @@ export class AgentRuntime {
               result.toolCalls && result.toolCalls.length > 0
                 ? result.toolCalls
                 : streamedToolCalls;
-            resolve({
+            const completedHostedWebSearches =
+              hostedWebSearches.size > 0
+                ? [...hostedWebSearches.entries()].map(([id, search]) => ({
+                    id,
+                    ...search,
+                  }))
+                : undefined;
+            const suppressedToolCall =
+              result.suppressedToolCall ||
+              (!allowHostedWebSearch && !!completedHostedWebSearches?.length);
+            const completedResult = {
               content: result.content,
               reasoning: result.reasoning || roundReasoning || undefined,
               toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-              hostedWebSearches:
-                hostedWebSearches.size > 0
-                  ? [...hostedWebSearches.entries()].map(([id, search]) => ({
-                      id,
-                      ...search,
-                    }))
-                  : undefined,
-              suppressedToolCall: result.suppressedToolCall,
+              hostedWebSearches: completedHostedWebSearches,
+              suppressedToolCall,
+              incompleteToolProtocol: result.incompleteToolProtocol,
               stopReason,
-            });
+            };
+            const hasUnexpectedDeferredProtocol =
+              stopReason === "tool_calls" ||
+              !!completedResult.suppressedToolCall ||
+              !!completedResult.incompleteToolProtocol ||
+              !!completedResult.toolCalls?.length ||
+              !!completedResult.hostedWebSearches?.length;
+
+            if (
+              deferStreamingUpdatesUntilComplete &&
+              !hasUnexpectedDeferredProtocol &&
+              this.callbacks.isSessionTracked(sendingSession, sessionRunId)
+            ) {
+              const acceptedReasoning = completedResult.reasoning || "";
+              assistantMessage.content =
+                displayBeforeThisRound + completedResult.content;
+              assistantMessage.reasoning =
+                reasoningBeforeRound || acceptedReasoning
+                  ? reasoningBeforeRound + acceptedReasoning
+                  : undefined;
+              assistantMessage.streamingState = "in_progress";
+              this.messageCheckpointer.schedule(
+                sendingSession,
+                sessionRunId,
+                assistantMessage,
+              );
+              if (acceptedReasoning) {
+                this.emitRuntimeEvent<"reasoning_delta">(
+                  sendingSession,
+                  sessionRunId,
+                  assistantMessage,
+                  {
+                    type: "reasoning_delta",
+                    delta: acceptedReasoning,
+                    reasoning: assistantMessage.reasoning || "",
+                    iteration,
+                  },
+                );
+                if (this.callbacks.isSessionActive(sendingSession)) {
+                  this.callbacks.onReasoningUpdate?.(
+                    assistantMessage.reasoning || "",
+                    assistantMessage.id,
+                  );
+                }
+              }
+              if (completedResult.content) {
+                this.emitRuntimeEvent<"text_delta">(
+                  sendingSession,
+                  sessionRunId,
+                  assistantMessage,
+                  {
+                    type: "text_delta",
+                    delta: completedResult.content,
+                    content: assistantMessage.content,
+                    iteration,
+                  },
+                );
+                if (this.callbacks.isSessionActive(sendingSession)) {
+                  this.callbacks.onStreamingUpdate?.(
+                    assistantMessage.content,
+                    assistantMessage.id,
+                  );
+                }
+              }
+            }
+
+            resolve(completedResult);
           },
           onError: rejectAttempt,
         };

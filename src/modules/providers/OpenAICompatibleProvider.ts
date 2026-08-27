@@ -8,8 +8,13 @@ import type {
   ChatMessage,
   StreamCallbacks,
   StreamToolCallingCallbacks,
+  ToolCallingStopReason,
 } from "../../types/chat";
-import type { PdfAttachment, ToolCallingOptions } from "../../types/provider";
+import type {
+  PdfAttachment,
+  ToolCallingCompletionResult,
+  ToolCallingOptions,
+} from "../../types/provider";
 import type { ToolDefinition, ToolCall } from "../../types/tool";
 import { parseSSEStreamWithToolCalling } from "./SSEParser";
 import { shouldIncludeReasoningContentForRequest } from "./reasoning-content";
@@ -21,6 +26,7 @@ import {
   stablePromptCacheStringify,
 } from "./prompt-cache-diagnostics";
 import { applyReasoningRequestOptions } from "./reasoning-request";
+import { normalizeToolCallingStopReason } from "./stopReason";
 
 const EXTRA_REQUEST_BODY_PROTECTED_KEYS = new Set([
   "model",
@@ -74,6 +80,9 @@ const DSML_TOOL_CALLS_END_SCAN_REGEX = new RegExp(
   String.raw`<\s*\/\s*${DSML_TAG_PREFIX}\s*tool_calls\s*>`,
   "gi",
 );
+const XML_TOOL_CALLS_START_REGEX = /<\s*function_calls\s*>/i;
+const XML_TOOL_CALLS_START_SCAN_REGEX = /<\s*function_calls\s*>/gi;
+const XML_TOOL_CALLS_END_SCAN_REGEX = /<\s*\/\s*function_calls\s*>/gi;
 const DSML_INVOKE_REGEX = new RegExp(
   String.raw`<\s*${DSML_TAG_PREFIX}\s*invoke\b([^>]*)>([\s\S]*?)<\s*\/\s*${DSML_TAG_PREFIX}\s*invoke\s*>`,
   "gi",
@@ -111,7 +120,7 @@ function parseXmlAttributes(rawAttributes: string): Record<string, string> {
   return attributes;
 }
 
-interface DsmlToolCallBlock {
+interface ToolCallProtocolBlock {
   start: number;
   end: number;
   body: string;
@@ -153,13 +162,29 @@ function isPotentialDsmlToolCallsStart(candidate: string): boolean {
   return !rest || "tool_calls>".startsWith(rest);
 }
 
+function isPotentialXmlToolCallsStart(candidate: string): boolean {
+  const compact = candidate.replace(/\s/g, "").toLowerCase();
+  return (
+    compact.length > 1 &&
+    compact.startsWith("<") &&
+    "<function_calls>".startsWith(compact)
+  );
+}
+
+function isPotentialFallbackToolCallsStart(candidate: string): boolean {
+  return (
+    isPotentialDsmlToolCallsStart(candidate) ||
+    isPotentialXmlToolCallsStart(candidate)
+  );
+}
+
 /**
  * Scan DSML envelopes without asking one backtracking regex to search from
  * every opening marker. An opening marker without a close consumes through
  * EOF: it is still provider protocol text and must never become chat content.
  */
-function scanDsmlToolCallBlocks(content: string): DsmlToolCallBlock[] {
-  const blocks: DsmlToolCallBlock[] = [];
+function scanDsmlToolCallBlocks(content: string): ToolCallProtocolBlock[] {
+  const blocks: ToolCallProtocolBlock[] = [];
   let cursor = 0;
 
   while (cursor < content.length) {
@@ -207,8 +232,59 @@ function scanDsmlToolCallBlocks(content: string): DsmlToolCallBlock[] {
   return blocks;
 }
 
-export function stripDsmlToolCallBlocks(content: string): string {
-  const blocks = scanDsmlToolCallBlocks(content);
+function scanXmlToolCallBlocks(content: string): ToolCallProtocolBlock[] {
+  const blocks: ToolCallProtocolBlock[] = [];
+  let cursor = 0;
+
+  while (cursor < content.length) {
+    XML_TOOL_CALLS_START_SCAN_REGEX.lastIndex = cursor;
+    const startMatch = XML_TOOL_CALLS_START_SCAN_REGEX.exec(content);
+    if (!startMatch) {
+      const trailingTagStart = content.lastIndexOf("<");
+      if (
+        trailingTagStart >= cursor &&
+        isPotentialXmlToolCallsStart(content.slice(trailingTagStart))
+      ) {
+        blocks.push({
+          start: trailingTagStart,
+          end: content.length,
+          body: "",
+          complete: false,
+        });
+      }
+      break;
+    }
+
+    const bodyStart = startMatch.index + startMatch[0].length;
+    XML_TOOL_CALLS_END_SCAN_REGEX.lastIndex = bodyStart;
+    const endMatch = XML_TOOL_CALLS_END_SCAN_REGEX.exec(content);
+    if (!endMatch) {
+      blocks.push({
+        start: startMatch.index,
+        end: content.length,
+        body: content.slice(bodyStart),
+        complete: false,
+      });
+      break;
+    }
+
+    const end = endMatch.index + endMatch[0].length;
+    blocks.push({
+      start: startMatch.index,
+      end,
+      body: content.slice(bodyStart, endMatch.index),
+      complete: true,
+    });
+    cursor = end;
+  }
+
+  return blocks;
+}
+
+function stripToolCallProtocolBlocks(
+  content: string,
+  blocks: ToolCallProtocolBlock[],
+): string {
   if (blocks.length === 0) {
     return content.trim();
   }
@@ -221,6 +297,11 @@ export function stripDsmlToolCallBlocks(content: string): string {
   }
   cleanParts.push(content.slice(cursor));
   return cleanParts.join("").trim();
+}
+
+export function stripDsmlToolCallBlocks(content: string): string {
+  const blocks = scanDsmlToolCallBlocks(content);
+  return stripToolCallProtocolBlocks(content, blocks);
 }
 
 export function hasDsmlToolCallBlock(content: string): boolean {
@@ -274,6 +355,41 @@ export function parseDsmlToolCallsFromContent(content: string): ToolCall[] {
   return toolCalls;
 }
 
+function parseXmlToolCallsFromContent(content: string): ToolCall[] {
+  const toolCalls: ToolCall[] = [];
+  let index = 0;
+
+  for (const block of scanXmlToolCallBlocks(content)) {
+    if (!block.complete) {
+      continue;
+    }
+    const invokeRegex = /<invoke\s+name="([^"]+)">([\s\S]*?)<\/invoke>/g;
+    let invokeMatch: RegExpExecArray | null;
+
+    while ((invokeMatch = invokeRegex.exec(block.body)) !== null) {
+      const params: Record<string, string> = {};
+      const paramRegex = /<parameter\s+name="([^"]+)">([\s\S]*?)<\/parameter>/g;
+      let paramMatch: RegExpExecArray | null;
+
+      while ((paramMatch = paramRegex.exec(invokeMatch[2])) !== null) {
+        params[paramMatch[1]] = paramMatch[2];
+      }
+
+      toolCalls.push({
+        id: `xml_call_${index}`,
+        type: "function",
+        function: {
+          name: invokeMatch[1],
+          arguments: JSON.stringify(params),
+        },
+      });
+      index++;
+    }
+  }
+
+  return toolCalls;
+}
+
 function filterToolCallsByAllowedTools(
   toolCalls: ToolCall[],
   tools: ToolDefinition[] | undefined,
@@ -288,38 +404,118 @@ function filterToolCallsByAllowedTools(
   );
 }
 
+type FallbackToolProtocolMode = "literal" | "allow" | "suppress";
+
+function getFallbackToolProtocolMode(
+  tools: ToolDefinition[] | undefined,
+  toolChoice: ToolCallingOptions["toolChoice"],
+): FallbackToolProtocolMode {
+  if (toolChoice === "none") {
+    return "suppress";
+  }
+  return tools?.length ? "allow" : "literal";
+}
+
 export function resolveDsmlFallbackContent(
   content: string,
   tools: ToolDefinition[] | undefined,
-  allowDsmlToolCalls: boolean,
+  mode: FallbackToolProtocolMode,
 ): {
   cleanContent: string;
   hasDsmlBlock: boolean;
   toolCalls: ToolCall[];
   suppressedToolCall: boolean;
+  incompleteToolProtocol: boolean;
 } {
-  // DSML is provider protocol only while a tool contract is active. Preserve
-  // literal DSML examples in ordinary, tool-free answers.
-  if (!tools || tools.length === 0) {
+  // DSML is normally provider protocol only while a tool contract is active.
+  // Text-only continuation rounds explicitly detect it without a schema so a
+  // provider cannot leak forbidden tool markup into displayed content.
+  if (mode === "literal") {
     return {
       cleanContent: content,
       hasDsmlBlock: false,
       toolCalls: [],
       suppressedToolCall: false,
+      incompleteToolProtocol: false,
     };
   }
 
   const hasDsmlBlock = hasDsmlToolCallBlock(content);
+  const parsedToolCalls =
+    hasDsmlBlock && mode === "allow"
+      ? parseDsmlToolCallsFromContent(content)
+      : [];
+  const toolCalls =
+    mode === "allow"
+      ? filterToolCallsByAllowedTools(parsedToolCalls, tools)
+      : [];
   return {
     cleanContent: hasDsmlBlock ? stripDsmlToolCallBlocks(content) : content,
     hasDsmlBlock,
-    toolCalls: allowDsmlToolCalls
-      ? filterToolCallsByAllowedTools(
-          parseDsmlToolCallsFromContent(content),
-          tools,
-        )
-      : [],
-    suppressedToolCall: hasDsmlBlock && !allowDsmlToolCalls,
+    toolCalls,
+    suppressedToolCall:
+      hasDsmlBlock &&
+      (mode === "suppress" ||
+        (mode === "allow" && parsedToolCalls.length !== toolCalls.length)),
+    incompleteToolProtocol:
+      hasDsmlBlock && mode === "allow" && parsedToolCalls.length === 0,
+  };
+}
+
+function resolveXmlFallbackContent(
+  content: string,
+  tools: ToolDefinition[] | undefined,
+  mode: FallbackToolProtocolMode,
+  stopReason: ToolCallingStopReason,
+): {
+  cleanContent: string;
+  hasXmlBlock: boolean;
+  toolCalls: ToolCall[];
+  suppressedToolCall: boolean;
+  incompleteToolProtocol: boolean;
+} {
+  const shouldInterpret =
+    mode === "suppress" ||
+    stopReason === "tool_calls" ||
+    (mode === "allow" && stopReason === "max_tokens");
+  if (!shouldInterpret) {
+    return {
+      cleanContent: content,
+      hasXmlBlock: false,
+      toolCalls: [],
+      suppressedToolCall: false,
+      incompleteToolProtocol: false,
+    };
+  }
+
+  const blocks = scanXmlToolCallBlocks(content);
+  if (blocks.length === 0) {
+    return {
+      cleanContent: content,
+      hasXmlBlock: false,
+      toolCalls: [],
+      suppressedToolCall: false,
+      incompleteToolProtocol: false,
+    };
+  }
+
+  const parsedToolCalls =
+    stopReason === "tool_calls" ? parseXmlToolCallsFromContent(content) : [];
+  const toolCalls =
+    mode === "allow"
+      ? filterToolCallsByAllowedTools(parsedToolCalls, tools)
+      : [];
+  return {
+    cleanContent: stripToolCallProtocolBlocks(content, blocks),
+    hasXmlBlock: true,
+    toolCalls,
+    suppressedToolCall:
+      mode !== "allow" || parsedToolCalls.length !== toolCalls.length,
+    incompleteToolProtocol:
+      mode === "allow" &&
+      (stopReason === "max_tokens" ||
+        blocks.some((block) => !block.complete) ||
+        parsedToolCalls.length === 0),
   };
 }
 
@@ -533,12 +729,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
     tools?: ToolDefinition[],
     signal?: AbortSignal,
     options?: ToolCallingOptions,
-  ): Promise<{
-    content: string;
-    reasoning?: string;
-    toolCalls?: ToolCall[];
-    suppressedToolCall?: boolean;
-  }> {
+  ): Promise<ToolCallingCompletionResult> {
     if (!this.isReady()) {
       throw new Error("Provider is not configured");
     }
@@ -609,6 +800,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
 
     const message = data.choices?.[0]?.message;
     const finishReason = data.choices?.[0]?.finish_reason;
+    const stopReason = normalizeToolCallingStopReason(finishReason);
 
     ztoolkit.log(
       "[chatCompletionWithTools] Response finish_reason:",
@@ -631,38 +823,29 @@ export class OpenAICompatibleProvider extends BaseProvider {
 
     const rawContent = message?.content || "";
     const structuredToolCalls = message?.tool_calls;
-    const allowDsmlToolCalls =
-      !!tools && tools.length > 0 && options?.toolChoice !== "none";
-
-    // Fallback: some OpenAI-compatible backends leak native tool-call markup
-    // into content instead of returning structured message.tool_calls.
-    if (
-      finishReason === "tool_calls" &&
-      (!structuredToolCalls || structuredToolCalls.length === 0)
-    ) {
-      const xmlToolCalls = this.parseXmlToolCalls(rawContent);
-      if (xmlToolCalls.length > 0) {
-        ztoolkit.log(
-          "[chatCompletionWithTools] Parsed",
-          xmlToolCalls.length,
-          "tool calls from XML fallback",
-        );
-        const cleanContent = rawContent
-          .replace(/<function_calls>[\s\S]*?<\/function_calls>/g, "")
-          .trim();
-        return {
-          content: cleanContent,
-          reasoning: message?.reasoning_content || undefined,
-          toolCalls: allowDsmlToolCalls ? xmlToolCalls : undefined,
-          suppressedToolCall: !allowDsmlToolCalls,
-        };
-      }
+    const fallbackProtocolMode = getFallbackToolProtocolMode(
+      tools,
+      options?.toolChoice,
+    );
+    const allowFallbackToolCalls = fallbackProtocolMode === "allow";
+    const xmlFallback = resolveXmlFallbackContent(
+      rawContent,
+      tools,
+      fallbackProtocolMode,
+      stopReason,
+    );
+    if (xmlFallback.toolCalls.length > 0) {
+      ztoolkit.log(
+        "[chatCompletionWithTools] Parsed",
+        xmlFallback.toolCalls.length,
+        "tool calls from XML fallback",
+      );
     }
 
     const dsmlFallback = resolveDsmlFallbackContent(
-      rawContent,
+      xmlFallback.cleanContent,
       tools,
-      allowDsmlToolCalls,
+      fallbackProtocolMode,
     );
     if (dsmlFallback.toolCalls.length > 0) {
       ztoolkit.log(
@@ -677,64 +860,34 @@ export class OpenAICompatibleProvider extends BaseProvider {
           structuredToolCalls && structuredToolCalls.length > 0
             ? structuredToolCalls
             : dsmlFallback.toolCalls,
+        suppressedToolCall:
+          xmlFallback.suppressedToolCall || dsmlFallback.suppressedToolCall,
+        incompleteToolProtocol:
+          xmlFallback.incompleteToolProtocol ||
+          dsmlFallback.incompleteToolProtocol,
+        stopReason,
       };
     }
 
+    const fallbackToolCalls =
+      xmlFallback.toolCalls.length > 0 ? xmlFallback.toolCalls : undefined;
     return {
       content: dsmlFallback.cleanContent,
       reasoning: message?.reasoning_content || undefined,
-      toolCalls: allowDsmlToolCalls ? structuredToolCalls : undefined,
+      toolCalls: allowFallbackToolCalls
+        ? structuredToolCalls && structuredToolCalls.length > 0
+          ? structuredToolCalls
+          : fallbackToolCalls
+        : undefined,
       suppressedToolCall:
+        xmlFallback.suppressedToolCall ||
         dsmlFallback.suppressedToolCall ||
-        (!allowDsmlToolCalls && !!structuredToolCalls?.length),
+        (!allowFallbackToolCalls && !!structuredToolCalls?.length),
+      incompleteToolProtocol:
+        xmlFallback.incompleteToolProtocol ||
+        dsmlFallback.incompleteToolProtocol,
+      stopReason: fallbackToolCalls?.length ? "tool_calls" : stopReason,
     };
-  }
-
-  /**
-   * Parse XML-formatted tool calls from content string.
-   * Some backends (e.g. Anthropic→OpenAI adapters) may emit tool calls
-   * as XML in the content field instead of structured tool_calls.
-   */
-  private parseXmlToolCalls(content: string): ToolCall[] {
-    try {
-      const blockMatch = content.match(
-        /<function_calls>([\s\S]*?)<\/function_calls>/,
-      );
-      if (!blockMatch) return [];
-
-      const block = blockMatch[1];
-      const invokeRegex = /<invoke\s+name="([^"]+)">([\s\S]*?)<\/invoke>/g;
-      const toolCalls: ToolCall[] = [];
-      let invokeMatch: RegExpExecArray | null;
-      let index = 0;
-
-      while ((invokeMatch = invokeRegex.exec(block)) !== null) {
-        const functionName = invokeMatch[1];
-        const paramsBlock = invokeMatch[2];
-        const paramRegex =
-          /<parameter\s+name="([^"]+)">([\s\S]*?)<\/parameter>/g;
-        const params: Record<string, string> = {};
-        let paramMatch: RegExpExecArray | null;
-
-        while ((paramMatch = paramRegex.exec(paramsBlock)) !== null) {
-          params[paramMatch[1]] = paramMatch[2];
-        }
-
-        toolCalls.push({
-          id: `xml_call_${index}`,
-          type: "function",
-          function: {
-            name: functionName,
-            arguments: JSON.stringify(params),
-          },
-        });
-        index++;
-      }
-
-      return toolCalls;
-    } catch {
-      return [];
-    }
   }
 
   /**
@@ -812,30 +965,42 @@ export class OpenAICompatibleProvider extends BaseProvider {
         number,
         { id: string; name: string; arguments: string }
       >();
-      let stopReason = "end_turn";
-      const shouldHandleDsmlProtocol = tools.length > 0;
-      const allowDsmlToolCalls =
-        shouldHandleDsmlProtocol && options?.toolChoice !== "none";
+      let stopReason: ToolCallingStopReason = "end_turn";
+      const fallbackProtocolMode = getFallbackToolProtocolMode(
+        tools,
+        options?.toolChoice,
+      );
+      const shouldHandleFallbackProtocol = fallbackProtocolMode !== "literal";
+      const allowFallbackToolCalls = fallbackProtocolMode === "allow";
       let pendingTextDelta = "";
-      let suppressDsmlTextDeltas = false;
+      let suppressFallbackProtocolTextDeltas = false;
+      let emittedContent = "";
+
+      const emitTextDelta = (text: string): void => {
+        if (!text) {
+          return;
+        }
+        emittedContent += text;
+        onTextDelta(text);
+      };
 
       const flushPendingTextDelta = (): void => {
         if (!pendingTextDelta) {
           return;
         }
-        onTextDelta(pendingTextDelta);
+        emitTextDelta(pendingTextDelta);
         pendingTextDelta = "";
       };
 
       const handleTextDelta = (text: string): void => {
         fullContent += text;
 
-        if (!shouldHandleDsmlProtocol) {
-          onTextDelta(text);
+        if (!shouldHandleFallbackProtocol) {
+          emitTextDelta(text);
           return;
         }
 
-        if (suppressDsmlTextDeltas) {
+        if (suppressFallbackProtocolTextDeltas) {
           return;
         }
 
@@ -845,11 +1010,11 @@ export class OpenAICompatibleProvider extends BaseProvider {
         while (combined) {
           const tagStart = combined.indexOf("<");
           if (tagStart < 0) {
-            onTextDelta(combined);
+            emitTextDelta(combined);
             return;
           }
           if (tagStart > 0) {
-            onTextDelta(combined.slice(0, tagStart));
+            emitTextDelta(combined.slice(0, tagStart));
             combined = combined.slice(tagStart);
           }
 
@@ -857,26 +1022,29 @@ export class OpenAICompatibleProvider extends BaseProvider {
           if (tagEnd < 0) {
             if (
               combined.replace(/\s/g, "") === "<" ||
-              isPotentialDsmlToolCallsStart(combined)
+              isPotentialFallbackToolCallsStart(combined)
             ) {
               pendingTextDelta = combined;
             } else {
-              onTextDelta(combined);
+              emitTextDelta(combined);
             }
             return;
           }
 
           const candidateTag = combined.slice(0, tagEnd + 1);
           const dsmlStartMatch = DSML_TOOL_CALLS_START_REGEX.exec(candidateTag);
+          const xmlStartMatch = XML_TOOL_CALLS_START_REGEX.exec(candidateTag);
           if (
-            dsmlStartMatch?.index === 0 &&
-            dsmlStartMatch[0].length === candidateTag.length
+            (dsmlStartMatch?.index === 0 &&
+              dsmlStartMatch[0].length === candidateTag.length) ||
+            (xmlStartMatch?.index === 0 &&
+              xmlStartMatch[0].length === candidateTag.length)
           ) {
-            suppressDsmlTextDeltas = true;
+            suppressFallbackProtocolTextDeltas = true;
             return;
           }
 
-          onTextDelta(candidateTag);
+          emitTextDelta(candidateTag);
           combined = combined.slice(tagEnd + 1);
         }
       };
@@ -941,15 +1109,29 @@ export class OpenAICompatibleProvider extends BaseProvider {
         });
       }
 
-      const dsmlFallback = resolveDsmlFallbackContent(
+      const xmlFallback = resolveXmlFallbackContent(
         fullContent,
         tools,
-        allowDsmlToolCalls,
+        fallbackProtocolMode,
+        stopReason,
+      );
+      const dsmlFallback = resolveDsmlFallbackContent(
+        xmlFallback.cleanContent,
+        tools,
+        fallbackProtocolMode,
       );
 
-      if (!dsmlFallback.hasDsmlBlock) {
+      if (!xmlFallback.hasXmlBlock && !dsmlFallback.hasDsmlBlock) {
         flushPendingTextDelta();
+        if (dsmlFallback.cleanContent.startsWith(emittedContent)) {
+          emitTextDelta(dsmlFallback.cleanContent.slice(emittedContent.length));
+        }
       }
+
+      const fallbackToolCalls =
+        xmlFallback.toolCalls.length > 0
+          ? xmlFallback.toolCalls
+          : dsmlFallback.toolCalls;
 
       onComplete({
         content: dsmlFallback.cleanContent,
@@ -957,16 +1139,17 @@ export class OpenAICompatibleProvider extends BaseProvider {
         toolCalls:
           toolCalls.length > 0
             ? toolCalls
-            : dsmlFallback.toolCalls.length > 0
-              ? dsmlFallback.toolCalls
+            : fallbackToolCalls.length > 0
+              ? fallbackToolCalls
               : undefined,
         suppressedToolCall:
+          xmlFallback.suppressedToolCall ||
           dsmlFallback.suppressedToolCall ||
-          (!allowDsmlToolCalls && toolCalls.length > 0),
-        stopReason:
-          dsmlFallback.toolCalls.length > 0
-            ? "tool_calls"
-            : (stopReason as "tool_calls" | "end_turn" | "max_tokens" | "stop"),
+          (!allowFallbackToolCalls && toolCalls.length > 0),
+        incompleteToolProtocol:
+          xmlFallback.incompleteToolProtocol ||
+          dsmlFallback.incompleteToolProtocol,
+        stopReason: fallbackToolCalls.length > 0 ? "tool_calls" : stopReason,
       });
     } catch (error) {
       onError(this.wrapError(error));

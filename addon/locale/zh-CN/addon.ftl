@@ -189,6 +189,7 @@ paperchat-chat-evidence-section = 章节：{ $section }
 paperchat-chat-interrupted = 已中断
 paperchat-chat-turn-in-progress = 当前回复仍在生成中。
 paperchat-chat-max-planning-iterations-reached = 抱歉，我未能在允许的最大规划轮次内完成此请求。
+paperchat-chat-output-truncated = 模型服务在回复完成前停止了生成，这条回复可能不完整。
 paperchat-chat-thinking = 思考中
 paperchat-chat-history-title = 对话 { $time }
 paperchat-reading-loop-execute = 执行

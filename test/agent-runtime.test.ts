@@ -2587,6 +2587,7 @@ describe("agent runtime plan semantics", function () {
         type: "paperchat",
         defaultModel: "test-model",
       },
+      supportsHostedWebSearch: () => true,
       chatCompletionWithTools: async () => ({ content: "unused" }),
       streamChatCompletionWithTools: async (
         _messages: ChatMessage[],
@@ -2631,7 +2632,7 @@ describe("agent runtime plan semantics", function () {
         assistantMessage,
         pdfWasAttached: false,
         summaryTriggered: false,
-        tools: [],
+        tools: [createToolDefinition("web_search")],
         sendingSession: session,
       });
 
@@ -2717,6 +2718,7 @@ describe("agent runtime plan semantics", function () {
           type: "paperchat",
           defaultModel: "test-model",
         },
+        supportsHostedWebSearch: () => true,
         chatCompletionWithTools: async () => ({
           content: "Answer from web",
           hostedWebSearches: [
@@ -2735,7 +2737,7 @@ describe("agent runtime plan semantics", function () {
       assistantMessage,
       pdfWasAttached: false,
       summaryTriggered: false,
-      tools: [],
+      tools: [createToolDefinition("web_search")],
       sendingSession: session,
     });
     (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
@@ -2857,6 +2859,7 @@ describe("agent runtime plan semantics", function () {
         type: "paperchat",
         defaultModel: "test-model",
       },
+      supportsHostedWebSearch: () => true,
       chatCompletionWithTools: async () => ({ content: "unused" }),
       streamChatCompletionWithTools: async (
         _messages: ChatMessage[],
@@ -2882,7 +2885,7 @@ describe("agent runtime plan semantics", function () {
           assistantMessage,
           pdfWasAttached: false,
           summaryTriggered: false,
-          tools: [],
+          tools: [createToolDefinition("web_search")],
           sendingSession: session,
         });
       } catch (error) {

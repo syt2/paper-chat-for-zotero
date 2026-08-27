@@ -7,6 +7,9 @@
  * - Gemini: candidates[0].content.parts[0].text
  */
 
+import { normalizeToolCallingStopReason } from "./stopReason";
+import type { ToolCallingStopReason } from "../../types/chat";
+
 export type SSEFormat = "openai" | "anthropic" | "gemini";
 
 // ============ 基础回调（纯文本流式） ============
@@ -25,7 +28,7 @@ export type SSEToolCallingEvent =
   | { type: "reasoning_delta"; text: string }
   | { type: "tool_call_start"; index: number; id: string; name: string }
   | { type: "tool_call_delta"; index: number; argumentsDelta: string }
-  | { type: "done"; stopReason: string }
+  | { type: "done"; stopReason: ToolCallingStopReason }
   | { type: "error"; error: Error };
 
 export interface SSEToolCallingCallbacks {
@@ -174,8 +177,7 @@ function parseOpenAIToolCallingEvents(parsed: unknown): SSEToolCallingEvent[] {
   if (choice.finish_reason) {
     events.push({
       type: "done",
-      stopReason:
-        choice.finish_reason === "tool_calls" ? "tool_calls" : "end_turn",
+      stopReason: normalizeToolCallingStopReason(choice.finish_reason),
     });
   }
 
@@ -245,7 +247,7 @@ function parseAnthropicToolCallingEvents(
       return [
         {
           type: "done",
-          stopReason: stopReason === "tool_use" ? "tool_calls" : "end_turn",
+          stopReason: normalizeToolCallingStopReason(stopReason),
         },
       ];
     }

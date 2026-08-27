@@ -61,6 +61,8 @@ export interface ChatMessage {
   tool_call_id?: string; // tool 角色消息的工具调用ID
   streamingState?: ChatMessageStreamingState;
   apiOnly?: boolean; // Hidden from chat UI; retained only for model context.
+  /** Transient context used to continue a truncated provider response. */
+  outputContinuation?: boolean;
   // 系统通知标记 (用于显示 item 切换提示等)
   isSystemNotice?: boolean;
   /** Trusted passage records referenced by this assistant message. */
@@ -506,6 +508,12 @@ export interface HostedWebSearchCall {
   }>;
 }
 
+export type ToolCallingStopReason =
+  | "tool_calls"
+  | "end_turn"
+  | "max_tokens"
+  | "stop";
+
 export interface StreamToolCallingResult {
   content: string;
   reasoning?: string;
@@ -513,7 +521,9 @@ export interface StreamToolCallingResult {
   hostedWebSearches?: HostedWebSearchCall[];
   /** Provider returned tool protocol even though this round disabled tools. */
   suppressedToolCall?: boolean;
-  stopReason: "tool_calls" | "end_turn" | "max_tokens" | "stop";
+  /** Provider output ended while a fallback tool protocol was incomplete. */
+  incompleteToolProtocol?: boolean;
+  stopReason: ToolCallingStopReason;
 }
 
 // 流式 Tool Calling 回调

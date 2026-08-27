@@ -8,6 +8,7 @@ import type {
   ChatMessage,
   StreamCallbacks,
   StreamToolCallingCallbacks,
+  ToolCallingStopReason,
 } from "../../types/chat";
 import type {
   PdfAttachment,
@@ -17,10 +18,12 @@ import type {
   AnthropicMessage,
   AnthropicTextBlock,
   AnthropicImageBlock,
+  ToolCallingCompletionResult,
   ToolCallingOptions,
 } from "../../types/provider";
 import type { ToolDefinition, ToolCall } from "../../types/tool";
 import { parseSSEStreamWithToolCalling } from "./SSEParser";
+import { normalizeToolCallingStopReason } from "./stopReason";
 
 export class AnthropicProvider extends BaseProvider {
   private buildSystemPrompt(messages: ChatMessage[]): string | undefined {
@@ -297,7 +300,7 @@ export class AnthropicProvider extends BaseProvider {
     tools?: ToolDefinition[],
     signal?: AbortSignal,
     options?: ToolCallingOptions,
-  ): Promise<{ content: string; toolCalls?: ToolCall[] }> {
+  ): Promise<ToolCallingCompletionResult> {
     if (!this.isReady()) {
       throw new Error("Provider is not configured");
     }
@@ -378,6 +381,7 @@ export class AnthropicProvider extends BaseProvider {
     return {
       content: textContent,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      stopReason: normalizeToolCallingStopReason(data.stop_reason),
     };
   }
 
@@ -447,7 +451,7 @@ export class AnthropicProvider extends BaseProvider {
         number,
         { id: string; name: string; arguments: string }
       >();
-      let stopReason = "end_turn";
+      let stopReason: ToolCallingStopReason = "end_turn";
 
       await parseSSEStreamWithToolCalling(reader, "anthropic", {
         onEvent: (event) => {
@@ -506,11 +510,7 @@ export class AnthropicProvider extends BaseProvider {
       onComplete({
         content: fullContent,
         toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-        stopReason: stopReason as
-          | "tool_calls"
-          | "end_turn"
-          | "max_tokens"
-          | "stop",
+        stopReason,
       });
     } catch (error) {
       onError(this.wrapError(error));

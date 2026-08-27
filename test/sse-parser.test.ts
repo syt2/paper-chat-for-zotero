@@ -20,6 +20,48 @@ function readerFromSSE(
 }
 
 describe("SSEParser", function () {
+  it("reports OpenAI length truncation as max_tokens", async function () {
+    const events: SSEToolCallingEvent[] = [];
+    const sse = [
+      `data: ${JSON.stringify({
+        choices: [
+          {
+            index: 0,
+            delta: { content: "partial" },
+            finish_reason: "length",
+          },
+        ],
+      })}\n\n`,
+      "data: [DONE]\n\n",
+    ];
+
+    await parseSSEStreamWithToolCalling(readerFromSSE(sse), "openai", {
+      onEvent: (event) => events.push(event),
+    });
+
+    assert.deepEqual(events, [
+      { type: "text_delta", text: "partial" },
+      { type: "done", stopReason: "max_tokens" },
+    ]);
+  });
+
+  it("keeps Anthropic max_tokens through message_stop", async function () {
+    const events: SSEToolCallingEvent[] = [];
+    const sse = [
+      `data: ${JSON.stringify({
+        type: "message_delta",
+        delta: { stop_reason: "max_tokens" },
+      })}\n\n`,
+      `data: ${JSON.stringify({ type: "message_stop" })}\n\n`,
+    ];
+
+    await parseSSEStreamWithToolCalling(readerFromSSE(sse), "anthropic", {
+      onEvent: (event) => events.push(event),
+    });
+
+    assert.deepEqual(events, [{ type: "done", stopReason: "max_tokens" }]);
+  });
+
   it("parses OpenAI-compatible tool calls packaged with finish_reason", async function () {
     const events: SSEToolCallingEvent[] = [];
     const sse = [

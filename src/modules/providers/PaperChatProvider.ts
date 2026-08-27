@@ -9,13 +9,14 @@ import type {
   StreamToolCallingCallbacks,
 } from "../../types/chat";
 import type {
-  AIProvider,
   ApiKeyProviderConfig,
   PaperChatProviderConfig,
   PdfAttachment,
+  ToolCallingCompletionResult,
   ToolCallingOptions,
+  ToolCallingProvider,
 } from "../../types/provider";
-import type { ToolDefinition, ToolCall } from "../../types/tool";
+import type { ToolDefinition } from "../../types/tool";
 import { getAuthManager } from "../auth";
 import { OpenAICompatibleProvider } from "./OpenAICompatibleProvider";
 import { OpenAIResponsesProvider } from "./OpenAIResponsesProvider";
@@ -34,7 +35,7 @@ import { resolveSelectedTierModel } from "./paperchat-tier-routing";
 import { getPaperChatApiCapabilities } from "./paperchat-routing-metadata";
 import { normalizeReasoningEffortPreference } from "./reasoning-request";
 
-export class PaperChatProvider implements AIProvider {
+export class PaperChatProvider implements ToolCallingProvider {
   private _config: PaperChatProviderConfig;
   private _delegate: OpenAICompatibleProvider;
   private _responsesDelegate: OpenAIResponsesProvider;
@@ -251,7 +252,7 @@ export class PaperChatProvider implements AIProvider {
     tools?: ToolDefinition[],
     signal?: AbortSignal,
     options?: ToolCallingOptions,
-  ): Promise<{ content: string; toolCalls?: ToolCall[] }> {
+  ): Promise<ToolCallingCompletionResult> {
     const { delegate, capabilities } = this.refreshDelegates();
     return delegate.chatCompletionWithTools(
       messages,

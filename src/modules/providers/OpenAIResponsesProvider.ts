@@ -3,10 +3,12 @@ import type {
   HostedWebSearchCall,
   StreamCallbacks,
   StreamToolCallingCallbacks,
+  ToolCallingStopReason,
 } from "../../types/chat";
 import type {
   ApiKeyProviderConfig,
   PdfAttachment,
+  ToolCallingCompletionResult,
   ToolCallingOptions,
 } from "../../types/provider";
 import type { ToolCall, ToolDefinition } from "../../types/tool";
@@ -18,6 +20,7 @@ import {
   stablePromptCacheStringify,
 } from "./prompt-cache-diagnostics";
 import { applyReasoningRequestOptions } from "./reasoning-request";
+import { normalizeToolCallingStopReason } from "./stopReason";
 
 type ResponsesInputItem = Record<string, unknown>;
 type ResponsesOutputItem = Record<string, unknown>;
@@ -45,12 +48,28 @@ interface PreviousOutputDescriptor {
   toolCallIds: string[];
 }
 
-interface ResponsesConversationState {
-  previousResponseId?: string;
+interface ResponsesConversationMatchState {
   localMessages: LocalMessageDescriptor[];
   lastOutput: PreviousOutputDescriptor;
-  statelessTranscript?: ResponsesInputItem[];
 }
+
+interface ResponsesConversationStateBase extends ResponsesConversationMatchState {
+  visibleContinuationState?: ResponsesConversationMatchState;
+}
+
+interface StoredResponsesConversationState extends ResponsesConversationStateBase {
+  mode: "stored";
+  previousResponseId: string;
+}
+
+interface StatelessResponsesConversationState extends ResponsesConversationStateBase {
+  mode: "stateless";
+  statelessTranscript: ResponsesInputItem[];
+}
+
+type ResponsesConversationState =
+  | StoredResponsesConversationState
+  | StatelessResponsesConversationState;
 
 interface ResponsesRequestPlan {
   mode: "full" | "previous_response" | "stateless";
@@ -218,7 +237,7 @@ function describeVisibleOutput(
 
 function findIncrementalMessages(
   messages: ChatMessage[],
-  state: ResponsesConversationState,
+  state: ResponsesConversationMatchState,
 ): { compatible: boolean; messages: ChatMessage[] } {
   const matchedIndexes = new Set<number>();
   const updatedRuntimeIndexes = new Set<number>();
@@ -412,6 +431,14 @@ function convertMessagesToResponsesInput(
   return input;
 }
 
+function omitResponseBackedContinuationOutput(
+  messages: ChatMessage[],
+): ChatMessage[] {
+  return messages.filter(
+    (message) => !(message.outputContinuation && message.role === "assistant"),
+  );
+}
+
 function convertTools(
   tools: ToolDefinition[] | undefined,
   hostedWebSearch: boolean,
@@ -582,6 +609,23 @@ export function extractResponsesText(response: ResponsesApiResponse): string {
   return `${text}\n\nSources:\n${sources}`;
 }
 
+export function extractResponsesReasoning(
+  response: ResponsesApiResponse,
+): string {
+  const reasoningParts: string[] = [];
+  for (const item of response.output || []) {
+    if (item.type !== "reasoning" || !Array.isArray(item.summary)) {
+      continue;
+    }
+    for (const part of item.summary as ResponsesInputItem[]) {
+      if (part.type === "summary_text" && typeof part.text === "string") {
+        reasoningParts.push(part.text);
+      }
+    }
+  }
+  return reasoningParts.join("");
+}
+
 function responseError(response: ResponsesApiResponse): Error | null {
   if (response.status === "failed" || response.error) {
     return new Error(response.error?.message || "Responses API request failed");
@@ -613,7 +657,8 @@ function responseError(response: ResponsesApiResponse): Error | null {
   if (
     reason === "max_output_tokens" &&
     functionCalls.length === 0 &&
-    extractResponsesText(response).trim()
+    (extractResponsesText(response).trim() ||
+      extractResponsesReasoning(response).trim())
   ) {
     return null;
   }
@@ -622,6 +667,19 @@ function responseError(response: ResponsesApiResponse): Error | null {
       ? `Responses API response incomplete: ${reason}`
       : "Responses API response incomplete",
   );
+}
+
+function resolveResponsesStopReason(
+  response: ResponsesApiResponse,
+  allowToolCalls: boolean,
+  toolCallCount: number,
+): ToolCallingStopReason {
+  if (allowToolCalls && toolCallCount > 0) {
+    return "tool_calls";
+  }
+  return response.status === "incomplete"
+    ? normalizeToolCallingStopReason(response.incomplete_details?.reason)
+    : "end_turn";
 }
 
 function parseSseDataLine(line: string): string | null {
@@ -1100,7 +1158,13 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     let incrementalMessages: ChatMessage[] = [];
 
     if (state) {
-      const incremental = findIncrementalMessages(localMessages, state);
+      let incremental = findIncrementalMessages(localMessages, state);
+      if (!incremental.compatible && state.visibleContinuationState) {
+        incremental = findIncrementalMessages(
+          localMessages,
+          state.visibleContinuationState,
+        );
+      }
       if (!incremental.compatible) {
         this.clearConversationState();
         state = undefined;
@@ -1109,9 +1173,9 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
       }
     }
 
-    if (state?.statelessTranscript) {
+    if (state?.mode === "stateless") {
       const delta = convertMessagesToResponsesInput(
-        incrementalMessages,
+        omitResponseBackedContinuationOutput(incrementalMessages),
         pdfAttachment,
       );
       return {
@@ -1122,14 +1186,14 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
         requestInput: [...state.statelessTranscript, ...delta],
       };
     }
-    if (state?.previousResponseId) {
+    if (state?.mode === "stored") {
       return {
         mode: "previous_response",
         localMessages,
         localDescriptors,
         fullInput,
         requestInput: convertMessagesToResponsesInput(
-          incrementalMessages,
+          omitResponseBackedContinuationOutput(incrementalMessages),
           pdfAttachment,
         ),
         previousResponseId: state.previousResponseId,
@@ -1242,30 +1306,61 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
       return;
     }
     const toolCalls = extractToolCalls(response);
-    const nextState: ResponsesConversationState = {
+    const responseText = extractResponsesText(response);
+    const nextStateBase: ResponsesConversationStateBase = {
       localMessages: plan.localDescriptors,
       lastOutput: {
-        text: extractResponsesText(response),
+        text: responseText,
         visibleText: "",
         toolCallIds: toolCalls.map((call) => call.id),
       },
     };
-    nextState.lastOutput.visibleText = describeVisibleOutput(
+    nextStateBase.lastOutput.visibleText = describeVisibleOutput(
       plan.localMessages,
-      nextState.lastOutput.text,
+      nextStateBase.lastOutput.text,
     );
+    const continuationMessages = plan.localMessages.filter(
+      (message) => message.outputContinuation,
+    );
+    if (continuationMessages.length > 0) {
+      const visibleLocalMessages = plan.localMessages.filter(
+        (message) => !message.outputContinuation,
+      );
+      const combinedText =
+        continuationMessages
+          .filter((message) => message.role === "assistant")
+          .map((message) => message.content)
+          .join("") + responseText;
+      nextStateBase.visibleContinuationState = {
+        localMessages: describeMessages(visibleLocalMessages),
+        lastOutput: {
+          text: combinedText,
+          visibleText: describeVisibleOutput(
+            visibleLocalMessages,
+            combinedText,
+          ),
+          toolCallIds: toolCalls.map((call) => call.id),
+        },
+      };
+    }
+    let nextState: ResponsesConversationState;
     if (
       response.store === false ||
       (forceStateless && response.store !== true)
     ) {
       const transcriptBase =
         plan.mode === "stateless" ? plan.requestInput : plan.fullInput;
-      nextState.statelessTranscript = [
-        ...transcriptBase,
-        ...(response.output || []),
-      ];
+      nextState = {
+        ...nextStateBase,
+        mode: "stateless",
+        statelessTranscript: [...transcriptBase, ...(response.output || [])],
+      };
     } else {
-      nextState.previousResponseId = response.id;
+      nextState = {
+        ...nextStateBase,
+        mode: "stored",
+        previousResponseId: response.id,
+      };
     }
     this.setConversationState(nextState);
   }
@@ -1277,6 +1372,60 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
       requestKind,
       usage,
     });
+  }
+
+  private completeToolCallingResponse(params: {
+    plan: ResponsesRequestPlan;
+    response: ResponsesApiResponse;
+    forceStateless: boolean;
+    isolatedStateless: boolean;
+    tools?: ToolDefinition[];
+    options?: ToolCallingOptions;
+    requestKind: string;
+  }): ToolCallingCompletionResult {
+    const {
+      plan,
+      response,
+      forceStateless,
+      isolatedStateless,
+      tools,
+      options,
+      requestKind,
+    } = params;
+    const toolCalls = extractToolCalls(response);
+    const hostedWebSearches = extractHostedWebSearchCalls(response);
+    const allowToolCalls = options?.toolChoice !== "none";
+    const allowHostedWebSearch =
+      allowToolCalls &&
+      this.runtimeOptions.hostedWebSearch === true &&
+      !!tools?.some((tool) => tool.function.name === "web_search");
+    const suppressedToolProtocol =
+      (!allowToolCalls &&
+        (toolCalls.length > 0 || hostedWebSearches.length > 0)) ||
+      (!allowHostedWebSearch && hostedWebSearches.length > 0);
+
+    if (isolatedStateless) {
+      // Internal isolated jobs must not replace or clear the main chat state.
+    } else if (suppressedToolProtocol) {
+      this.clearConversationState();
+    } else {
+      this.commitResponseState(plan, response, forceStateless);
+    }
+    this.logResponsesUsage(requestKind, response.usage);
+
+    return {
+      content: extractResponsesText(response),
+      reasoning: extractResponsesReasoning(response) || undefined,
+      toolCalls: allowToolCalls && toolCalls.length > 0 ? toolCalls : undefined,
+      hostedWebSearches:
+        hostedWebSearches.length > 0 ? hostedWebSearches : undefined,
+      suppressedToolCall: suppressedToolProtocol,
+      stopReason: resolveResponsesStopReason(
+        response,
+        allowToolCalls,
+        toolCalls.length,
+      ),
+    };
   }
 
   async streamChatCompletion(
@@ -1345,13 +1494,7 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     tools?: ToolDefinition[],
     signal?: AbortSignal,
     options?: ToolCallingOptions,
-  ): Promise<{
-    content: string;
-    reasoning?: string;
-    toolCalls?: ToolCall[];
-    hostedWebSearches?: HostedWebSearchCall[];
-    suppressedToolCall?: boolean;
-  }> {
+  ): Promise<ToolCallingCompletionResult> {
     if (!this.isReady()) {
       throw new Error("Provider is not configured");
     }
@@ -1362,24 +1505,15 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     if (error) {
       throw error;
     }
-    const toolCalls = extractToolCalls(completed);
-    const hostedWebSearches = extractHostedWebSearchCalls(completed);
-    const allowToolCalls = options?.toolChoice !== "none";
-    if (isolatedStateless) {
-      // Internal isolated jobs must not replace or clear the main chat state.
-    } else if (!allowToolCalls && toolCalls.length > 0) {
-      this.clearConversationState();
-    } else {
-      this.commitResponseState(plan, completed, forceStateless);
-    }
-    this.logResponsesUsage("responses-tools", completed.usage);
-    return {
-      content: extractResponsesText(completed),
-      toolCalls: allowToolCalls && toolCalls.length > 0 ? toolCalls : undefined,
-      hostedWebSearches:
-        hostedWebSearches.length > 0 ? hostedWebSearches : undefined,
-      suppressedToolCall: !allowToolCalls && toolCalls.length > 0,
-    };
+    return this.completeToolCallingResponse({
+      plan,
+      response: completed,
+      forceStateless,
+      isolatedStateless,
+      tools,
+      options,
+      requestKind: "responses-tools",
+    });
   }
 
   async streamChatCompletionWithTools(
@@ -1410,32 +1544,17 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
       if (error) {
         throw error;
       }
-      const toolCalls = extractToolCalls(completed);
-      const hostedWebSearches = extractHostedWebSearchCalls(completed);
-      const allowToolCalls = options?.toolChoice !== "none";
-      if (isolatedStateless) {
-        // Internal isolated jobs must not replace or clear the main chat state.
-      } else if (!allowToolCalls && toolCalls.length > 0) {
-        this.clearConversationState();
-      } else {
-        this.commitResponseState(plan, completed, forceStateless);
-      }
-      this.logResponsesUsage("responses-tools-stream", completed.usage);
-      callbacks.onComplete({
-        content: extractResponsesText(completed),
-        toolCalls:
-          allowToolCalls && toolCalls.length > 0 ? toolCalls : undefined,
-        hostedWebSearches:
-          hostedWebSearches.length > 0 ? hostedWebSearches : undefined,
-        suppressedToolCall: !allowToolCalls && toolCalls.length > 0,
-        stopReason:
-          allowToolCalls && toolCalls.length > 0
-            ? "tool_calls"
-            : completed.status === "incomplete" &&
-                completed.incomplete_details?.reason === "max_output_tokens"
-              ? "max_tokens"
-              : "end_turn",
-      });
+      callbacks.onComplete(
+        this.completeToolCallingResponse({
+          plan,
+          response: completed,
+          forceStateless,
+          isolatedStateless,
+          tools,
+          options,
+          requestKind: "responses-tools-stream",
+        }),
+      );
     } catch (error) {
       callbacks.onError(this.wrapError(error));
     }

@@ -364,6 +364,254 @@ describe("OpenAIResponsesProvider", function () {
     ]);
   });
 
+  it("keeps previous_response_id after transient output-continuation context is collapsed", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    const responses = [
+      {
+        id: "resp_truncated_1",
+        status: "incomplete",
+        store: true,
+        incomplete_details: { reason: "max_output_tokens" },
+        output: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "Alpha ", annotations: [] }],
+          },
+        ],
+      },
+      {
+        id: "resp_truncated_2",
+        status: "incomplete",
+        store: true,
+        incomplete_details: { reason: "max_output_tokens" },
+        output: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "Beta ", annotations: [] }],
+          },
+        ],
+      },
+      completedResponse("resp_truncated_3", "Gamma"),
+      completedResponse("resp_follow_up", "Delta"),
+    ];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse(responses.shift()!);
+    }) as typeof fetch;
+
+    const provider = createProvider({
+      sessionId: "session-output-continuation",
+    });
+    const user = message("u1", "user", "long answer");
+    await provider.chatCompletionWithTools([user], []);
+    await provider.chatCompletionWithTools(
+      [
+        user,
+        {
+          ...message("continuation-a1", "assistant", "Alpha "),
+          apiOnly: true,
+          outputContinuation: true,
+        },
+        {
+          ...message("continuation-u1", "user", "continue once"),
+          apiOnly: true,
+          outputContinuation: true,
+        },
+      ],
+      [],
+      undefined,
+      { toolChoice: "none" },
+    );
+    await provider.chatCompletionWithTools(
+      [
+        user,
+        {
+          ...message("continuation-a1", "assistant", "Alpha "),
+          apiOnly: true,
+          outputContinuation: true,
+        },
+        {
+          ...message("continuation-u1", "user", "continue once"),
+          apiOnly: true,
+          outputContinuation: true,
+        },
+        {
+          ...message("continuation-a2", "assistant", "Beta "),
+          apiOnly: true,
+          outputContinuation: true,
+        },
+        {
+          ...message("continuation-u2", "user", "continue twice"),
+          apiOnly: true,
+          outputContinuation: true,
+        },
+      ],
+      [],
+      undefined,
+      { toolChoice: "none" },
+    );
+    await provider.chatCompletionWithTools(
+      [
+        user,
+        message("a1", "assistant", "Alpha Beta Gamma"),
+        message("u2", "user", "follow up"),
+      ],
+      [],
+    );
+
+    assert.equal(requestBodies[1].previous_response_id, "resp_truncated_1");
+    assert.deepEqual(requestBodies[1].input, [
+      { role: "user", content: "continue once" },
+    ]);
+    assert.equal(requestBodies[2].previous_response_id, "resp_truncated_2");
+    assert.deepEqual(requestBodies[2].input, [
+      { role: "user", content: "continue twice" },
+    ]);
+    assert.equal(requestBodies[3].previous_response_id, "resp_truncated_3");
+    assert.deepEqual(requestBodies[3].input, [
+      { role: "user", content: "follow up" },
+    ]);
+  });
+
+  it("replays store-false continuation state without duplicating the partial output", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    const alphaOutput = [
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "Alpha ", annotations: [] }],
+      },
+    ];
+    const betaOutput = [
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "Beta ", annotations: [] }],
+      },
+    ];
+    const gammaOutput = [
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "Gamma", annotations: [] }],
+      },
+    ];
+    const responses = [
+      {
+        id: "resp_stateless_truncated_1",
+        status: "incomplete",
+        store: false,
+        incomplete_details: { reason: "max_output_tokens" },
+        output: alphaOutput,
+      },
+      {
+        id: "resp_stateless_truncated_2",
+        status: "incomplete",
+        store: false,
+        incomplete_details: { reason: "max_output_tokens" },
+        output: betaOutput,
+      },
+      completedResponse("resp_stateless_truncated_3", "Gamma", {
+        store: false,
+        output: gammaOutput,
+      }),
+      completedResponse("resp_stateless_follow_up", "Delta", {
+        store: false,
+      }),
+    ];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse(responses.shift()!);
+    }) as typeof fetch;
+
+    const provider = createProvider({
+      sessionId: "session-stateless-output-continuation",
+    });
+    const user = message("u1", "user", "long answer");
+    await provider.chatCompletionWithTools([user], []);
+    await provider.chatCompletionWithTools(
+      [
+        user,
+        {
+          ...message("continuation-a1", "assistant", "Alpha "),
+          apiOnly: true,
+          outputContinuation: true,
+        },
+        {
+          ...message("continuation-u1", "user", "continue once"),
+          apiOnly: true,
+          outputContinuation: true,
+        },
+      ],
+      [],
+      undefined,
+      { toolChoice: "none" },
+    );
+    await provider.chatCompletionWithTools(
+      [
+        user,
+        {
+          ...message("continuation-a1", "assistant", "Alpha "),
+          apiOnly: true,
+          outputContinuation: true,
+        },
+        {
+          ...message("continuation-u1", "user", "continue once"),
+          apiOnly: true,
+          outputContinuation: true,
+        },
+        {
+          ...message("continuation-a2", "assistant", "Beta "),
+          apiOnly: true,
+          outputContinuation: true,
+        },
+        {
+          ...message("continuation-u2", "user", "continue twice"),
+          apiOnly: true,
+          outputContinuation: true,
+        },
+      ],
+      [],
+      undefined,
+      { toolChoice: "none" },
+    );
+    await provider.chatCompletionWithTools(
+      [
+        user,
+        message("a1", "assistant", "Alpha Beta Gamma"),
+        message("u2", "user", "follow up"),
+      ],
+      [],
+    );
+
+    assert.notProperty(requestBodies[1], "previous_response_id");
+    assert.deepEqual(requestBodies[1].input, [
+      { role: "user", content: "long answer" },
+      ...alphaOutput,
+      { role: "user", content: "continue once" },
+    ]);
+    assert.notProperty(requestBodies[2], "previous_response_id");
+    assert.deepEqual(requestBodies[2].input, [
+      { role: "user", content: "long answer" },
+      ...alphaOutput,
+      { role: "user", content: "continue once" },
+      ...betaOutput,
+      { role: "user", content: "continue twice" },
+    ]);
+    assert.notProperty(requestBodies[3], "previous_response_id");
+    assert.deepEqual(requestBodies[3].input, [
+      { role: "user", content: "long answer" },
+      ...alphaOutput,
+      { role: "user", content: "continue once" },
+      ...betaOutput,
+      { role: "user", content: "continue twice" },
+      ...gammaOutput,
+      { role: "user", content: "follow up" },
+    ]);
+  });
+
   it("keeps isolated stateless model jobs out of the main Responses chain", async function () {
     const requestBodies: Array<Record<string, any>> = [];
     const responses = [
@@ -1158,6 +1406,91 @@ describe("OpenAIResponsesProvider", function () {
     assert.notProperty(requestBodies[1], "previous_response_id");
   });
 
+  it("clears state when a non-streaming text-only round leaks hosted search", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    const responses = [
+      completedResponse("resp_forbidden_search", "", {
+        output: [
+          {
+            type: "web_search_call",
+            id: "ws_forbidden",
+            status: "completed",
+            action: { type: "search", query: "hidden search" },
+          },
+        ],
+      }),
+      completedResponse("resp_recovery", "recovered"),
+    ];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse(responses.shift()!);
+    }) as typeof fetch;
+
+    const provider = createProvider({ sessionId: "session-search-suppressed" });
+    const first = await provider.chatCompletionWithTools(
+      [message("u1", "user", "continue without tools")],
+      [],
+      undefined,
+      { toolChoice: "none" },
+    );
+    assert.isTrue(first.suppressedToolCall);
+    assert.lengthOf(first.hostedWebSearches || [], 1);
+
+    await provider.chatCompletionWithTools(
+      [
+        message("u1", "user", "continue without tools"),
+        message("u2", "user", "recover"),
+      ],
+      [localPaperTool],
+    );
+    assert.notProperty(requestBodies[1], "previous_response_id");
+  });
+
+  it("suppresses hosted search that was not offered in an auto tool round", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    const responses = [
+      completedResponse("resp_unoffered_search", "", {
+        output: [
+          {
+            type: "web_search_call",
+            id: "ws_unoffered",
+            status: "completed",
+            action: { type: "search", query: "unoffered search" },
+          },
+        ],
+      }),
+      completedResponse("resp_recovery", "recovered"),
+    ];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse(responses.shift()!);
+    }) as typeof fetch;
+
+    const provider = createProvider({
+      sessionId: "session-unoffered-search",
+      hostedWebSearch: true,
+    });
+    const first = await provider.chatCompletionWithTools(
+      [message("u1", "user", "use only the paper")],
+      [localPaperTool],
+    );
+
+    assert.isTrue(first.suppressedToolCall);
+    assert.lengthOf(first.hostedWebSearches || [], 1);
+    assert.notDeepInclude(requestBodies[0].tools, {
+      type: "web_search_preview",
+    });
+
+    await provider.chatCompletionWithTools(
+      [
+        message("u1", "user", "use only the paper"),
+        message("u2", "user", "recover"),
+      ],
+      [localPaperTool],
+    );
+    assert.notProperty(requestBodies[1], "previous_response_id");
+  });
+
   it("continues repeated AgentRuntime tool loops without replaying renamed history", async function () {
     const requestBodies: Array<Record<string, any>> = [];
     const responses = [
@@ -1787,6 +2120,140 @@ describe("OpenAIResponsesProvider", function () {
     await provider.chatCompletionWithTools(
       [
         message("u1", "user", "answer without tools"),
+        message("u2", "user", "recover"),
+      ],
+      [localPaperTool],
+    );
+    assert.notProperty(requestBodies[1], "previous_response_id");
+  });
+
+  it("clears state when a streaming text-only round leaks hosted search", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    let call = 0;
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      call++;
+      if (call === 1) {
+        const terminal = completedResponse("resp_forbidden_stream_search", "", {
+          output: [
+            {
+              type: "web_search_call",
+              id: "ws_forbidden_stream",
+              status: "completed",
+              action: { type: "search", query: "hidden stream search" },
+            },
+          ],
+        });
+        const event = {
+          type: "response.completed",
+          response: terminal,
+        };
+        return new Response(
+          `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+          { status: 200, headers: { "Content-Type": "text/event-stream" } },
+        );
+      }
+      return jsonResponse(completedResponse("resp_recovery", "recovered"));
+    }) as typeof fetch;
+
+    const provider = createProvider({
+      sessionId: "session-search-suppressed-stream",
+    });
+    let streamedResult: { suppressedToolCall?: boolean } | undefined;
+    let streamedError: Error | undefined;
+    await provider.streamChatCompletionWithTools(
+      [message("u1", "user", "continue without tools")],
+      [],
+      {
+        onTextDelta: () => undefined,
+        onToolCallStart: () => undefined,
+        onToolCallDelta: () => undefined,
+        onComplete: (result) => {
+          streamedResult = result;
+        },
+        onError: (error) => {
+          streamedError = error;
+        },
+      },
+      undefined,
+      { toolChoice: "none" },
+    );
+    assert.isUndefined(streamedError);
+    assert.isTrue(streamedResult?.suppressedToolCall);
+
+    await provider.chatCompletionWithTools(
+      [
+        message("u1", "user", "continue without tools"),
+        message("u2", "user", "recover"),
+      ],
+      [localPaperTool],
+    );
+    assert.notProperty(requestBodies[1], "previous_response_id");
+  });
+
+  it("suppresses streamed hosted search that was not offered in an auto tool round", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    let call = 0;
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      call++;
+      if (call === 1) {
+        const terminal = completedResponse("resp_unoffered_stream_search", "", {
+          output: [
+            {
+              type: "web_search_call",
+              id: "ws_unoffered_stream",
+              status: "completed",
+              action: { type: "search", query: "unoffered stream search" },
+            },
+          ],
+        });
+        const event = {
+          type: "response.completed",
+          response: terminal,
+        };
+        return new Response(
+          `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+          { status: 200, headers: { "Content-Type": "text/event-stream" } },
+        );
+      }
+      return jsonResponse(completedResponse("resp_recovery", "recovered"));
+    }) as typeof fetch;
+
+    const provider = createProvider({
+      sessionId: "session-unoffered-search-stream",
+      hostedWebSearch: true,
+    });
+    let streamedResult:
+      | { suppressedToolCall?: boolean; hostedWebSearches?: unknown[] }
+      | undefined;
+    let streamedError: Error | undefined;
+    await provider.streamChatCompletionWithTools(
+      [message("u1", "user", "use only the paper")],
+      [localPaperTool],
+      {
+        onTextDelta: () => undefined,
+        onToolCallStart: () => undefined,
+        onToolCallDelta: () => undefined,
+        onComplete: (result) => {
+          streamedResult = result;
+        },
+        onError: (error) => {
+          streamedError = error;
+        },
+      },
+    );
+
+    assert.isUndefined(streamedError);
+    assert.isTrue(streamedResult?.suppressedToolCall);
+    assert.lengthOf(streamedResult?.hostedWebSearches || [], 1);
+    assert.notDeepInclude(requestBodies[0].tools, {
+      type: "web_search_preview",
+    });
+
+    await provider.chatCompletionWithTools(
+      [
+        message("u1", "user", "use only the paper"),
         message("u2", "user", "recover"),
       ],
       [localPaperTool],
