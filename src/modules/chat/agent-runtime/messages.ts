@@ -57,6 +57,34 @@ export function getOutputTruncationNotice(): string {
   return OUTPUT_TRUNCATION_NOTICE;
 }
 
+/** Remove the app-authored incomplete-output notice from persisted text. */
+export function stripOutputTruncationNotice(content: string): string {
+  if (!content) return content;
+
+  const candidates = Array.from(
+    new Set([getOutputTruncationNotice(), OUTPUT_TRUNCATION_NOTICE]),
+  ).sort((left, right) => right.length - left.length);
+  for (const candidate of candidates) {
+    if (content.endsWith(candidate)) {
+      return content.slice(0, -candidate.length);
+    }
+  }
+
+  // A persisted renderer may have normalized trailing whitespace while keeping
+  // the same notice text. Retry against a right-trimmed copy, preserving any
+  // whitespace that preceded the notice.
+  const trimmed = content.trimEnd();
+  if (trimmed !== content) {
+    for (const candidate of candidates) {
+      const candidateTrimmed = candidate.trimEnd();
+      if (trimmed.endsWith(candidateTrimmed)) {
+        return trimmed.slice(0, -candidateTrimmed.length);
+      }
+    }
+  }
+  return content;
+}
+
 export function isMaxIterationsNoticeContent(content: string): boolean {
   return content.trimEnd().endsWith(MAX_ITERATIONS_LINK_SUFFIX);
 }

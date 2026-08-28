@@ -1,25 +1,19 @@
 import type { ImageAttachment } from "../../types/chat";
 import { getString } from "../../utils/locale";
+import { getReaderWindows } from "./readerWindows";
+import { MAX_PENDING_IMAGE_BYTES } from "./chat-panel/imageAttachmentPolicy";
+
+export { getReaderWindows } from "./readerWindows";
 
 const MIN_SELECTION_CSS_PIXELS = 8;
 const MAX_CAPTURE_DIMENSION = 2048;
 const MAX_CAPTURE_PIXELS = 1_000_000;
-const MAX_CAPTURE_PNG_BYTES = 1024 * 1024;
+const MAX_CAPTURE_PNG_BYTES = MAX_PENDING_IMAGE_BYTES;
 const MAX_CAPTURE_ENCODING_ATTEMPTS = 5;
-
-type ReaderView = {
-  _iframeWindow?: Window;
-};
-
-type ReaderInternal = {
-  _lastView?: ReaderView;
-  _primaryView?: ReaderView;
-};
 
 type ReaderLike = _ZoteroTypes.ReaderInstance & {
   type?: string;
   _iframeWindow?: Window;
-  _internalReader?: ReaderInternal;
   focus?: () => void;
 };
 
@@ -60,12 +54,19 @@ export type FigureSelectionSession = {
 type BeginSelectionOptions = {
   promptText: string;
   onCapture: (image: ImageAttachment) => void | Promise<void>;
+  onCaptureError?: (error?: unknown) => void;
   isContextActive?: () => boolean;
   mainWindow?: Window | null;
 };
 
 let activeSelectionCancel: (() => void) | null = null;
 let captureEpoch = 0;
+let pngEncodingQueueRunning = false;
+const pendingPngEncodings: Array<{
+  run: () => Promise<Blob | null> | Blob | null;
+  resolve: (blob: Blob | null) => void;
+  reject: (error: unknown) => void;
+}> = [];
 
 function logCaptureFailure(error: unknown): void {
   try {
@@ -75,6 +76,18 @@ function logCaptureFailure(error: unknown): void {
     );
   } catch {
     // Unit tests and early shutdown can run without the toolkit global.
+  }
+}
+
+function notifyCaptureFailure(
+  onCaptureError: ((error?: unknown) => void) | undefined,
+  error?: unknown,
+): void {
+  if (!onCaptureError) return;
+  try {
+    onCaptureError(error);
+  } catch (callbackError) {
+    logCaptureFailure(callbackError);
   }
 }
 
@@ -92,22 +105,6 @@ function documentMatches(doc: Document, selector: string): boolean {
   } catch {
     return false;
   }
-}
-
-export function getReaderWindows(
-  reader: _ZoteroTypes.ReaderInstance,
-): Window[] {
-  const readerLike = reader as ReaderLike;
-  const internalReader = readerLike._internalReader;
-  return Array.from(
-    new Set(
-      [
-        internalReader?._lastView?._iframeWindow,
-        internalReader?._primaryView?._iframeWindow,
-        readerLike._iframeWindow,
-      ].filter((candidate): candidate is Window => Boolean(candidate)),
-    ),
-  );
 }
 
 export function resolveReaderDocument(
@@ -224,16 +221,25 @@ function calculateBoundedOutputDimensions(
   };
 }
 
-/** Convert a CSS-pixel drag rectangle into bounded source/output pixels. */
-export function calculateCaptureRegion(
+type SourceCaptureRegion = Pick<
+  CaptureRegion,
+  | "sourceX"
+  | "sourceY"
+  | "sourceWidth"
+  | "sourceHeight"
+  | "cssLeft"
+  | "cssTop"
+  | "cssWidth"
+  | "cssHeight"
+>;
+
+/** Convert an already-clamped CSS rectangle into one canvas's source pixels. */
+function calculateSourceRegion(
   bounds: RectLike,
   canvasWidth: number,
   canvasHeight: number,
-  startX: number,
-  startY: number,
-  endX: number,
-  endY: number,
-): CaptureRegion | null {
+  cssSelection: NonNullable<ReturnType<typeof getClampedCssSelection>>,
+): SourceCaptureRegion | null {
   if (
     !Number.isFinite(canvasWidth) ||
     !Number.isFinite(canvasHeight) ||
@@ -243,23 +249,17 @@ export function calculateCaptureRegion(
     return null;
   }
 
-  const cssSelection = getClampedCssSelection(
-    bounds,
-    startX,
-    startY,
-    endX,
-    endY,
-  );
+  const cssCanvasWidth = bounds.right - bounds.left;
+  const cssCanvasHeight = bounds.bottom - bounds.top;
   if (
-    !cssSelection ||
-    cssSelection.width < MIN_SELECTION_CSS_PIXELS ||
-    cssSelection.height < MIN_SELECTION_CSS_PIXELS
+    !Number.isFinite(cssCanvasWidth) ||
+    !Number.isFinite(cssCanvasHeight) ||
+    cssCanvasWidth <= 0 ||
+    cssCanvasHeight <= 0
   ) {
     return null;
   }
 
-  const cssCanvasWidth = bounds.right - bounds.left;
-  const cssCanvasHeight = bounds.bottom - bounds.top;
   const scaleX = canvasWidth / cssCanvasWidth;
   const scaleY = canvasHeight / cssCanvasHeight;
   const sourceX = clamp(
@@ -286,19 +286,60 @@ export function calculateCaptureRegion(
   const sourceHeight = sourceBottom - sourceY;
   if (sourceWidth <= 0 || sourceHeight <= 0) return null;
 
-  const output = calculateBoundedOutputDimensions(sourceWidth, sourceHeight);
-
   return {
     sourceX,
     sourceY,
     sourceWidth,
     sourceHeight,
-    outputWidth: output.width,
-    outputHeight: output.height,
     cssLeft: cssSelection.left,
     cssTop: cssSelection.top,
     cssWidth: cssSelection.width,
     cssHeight: cssSelection.height,
+  };
+}
+
+/** Convert a CSS-pixel drag rectangle into bounded source/output pixels. */
+export function calculateCaptureRegion(
+  bounds: RectLike,
+  canvasWidth: number,
+  canvasHeight: number,
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number,
+): CaptureRegion | null {
+  const cssSelection = getClampedCssSelection(
+    bounds,
+    startX,
+    startY,
+    endX,
+    endY,
+  );
+  if (
+    !cssSelection ||
+    cssSelection.width < MIN_SELECTION_CSS_PIXELS ||
+    cssSelection.height < MIN_SELECTION_CSS_PIXELS
+  ) {
+    return null;
+  }
+
+  const source = calculateSourceRegion(
+    bounds,
+    canvasWidth,
+    canvasHeight,
+    cssSelection,
+  );
+  if (!source) return null;
+
+  const output = calculateBoundedOutputDimensions(
+    source.sourceWidth,
+    source.sourceHeight,
+  );
+
+  return {
+    ...source,
+    outputWidth: output.width,
+    outputHeight: output.height,
   };
 }
 
@@ -362,44 +403,31 @@ function drawCanvasLayers(
     const bottom = Math.min(selection.bottom, bounds.bottom);
     if (right <= left || bottom <= top) continue;
 
-    const canvasCssWidth = bounds.right - bounds.left;
-    const canvasCssHeight = bounds.bottom - bounds.top;
-    const scaleX = canvas.width / canvasCssWidth;
-    const scaleY = canvas.height / canvasCssHeight;
-    const sourceX = clamp(
-      Math.floor((left - bounds.left) * scaleX),
-      0,
-      canvas.width,
-    );
-    const sourceY = clamp(
-      Math.floor((top - bounds.top) * scaleY),
-      0,
-      canvas.height,
-    );
-    const sourceRight = clamp(
-      Math.ceil((right - bounds.left) * scaleX),
-      0,
-      canvas.width,
-    );
-    const sourceBottom = clamp(
-      Math.ceil((bottom - bounds.top) * scaleY),
-      0,
-      canvas.height,
-    );
+    const source = calculateSourceRegion(bounds, canvas.width, canvas.height, {
+      left,
+      top,
+      right,
+      bottom,
+      width: right - left,
+      height: bottom - top,
+    });
+    if (!source) continue;
     const destinationX = Math.floor(
-      ((left - selection.left) / selection.width) * outputWidth,
+      ((source.cssLeft - selection.left) / selection.width) * outputWidth,
     );
     const destinationY = Math.floor(
-      ((top - selection.top) / selection.height) * outputHeight,
+      ((source.cssTop - selection.top) / selection.height) * outputHeight,
     );
     const destinationRight = Math.ceil(
-      ((right - selection.left) / selection.width) * outputWidth,
+      ((source.cssLeft + source.cssWidth - selection.left) / selection.width) *
+        outputWidth,
     );
     const destinationBottom = Math.ceil(
-      ((bottom - selection.top) / selection.height) * outputHeight,
+      ((source.cssTop + source.cssHeight - selection.top) / selection.height) *
+        outputHeight,
     );
-    const sourceWidth = sourceRight - sourceX;
-    const sourceHeight = sourceBottom - sourceY;
+    const sourceWidth = source.sourceWidth;
+    const sourceHeight = source.sourceHeight;
     const destinationWidth = destinationRight - destinationX;
     const destinationHeight = destinationBottom - destinationY;
     if (
@@ -412,8 +440,8 @@ function drawCanvasLayers(
     }
     context.drawImage(
       canvas,
-      sourceX,
-      sourceY,
+      source.sourceX,
+      source.sourceY,
       sourceWidth,
       sourceHeight,
       destinationX,
@@ -424,18 +452,72 @@ function drawCanvasLayers(
   }
 }
 
-function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob | null> {
-  if (typeof canvas.toBlob !== "function") return Promise.resolve(null);
-  return new Promise((resolve, reject) => {
-    try {
-      canvas.toBlob(resolve, "image/png");
-    } catch (error) {
-      reject(error);
-    }
+function canvasToPngBlob(
+  canvas: HTMLCanvasElement,
+  isActive?: () => boolean,
+): Promise<Blob | null> {
+  const run = (): Promise<Blob | null> | Blob | null => {
+    if (isActive && !isCaptureActive(isActive)) return null;
+    if (typeof canvas.toBlob !== "function") return null;
+    return new Promise<Blob | null>((resolve, reject) => {
+      try {
+        canvas.toBlob(resolve, "image/png");
+      } catch (error) {
+        reject(error);
+      }
+    });
+  };
+
+  const operation = new Promise<Blob | null>((resolve, reject) => {
+    pendingPngEncodings.push({ run, resolve, reject });
   });
+  drainPngEncodingQueue();
+  return operation;
 }
 
-async function blobToBase64(blob: Blob, doc: Document): Promise<string | null> {
+function drainPngEncodingQueue(): void {
+  if (pngEncodingQueueRunning) return;
+  const next = pendingPngEncodings.shift();
+  if (!next) return;
+  pngEncodingQueueRunning = true;
+  let result: Promise<Blob | null> | Blob | null;
+  try {
+    // Start the first toBlob call synchronously. Besides reducing latency, this
+    // makes cancellation/replacement deterministic before the next capture is
+    // queued behind it.
+    result = next.run();
+  } catch (error) {
+    next.reject(error);
+    pngEncodingQueueRunning = false;
+    drainPngEncodingQueue();
+    return;
+  }
+  Promise.resolve(result)
+    .then(
+      (blob) => next.resolve(blob),
+      (error) => next.reject(error),
+    )
+    .finally(() => {
+      pngEncodingQueueRunning = false;
+      drainPngEncodingQueue();
+    });
+}
+
+function isCaptureActive(predicate?: () => boolean): boolean {
+  if (!predicate) return true;
+  try {
+    return predicate() !== false;
+  } catch {
+    return false;
+  }
+}
+
+async function blobToBase64(
+  blob: Blob,
+  doc: Document,
+  isActive?: () => boolean,
+): Promise<string | null> {
+  if (!isCaptureActive(isActive)) return null;
   const view = doc.defaultView;
   const encode = view?.btoa?.bind(view) || globalThis.btoa;
   if (!encode) return null;
@@ -447,6 +529,7 @@ async function blobToBase64(blob: Blob, doc: Document): Promise<string | null> {
   const ByteArray = view?.Uint8Array || Uint8Array;
   const fromCharCode = view?.String?.fromCharCode || String.fromCharCode;
   const bytes = new ByteArray(await blob.arrayBuffer());
+  if (!isCaptureActive(isActive)) return null;
   const chunks: string[] = [];
   const chunkSize = 0x8000;
   for (let offset = 0; offset < bytes.length; offset += chunkSize) {
@@ -462,7 +545,9 @@ export async function capturePageSelection(
   startY: number,
   endX: number,
   endY: number,
+  isActive?: () => boolean,
 ): Promise<ImageAttachment | null> {
+  if (!isCaptureActive(isActive)) return null;
   const pageCanvas = getPageCanvas(page);
   if (!pageCanvas) return null;
   const pageBounds = pageCanvas.getBoundingClientRect();
@@ -501,15 +586,18 @@ export async function capturePageSelection(
   const output = page.ownerDocument.createElement("canvas");
   try {
     for (let attempt = 0; attempt < MAX_CAPTURE_ENCODING_ATTEMPTS; attempt++) {
+      if (!isCaptureActive(isActive)) return null;
       output.width = outputDimensions.width;
       output.height = outputDimensions.height;
       const context = output.getContext("2d");
       if (!context) return null;
       drawCanvasLayers(context, layers, selection, output.width, output.height);
-      const blob = await canvasToPngBlob(output);
+      const blob = await canvasToPngBlob(output, isActive);
+      if (!isCaptureActive(isActive)) return null;
       if (!blob) return null;
       if (blob.size <= MAX_CAPTURE_PNG_BYTES) {
-        const data = await blobToBase64(blob, page.ownerDocument);
+        const data = await blobToBase64(blob, page.ownerDocument, isActive);
+        if (!isCaptureActive(isActive)) return null;
         if (!data) return null;
         return {
           type: "base64",
@@ -537,6 +625,7 @@ export async function capturePageSelection(
       ) {
         return null;
       }
+      if (!isCaptureActive(isActive)) return null;
       outputDimensions = { width: nextWidth, height: nextHeight };
     }
     return null;
@@ -808,20 +897,40 @@ export function beginReaderFigureSelection(
     cleanupInteraction();
     void (async () => {
       try {
-        const image = await capturePageSelection(
-          completedSelection.page,
-          completedSelection.startX,
-          completedSelection.startY,
-          endX,
-          endY,
-        );
-        if (!image || captureEpoch !== sessionEpoch) return;
+        let image: ImageAttachment | null = null;
+        try {
+          image = await capturePageSelection(
+            completedSelection.page,
+            completedSelection.startX,
+            completedSelection.startY,
+            endX,
+            endY,
+            () => captureEpoch === sessionEpoch,
+          );
+        } catch (error) {
+          logCaptureFailure(error);
+          if (captureEpoch === sessionEpoch) {
+            notifyCaptureFailure(options.onCaptureError, error);
+          }
+          return;
+        }
+        if (!image) {
+          if (captureEpoch === sessionEpoch) {
+            notifyCaptureFailure(options.onCaptureError);
+          }
+          return;
+        }
+        if (captureEpoch !== sessionEpoch) return;
         try {
           if (options.isContextActive?.() === false) return;
         } catch {
           return;
         }
-        await options.onCapture(image);
+        try {
+          await options.onCapture(image);
+        } catch (error) {
+          logCaptureFailure(error);
+        }
       } catch (error) {
         logCaptureFailure(error);
       } finally {
@@ -912,22 +1021,27 @@ function getActivePdfReader(): _ZoteroTypes.ReaderInstance | null {
 
 export function startReaderFigureScreenshot(
   onCapture: (image: ImageAttachment) => void,
+  onCaptureError?: (error?: unknown) => void,
 ): boolean {
   cancelReaderFigureScreenshot();
   const reader = getActivePdfReader();
   if (!reader) return false;
-  const doc = resolveReaderDocument(reader);
-  if (
-    !doc?.body ||
-    !documentMatches(
-      doc,
-      "[data-page-number] .canvasWrapper canvas, [data-page-number] canvas, .page canvas",
-    )
-  ) {
-    return false;
-  }
 
   try {
+    // Reader wrappers are backed by private Zotero fields and can become
+    // invalid between the active-tab lookup and document resolution. Keep all
+    // of that access inside the guarded entry point so a stale wrapper simply
+    // reports that capture could not start.
+    const doc = resolveReaderDocument(reader);
+    if (
+      !doc?.body ||
+      !documentMatches(
+        doc,
+        "[data-page-number] .canvasWrapper canvas, [data-page-number] canvas, .page canvas",
+      )
+    ) {
+      return false;
+    }
     (reader as ReaderLike).focus?.();
     const session = beginReaderFigureSelection(doc, {
       promptText: getString("chat-reader-figure-screenshot-prompt"),
@@ -939,6 +1053,7 @@ export function startReaderFigureScreenshot(
         );
       },
       onCapture,
+      onCaptureError,
     });
     return Boolean(session);
   } catch (error) {

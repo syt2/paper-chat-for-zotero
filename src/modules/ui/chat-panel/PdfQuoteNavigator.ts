@@ -1,4 +1,5 @@
 import { parsePages } from "../../chat/pdf-tools/paperParser";
+import { getReaderWindows } from "../readerWindows";
 
 const MIN_QUOTE_SEARCH_LENGTH = 12;
 const MAX_QUOTE_SEARCH_LENGTH = 480;
@@ -22,11 +23,6 @@ type PdfReaderWindow = Window & {
   PDFViewerApplication?: {
     initializedPromise?: Promise<unknown>;
   };
-};
-
-type PdfReaderView = {
-  initializedPromise?: Promise<unknown>;
-  _iframeWindow?: PdfReaderWindow;
 };
 
 type DomTextOffset = {
@@ -328,20 +324,6 @@ async function delay(ms: number): Promise<void> {
   });
 }
 
-function getReaderWindows(
-  reader: _ZoteroTypes.ReaderInstance | null,
-): PdfReaderWindow[] {
-  if (!reader) return [];
-  const internalView = reader._internalReader?._lastView as
-    | PdfReaderView
-    | undefined;
-  const windows = [
-    internalView?._iframeWindow,
-    reader._iframeWindow as PdfReaderWindow | undefined,
-  ].filter((candidate): candidate is PdfReaderWindow => !!candidate);
-  return Array.from(new Set(windows));
-}
-
 async function waitForTextLayer(
   reader: _ZoteroTypes.ReaderInstance | null,
   pageIndex: number,
@@ -351,7 +333,7 @@ async function waitForTextLayer(
   const selector = `[data-page-number="${pageIndex + 1}"] .textLayer`;
 
   while (isCurrentHighlight(generation) && Date.now() < deadline) {
-    for (const readerWindow of getReaderWindows(reader)) {
+    for (const readerWindow of getReaderWindows(reader) as PdfReaderWindow[]) {
       try {
         const layer =
           readerWindow.document.querySelector<HTMLElement>(selector);

@@ -7,6 +7,7 @@ import {
   findPageElement,
   getReaderWindows,
   resolveReaderDocument,
+  startReaderFigureScreenshot,
 } from "../src/modules/ui/ReaderFigureScreenshot.ts";
 import { watchActivePdfSelection } from "../src/modules/ui/ReaderChatEntry.ts";
 import {
@@ -156,6 +157,7 @@ class FakeDocument extends FakeEventTarget {
   outputEncodeDimensions: Array<{ width: number; height: number }> = [];
   outputBlobSizer: ((width: number, height: number) => number) | null = null;
   deferOutputBlob = false;
+  returnNullOutputBlob = false;
   visibilityState: DocumentVisibilityState = "visible";
   selectionClearCount = 0;
   private readonly deferredBlobCallbacks: Array<() => void> = [];
@@ -205,7 +207,11 @@ class FakeDocument extends FakeEventTarget {
       ? new Uint8Array(size)
       : new Uint8Array([0x70, 0x6e, 0x67]);
     const resolve = () =>
-      callback(new Blob([bytes], { type: type || "image/png" }));
+      callback(
+        this.returnNullOutputBlob
+          ? null
+          : new Blob([bytes], { type: type || "image/png" }),
+      );
     if (this.deferOutputBlob) {
       this.deferredBlobCallbacks.push(resolve);
     } else {
@@ -308,6 +314,26 @@ describe("reader figure screenshot", function () {
 
     assert.deepEqual(getReaderWindows(reader), [readerWindow]);
     assert.equal(findPageElement(target as unknown as Element), page);
+  });
+
+  it("returns false instead of throwing when a reader wrapper is already dead", function () {
+    const runtime = globalThis as Record<string, any>;
+    const previousZotero = runtime.Zotero;
+    const deadReader = { type: "pdf" } as Record<string, any>;
+    Object.defineProperty(deadReader, "_internalReader", {
+      get() {
+        throw new Error("dead reader wrapper");
+      },
+    });
+    runtime.Zotero = {
+      getMainWindow: () => ({ Zotero_Tabs: { selectedID: "dead-tab" } }),
+      Reader: { getByTabID: () => deadReader },
+    };
+    try {
+      assert.isFalse(startReaderFigureScreenshot(() => {}));
+    } finally {
+      runtime.Zotero = previousZotero;
+    }
   });
 
   it("maps CSS coordinates to source pixels and accepts reverse drags", function () {
@@ -670,6 +696,42 @@ describe("reader figure screenshot", function () {
     assert.lengthOf(doc.head.children, 0);
     assert.equal(doc.defaultView.listenerCount("pagehide"), 0);
     assert.equal(doc.listenerCount("visibilitychange"), 0);
+  });
+
+  it("reports a capture encoding failure to the selection owner", async function () {
+    const doc = new FakeDocument();
+    createPage(doc);
+    doc.returnNullOutputBlob = true;
+    let failures = 0;
+    const session = beginReaderFigureSelection(doc as unknown as Document, {
+      promptText: "Select a region",
+      onCapture: () => {},
+      onCaptureError: () => {
+        failures += 1;
+      },
+    });
+    const overlay = doc.body.children.find((node) =>
+      node.attributes.has("data-paperchat-figure-screenshot-overlay"),
+    );
+    overlay?.dispatch(
+      "pointerdown",
+      fakeEvent({
+        button: 0,
+        isPrimary: true,
+        pointerId: 12,
+        clientX: 10,
+        clientY: 10,
+      }),
+    );
+    overlay?.dispatch(
+      "pointerup",
+      fakeEvent({ pointerId: 12, clientX: 80, clientY: 80 }),
+    );
+    await flushAsyncWork();
+
+    assert.equal(failures, 1);
+    assert.isEmpty(doc.body.children);
+    session?.cancel();
   });
 
   it("keeps the encoding cancellable after pointer-up", async function () {

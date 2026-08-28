@@ -21,6 +21,8 @@ import {
 } from "./prompt-cache-diagnostics";
 import { applyReasoningRequestOptions } from "./reasoning-request";
 import { normalizeToolCallingStopReason } from "./stopReason";
+import { stripOutputTruncationNotice } from "../chat/agent-runtime/messages";
+import { mergeContinuationText } from "../chat/agent-runtime/outputTruncationContinuation";
 
 type ResponsesInputItem = Record<string, unknown>;
 type ResponsesOutputItem = Record<string, unknown>;
@@ -43,7 +45,7 @@ interface LocalMessageDescriptor {
 }
 
 interface PreviousOutputDescriptor {
-  text: string;
+  hasText: boolean;
   visibleText: string;
   toolCallIds: string[];
 }
@@ -104,6 +106,7 @@ export interface ResponsesStreamHandlers {
   onHostedWebSearchStatus?: (event: HostedWebSearchCall) => void;
 }
 
+const MAX_CONVERSATION_STATES = 128;
 const conversationStates = new Map<string, ResponsesConversationState>();
 
 function conversationKey(sessionId: string, modelId: string): string {
@@ -112,6 +115,16 @@ function conversationKey(sessionId: string, modelId: string): string {
 
 export function resetOpenAIResponsesStateForTests(): void {
   conversationStates.clear();
+}
+
+/** Drop all cached Responses chains belonging to a deleted chat session. */
+export function clearOpenAIResponsesStateForSession(sessionId: string): void {
+  const prefix = `${sessionId}\u0000`;
+  for (const key of conversationStates.keys()) {
+    if (key.startsWith(prefix)) {
+      conversationStates.delete(key);
+    }
+  }
 }
 
 function hashText(value: string): string {
@@ -200,14 +213,14 @@ function isPreviousOutputMessage(
       output.toolCallIds.every((id) => messageIds.has(id))
     );
   }
-  if (!output.text) {
+  if (!output.hasText) {
     return false;
   }
   return normalizeVisibleAssistantText(message.content) === output.visibleText;
 }
 
 function normalizeVisibleAssistantText(value: string): string {
-  return value
+  return stripOutputTruncationNotice(value)
     .split(/\n?<tool-call\b[^>]*>[\s\S]*?<\/tool-call>\n?/gi)
     .map((segment) => segment.trim())
     .filter(Boolean)
@@ -334,6 +347,7 @@ function findIncrementalMessages(
   // additionally require their matching local output exchange.
   if (
     state.lastOutput.toolCallIds.length > 0 ||
+    state.lastOutput.hasText ||
     state.lastOutput.visibleText.length > 0
   ) {
     return { compatible: false, messages: [] };
@@ -581,7 +595,10 @@ function linkifyUrlCitations(text: string, annotations: unknown): string {
   return linked;
 }
 
-export function extractResponsesText(response: ResponsesApiResponse): string {
+export function extractResponsesText(
+  response: ResponsesApiResponse,
+  options: { includeSources?: boolean } = {},
+): string {
   const textParts: string[] = [];
   for (const item of response.output || []) {
     if (item.type !== "message" || !Array.isArray(item.content)) {
@@ -596,6 +613,9 @@ export function extractResponsesText(response: ResponsesApiResponse): string {
     }
   }
   const text = textParts.join("");
+  if (options.includeSources === false) {
+    return text;
+  }
   const citations = collectUrlCitations(response);
   if (citations.length === 0) {
     return text;
@@ -657,7 +677,7 @@ function responseError(response: ResponsesApiResponse): Error | null {
   if (
     reason === "max_output_tokens" &&
     functionCalls.length === 0 &&
-    (extractResponsesText(response).trim() ||
+    (extractResponsesText(response, { includeSources: false }).trim() ||
       extractResponsesReasoning(response).trim())
   ) {
     return null;
@@ -666,6 +686,13 @@ function responseError(response: ResponsesApiResponse): Error | null {
     reason
       ? `Responses API response incomplete: ${reason}`
       : "Responses API response incomplete",
+  );
+}
+
+function isMaxOutputTokensIncomplete(response: ResponsesApiResponse): boolean {
+  return (
+    response.status === "incomplete" &&
+    response.incomplete_details?.reason === "max_output_tokens"
   );
 }
 
@@ -1109,10 +1136,18 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     if (!sessionId) {
       return;
     }
-    conversationStates.set(
-      conversationKey(sessionId, this._config.defaultModel),
-      state,
-    );
+    const key = conversationKey(sessionId, this._config.defaultModel);
+    // Refresh insertion order so active sessions are retained by the small
+    // process-wide bound below.
+    conversationStates.delete(key);
+    conversationStates.set(key, state);
+    while (conversationStates.size > MAX_CONVERSATION_STATES) {
+      const oldest = conversationStates.keys().next().value as
+        | string
+        | undefined;
+      if (oldest === undefined) break;
+      conversationStates.delete(oldest);
+    }
   }
 
   private clearConversationState(): void {
@@ -1306,18 +1341,23 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
       return;
     }
     const toolCalls = extractToolCalls(response);
-    const responseText = extractResponsesText(response);
+    // Sources are a terminal decoration. Keep the raw response body for an
+    // incomplete fragment so its bibliography cannot split the next fragment;
+    // completed responses retain the appendix for exact history matching.
+    const responseText = extractResponsesText(response, {
+      includeSources: !isMaxOutputTokensIncomplete(response),
+    });
     const nextStateBase: ResponsesConversationStateBase = {
       localMessages: plan.localDescriptors,
       lastOutput: {
-        text: responseText,
+        hasText: responseText.length > 0,
         visibleText: "",
         toolCallIds: toolCalls.map((call) => call.id),
       },
     };
     nextStateBase.lastOutput.visibleText = describeVisibleOutput(
       plan.localMessages,
-      nextStateBase.lastOutput.text,
+      responseText,
     );
     const continuationMessages = plan.localMessages.filter(
       (message) => message.outputContinuation,
@@ -1326,15 +1366,17 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
       const visibleLocalMessages = plan.localMessages.filter(
         (message) => !message.outputContinuation,
       );
-      const combinedText =
-        continuationMessages
-          .filter((message) => message.role === "assistant")
-          .map((message) => message.content)
-          .join("") + responseText;
+      let combinedText = "";
+      for (const message of continuationMessages) {
+        if (message.role === "assistant") {
+          combinedText = mergeContinuationText(combinedText, message.content);
+        }
+      }
+      combinedText = mergeContinuationText(combinedText, responseText);
       nextStateBase.visibleContinuationState = {
         localMessages: describeMessages(visibleLocalMessages),
         lastOutput: {
-          text: combinedText,
+          hasText: combinedText.length > 0,
           visibleText: describeVisibleOutput(
             visibleLocalMessages,
             combinedText,
@@ -1414,7 +1456,9 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     this.logResponsesUsage(requestKind, response.usage);
 
     return {
-      content: extractResponsesText(response),
+      content: extractResponsesText(response, {
+        includeSources: !isMaxOutputTokensIncomplete(response),
+      }),
       reasoning: extractResponsesReasoning(response) || undefined,
       toolCalls: allowToolCalls && toolCalls.length > 0 ? toolCalls : undefined,
       hostedWebSearches:
@@ -1460,7 +1504,11 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
       }
       this.commitResponseState(plan, completed, forceStateless);
       this.logResponsesUsage("responses-stream", completed.usage);
-      callbacks.onComplete(extractResponsesText(completed));
+      callbacks.onComplete(
+        extractResponsesText(completed, {
+          includeSources: !isMaxOutputTokensIncomplete(completed),
+        }),
+      );
     } catch (error) {
       callbacks.onError(this.wrapError(error));
     }
@@ -1486,7 +1534,9 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     }
     this.commitResponseState(plan, completed, forceStateless);
     this.logResponsesUsage("responses", completed.usage);
-    return extractResponsesText(completed);
+    return extractResponsesText(completed, {
+      includeSources: !isMaxOutputTokensIncomplete(completed),
+    });
   }
 
   async chatCompletionWithTools(

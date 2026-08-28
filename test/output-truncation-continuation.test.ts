@@ -5,6 +5,7 @@ import {
   appendOutputContinuationMessages,
   continueTruncatedOutput,
   hasUnexpectedContinuationToolProtocol,
+  mergeContinuationText,
   shouldContinueTruncatedOutput,
 } from "../src/modules/chat/agent-runtime/outputTruncationContinuation.ts";
 import {
@@ -219,6 +220,20 @@ describe("output truncation continuation", function () {
     assert.isTrue(messages.every((message) => message.apiOnly));
     assert.isTrue(
       messages.every((message) => message.outputContinuation === true),
+    );
+  });
+
+  it("removes a long provider overlap without dropping short ordinary text", function () {
+    assert.equal(
+      mergeContinuationText(
+        "The result is 42 and ",
+        "result is 42 and it is final.",
+      ),
+      "The result is 42 and it is final.",
+    );
+    assert.equal(
+      mergeContinuationText("hello ", "hello world"),
+      "hello hello world",
     );
   });
 });

@@ -183,18 +183,23 @@ function isPotentialFallbackToolCallsStart(candidate: string): boolean {
  * every opening marker. An opening marker without a close consumes through
  * EOF: it is still provider protocol text and must never become chat content.
  */
-function scanDsmlToolCallBlocks(content: string): ToolCallProtocolBlock[] {
+function scanToolCallBlocks(
+  content: string,
+  startRegex: RegExp,
+  endRegex: RegExp,
+  isPotentialStart: (candidate: string) => boolean,
+): ToolCallProtocolBlock[] {
   const blocks: ToolCallProtocolBlock[] = [];
   let cursor = 0;
 
   while (cursor < content.length) {
-    DSML_TOOL_CALLS_START_SCAN_REGEX.lastIndex = cursor;
-    const startMatch = DSML_TOOL_CALLS_START_SCAN_REGEX.exec(content);
+    startRegex.lastIndex = cursor;
+    const startMatch = startRegex.exec(content);
     if (!startMatch) {
       const trailingTagStart = content.lastIndexOf("<");
       if (
         trailingTagStart >= cursor &&
-        isPotentialDsmlToolCallsStart(content.slice(trailingTagStart))
+        isPotentialStart(content.slice(trailingTagStart))
       ) {
         blocks.push({
           start: trailingTagStart,
@@ -207,8 +212,8 @@ function scanDsmlToolCallBlocks(content: string): ToolCallProtocolBlock[] {
     }
 
     const bodyStart = startMatch.index + startMatch[0].length;
-    DSML_TOOL_CALLS_END_SCAN_REGEX.lastIndex = bodyStart;
-    const endMatch = DSML_TOOL_CALLS_END_SCAN_REGEX.exec(content);
+    endRegex.lastIndex = bodyStart;
+    const endMatch = endRegex.exec(content);
     if (!endMatch) {
       blocks.push({
         start: startMatch.index,
@@ -232,53 +237,22 @@ function scanDsmlToolCallBlocks(content: string): ToolCallProtocolBlock[] {
   return blocks;
 }
 
+function scanDsmlToolCallBlocks(content: string): ToolCallProtocolBlock[] {
+  return scanToolCallBlocks(
+    content,
+    DSML_TOOL_CALLS_START_SCAN_REGEX,
+    DSML_TOOL_CALLS_END_SCAN_REGEX,
+    isPotentialDsmlToolCallsStart,
+  );
+}
+
 function scanXmlToolCallBlocks(content: string): ToolCallProtocolBlock[] {
-  const blocks: ToolCallProtocolBlock[] = [];
-  let cursor = 0;
-
-  while (cursor < content.length) {
-    XML_TOOL_CALLS_START_SCAN_REGEX.lastIndex = cursor;
-    const startMatch = XML_TOOL_CALLS_START_SCAN_REGEX.exec(content);
-    if (!startMatch) {
-      const trailingTagStart = content.lastIndexOf("<");
-      if (
-        trailingTagStart >= cursor &&
-        isPotentialXmlToolCallsStart(content.slice(trailingTagStart))
-      ) {
-        blocks.push({
-          start: trailingTagStart,
-          end: content.length,
-          body: "",
-          complete: false,
-        });
-      }
-      break;
-    }
-
-    const bodyStart = startMatch.index + startMatch[0].length;
-    XML_TOOL_CALLS_END_SCAN_REGEX.lastIndex = bodyStart;
-    const endMatch = XML_TOOL_CALLS_END_SCAN_REGEX.exec(content);
-    if (!endMatch) {
-      blocks.push({
-        start: startMatch.index,
-        end: content.length,
-        body: content.slice(bodyStart),
-        complete: false,
-      });
-      break;
-    }
-
-    const end = endMatch.index + endMatch[0].length;
-    blocks.push({
-      start: startMatch.index,
-      end,
-      body: content.slice(bodyStart, endMatch.index),
-      complete: true,
-    });
-    cursor = end;
-  }
-
-  return blocks;
+  return scanToolCallBlocks(
+    content,
+    XML_TOOL_CALLS_START_SCAN_REGEX,
+    XML_TOOL_CALLS_END_SCAN_REGEX,
+    isPotentialXmlToolCallsStart,
+  );
 }
 
 function stripToolCallProtocolBlocks(

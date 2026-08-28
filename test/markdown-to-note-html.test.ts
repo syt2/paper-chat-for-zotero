@@ -151,4 +151,11 @@ describe("markdownToNoteHtml", function () {
     assert.include(html, "$10");
     assert.include(html, "$20-$30");
   });
+
+  it("preserves leading indentation so an initial code block stays code", function () {
+    const html = markdownToNoteHtml("    $x$\n\n    $$y$$");
+
+    assert.include(html, "<pre><code>$x$\n\n$$y$$");
+    assert.notInclude(html, 'class="math"');
+  });
 });

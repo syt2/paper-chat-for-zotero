@@ -16,6 +16,7 @@ export { OpenAICompatibleProvider } from "./OpenAICompatibleProvider";
 export { AnthropicProvider } from "./AnthropicProvider";
 export { GeminiProvider } from "./GeminiProvider";
 export { PaperChatProvider } from "./PaperChatProvider";
+export { clearOpenAIResponsesStateForSession } from "./OpenAIResponsesProvider";
 
 // Re-export types
 export type {

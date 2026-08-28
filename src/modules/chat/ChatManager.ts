@@ -51,7 +51,11 @@ import {
 import { getToolScheduler } from "./tool-scheduler";
 import { getSkillRegistry, type SelectedPaperChatSkill } from "./skills";
 import { getSessionArtifactStore } from "./session-artifacts";
-import { getProviderManager, PaperChatProvider } from "../providers";
+import {
+  clearOpenAIResponsesStateForSession,
+  getProviderManager,
+  PaperChatProvider,
+} from "../providers";
 import type { ProviderRetryOptions } from "../providers/ProviderManager";
 import { getAuthManager } from "../auth";
 import { getString } from "../../utils/locale";
@@ -1287,6 +1291,7 @@ export class ChatManager {
     // denying them before the delete would leave approvals killed while the
     // session still exists on disk.
     await this.sessionStorage.deleteSession(sessionId);
+    clearOpenAIResponsesStateForSession(sessionId);
 
     getToolPermissionManager().denyPendingApprovals({
       sessionId,

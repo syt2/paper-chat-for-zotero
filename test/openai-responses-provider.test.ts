@@ -364,6 +364,86 @@ describe("OpenAIResponsesProvider", function () {
     ]);
   });
 
+  it("keeps Sources out of an incomplete fragment and strips the app notice when matching", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    const responses = [
+      {
+        id: "resp_notice_1",
+        status: "completed",
+        store: true,
+        output: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [
+              {
+                type: "output_text",
+                text: "first answer",
+                annotations: [],
+              },
+            ],
+          },
+        ],
+      },
+      completedResponse("resp_notice_2", "second answer"),
+    ];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse(responses.shift()!);
+    }) as typeof fetch;
+
+    const provider = createProvider({ sessionId: "session-notice" });
+    await provider.chatCompletion([message("u1", "user", "first")]);
+    await provider.chatCompletion([
+      message("u1", "user", "first"),
+      message(
+        "a1",
+        "assistant",
+        "first answer\n\n> The provider stopped before completing this response. The reply may be incomplete.",
+      ),
+      message("u2", "user", "second"),
+    ]);
+
+    assert.equal(requestBodies[1].previous_response_id, "resp_notice_1");
+    assert.deepEqual(requestBodies[1].input, [
+      { role: "user", content: "second" },
+    ]);
+  });
+
+  it("can extract a Responses body without its Sources appendix", function () {
+    const response = {
+      id: "resp_sources_option",
+      status: "incomplete",
+      output: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [
+            {
+              type: "output_text",
+              text: "partial answer",
+              annotations: [
+                {
+                  type: "url_citation",
+                  url: "https://example.test/source",
+                  title: "Example source",
+                  start_index: 0,
+                  end_index: 7,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    assert.equal(
+      extractResponsesText(response, { includeSources: false }),
+      "[partial](https://example.test/source) answer",
+    );
+    assert.include(extractResponsesText(response), "\n\nSources:\n");
+  });
+
   it("keeps previous_response_id after transient output-continuation context is collapsed", async function () {
     const requestBodies: Array<Record<string, any>> = [];
     const responses = [

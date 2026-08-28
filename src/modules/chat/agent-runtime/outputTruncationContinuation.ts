@@ -11,7 +11,35 @@ export const REASONING_TRUNCATION_CONTINUATION_USER_MESSAGE =
 export const OUTPUT_CONTINUATION_TOOL_PROTOCOL_ERROR =
   "Provider returned tool protocol during text-only output continuation.";
 
+// A provider is asked not to repeat the previous fragment, but some models
+// still include a short overlap at the boundary. Only remove a reasonably
+// long exact overlap; short matches are common in prose and should be kept.
+const MIN_CONTINUATION_OVERLAP = 12;
+const MAX_CONTINUATION_OVERLAP = 4096;
+
 export type TruncatableOutputResult = Partial<StreamToolCallingResult>;
+
+/** Join a continuation while removing a confidently repeated boundary. */
+export function mergeContinuationText(previous: string, next: string): string {
+  if (!previous) return next;
+  if (!next) return previous;
+
+  const maxOverlap = Math.min(
+    MAX_CONTINUATION_OVERLAP,
+    previous.length,
+    next.length,
+  );
+  for (
+    let length = maxOverlap;
+    length >= MIN_CONTINUATION_OVERLAP;
+    length -= 1
+  ) {
+    if (previous.slice(-length) === next.slice(0, length)) {
+      return previous + next.slice(length);
+    }
+  }
+  return previous + next;
+}
 
 export function shouldContinueTruncatedOutput(
   result: TruncatableOutputResult,
@@ -116,8 +144,10 @@ export async function continueTruncatedOutput<
     continuationCount < MAX_OUTPUT_TRUNCATION_CONTINUATIONS
   ) {
     continuationCount += 1;
-    displayBeforeResult +=
-      getSupplementalDisplay(result) + (result.content || "");
+    displayBeforeResult = mergeContinuationText(
+      displayBeforeResult,
+      getSupplementalDisplay(result) + (result.content || ""),
+    );
     appendOutputContinuationMessages(
       params.currentMessages,
       result.content || "",
@@ -138,11 +168,12 @@ export async function continueTruncatedOutput<
 
   return {
     result,
-    accumulatedDisplay:
-      displayBeforeResult +
-      (unexpectedToolProtocol
-        ? ""
-        : getSupplementalDisplay(result) + (result.content || "")),
+    accumulatedDisplay: unexpectedToolProtocol
+      ? displayBeforeResult
+      : mergeContinuationText(
+          displayBeforeResult,
+          getSupplementalDisplay(result) + (result.content || ""),
+        ),
     continuationCount,
     outputStillTruncated: result.stopReason === "max_tokens",
     unexpectedToolProtocol,

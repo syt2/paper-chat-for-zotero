@@ -121,6 +121,11 @@ import {
   requestNextQuestionHintAfterRecentRender,
 } from "./NextQuestionHintController";
 import { cancelReaderFigureScreenshot } from "../ReaderFigureScreenshot";
+import {
+  MAX_PENDING_IMAGE_ATTACHMENTS,
+  MAX_PENDING_IMAGE_BYTES,
+  MAX_PENDING_IMAGE_DRAFT_BYTES,
+} from "./imageAttachmentPolicy";
 
 // Panel display mode: 'sidebar' or 'floating'
 export type PanelMode = "sidebar" | "floating";
@@ -140,10 +145,6 @@ const APPROVAL_ENTER_ANIMATION_MS = 220;
 const STREAMING_TEXT_RENDER_INTERVAL_MS = 80;
 const STREAMING_MARKDOWN_RENDER_INTERVAL_MS = 1200;
 const STREAMING_TEXT_TAIL_ATTR = "data-streaming-text-tail";
-const MAX_PENDING_IMAGE_ATTACHMENTS = 6;
-const MAX_PENDING_IMAGE_BYTES = 1024 * 1024;
-const MAX_PENDING_IMAGE_DRAFT_BYTES = 4 * 1024 * 1024;
-
 type PendingApprovalRequest = ToolApprovalState["pendingRequests"][number];
 
 type ApprovalPanelTransitionEntry = ApprovalViewTransitionState & {

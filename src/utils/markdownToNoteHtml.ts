@@ -386,9 +386,11 @@ noteMarkdown.renderer.rules.image = (tokens, index) => {
 };
 
 export function markdownToNoteHtml(markdown: string): string {
-  const trimmed = markdown.trim();
-  if (!trimmed) {
+  if (!markdown.trim()) {
     return "";
   }
-  return noteMarkdown.render(trimmed).trim();
+  // Keep the original source for rendering. Trimming before MarkdownIt sees
+  // it turns a four-space-indented code block at the beginning of a note into
+  // ordinary text (and can make a dollar expression look like math).
+  return noteMarkdown.render(markdown).trim();
 }

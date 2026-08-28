@@ -383,6 +383,34 @@ interface IterationControlState {
   toolChoice: "auto" | "none";
 }
 
+function decideHostedWebSearchRound(
+  iterationControl: Pick<
+    IterationControlState,
+    "forceFinalAnswer" | "toolsForRound"
+  >,
+  result: {
+    hostedWebSearches?: HostedWebSearchCall[];
+    suppressedToolCall?: boolean;
+  },
+): {
+  accepted: HostedWebSearchCall[];
+  suppressedToolCall: boolean;
+} {
+  const allowed =
+    !iterationControl.forceFinalAnswer &&
+    iterationControl.toolsForRound.some(
+      (tool) => tool.function.name === "web_search",
+    );
+  const hasHostedSearches = !!result.hostedWebSearches?.length;
+  const suppressedToolCall =
+    Boolean(result.suppressedToolCall) || (!allowed && hasHostedSearches);
+  return {
+    accepted:
+      allowed && !suppressedToolCall ? result.hostedWebSearches || [] : [],
+    suppressedToolCall,
+  };
+}
+
 export class AgentRuntime {
   private executionPlanManager = new ExecutionPlanManager();
   private messageCheckpointer = new AssistantMessageCheckpointer({
@@ -610,18 +638,13 @@ export class AgentRuntime {
           result.stopReason,
         );
 
-        const roundAllowsHostedWebSearch =
-          !iterationControl.forceFinalAnswer &&
-          iterationControl.toolsForRound.some(
-            (tool) => tool.function.name === "web_search",
-          );
-        if (!roundAllowsHostedWebSearch && !!result.hostedWebSearches?.length) {
-          result.suppressedToolCall = true;
-        }
-        const acceptedHostedWebSearches =
-          roundAllowsHostedWebSearch && !result.suppressedToolCall
-            ? result.hostedWebSearches || []
-            : [];
+        const hostedWebSearchDecision = decideHostedWebSearchRound(
+          iterationControl,
+          result,
+        );
+        result.suppressedToolCall =
+          hostedWebSearchDecision.suppressedToolCall || undefined;
+        const acceptedHostedWebSearches = hostedWebSearchDecision.accepted;
         this.upsertHostedWebSearchResults(
           sendingSession,
           acceptedHostedWebSearches,
@@ -1010,18 +1033,13 @@ export class AgentRuntime {
           result.toolCalls?.length || 0,
         );
 
-        const roundAllowsHostedWebSearch =
-          !iterationControl.forceFinalAnswer &&
-          iterationControl.toolsForRound.some(
-            (tool) => tool.function.name === "web_search",
-          );
-        if (!roundAllowsHostedWebSearch && !!result.hostedWebSearches?.length) {
-          result.suppressedToolCall = true;
-        }
-        const acceptedHostedWebSearches =
-          roundAllowsHostedWebSearch && !result.suppressedToolCall
-            ? result.hostedWebSearches || []
-            : [];
+        const hostedWebSearchDecision = decideHostedWebSearchRound(
+          iterationControl,
+          result,
+        );
+        result.suppressedToolCall =
+          hostedWebSearchDecision.suppressedToolCall || undefined;
+        const acceptedHostedWebSearches = hostedWebSearchDecision.accepted;
         this.upsertHostedWebSearchResults(
           sendingSession,
           acceptedHostedWebSearches,
