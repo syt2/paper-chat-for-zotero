@@ -172,6 +172,9 @@ interface RuntimeExecutionOptions {
   assistantMessage: ChatMessage;
   pdfWasAttached: boolean;
   summaryTriggered: boolean;
+  /** Stable tool contract sent on every model round in this user turn. */
+  requestTools?: ToolDefinition[];
+  /** Mutable subset that the runtime currently permits the model to execute. */
   tools: ToolDefinition[];
   paperStructure?: PaperStructure | PaperStructureExtended | null;
   sendingSession: ChatSession;
@@ -345,17 +348,17 @@ function createUnavailableToolResult(toolCall: ToolCall): ToolExecutionResult {
         policy: "tool_availability",
         outcome: "blocked",
         summary:
-          "Blocked a tool that was not available in the current model round.",
+          "Blocked a tool outside the currently authorized execution subset.",
       },
     ],
     content: formatToolError({
-      summary: `Tool ${toolCall.function.name} is not available in the current model round.`,
+      summary: `Tool ${toolCall.function.name} is not authorized for execution in the current model round.`,
       category: "permission_denied",
       retryable: true,
       cause:
-        "The model requested a tool that was not included in the current request.",
+        "The tool schema may be advertised to keep the request contract stable, but execution is currently locked.",
       suggestedFix:
-        "Continue using only the tools exposed in this model round.",
+        "Continue using only the tools authorized for execution in this model round.",
     }),
   };
 }
@@ -366,6 +369,7 @@ interface IterationControlState {
   maxIterations: number;
   forceFinalAnswer: boolean;
   toolsForRound: ToolDefinition[];
+  allowedToolNames: Set<string>;
   toolChoice: "auto" | "none";
 }
 
@@ -462,6 +466,7 @@ export class AgentRuntime {
       assistantMessage,
       pdfWasAttached,
       summaryTriggered,
+      requestTools,
       tools,
       paperStructure,
       sendingSession,
@@ -489,6 +494,7 @@ export class AgentRuntime {
     let budgetLimits = getToolBudgetLimits(configuredMaxIterations);
     let iteration = 0;
     let accumulatedDisplay = assistantMessage.content;
+    let stableRequestTools = (requestTools || tools).slice();
     await this.startTurn(
       sendingSession,
       sessionRunId,
@@ -522,6 +528,9 @@ export class AgentRuntime {
       while (iteration < maxIterations) {
         iteration++;
         syncPresentationLaunchTools(tools, presentationLaunchSession);
+        // When callers omit the optional stable catalog, derive it after the
+        // launcher handoff has synchronized the executable tool list.
+        stableRequestTools = (requestTools || tools).slice();
         const iterationControl = this.createIterationControl(
           iteration,
           tools,
@@ -529,6 +538,7 @@ export class AgentRuntime {
           sendingSession,
           budgetLimits,
           provider.supportsHostedWebSearch?.() === true,
+          stableRequestTools,
         );
         this.refreshSystemPrompt(
           currentMessages,
@@ -536,18 +546,23 @@ export class AgentRuntime {
           refreshSystemPrompt,
           iterationControl,
         );
+        this.syncFinalSynthesisInstruction(
+          currentMessages,
+          iterationControl.forceFinalAnswer,
+        );
         this.prepareMessagesForModel(currentMessages, provider);
         ztoolkit.log(
           `[${logPrefix}] Iteration ${iteration}, messages: ${currentMessages.length}`,
         );
         if (iterationControl.forceFinalAnswer) {
           ztoolkit.log(
-            `[${logPrefix}] Final synthesis iteration ${iteration}/${maxIterations}; tools disabled for this round`,
+            `[${logPrefix}] Final synthesis iteration ${iteration}/${maxIterations}; provider and local tool execution disabled, request tool catalog unchanged`,
           );
         }
 
         const displayBeforeThisRound = accumulatedDisplay;
-        const refreshRoundToolsAfterProviderChange = () =>
+        const refreshRoundToolsAfterProviderChange = () => {
+          stableRequestTools = (requestTools || tools).slice();
           this.refreshIterationToolsForProvider(
             iterationControl,
             iteration,
@@ -556,7 +571,9 @@ export class AgentRuntime {
             sendingSession,
             budgetLimits,
             provider.supportsHostedWebSearch?.() === true,
+            stableRequestTools,
           );
+        };
         const result = await this.runStreamingRound(
           provider,
           currentMessages,
@@ -615,9 +632,7 @@ export class AgentRuntime {
             currentItemKey,
             lockedToolItemKey,
             currentItemLibraryID,
-            allowedToolNames: new Set(
-              iterationControl.toolsForRound.map((tool) => tool.function.name),
-            ),
+            allowedToolNames: iterationControl.allowedToolNames,
             selectedSearchScope,
             noteSummaryContext,
             executeProviderRequest,
@@ -790,6 +805,7 @@ export class AgentRuntime {
       assistantMessage,
       pdfWasAttached,
       summaryTriggered,
+      requestTools,
       tools,
       paperStructure,
       sendingSession,
@@ -817,6 +833,7 @@ export class AgentRuntime {
     let budgetLimits = getToolBudgetLimits(configuredMaxIterations);
     let iteration = 0;
     let accumulatedDisplay = assistantMessage.content;
+    let stableRequestTools = (requestTools || tools).slice();
     await this.startTurn(
       sendingSession,
       sessionRunId,
@@ -850,6 +867,8 @@ export class AgentRuntime {
       while (iteration < maxIterations) {
         iteration++;
         syncPresentationLaunchTools(tools, presentationLaunchSession);
+        // Keep the optional-call fallback in sync with presentation handoff.
+        stableRequestTools = (requestTools || tools).slice();
         const iterationControl = this.createIterationControl(
           iteration,
           tools,
@@ -857,6 +876,7 @@ export class AgentRuntime {
           sendingSession,
           budgetLimits,
           provider.supportsHostedWebSearch?.() === true,
+          stableRequestTools,
         );
         this.refreshSystemPrompt(
           currentMessages,
@@ -864,13 +884,17 @@ export class AgentRuntime {
           refreshSystemPrompt,
           iterationControl,
         );
+        this.syncFinalSynthesisInstruction(
+          currentMessages,
+          iterationControl.forceFinalAnswer,
+        );
         this.prepareMessagesForModel(currentMessages, provider);
         ztoolkit.log(
           `[${logPrefix}] Iteration ${iteration}, messages: ${currentMessages.length}`,
         );
         if (iterationControl.forceFinalAnswer) {
           ztoolkit.log(
-            `[${logPrefix}] Final synthesis iteration ${iteration}/${maxIterations}; tools disabled for this round`,
+            `[${logPrefix}] Final synthesis iteration ${iteration}/${maxIterations}; provider and local tool execution disabled, request tool catalog unchanged`,
           );
         }
 
@@ -884,7 +908,8 @@ export class AgentRuntime {
                 toolChoice: iterationControl.toolChoice,
               },
             ),
-          () =>
+          () => {
+            stableRequestTools = (requestTools || tools).slice();
             this.refreshIterationToolsForProvider(
               iterationControl,
               iteration,
@@ -893,7 +918,9 @@ export class AgentRuntime {
               sendingSession,
               budgetLimits,
               provider.supportsHostedWebSearch?.() === true,
-            ),
+              stableRequestTools,
+            );
+          },
         );
 
         this.ensureSessionTracked(sendingSession, sessionRunId);
@@ -937,9 +964,7 @@ export class AgentRuntime {
             currentItemKey,
             lockedToolItemKey,
             currentItemLibraryID,
-            allowedToolNames: new Set(
-              iterationControl.toolsForRound.map((tool) => tool.function.name),
-            ),
+            allowedToolNames: iterationControl.allowedToolNames,
             selectedSearchScope,
             noteSummaryContext,
             executeProviderRequest,
@@ -3207,6 +3232,7 @@ export class AgentRuntime {
     session: ChatSession,
     budgetLimits: ToolBudgetLimits,
     supportsHostedWebSearch: boolean,
+    requestTools: ToolDefinition[] = tools,
   ): IterationControlState {
     const remainingIterations = maxIterations - iteration + 1;
     const forceFinalAnswer = remainingIterations === 1;
@@ -3217,7 +3243,7 @@ export class AgentRuntime {
       0,
       budgetLimits.maxWebSearchCallsPerTurn - searchBudget.webSearchCalls,
     );
-    const toolsForRound =
+    const availableToolsForRound =
       remainingSearchCalls === 0
         ? tools.filter((tool) => {
             if (tool.function.name === "search_scholarly_sources") {
@@ -3233,7 +3259,14 @@ export class AgentRuntime {
       remainingIterations,
       maxIterations,
       forceFinalAnswer,
-      toolsForRound: forceFinalAnswer ? [] : toolsForRound,
+      toolsForRound: requestTools,
+      allowedToolNames: new Set(
+        (forceFinalAnswer ? [] : availableToolsForRound).map(
+          (tool) => tool.function.name,
+        ),
+      ),
+      // Keep the catalog stable, but stop provider-hosted tools before they
+      // execute server-side when this bounded loop must return its answer.
       toolChoice: forceFinalAnswer ? "none" : "auto",
     };
   }
@@ -3246,6 +3279,7 @@ export class AgentRuntime {
     session: ChatSession,
     budgetLimits: ToolBudgetLimits,
     supportsHostedWebSearch: boolean,
+    requestTools: ToolDefinition[] = tools,
   ): void {
     const refreshed = this.createIterationControl(
       iteration,
@@ -3254,12 +3288,17 @@ export class AgentRuntime {
       session,
       budgetLimits,
       supportsHostedWebSearch,
+      requestTools,
     );
     iterationControl.toolsForRound.splice(
       0,
       iterationControl.toolsForRound.length,
       ...refreshed.toolsForRound,
     );
+    iterationControl.allowedToolNames.clear();
+    for (const toolName of refreshed.allowedToolNames) {
+      iterationControl.allowedToolNames.add(toolName);
+    }
   }
 
   private getMaxIterations(): number {
@@ -3350,6 +3389,32 @@ export class AgentRuntime {
   ): void {
     const strategy = getToolContextStrategy(provider);
     compactOlderToolResultMessages(currentMessages, strategy.compactionPolicy);
+  }
+
+  private syncFinalSynthesisInstruction(
+    currentMessages: ChatMessage[],
+    forceFinalAnswer: boolean,
+  ): void {
+    const existingIndex = currentMessages.findIndex(
+      (message) => message.id === "final-synthesis-context",
+    );
+    if (!forceFinalAnswer) {
+      if (existingIndex >= 0) {
+        currentMessages.splice(existingIndex, 1);
+      }
+      return;
+    }
+    if (existingIndex >= 0) {
+      currentMessages[existingIndex].timestamp = Date.now();
+      return;
+    }
+    currentMessages.push({
+      id: "final-synthesis-context",
+      role: "system",
+      content:
+        "This is the final synthesis iteration. Do not call any tools. Use only the user content and tool results already present, and return the final answer directly.",
+      timestamp: Date.now(),
+    });
   }
 
   private emitRuntimeEvent<T extends AgentRuntimeEventType>(

@@ -23,6 +23,19 @@ import type { ToolDefinition, ToolCall } from "../../types/tool";
 import { parseSSEStreamWithToolCalling } from "./SSEParser";
 
 export class AnthropicProvider extends BaseProvider {
+  private buildSystemPrompt(messages: ChatMessage[]): string | undefined {
+    const sections = [
+      this._config.systemPrompt,
+      ...messages
+        .filter((message) => message.role === "system")
+        .map((message) => message.content),
+    ].filter(
+      (section): section is string =>
+        typeof section === "string" && section.trim().length > 0,
+    );
+    return sections.length > 0 ? sections.join("\n\n") : undefined;
+  }
+
   supportsPdfUpload(): boolean {
     return true;
   }
@@ -56,7 +69,7 @@ export class AnthropicProvider extends BaseProvider {
         body: JSON.stringify({
           model: this._config.defaultModel,
           max_tokens: this._config.maxTokens || 8192,
-          system: this._config.systemPrompt || undefined,
+          system: this.buildSystemPrompt(messages),
           messages: anthropicMessages,
           stream: true,
         }),
@@ -90,7 +103,7 @@ export class AnthropicProvider extends BaseProvider {
       body: JSON.stringify({
         model: this._config.defaultModel,
         max_tokens: this._config.maxTokens || 8192,
-        system: this._config.systemPrompt || undefined,
+        system: this.buildSystemPrompt(messages),
         messages: anthropicMessages,
       }),
       signal,
@@ -294,7 +307,7 @@ export class AnthropicProvider extends BaseProvider {
     const requestBody: Record<string, unknown> = {
       model: this._config.defaultModel,
       max_tokens: this._config.maxTokens || 8192,
-      system: this._config.systemPrompt || undefined,
+      system: this.buildSystemPrompt(messages),
       messages: anthropicMessages,
     };
 
@@ -398,7 +411,7 @@ export class AnthropicProvider extends BaseProvider {
       const requestBody: Record<string, unknown> = {
         model: this._config.defaultModel,
         max_tokens: this._config.maxTokens || 8192,
-        system: this._config.systemPrompt || undefined,
+        system: this.buildSystemPrompt(messages),
         messages: anthropicMessages,
         stream: true,
       };

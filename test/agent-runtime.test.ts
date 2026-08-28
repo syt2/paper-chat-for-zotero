@@ -23,6 +23,7 @@ import { createPdfPassageEvidenceRecord } from "../src/modules/chat/evidence/ind
 import { AGENT_MAX_PLANNING_ITERATIONS_SETTINGS_HREF } from "../src/utils/internalLinks.ts";
 import {
   createPendingSearchScopeTools,
+  createSearchScopeToolDefinition,
   filterSearchToolsForScope,
 } from "../src/modules/chat/agent-runtime/SearchScopeGate.ts";
 
@@ -54,6 +55,14 @@ function createToolDefinition(name: string): ToolDefinition {
       parameters: { type: "object", properties: {} },
     },
   };
+}
+
+function createStableSearchRequestTools(
+  tools: ToolDefinition[],
+): ToolDefinition[] {
+  return [...tools, createSearchScopeToolDefinition()].sort((left, right) =>
+    left.function.name.localeCompare(right.function.name),
+  );
 }
 
 describe("agent runtime plan semantics", function () {
@@ -243,7 +252,9 @@ describe("agent runtime plan semantics", function () {
       },
     ];
     const tools = createPendingSearchScopeTools(allTools);
+    const requestTools = createStableSearchRequestTools(allTools);
     const receivedToolNames: string[][] = [];
+    const receivedToolChoices: string[] = [];
     const executedToolNames: string[] = [];
     let providerCalls = 0;
     const runtime = new AgentRuntime(
@@ -287,9 +298,12 @@ describe("agent runtime plan semantics", function () {
       chatCompletionWithTools: async (
         _messages: ChatMessage[],
         roundTools: ToolDefinition[],
+        _signal: AbortSignal | undefined,
+        options: { toolChoice?: string } | undefined,
       ) => {
         providerCalls++;
         receivedToolNames.push(roundTools.map((tool) => tool.function.name));
+        receivedToolChoices.push(options?.toolChoice || "");
         if (providerCalls === 1) {
           return {
             content: "",
@@ -336,6 +350,7 @@ describe("agent runtime plan semantics", function () {
         pdfWasAttached: false,
         summaryTriggered: false,
         tools,
+        requestTools,
         sendingSession: session,
         searchScopeGate: {
           onScopeSelected: (scope) => {
@@ -349,19 +364,12 @@ describe("agent runtime plan semantics", function () {
         },
       });
 
-      assert.deepEqual(receivedToolNames[0], [
-        "search_items",
-        "select_search_scope",
+      assert.deepEqual(receivedToolNames, [
+        requestTools.map((tool) => tool.function.name),
+        requestTools.map((tool) => tool.function.name),
+        requestTools.map((tool) => tool.function.name),
       ]);
-      assert.deepEqual(receivedToolNames[1], [
-        "search_scholarly_sources",
-        "search_items",
-      ]);
-      assert.deepEqual(receivedToolNames[2], [
-        "web_search",
-        "search_scholarly_sources",
-        "search_items",
-      ]);
+      assert.deepEqual(receivedToolChoices, ["auto", "auto", "auto"]);
       assert.deepEqual(executedToolNames, ["search_scholarly_sources"]);
       assert.equal(providerCalls, 3);
     } finally {
@@ -518,6 +526,7 @@ describe("agent runtime plan semantics", function () {
       },
     ];
     const tools = createPendingSearchScopeTools(allTools);
+    const requestTools = createStableSearchRequestTools(allTools);
     const receivedToolNames: string[][] = [];
     const executedToolNames: string[] = [];
     let providerCalls = 0;
@@ -649,6 +658,7 @@ describe("agent runtime plan semantics", function () {
         pdfWasAttached: false,
         summaryTriggered: false,
         tools,
+        requestTools,
         sendingSession: session,
         searchScopeGate: {
           onScopeSelected: (scope) => {
@@ -662,11 +672,12 @@ describe("agent runtime plan semantics", function () {
         },
       });
 
-      assert.deepEqual(receivedToolNames, [
-        ["search_items", "select_search_scope"],
-        ["search_scholarly_sources", "search_items"],
-        ["web_search", "search_scholarly_sources", "search_items"],
-      ]);
+      assert.deepEqual(
+        receivedToolNames,
+        Array.from({ length: 3 }, () =>
+          requestTools.map((tool) => tool.function.name),
+        ),
+      );
       assert.deepEqual(executedToolNames, ["search_scholarly_sources"]);
       assert.equal(providerCalls, 3);
       assert.equal(assistantMessage.content, "Answer from fallback web");
@@ -713,6 +724,7 @@ describe("agent runtime plan semantics", function () {
       },
     ];
     const tools = createPendingSearchScopeTools(allTools);
+    const requestTools = createStableSearchRequestTools(allTools);
     const receivedToolNames: string[][] = [];
     let providerCalls = 0;
     let providerRetries = 0;
@@ -804,6 +816,7 @@ describe("agent runtime plan semantics", function () {
         pdfWasAttached: false,
         summaryTriggered: false,
         tools,
+        requestTools,
         sendingSession: session,
         executeProviderRequest: async (operation) => {
           try {
@@ -826,12 +839,12 @@ describe("agent runtime plan semantics", function () {
         },
       });
 
-      assert.deepEqual(receivedToolNames, [
-        ["select_search_scope"],
-        ["search_scholarly_sources"],
-        ["web_search", "search_scholarly_sources"],
-        ["web_search", "search_scholarly_sources"],
-      ]);
+      assert.deepEqual(
+        receivedToolNames,
+        Array.from({ length: 4 }, () =>
+          requestTools.map((tool) => tool.function.name),
+        ),
+      );
       assert.equal(providerRetries, 1);
       assert.equal(selectedScopeCallbacks, 2);
       assert.equal(scholarlyExecutions, 1);
@@ -855,7 +868,7 @@ describe("agent runtime plan semantics", function () {
     }
   });
 
-  it("refreshes exhausted-budget tools when rerouting across hosted-search capabilities", async function () {
+  it("refreshes request catalogs and execution permissions when rerouting across hosted-search capabilities", async function () {
     const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
     (globalThis as { ztoolkit?: unknown }).ztoolkit = {
       log: () => undefined,
@@ -887,51 +900,17 @@ describe("agent runtime plan semantics", function () {
       },
     ];
 
-    const runTransition = async (initialHosted: boolean) => {
+    const runTransition = async (
+      initialHosted: boolean,
+      streaming: boolean,
+    ) => {
       let hosted = initialHosted;
       let providerCalls = 0;
       const receivedToolNames: string[][] = [];
+      const executedToolNames: string[] = [];
       const session = createSession();
-      session.toolExecutionState = {
-        turnStartedAt: 1,
-        updatedAt: 2,
-        results: [
-          {
-            toolCall: {
-              id: `scope-${initialHosted}`,
-              type: "function",
-              function: {
-                name: "select_search_scope",
-                arguments: JSON.stringify({
-                  scope: "web_allowed",
-                  reason: "Ordinary web evidence is allowed.",
-                }),
-              },
-            },
-            args: {
-              scope: "web_allowed",
-              reason: "Ordinary web evidence is allowed.",
-            },
-            status: "completed",
-            content: "scope selected",
-          },
-          {
-            toolCall: {
-              id: `local-budget-${initialHosted}`,
-              type: "function",
-              function: {
-                name: "search_scholarly_sources",
-                arguments: JSON.stringify({ query: "local evidence" }),
-              },
-            },
-            args: { query: "local evidence" },
-            status: "completed",
-            content: "local result",
-          },
-        ],
-      };
       const assistantMessage: ChatMessage = {
-        id: `assistant-capability-budget-${initialHosted}`,
+        id: `assistant-capability-reroute-${initialHosted}-${streaming}`,
         role: "assistant",
         content: "",
         timestamp: 3,
@@ -940,7 +919,16 @@ describe("agent runtime plan semantics", function () {
       const tools = filterSearchToolsForScope({
         tools: allTools,
         supportsHostedWebSearch: hosted,
-        scope: "web_allowed",
+        scope: undefined,
+      }).slice();
+      const requestTools = tools.slice();
+      const createScholarlyToolCall = (): ToolCall => ({
+        id: `scholarly-after-reroute-${initialHosted}-${streaming}`,
+        type: "function",
+        function: {
+          name: "search_scholarly_sources",
+          arguments: JSON.stringify({ query: "rerouted evidence" }),
+        },
       });
       const provider = {
         config: { id: "paperchat", type: "paperchat", defaultModel: "gpt" },
@@ -954,7 +942,44 @@ describe("agent runtime plan semantics", function () {
           if (providerCalls === 1) {
             throw new Error("reroute this model");
           }
-          return { content: "final answer" };
+          if (providerCalls === 2) {
+            return {
+              content: "",
+              toolCalls: [createScholarlyToolCall()],
+            };
+          }
+          return { content: "final answer after reroute" };
+        },
+        streamChatCompletionWithTools: async (
+          _messages: ChatMessage[],
+          roundTools: ToolDefinition[],
+          callbacks: any,
+        ) => {
+          providerCalls += 1;
+          receivedToolNames.push(roundTools.map((tool) => tool.function.name));
+          if (providerCalls === 1) {
+            throw new Error("reroute this model");
+          }
+          if (providerCalls === 2) {
+            const toolCall = createScholarlyToolCall();
+            callbacks.onToolCallStart({
+              index: 0,
+              id: toolCall.id,
+              name: toolCall.function.name,
+            });
+            callbacks.onToolCallDelta(0, toolCall.function.arguments);
+            callbacks.onComplete({
+              content: "",
+              toolCalls: [toolCall],
+              stopReason: "tool_calls",
+            });
+            return;
+          }
+          callbacks.onTextDelta("final answer after reroute");
+          callbacks.onComplete({
+            content: "final answer after reroute",
+            stopReason: "end_turn",
+          });
         },
       };
       const runtime = new AgentRuntime(
@@ -967,25 +992,39 @@ describe("agent runtime plan semantics", function () {
           isSessionActive: () => false,
           isSessionTracked: () => true,
           formatToolCallCard: () => "",
-          generateId: () => `capability-budget-${initialHosted}`,
+          generateId: () => `capability-reroute-${initialHosted}-${streaming}`,
         } as any,
         {
-          createExecutionBatches: () => [],
-          executeBatch: async () => [],
+          createExecutionBatches: (requests: any[]) => [requests],
+          executeBatch: async (requests: any[]) => {
+            executedToolNames.push(
+              ...requests.map(
+                (request) => request.toolCall.function.name as string,
+              ),
+            );
+            return requests.map((request) => ({
+              toolCall: request.toolCall,
+              status: "completed" as const,
+              content: "scholarly result after reroute",
+            }));
+          },
         },
       ) as any;
       runtime.getMaxIterations = () => 3;
 
-      await runtime.executeNonStreamingToolLoop({
+      const executionOptions = {
         provider,
         currentMessages: session.messages,
         assistantMessage,
         pdfWasAttached: false,
         summaryTriggered: false,
         tools,
+        requestTools,
         sendingSession: session,
-        preserveToolExecutionState: true,
-        executeProviderRequest: async (operation, onProviderRerouted) => {
+        executeProviderRequest: async (
+          operation: () => Promise<unknown>,
+          onProviderRerouted?: () => void,
+        ) => {
           try {
             return await operation();
           } catch {
@@ -993,37 +1032,383 @@ describe("agent runtime plan semantics", function () {
             const reroutedTools = filterSearchToolsForScope({
               tools: allTools,
               supportsHostedWebSearch: hosted,
-              scope: "web_allowed",
-            });
+              scope: undefined,
+            }).slice();
             tools.splice(0, tools.length, ...reroutedTools);
+            requestTools.splice(0, requestTools.length, ...reroutedTools);
             onProviderRerouted?.();
             return operation();
           }
         },
-        searchScopeGate: {
-          onScopeSelected: (scope) => {
-            const scopedTools = filterSearchToolsForScope({
+      };
+      if (streaming) {
+        await runtime.executeStreamingToolLoop(executionOptions as any);
+      } else {
+        await runtime.executeNonStreamingToolLoop(executionOptions as any);
+      }
+
+      return {
+        receivedToolNames,
+        executedToolNames,
+        results: session.toolExecutionState?.results || [],
+      };
+    };
+
+    try {
+      for (const streaming of [false, true]) {
+        const nonHostedToHosted = await runTransition(false, streaming);
+        assert.deepEqual(nonHostedToHosted.receivedToolNames, [
+          ["web_search", "search_items"],
+          ["web_search", "search_scholarly_sources", "search_items"],
+          ["web_search", "search_scholarly_sources", "search_items"],
+        ]);
+        assert.deepEqual(nonHostedToHosted.executedToolNames, [
+          "search_scholarly_sources",
+        ]);
+        assert.include(
+          nonHostedToHosted.results.map((result) => result.status),
+          "completed",
+        );
+
+        const hostedToNonHosted = await runTransition(true, streaming);
+        assert.deepEqual(hostedToNonHosted.receivedToolNames, [
+          ["web_search", "search_scholarly_sources", "search_items"],
+          ["web_search", "search_items"],
+          ["web_search", "search_items"],
+        ]);
+        assert.deepEqual(hostedToNonHosted.executedToolNames, []);
+        assert.include(
+          hostedToNonHosted.results.map((result) => result.status),
+          "denied",
+        );
+      }
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
+  });
+
+  it("observes a provider catalog reroute that occurs during tool execution", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    const allTools: ToolDefinition[] = [
+      createToolDefinition("web_search"),
+      createToolDefinition("search_scholarly_sources"),
+      createToolDefinition("search_items"),
+    ];
+
+    const runMode = async (streaming: boolean) => {
+      let hosted = false;
+      let providerCalls = 0;
+      const receivedToolNames: string[][] = [];
+      const session = createSession();
+      const assistantMessage: ChatMessage = {
+        id: `assistant-nested-reroute-${streaming}`,
+        role: "assistant",
+        content: "",
+        timestamp: 2,
+      };
+      session.messages.push(assistantMessage);
+      const tools = filterSearchToolsForScope({
+        tools: allTools,
+        supportsHostedWebSearch: hosted,
+        scope: undefined,
+      }).slice();
+      const requestTools = tools.slice();
+      const localToolCall: ToolCall = {
+        id: `search-items-before-nested-reroute-${streaming}`,
+        type: "function",
+        function: {
+          name: "search_items",
+          arguments: JSON.stringify({ query: "local paper" }),
+        },
+      };
+      const provider = {
+        config: { id: "paperchat", type: "paperchat", defaultModel: "gpt" },
+        supportsHostedWebSearch: () => hosted,
+        chatCompletionWithTools: async (
+          _messages: ChatMessage[],
+          roundTools: ToolDefinition[],
+        ) => {
+          providerCalls += 1;
+          receivedToolNames.push(roundTools.map((tool) => tool.function.name));
+          return providerCalls === 1
+            ? { content: "", toolCalls: [localToolCall] }
+            : { content: "final answer after nested reroute" };
+        },
+        streamChatCompletionWithTools: async (
+          _messages: ChatMessage[],
+          roundTools: ToolDefinition[],
+          callbacks: any,
+        ) => {
+          providerCalls += 1;
+          receivedToolNames.push(roundTools.map((tool) => tool.function.name));
+          if (providerCalls === 1) {
+            callbacks.onToolCallStart({
+              index: 0,
+              id: localToolCall.id,
+              name: localToolCall.function.name,
+            });
+            callbacks.onToolCallDelta(0, localToolCall.function.arguments);
+            callbacks.onComplete({
+              content: "",
+              toolCalls: [localToolCall],
+              stopReason: "tool_calls",
+            });
+            return;
+          }
+          callbacks.onTextDelta("final answer after nested reroute");
+          callbacks.onComplete({
+            content: "final answer after nested reroute",
+            stopReason: "end_turn",
+          });
+        },
+      };
+      const runtime = new AgentRuntime(
+        {
+          updateMessageContent: async () => undefined,
+          updateSessionMeta: async () => undefined,
+          saveSession: async () => undefined,
+        } as any,
+        {
+          isSessionActive: () => false,
+          isSessionTracked: () => true,
+          formatToolCallCard: () => "",
+          generateId: () => `nested-reroute-${streaming}`,
+        } as any,
+        {
+          createExecutionBatches: (requests: any[]) => [requests],
+          executeBatch: async (requests: any[]) => {
+            hosted = true;
+            const reroutedTools = filterSearchToolsForScope({
               tools: allTools,
               supportsHostedWebSearch: hosted,
-              scope,
-            });
-            tools.splice(0, tools.length, ...scopedTools);
+              scope: undefined,
+            }).slice();
+            tools.splice(0, tools.length, ...reroutedTools);
+            requestTools.splice(0, requestTools.length, ...reroutedTools);
+            return requests.map((request) => ({
+              toolCall: request.toolCall,
+              status: "completed" as const,
+              content: "local paper result",
+            }));
           },
         },
-      });
+      ) as any;
+      runtime.getMaxIterations = () => 2;
+      const executionOptions = {
+        provider,
+        currentMessages: session.messages,
+        assistantMessage,
+        pdfWasAttached: false,
+        summaryTriggered: false,
+        tools,
+        requestTools,
+        sendingSession: session,
+      };
+
+      if (streaming) {
+        await runtime.executeStreamingToolLoop(executionOptions as any);
+      } else {
+        await runtime.executeNonStreamingToolLoop(executionOptions as any);
+      }
 
       return receivedToolNames;
     };
 
     try {
-      assert.deepEqual(await runTransition(false), [
-        ["search_items"],
-        ["web_search", "search_items"],
-      ]);
-      assert.deepEqual(await runTransition(true), [
-        ["web_search", "search_items"],
-        ["search_items"],
-      ]);
+      for (const streaming of [false, true]) {
+        assert.deepEqual(await runMode(streaming), [
+          ["web_search", "search_items"],
+          ["web_search", "search_scholarly_sources", "search_items"],
+        ]);
+      }
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
+    }
+  });
+
+  it("disables provider-hosted and local tools during final synthesis", async function () {
+    const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    const requestTools = [
+      createToolDefinition("web_search"),
+      createToolDefinition("search_items"),
+    ];
+
+    const runMode = async (streaming: boolean) => {
+      const session = createSession();
+      const assistantMessage: ChatMessage = {
+        id: `assistant-final-synthesis-${streaming}`,
+        role: "assistant",
+        content: "",
+        timestamp: 2,
+      };
+      session.messages.push(assistantMessage);
+      const receivedToolNames: string[][] = [];
+      const receivedToolChoices: string[] = [];
+      let providerCalls = 0;
+      let hostedWebSearchExecutions = 0;
+      let localToolExecutions = 0;
+      const localToolCall: ToolCall = {
+        id: `local-before-final-${streaming}`,
+        type: "function",
+        function: {
+          name: "search_items",
+          arguments: JSON.stringify({ query: "local paper" }),
+        },
+      };
+      const recordRequest = (
+        roundTools: ToolDefinition[],
+        options: { toolChoice?: string } | undefined,
+      ) => {
+        providerCalls += 1;
+        receivedToolNames.push(roundTools.map((tool) => tool.function.name));
+        receivedToolChoices.push(options?.toolChoice || "");
+      };
+      const provider = {
+        config: { id: "paperchat", type: "paperchat", defaultModel: "gpt" },
+        supportsHostedWebSearch: () => true,
+        chatCompletionWithTools: async (
+          _messages: ChatMessage[],
+          roundTools: ToolDefinition[],
+          _signal: AbortSignal | undefined,
+          options: { toolChoice?: string } | undefined,
+        ) => {
+          recordRequest(roundTools, options);
+          if (providerCalls === 1) {
+            return { content: "", toolCalls: [localToolCall] };
+          }
+          if (options?.toolChoice !== "none") {
+            hostedWebSearchExecutions += 1;
+            return {
+              content: "Answer produced after an unexpected hosted search.",
+              hostedWebSearches: [
+                {
+                  index: 0,
+                  id: `unexpected-hosted-${streaming}`,
+                  status: "completed" as const,
+                  queries: ["unexpected final search"],
+                  sources: [],
+                },
+              ],
+            };
+          }
+          return { content: "final answer without more tools" };
+        },
+        streamChatCompletionWithTools: async (
+          _messages: ChatMessage[],
+          roundTools: ToolDefinition[],
+          callbacks: any,
+          _signal: AbortSignal | undefined,
+          options: { toolChoice?: string } | undefined,
+        ) => {
+          recordRequest(roundTools, options);
+          if (providerCalls === 1) {
+            callbacks.onToolCallStart({
+              index: 0,
+              id: localToolCall.id,
+              name: localToolCall.function.name,
+            });
+            callbacks.onToolCallDelta(0, localToolCall.function.arguments);
+            callbacks.onComplete({
+              content: "",
+              toolCalls: [localToolCall],
+              stopReason: "tool_calls",
+            });
+            return;
+          }
+          if (options?.toolChoice !== "none") {
+            hostedWebSearchExecutions += 1;
+            callbacks.onHostedWebSearchStatus({
+              index: 0,
+              id: `unexpected-hosted-${streaming}`,
+              status: "completed",
+              queries: ["unexpected final search"],
+              sources: [],
+            });
+            callbacks.onComplete({
+              content: "Answer produced after an unexpected hosted search.",
+              stopReason: "end_turn",
+            });
+            return;
+          }
+          callbacks.onTextDelta("final answer without more tools");
+          callbacks.onComplete({
+            content: "final answer without more tools",
+            stopReason: "end_turn",
+          });
+        },
+      };
+      const runtime = new AgentRuntime(
+        {
+          updateMessageContent: async () => undefined,
+          updateSessionMeta: async () => undefined,
+          saveSession: async () => undefined,
+        } as any,
+        {
+          isSessionActive: () => false,
+          isSessionTracked: () => true,
+          formatToolCallCard: () => "",
+          generateId: () => `final-synthesis-${streaming}`,
+        } as any,
+        {
+          createExecutionBatches: (requests: any[]) => [requests],
+          executeBatch: async (requests: any[]) => {
+            localToolExecutions += requests.length;
+            return requests.map((request) => ({
+              toolCall: request.toolCall,
+              status: "completed" as const,
+              content: "local paper result",
+            }));
+          },
+        },
+      ) as any;
+      runtime.getMaxIterations = () => 2;
+      const executionOptions = {
+        provider,
+        currentMessages: session.messages,
+        assistantMessage,
+        pdfWasAttached: false,
+        summaryTriggered: false,
+        tools: requestTools.slice(),
+        requestTools: requestTools.slice(),
+        sendingSession: session,
+      };
+
+      if (streaming) {
+        await runtime.executeStreamingToolLoop(executionOptions as any);
+      } else {
+        await runtime.executeNonStreamingToolLoop(executionOptions as any);
+      }
+
+      return {
+        assistantMessage,
+        hostedWebSearchExecutions,
+        localToolExecutions,
+        receivedToolChoices,
+        receivedToolNames,
+      };
+    };
+
+    try {
+      for (const streaming of [false, true]) {
+        const result = await runMode(streaming);
+        assert.deepEqual(result.receivedToolChoices, ["auto", "none"]);
+        assert.deepEqual(result.receivedToolNames, [
+          ["web_search", "search_items"],
+          ["web_search", "search_items"],
+        ]);
+        assert.equal(result.localToolExecutions, 1);
+        assert.equal(result.hostedWebSearchExecutions, 0);
+        assert.equal(
+          result.assistantMessage.content,
+          "final answer without more tools",
+        );
+      }
     } finally {
       (globalThis as { ztoolkit?: unknown }).ztoolkit = originalZtoolkit;
     }
@@ -1103,6 +1488,7 @@ describe("agent runtime plan semantics", function () {
       },
     ];
     const tools = createPendingSearchScopeTools(allTools);
+    const requestTools = createStableSearchRequestTools(allTools);
     const receivedToolNames: string[][] = [];
     const restoredScopes: string[] = [];
     const runtime = new AgentRuntime(
@@ -1145,6 +1531,7 @@ describe("agent runtime plan semantics", function () {
         pdfWasAttached: false,
         summaryTriggered: false,
         tools,
+        requestTools,
         sendingSession: session,
         preserveToolExecutionState: true,
         searchScopeGate: {
@@ -1162,7 +1549,7 @@ describe("agent runtime plan semantics", function () {
 
       assert.deepEqual(restoredScopes, ["web_allowed"]);
       assert.deepEqual(receivedToolNames, [
-        ["web_search", "search_scholarly_sources"],
+        requestTools.map((tool) => tool.function.name),
       ]);
       assert.lengthOf(session.toolExecutionState.results, 2);
     } finally {
@@ -1196,10 +1583,14 @@ describe("agent runtime plan semantics", function () {
 
     assert.equal(entries[0].kind, "synthetic");
     assert.equal(entries[0].results[0].status, "denied");
-    assert.include(entries[0].results[0].content, "not available");
+    assert.include(
+      entries[0].results[0].content,
+      "not authorized for execution",
+    );
+    assert.notInclude(entries[0].results[0].content, "select_search_scope");
   });
 
-  it("blocks a hallucinated non-search tool that was not exposed in the round", function () {
+  it("blocks a hallucinated non-search tool outside the authorized execution subset", function () {
     const runtime = new AgentRuntime({} as any, {} as any, {
       createExecutionBatches: () => [],
       executeBatch: async () => [],
@@ -1225,7 +1616,10 @@ describe("agent runtime plan semantics", function () {
 
     assert.equal(entries[0].kind, "synthetic");
     assert.equal(entries[0].results[0].status, "denied");
-    assert.include(entries[0].results[0].content, "not available");
+    assert.include(
+      entries[0].results[0].content,
+      "not authorized for execution",
+    );
   });
 
   it("does not persist an unavailable tool call in the api-only transcript", async function () {
@@ -2791,7 +3185,10 @@ describe("agent runtime plan semantics", function () {
         "web_search",
         "search_scholarly_sources",
       ]);
-      assert.deepEqual(receivedToolNames[1], ["web_search"]);
+      assert.deepEqual(receivedToolNames[1], [
+        "web_search",
+        "search_scholarly_sources",
+      ]);
       assert.equal(localExecutions, 1);
       assert.include(assistantMessage.content, "final answer");
       assert.equal(
@@ -2871,8 +3268,9 @@ describe("agent runtime plan semantics", function () {
 
     assert.deepEqual(
       control.toolsForRound.map((tool: ToolDefinition) => tool.function.name),
-      ["search_items"],
+      ["web_search", "search_scholarly_sources", "search_items"],
     );
+    assert.deepEqual([...control.allowedToolNames], ["search_items"]);
   });
 
   it("does not replay a completed tool when later streaming retries are exhausted", async function () {

@@ -305,19 +305,17 @@ export function createUnavailableSearchToolResult(
         policy: "permission_decision",
         outcome: "blocked",
         summary:
-          "Blocked a search-related tool that was not available in the current search-scope state.",
+          "Blocked a search-related tool outside the currently authorized execution subset.",
       },
     ],
     content: formatToolError({
-      summary: `Tool ${toolCall.function.name} is not available in the current search scope.`,
+      summary: `Tool ${toolCall.function.name} is not authorized for execution in the current model round.`,
       category: "permission_denied",
       retryable: true,
       cause:
-        "The model requested a search-related tool that was not included in this model round.",
+        "The model requested a search-related tool that is not currently authorized to execute.",
       suggestedFix:
-        toolCall.function.name === SEARCH_SCOPE_TOOL_NAME
-          ? "Continue with the already selected search scope."
-          : `Call ${SEARCH_SCOPE_TOOL_NAME} first if it is available, then use only the search tools exposed in the following round.`,
+        "Use the evidence already gathered or continue with the search tools currently authorized for this turn.",
     }),
   };
 }

@@ -342,7 +342,7 @@ describe("presentation model launch session", function () {
     }
   });
 
-  it("aligns system guidance with the launcher instead of hidden presentation", function () {
+  it("aligns system guidance with the launcher and locked presentation execution", function () {
     const launcherPrompt = generatePaperContextPrompt(
       undefined,
       "PAPER-A",
@@ -370,7 +370,11 @@ describe("presentation model launch session", function () {
     assert.include(launcherPrompt, 'follow-up such as "重试下"');
     assert.include(
       launcherPrompt,
-      "Do not call it in the same model response as request_presentation",
+      "presentation schema may remain advertised to keep the provider request stable",
+    );
+    assert.include(
+      launcherPrompt,
+      "Do not call presentation in the same model response as request_presentation",
     );
     assert.notInclude(unavailablePrompt, "=== PRESENTATION TOOL ===");
     assert.notInclude(unavailablePrompt, "=== PRESENTATION LAUNCH FLOW ===");

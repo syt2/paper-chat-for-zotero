@@ -141,11 +141,8 @@ import type {
   SearchHistorySessionMatchesRequest,
 } from "./search/SearchTypes";
 import {
-  createPendingSearchScopeTools,
   filterSearchToolsForScope,
-  findCompletedSearchScope,
   getSearchToolPromptMode,
-  type SearchScopeGateConfig,
   type SearchToolPromptMode,
   type SelectedSearchScope,
 } from "./agent-runtime/SearchScopeGate";
@@ -930,11 +927,6 @@ export class ChatManager {
             canLaunchPresentationFromChat(hasCurrentItem ? item! : null),
         },
       );
-      const searchScopeGateEnabled =
-        provider?.supportsHostedWebSearch?.() === true;
-      if (searchScopeGateEnabled) {
-        toolDefinitions = createPendingSearchScopeTools(toolDefinitions);
-      }
       const paperStructure = hasCurrentItem
         ? await pdfToolManager.extractAndParsePaper(
             item.key,
@@ -957,10 +949,7 @@ export class ChatManager {
         paperStructure,
         hasCurrentItem,
         item: hasCurrentItem ? item : undefined,
-        searchToolMode: getSearchToolPromptMode(
-          toolDefinitions,
-          searchScopeGateEnabled,
-        ),
+        searchToolMode: getSearchToolPromptMode(toolDefinitions),
         presentationToolMode: getPresentationToolPromptMode(toolDefinitions),
       });
       runtimeContextPrompt = this.buildToolCallingRuntimeSystemPrompt({
@@ -2675,27 +2664,16 @@ export class ChatManager {
       this.ensureTrackedRun(sendingSession, sessionRunId);
     };
 
-    let searchScopeGateEnabled = false;
-    let selectedSearchScope = preserveToolExecutionState
-      ? findCompletedSearchScope(
-          sendingSession.toolExecutionState?.results || [],
-        )
-      : undefined;
     const allowedToolNameSet = allowedToolNames
       ? new Set(allowedToolNames)
       : null;
     const buildToolsForCurrentSearchScope = (
       provider: AIProvider | null | undefined,
     ): ToolDefinition[] => {
-      // An explicit allowlist is an exact request boundary. Do not inject the
-      // search-scope gate or any other tool that the caller did not authorize.
-      searchScopeGateEnabled =
-        allowedToolNameSet === null &&
-        provider?.supportsHostedWebSearch?.() === true;
       const scopedTools = this.getToolDefinitionsForProvider(
         provider,
         hasCurrentItem,
-        selectedSearchScope,
+        undefined,
         {
           includePresentation:
             !!presentationAuthorization ||
@@ -2712,13 +2690,40 @@ export class ChatManager {
             allowedToolNameSet.has(tool.function.name),
           )
         : scopedTools;
-      return searchScopeGateEnabled && !selectedSearchScope
-        ? createPendingSearchScopeTools(allowedTools)
-        : allowedTools;
+      return allowedTools;
     };
     const tools = buildToolsForCurrentSearchScope(_provider);
+    const buildRequestToolsForTurn = (
+      provider: AIProvider | null | undefined,
+    ): ToolDefinition[] => {
+      const includePresentationLauncher =
+        !!presentationLaunchSession &&
+        provider?.config.id === "paperchat" &&
+        provider.config.type === "paperchat";
+      const presentationOptions = {
+        // A guarded launch can make the private tool executable later in the
+        // same turn. Advertise both schemas up front, then enforce the active
+        // subset in AgentRuntime without changing the provider request shape.
+        includePresentation:
+          !!presentationAuthorization || !!presentationLaunchSession,
+        includePresentationLauncher,
+      };
+      const baseTools = this.getToolDefinitionsForProvider(
+        provider,
+        hasCurrentItem,
+        undefined,
+        presentationOptions,
+      );
+      const requestTools = allowedToolNameSet
+        ? baseTools.filter((tool) => allowedToolNameSet.has(tool.function.name))
+        : baseTools.slice();
+      return requestTools.sort((left, right) =>
+        left.function.name.localeCompare(right.function.name),
+      );
+    };
+    const requestTools = buildRequestToolsForTurn(_provider);
     const getStableSearchToolMode = (): SearchToolPromptMode =>
-      searchScopeGateEnabled ? "gated" : getSearchToolPromptMode(tools);
+      getSearchToolPromptMode(tools);
     const includeFullChatContext = !noteSummaryContext;
     const hasPromptPaperContext = hasCurrentItem && includeFullChatContext;
 
@@ -2762,11 +2767,7 @@ export class ChatManager {
       const prompt = this.buildToolCallingRuntimeSystemPrompt({
         memoryContext,
         selectedSkills,
-        searchScope: selectedSearchScope,
-        searchToolMode: getSearchToolPromptMode(
-          tools,
-          searchScopeGateEnabled && !selectedSearchScope,
-        ),
+        searchToolMode: getSearchToolPromptMode(tools),
         sendingSession,
         runtimeState,
       });
@@ -2872,7 +2873,9 @@ export class ChatManager {
         refreshStablePrompt: boolean = true,
       ) => {
         const nextTools = buildToolsForCurrentSearchScope(currentProvider);
+        const nextRequestTools = buildRequestToolsForTurn(currentProvider);
         tools.splice(0, tools.length, ...nextTools);
+        requestTools.splice(0, requestTools.length, ...nextRequestTools);
         if (refreshStablePrompt) {
           paperContextPrompt = this.buildToolCallingStableSystemPrompt({
             paperStructure,
@@ -2888,13 +2891,13 @@ export class ChatManager {
           currentProvider,
           failedPaperChatModelId || sendingSession.resolvedModelId,
         );
-        const useStableDeepSeekCatalog = isDeepSeek && !searchScopeGateEnabled;
+        const useStableDeepSeekCatalog = isDeepSeek;
         const paperContextMessage = attemptMessagesWithContext.find(
           (message) => message.id === "paper-context",
         );
         if (paperContextMessage) {
           paperContextMessage.content = useStableDeepSeekCatalog
-            ? `${paperContextPrompt}\n\n${buildStableToolCatalogForPromptCache(tools)}`
+            ? `${paperContextPrompt}\n\n${buildStableToolCatalogForPromptCache(requestTools)}`
             : paperContextPrompt;
         }
         for (
@@ -2955,13 +2958,6 @@ export class ChatManager {
         }
       };
       syncModelSpecificRequestContext();
-      const searchScopeGate: SearchScopeGateConfig = {
-        onScopeSelected: (scope) => {
-          selectedSearchScope = scope;
-          refreshSearchToolsForCurrentModel();
-          syncModelSpecificRequestContext();
-        },
-      };
       const runtimePromptBuilder = (
         currentMessages: ChatMessage[],
         session: ChatSession,
@@ -2976,9 +2972,7 @@ export class ChatManager {
         return isDeepSeekToolPromptCacheTarget(
           currentProvider,
           failedPaperChatModelId || sendingSession.resolvedModelId,
-        ) &&
-          !searchScopeGateEnabled &&
-          !noteSummaryContext
+        ) && !noteSummaryContext
           ? null
           : buildRuntimeSystemPrompt(currentMessages, session, runtimeState);
       };
@@ -3060,6 +3054,7 @@ export class ChatManager {
           pdfWasAttached,
           summaryTriggered,
           tools,
+          requestTools,
           paperStructure,
           item?.libraryID ?? this.currentItemLibraryID ?? undefined,
           sendingSession,
@@ -3069,7 +3064,6 @@ export class ChatManager {
           preserveToolExecutionState,
           lockedToolItemKey,
           noteSummaryContext,
-          searchScopeGate,
           abortSignal,
           presentationAuthorization,
           presentationLaunchSession,
@@ -3085,6 +3079,7 @@ export class ChatManager {
           pdfWasAttached,
           summaryTriggered,
           tools,
+          requestTools,
           paperStructure,
           item?.libraryID ?? this.currentItemLibraryID ?? undefined,
           sendingSession,
@@ -3094,7 +3089,6 @@ export class ChatManager {
           preserveToolExecutionState,
           lockedToolItemKey,
           noteSummaryContext,
-          searchScopeGate,
           abortSignal,
           presentationAuthorization,
           presentationLaunchSession,
@@ -3337,6 +3331,7 @@ export class ChatManager {
     pdfWasAttached: boolean,
     summaryTriggered: boolean,
     tools: ToolDefinition[],
+    requestTools: ToolDefinition[],
     paperStructure: Awaited<
       ReturnType<typeof getPdfToolManager.prototype.extractAndParsePaper>
     >,
@@ -3362,7 +3357,6 @@ export class ChatManager {
     preserveToolExecutionState: boolean,
     lockedToolItemKey?: string,
     noteSummaryContext?: NoteSummaryContext,
-    searchScopeGate?: SearchScopeGateConfig,
     abortSignal?: AbortSignal,
     presentationAuthorization?: PresentationLaunchAuthorization,
     presentationLaunchSession?: PresentationToolLaunchSession,
@@ -3374,6 +3368,7 @@ export class ChatManager {
       pdfWasAttached,
       summaryTriggered,
       tools,
+      requestTools,
       paperStructure,
       sendingSession,
       currentItemKey: sendingSession.lastActiveItemKey,
@@ -3384,7 +3379,6 @@ export class ChatManager {
       preserveToolExecutionState,
       lockedToolItemKey,
       noteSummaryContext,
-      searchScopeGate,
       refreshSystemPrompt: buildSystemPrompt,
       presentationAuthorization,
       presentationLaunchSession,
@@ -3404,6 +3398,7 @@ export class ChatManager {
     pdfWasAttached: boolean,
     summaryTriggered: boolean,
     tools: ToolDefinition[],
+    requestTools: ToolDefinition[],
     paperStructure: Awaited<
       ReturnType<typeof getPdfToolManager.prototype.extractAndParsePaper>
     >,
@@ -3429,7 +3424,6 @@ export class ChatManager {
     preserveToolExecutionState: boolean,
     lockedToolItemKey?: string,
     noteSummaryContext?: NoteSummaryContext,
-    searchScopeGate?: SearchScopeGateConfig,
     abortSignal?: AbortSignal,
     presentationAuthorization?: PresentationLaunchAuthorization,
     presentationLaunchSession?: PresentationToolLaunchSession,
@@ -3441,6 +3435,7 @@ export class ChatManager {
       pdfWasAttached,
       summaryTriggered,
       tools,
+      requestTools,
       paperStructure,
       sendingSession,
       currentItemKey: sendingSession.lastActiveItemKey,
@@ -3451,7 +3446,6 @@ export class ChatManager {
       preserveToolExecutionState,
       lockedToolItemKey,
       noteSummaryContext,
-      searchScopeGate,
       refreshSystemPrompt: buildSystemPrompt,
       presentationAuthorization,
       presentationLaunchSession,

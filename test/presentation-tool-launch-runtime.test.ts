@@ -1,5 +1,6 @@
 import { assert } from "chai";
 import { AgentRuntime } from "../src/modules/chat/agent-runtime/AgentRuntime.ts";
+import { createPresentationToolDefinition } from "../src/modules/presentation/PresentationCapability.ts";
 import { PresentationLaunchCoordinator } from "../src/modules/presentation/PresentationLaunchCoordinator.ts";
 import { DEFAULT_PRESENTATION_LAUNCH_SETTINGS } from "../src/modules/presentation/PresentationLaunchSettings.ts";
 import {
@@ -11,7 +12,10 @@ import type { ToolCall, ToolDefinition } from "../src/types/tool.ts";
 
 type RuntimeMode = "non-streaming" | "streaming";
 
-async function runPresentationHandoff(mode: RuntimeMode): Promise<void> {
+async function runPresentationHandoff(
+  mode: RuntimeMode,
+  includeStableRequestTools = true,
+): Promise<void> {
   const originalZtoolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
   (globalThis as { ztoolkit?: unknown }).ztoolkit = {
     log: () => undefined,
@@ -52,6 +56,12 @@ async function runPresentationHandoff(mode: RuntimeMode): Promise<void> {
   });
   const toolsSeenByRound: string[][] = [];
   const executedCalls: ToolCall[] = [];
+  const requestTools = [
+    createPresentationLaunchToolDefinition(),
+    createPresentationToolDefinition(),
+  ].sort((left, right) =>
+    left.function.name.localeCompare(right.function.name),
+  );
   let providerRound = 0;
 
   const runtime = new AgentRuntime(
@@ -193,6 +203,7 @@ async function runPresentationHandoff(mode: RuntimeMode): Promise<void> {
       pdfWasAttached: true,
       summaryTriggered: false,
       tools: [createPresentationLaunchToolDefinition()],
+      ...(includeStableRequestTools ? { requestTools } : {}),
       sendingSession: session,
       currentItemKey: "PAPER-A",
       currentItemLibraryID: 1,
@@ -205,8 +216,16 @@ async function runPresentationHandoff(mode: RuntimeMode): Promise<void> {
       await runtime.executeNonStreamingToolLoop(options as any);
     }
 
-    assert.deepEqual(toolsSeenByRound[0], ["request_presentation"]);
-    assert.deepEqual(toolsSeenByRound[1], ["presentation"]);
+    assert.deepEqual(
+      toolsSeenByRound,
+      includeStableRequestTools
+        ? [
+            ["presentation", "request_presentation"],
+            ["presentation", "request_presentation"],
+            ["presentation", "request_presentation"],
+          ]
+        : [["request_presentation"], ["presentation"], ["presentation"]],
+    );
     assert.deepEqual(
       executedCalls.map((call) => call.function.name),
       ["request_presentation", "presentation"],
@@ -261,6 +280,12 @@ async function runBlockedPresentationHandoff(
   });
   const toolsSeenByRound: string[][] = [];
   const executedToolNames: string[] = [];
+  const requestTools = [
+    createPresentationLaunchToolDefinition(),
+    createPresentationToolDefinition(),
+  ].sort((left, right) =>
+    left.function.name.localeCompare(right.function.name),
+  );
   let providerRound = 0;
 
   const runtime = new AgentRuntime(
@@ -361,6 +386,7 @@ async function runBlockedPresentationHandoff(
       pdfWasAttached: true,
       summaryTriggered: false,
       tools: [createPresentationLaunchToolDefinition()],
+      requestTools,
       sendingSession: chatSession,
       currentItemKey: "PAPER-A",
       currentItemLibraryID: 1,
@@ -375,8 +401,10 @@ async function runBlockedPresentationHandoff(
 
     assert.equal(providerRound, 2);
     assert.deepEqual(executedToolNames, ["request_presentation"]);
-    assert.deepEqual(toolsSeenByRound, [["request_presentation"], []]);
-    assert.notInclude(toolsSeenByRound.flat(), "presentation");
+    assert.deepEqual(toolsSeenByRound, [
+      ["presentation", "request_presentation"],
+      ["presentation", "request_presentation"],
+    ]);
     assert.include(assistantMessage.content, "未开始生成 PPT");
 
     const replacement = createPresentationToolLaunchSession({
@@ -406,8 +434,12 @@ describe("presentation launcher runtime handoff", function () {
       await runPresentationHandoff(mode);
     });
 
+    it(`keeps the optional request catalog in sync during ${mode} presentation handoff`, async function () {
+      await runPresentationHandoff(mode, false);
+    });
+
     for (const guardOutcome of ["cancelled", "throws"] as const) {
-      it(`keeps presentation private after ${guardOutcome} guard in ${mode} mode`, async function () {
+      it(`keeps presentation execution blocked after ${guardOutcome} guard in ${mode} mode`, async function () {
         await runBlockedPresentationHandoff(mode, guardOutcome);
       });
     }

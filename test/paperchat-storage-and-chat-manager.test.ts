@@ -6460,7 +6460,7 @@ describe("paperchat storage and chat manager", function () {
     }
   });
 
-  it("rebuilds the search-scope gate when a hard reroute changes hosted-search capability", async function () {
+  it("rebuilds the provider-specific tool catalog when a hard reroute changes hosted-search capability", async function () {
     const providerManager = getProviderManager() as any;
     const originalExecuteWithRetry = providerManager.executeWithRetry;
     const allTools: ToolDefinition[] = [
@@ -6493,13 +6493,14 @@ describe("paperchat storage and chat manager", function () {
     const runTransition = async (
       initialHosted: boolean,
       reroutedHosted: boolean,
-      restoredScope?: "web_allowed" | "scholarly_then_web",
+      allowedToolNames?: readonly string[],
     ) => {
       let hosted = initialHosted;
       let requestCount = 0;
-      const requestTools: string[][] = [];
+      const activeToolsAtRequests: string[][] = [];
+      const stableRequestToolCatalogs: string[][] = [];
       const promptModes: string[] = [];
-      let postSelectionTools: string[] | undefined;
+      const searchScopeGatePresence: boolean[] = [];
       let rerouteCallbacks = 0;
       const provider = {
         config: {
@@ -6514,10 +6515,9 @@ describe("paperchat storage and chat manager", function () {
         },
         chatCompletionWithTools: async (
           _messages: ChatMessage[],
-          tools: ToolDefinition[],
+          _tools: ToolDefinition[],
         ) => {
           requestCount += 1;
-          requestTools.push(tools.map((tool) => tool.function.name));
           if (requestCount === 1) {
             throw new Error("hard model failure");
           }
@@ -6532,33 +6532,6 @@ describe("paperchat storage and chat manager", function () {
         resolvedModelId: "initial-model",
         messages: [],
       };
-      if (restoredScope) {
-        session.toolExecutionState = {
-          turnStartedAt: 1,
-          updatedAt: 1,
-          results: [
-            {
-              toolCall: {
-                id: "restored-search-scope",
-                type: "function",
-                function: {
-                  name: "select_search_scope",
-                  arguments: JSON.stringify({
-                    scope: restoredScope,
-                    reason: "restored after a failed request",
-                  }),
-                },
-              },
-              args: {
-                scope: restoredScope,
-                reason: "restored after a failed request",
-              },
-              status: "completed",
-              content: "scope restored",
-            },
-          ],
-        };
-      }
       const manager = Object.create(ChatManager.prototype) as any;
       manager.memoryManager = {
         buildPromptContext: async () => "",
@@ -6597,26 +6570,26 @@ describe("paperchat storage and chat manager", function () {
       };
       manager.agentRuntime = {
         executeNonStreamingToolLoop: async (options: any) => {
+          searchScopeGatePresence.push(!!options.searchScopeGate);
           await options.executeProviderRequest(
-            () => options.provider.chatCompletionWithTools([], options.tools),
+            () => {
+              activeToolsAtRequests.push(
+                options.tools.map((tool: ToolDefinition) => tool.function.name),
+              );
+              stableRequestToolCatalogs.push(
+                options.requestTools.map(
+                  (tool: ToolDefinition) => tool.function.name,
+                ),
+              );
+              return options.provider.chatCompletionWithTools(
+                [],
+                options.requestTools,
+              );
+            },
             () => {
               rerouteCallbacks += 1;
             },
           );
-          if (reroutedHosted && !restoredScope) {
-            options.searchScopeGate.onScopeSelected("scholarly_only");
-            postSelectionTools = options.tools.map(
-              (tool: ToolDefinition) => tool.function.name,
-            );
-          } else if (
-            !reroutedHosted &&
-            restoredScope === "scholarly_then_web"
-          ) {
-            options.searchScopeGate.onScopeSelected("web_allowed");
-            postSelectionTools = options.tools.map(
-              (tool: ToolDefinition) => tool.function.name,
-            );
-          }
         },
       };
       manager.sessionStorage = {
@@ -6634,15 +6607,35 @@ describe("paperchat storage and chat manager", function () {
         session,
         1,
         () => undefined,
-        !!restoredScope,
+        false,
+        undefined,
+        allowedToolNames,
       );
 
       return {
-        requestTools,
+        activeToolsAtRequests,
+        stableRequestToolCatalogs,
         promptModes,
-        postSelectionTools,
+        searchScopeGatePresence,
         rerouteCallbacks,
       };
+    };
+    const sortToolNames = (names: string[]) =>
+      [...names].sort((left, right) => left.localeCompare(right));
+    const assertActiveToolsAreAdvertised = (result: {
+      activeToolsAtRequests: string[][];
+      stableRequestToolCatalogs: string[][];
+    }) => {
+      assert.lengthOf(
+        result.stableRequestToolCatalogs,
+        result.activeToolsAtRequests.length,
+      );
+      result.activeToolsAtRequests.forEach((activeTools, index) => {
+        assert.includeMembers(
+          result.stableRequestToolCatalogs[index],
+          activeTools,
+        );
+      });
     };
 
     providerManager.executeWithRetry = async (
@@ -6652,56 +6645,52 @@ describe("paperchat storage and chat manager", function () {
 
     try {
       const nonHostedToHosted = await runTransition(false, true);
-      assert.deepEqual(nonHostedToHosted.requestTools, [
+      assert.deepEqual(nonHostedToHosted.activeToolsAtRequests, [
         ["web_search", "search_items"],
-        ["search_items", "select_search_scope"],
+        ["web_search", "search_scholarly_sources", "search_items"],
       ]);
-      assert.deepEqual(nonHostedToHosted.promptModes, [
-        "unified",
-        "gated",
-        "gated",
+      assert.deepEqual(nonHostedToHosted.stableRequestToolCatalogs, [
+        sortToolNames(["web_search", "search_items"]),
+        sortToolNames([
+          "web_search",
+          "search_scholarly_sources",
+          "search_items",
+        ]),
       ]);
-      assert.deepEqual(nonHostedToHosted.postSelectionTools, [
-        "search_scholarly_sources",
-        "search_items",
-      ]);
+      assertActiveToolsAreAdvertised(nonHostedToHosted);
+      assert.deepEqual(nonHostedToHosted.promptModes, ["unified", "split"]);
+      assert.deepEqual(nonHostedToHosted.searchScopeGatePresence, [false]);
       assert.equal(nonHostedToHosted.rerouteCallbacks, 1);
 
       const hostedToNonHosted = await runTransition(true, false);
-      assert.deepEqual(hostedToNonHosted.requestTools, [
-        ["search_items", "select_search_scope"],
+      assert.deepEqual(hostedToNonHosted.activeToolsAtRequests, [
+        ["web_search", "search_scholarly_sources", "search_items"],
         ["web_search", "search_items"],
       ]);
-      assert.deepEqual(hostedToNonHosted.promptModes, ["gated", "unified"]);
+      assert.deepEqual(hostedToNonHosted.stableRequestToolCatalogs, [
+        sortToolNames([
+          "web_search",
+          "search_scholarly_sources",
+          "search_items",
+        ]),
+        sortToolNames(["web_search", "search_items"]),
+      ]);
+      assertActiveToolsAreAdvertised(hostedToNonHosted);
+      assert.deepEqual(hostedToNonHosted.promptModes, ["split", "unified"]);
+      assert.deepEqual(hostedToNonHosted.searchScopeGatePresence, [false]);
       assert.equal(hostedToNonHosted.rerouteCallbacks, 1);
 
-      const restoredHosted = await runTransition(true, true, "web_allowed");
-      assert.deepEqual(restoredHosted.promptModes, ["gated", "gated"]);
-      assert.deepEqual(restoredHosted.requestTools, [
-        ["web_search", "search_scholarly_sources", "search_items"],
-        ["web_search", "search_scholarly_sources", "search_items"],
+      const restricted = await runTransition(true, false, ["search_items"]);
+      assert.deepEqual(restricted.activeToolsAtRequests, [
+        ["search_items"],
+        ["search_items"],
       ]);
-      assert.equal(restoredHosted.rerouteCallbacks, 1);
-
-      const restoredFallbackToLocal = await runTransition(
-        true,
-        false,
-        "scholarly_then_web",
-      );
-      assert.deepEqual(restoredFallbackToLocal.requestTools, [
-        ["search_scholarly_sources", "search_items"],
-        ["search_scholarly_sources", "search_items"],
+      assert.deepEqual(restricted.stableRequestToolCatalogs, [
+        ["search_items"],
+        ["search_items"],
       ]);
-      assert.deepEqual(restoredFallbackToLocal.promptModes, [
-        "gated",
-        "scholarly_only",
-        "unified",
-      ]);
-      assert.deepEqual(restoredFallbackToLocal.postSelectionTools, [
-        "web_search",
-        "search_items",
-      ]);
-      assert.equal(restoredFallbackToLocal.rerouteCallbacks, 1);
+      assertActiveToolsAreAdvertised(restricted);
+      assert.deepEqual(restricted.searchScopeGatePresence, [false]);
     } finally {
       providerManager.executeWithRetry = originalExecuteWithRetry;
     }
