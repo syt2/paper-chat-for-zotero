@@ -142,6 +142,33 @@ describe("chat panel presentation toolbar entry", function () {
     assert.notInclude(primary?.children || [], presentation);
   });
 
+  it("places the PDF screenshot action beside the existing upload action", function () {
+    const doc = new FakeDocument();
+    const container = createChatContainer(
+      doc as unknown as Document,
+      lightTheme,
+    ) as unknown as FakeElement;
+    const primary = container.querySelector("#chat-toolbar-primary-actions");
+    const upload = container.querySelector("#chat-upload-file");
+    const screenshot = container.querySelector("#chat-figure-screenshot-btn");
+
+    assert.isNotNull(upload);
+    assert.isNotNull(screenshot);
+    assert.strictEqual(screenshot?.parentElement, primary);
+    assert.equal(
+      primary?.children.indexOf(screenshot as FakeElement),
+      (primary?.children.indexOf(upload as FakeElement) ?? -1) + 1,
+    );
+    assert.equal(
+      screenshot?.getAttribute("title"),
+      "paperchat-chat-reader-figure-screenshot",
+    );
+    assert.equal(
+      screenshot?.children[0]?.getAttribute("src"),
+      "chrome://paperchat/content/icons/figure-screenshot.svg",
+    );
+  });
+
   it("updates the PPT button with the rest of the toolbar in dark mode", function () {
     const doc = new FakeDocument();
     const container = createChatContainer(
@@ -149,6 +176,7 @@ describe("chat panel presentation toolbar entry", function () {
       lightTheme,
     ) as unknown as FakeElement;
     const presentation = container.querySelector("#chat-generate-presentation");
+    const screenshot = container.querySelector("#chat-figure-screenshot-btn");
 
     updateCurrentTheme();
     applyThemeToContainer(container as unknown as HTMLElement);
@@ -156,6 +184,9 @@ describe("chat panel presentation toolbar entry", function () {
     assert.equal(presentation?.style.background, darkTheme.buttonBg);
     assert.equal(presentation?.style.borderColor, darkTheme.inputBorderColor);
     assert.equal(presentation?.style.color, darkTheme.textPrimary);
+    assert.equal(screenshot?.style.background, darkTheme.buttonBg);
+    assert.equal(screenshot?.style.borderColor, darkTheme.inputBorderColor);
+    assert.equal(screenshot?.style.color, darkTheme.textPrimary);
   });
 
   it("uses the supplied presentation-screen geometry with the shared icon theme", function () {

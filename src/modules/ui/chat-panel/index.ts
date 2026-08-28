@@ -6,6 +6,7 @@
 export {
   showPanel,
   showPanelWithSelectedText,
+  showPanelWithImageAttachment,
   showPanelForItem,
   hidePanel,
   togglePanel,
@@ -16,6 +17,7 @@ export {
   getChatManager,
   stopChatSearchBackfillForShutdown,
   addSelectedTextAttachment,
+  addImageAttachment,
   openPresentationForItem,
   focusRunningPresentationTask,
 } from "./ChatPanelManager";

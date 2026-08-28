@@ -17,6 +17,7 @@
 import { getString } from "../../utils/locale";
 import { showPanelWithSelectedText } from "./chat-panel";
 import type { ChatPanelOpenSource } from "./chat-panel/ChatPanelManager";
+import { cancelReaderFigureScreenshot } from "./ReaderFigureScreenshot";
 import {
   collectAnnotationText,
   FLOATING_SELECTION_ENTRY_SIZE,
@@ -398,12 +399,13 @@ function refreshFloatingSelectionEntry(doc: Document): void {
   showFloatingSelectionEntry(doc, selection);
 }
 
-function watchActivePdfSelection(): void {
+export function watchActivePdfSelection(): void {
   const doc = getActivePdfSelectionDocument();
   if (doc === watchedPdfDocument) {
     return;
   }
 
+  cancelReaderFigureScreenshot();
   cancelScheduledSelectionRefresh();
   if (watchedPdfDocument) {
     watchedPdfDocument.removeEventListener(
@@ -524,6 +526,7 @@ export function registerReaderChatEntries(): void {
 }
 
 export function unregisterReaderChatEntries(): void {
+  cancelReaderFigureScreenshot();
   removeFloatingSelectionEntry();
   cancelScheduledSelectionRefresh();
   if (readerWatchTimer) {

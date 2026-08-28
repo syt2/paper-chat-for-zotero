@@ -38,7 +38,14 @@ import {
   normalizeReasoningEffortPreference,
   type ReasoningEffortPreference,
 } from "../../providers/reasoning-request";
-import { getChatManager, type PanelMode } from "./ChatPanelManager";
+import {
+  canAddImageAttachmentToDraft,
+  getChatManager,
+  isImageAttachmentDraftWithinLimits,
+  showPanelWithImageAttachment,
+  type PanelMode,
+} from "./ChatPanelManager";
+import { startReaderFigureScreenshot } from "../ReaderFigureScreenshot";
 import {
   MentionSelector,
   type MentionResource,
@@ -706,6 +713,9 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
   const uploadFileBtn = container.querySelector(
     "#chat-upload-file",
   ) as HTMLButtonElement;
+  const figureScreenshotBtn = container.querySelector(
+    "#chat-figure-screenshot-btn",
+  ) as HTMLButtonElement | null;
   const presentationBtn = container.querySelector(
     "#chat-generate-presentation",
   ) as HTMLButtonElement | null;
@@ -787,6 +797,18 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
         draft.pendingQuotedMessages.length
       ) {
         context.appendError(getString("chat-queue-draft-conflict"));
+        return;
+      }
+      const queuedTurn = sessionTurnQueue
+        .snapshot(session.id)
+        .queued.find((turn) => turn.id === turnId);
+      if (
+        queuedTurn &&
+        !isImageAttachmentDraftWithinLimits(
+          queuedTurn.draft.attachmentState.pendingImages,
+        )
+      ) {
+        context.appendError(getString("chat-image-attachment-limit"));
         return;
       }
       const turn = sessionTurnQueue.remove(session.id, turnId);
@@ -1314,7 +1336,6 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
       const imageExts = ["png", "jpg", "jpeg", "gif", "webp", "bmp"];
 
       const extractor = chatManager.getPdfExtractor();
-      const attachmentState = context.getAttachmentState();
 
       if (imageExts.includes(ext)) {
         // Handle as image
@@ -1329,12 +1350,23 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
             "data length:",
             result.data.length,
           );
-          attachmentState.pendingImages.push({
+          const image: ImageAttachment = {
             type: "base64",
             data: result.data,
             mimeType: result.mimeType,
             name: fileName,
-          });
+          };
+          const attachmentState = context.getAttachmentState();
+          if (
+            !canAddImageAttachmentToDraft(attachmentState.pendingImages, image)
+          ) {
+            context.appendError(getString("chat-image-attachment-limit"));
+            return;
+          }
+          attachmentState.pendingImages = [
+            ...attachmentState.pendingImages,
+            image,
+          ];
           context.setAttachmentState(attachmentState);
           context.updateAttachmentsPreview();
         } else {
@@ -1344,6 +1376,7 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
         // Handle as text file
         const fileContent = await extractor.readTextFile(filePath);
         if (fileContent) {
+          const attachmentState = context.getAttachmentState();
           const fileName = filePath.split(/[/\\]/).pop() || "file.txt";
           ztoolkit.log(
             "[User Upload] Text file uploaded:",
@@ -1362,6 +1395,19 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
           ztoolkit.log("[User Upload] Failed to read text file:", filePath);
         }
       }
+    }
+  });
+
+  figureScreenshotBtn?.addEventListener("click", () => {
+    const started = startReaderFigureScreenshot((image) => {
+      if (!showPanelWithImageAttachment(image, "reader_selection")) {
+        context.appendError(
+          getString("chat-reader-figure-screenshot-attach-failed"),
+        );
+      }
+    });
+    if (!started) {
+      context.appendError(getString("chat-reader-figure-screenshot-no-pdf"));
     }
   });
 
@@ -2126,6 +2172,13 @@ async function sendMessage(
   try {
     const content = messageInput?.value?.trim();
     if (!content) return;
+    const initialAttachmentState = context.getAttachmentState();
+    if (
+      !isImageAttachmentDraftWithinLimits(initialAttachmentState.pendingImages)
+    ) {
+      context.appendError(getString("chat-image-attachment-limit"));
+      return;
+    }
 
     // Get active reader item first (used for PDF attachment)
     const activeReaderItem = getActiveReaderItem();
@@ -2201,11 +2254,18 @@ async function sendMessage(
     }
 
     const attachmentState = context.getAttachmentState();
+    if (!isImageAttachmentDraftWithinLimits(attachmentState.pendingImages)) {
+      context.appendError(getString("chat-image-attachment-limit"));
+      return;
+    }
     const shouldAttachPdf = activeReaderItem !== null;
+    const pendingImageAttachments = attachmentState.pendingImages.map(
+      (image) => ({ ...image }),
+    );
     const attachmentOptions = {
       images:
-        attachmentState.pendingImages.length > 0
-          ? attachmentState.pendingImages
+        pendingImageAttachments.length > 0
+          ? pendingImageAttachments
           : undefined,
       files:
         attachmentState.pendingFiles.length > 0
@@ -2245,6 +2305,9 @@ async function sendMessage(
       manager: chatManager,
       resolveSession,
       send: async (targetSession) => {
+        if (!isImageAttachmentDraftWithinLimits(pendingImageAttachments)) {
+          throw new Error(getString("chat-image-attachment-limit"));
+        }
         const accepted = await chatManager.sendMessage(content, {
           item: targetItem,
           attachPdf: shouldAttachPdf,

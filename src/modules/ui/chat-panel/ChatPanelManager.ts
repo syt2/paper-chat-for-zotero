@@ -120,6 +120,7 @@ import {
   NextQuestionHintController,
   requestNextQuestionHintAfterRecentRender,
 } from "./NextQuestionHintController";
+import { cancelReaderFigureScreenshot } from "../ReaderFigureScreenshot";
 
 // Panel display mode: 'sidebar' or 'floating'
 export type PanelMode = "sidebar" | "floating";
@@ -139,6 +140,9 @@ const APPROVAL_ENTER_ANIMATION_MS = 220;
 const STREAMING_TEXT_RENDER_INTERVAL_MS = 80;
 const STREAMING_MARKDOWN_RENDER_INTERVAL_MS = 1200;
 const STREAMING_TEXT_TAIL_ATTR = "data-streaming-text-tail";
+const MAX_PENDING_IMAGE_ATTACHMENTS = 6;
+const MAX_PENDING_IMAGE_BYTES = 1024 * 1024;
+const MAX_PENDING_IMAGE_DRAFT_BYTES = 4 * 1024 * 1024;
 
 type PendingApprovalRequest = ToolApprovalState["pendingRequests"][number];
 
@@ -1392,6 +1396,10 @@ function openFloatingWindow(): boolean {
     // Handle window close - only after content is loaded
     floatingWindow?.addEventListener("unload", () => {
       ztoolkit.log("Floating window unload event");
+      // A screenshot selection lives in the PDF reader realm, so closing the
+      // floating panel must invalidate it before any late capture callback can
+      // reopen the panel or attach an image to a disposed container.
+      cancelReaderFigureScreenshot();
       if (!suppressFloatingUnloadTracking) {
         trackChatPanelClosed();
       }
@@ -1928,6 +1936,8 @@ async function initializeFloatingChatContent(): Promise<void> {
  * Close floating window
  */
 function closeFloatingWindow(): void {
+  cancelReaderFigureScreenshot();
+
   // Unregister tab notifier
   if (floatingTabNotifierID) {
     Zotero.Notifier.unregisterObserver(floatingTabNotifierID);
@@ -2094,6 +2104,8 @@ function showSidebarPanel(): boolean {
  * Hide sidebar panel
  */
 function hideSidebarPanel(): void {
+  cancelReaderFigureScreenshot();
+
   if (chatContainer) {
     // The sidebar DOM and its event listeners are reused when shown again.
     cleanupPanelIntegrations(chatContainer, false);
@@ -2352,6 +2364,44 @@ export function showPanelWithSelectedText(
   // async initialization chain. initializeChatContentCommon() will sync the
   // same source-of-truth state again when initialization finishes.
   syncPendingAttachmentsPreviews();
+}
+
+/**
+ * Open PaperChat with one bounded image attachment. Attachment state is
+ * restored if the panel cannot actually become visible.
+ */
+export function showPanelWithImageAttachment(
+  image: ImageAttachment,
+  source: ChatPanelOpenSource = "reader_selection",
+): boolean {
+  const previousImages = pendingImages;
+  if (!addImageAttachment(image)) return false;
+
+  let panelShown = false;
+  try {
+    showPanel(source);
+    panelShown = isPanelShown();
+  } catch (error) {
+    pendingImages = previousImages;
+    syncPendingAttachmentsPreviews();
+    try {
+      ztoolkit.log(
+        "[ChatPanel] Failed to show panel for image attachment:",
+        error,
+      );
+    } catch {
+      // Shutdown can tear down the toolkit before the reader callback settles.
+    }
+    return false;
+  }
+  if (!panelShown) {
+    pendingImages = previousImages;
+    syncPendingAttachmentsPreviews();
+    return false;
+  }
+
+  syncPendingAttachmentsPreviews();
+  return true;
 }
 
 function getVisibleChatContainer(): HTMLElement | null {
@@ -3221,7 +3271,7 @@ function addAssistantReplyQuote(
 
 function cloneAttachmentState(state: AttachmentState): AttachmentState {
   return {
-    pendingImages: [...state.pendingImages],
+    pendingImages: state.pendingImages.map((image) => ({ ...image })),
     pendingFiles: [...state.pendingFiles],
     pinnedSelectedTexts: [...(state.pinnedSelectedTexts || [])],
     pendingSelectedText: state.pendingSelectedText,
@@ -3357,6 +3407,7 @@ function createContext(container: HTMLElement): ChatPanelContext {
       }),
     setAttachmentState: (state) => {
       const nextState = cloneAttachmentState(state);
+      if (!isImageAttachmentDraftWithinLimits(nextState.pendingImages)) return;
       pendingImages = nextState.pendingImages;
       pendingFiles = nextState.pendingFiles;
       pinnedSelectedTexts = nextState.pinnedSelectedTexts;
@@ -3694,4 +3745,82 @@ export function addSelectedTextAttachment(text: string): void {
   if (!trimmed) return;
   pendingSelectedText = trimmed;
   syncPendingAttachmentsPreviews();
+}
+
+function getImageAttachmentByteLength(image: ImageAttachment): number | null {
+  if (image.type !== "base64") return null;
+  if (
+    image.data.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]*={0,2}$/.test(image.data)
+  ) {
+    return null;
+  }
+  const padding = image.data.endsWith("==")
+    ? 2
+    : image.data.endsWith("=")
+      ? 1
+      : 0;
+  return Math.floor((image.data.length * 3) / 4) - padding;
+}
+
+/** Validate every image before it is restored, queued, or sent. */
+export function isImageAttachmentDraftWithinLimits(
+  images: readonly ImageAttachment[],
+): boolean {
+  if (!Array.isArray(images) || images.length > MAX_PENDING_IMAGE_ATTACHMENTS) {
+    return false;
+  }
+
+  let draftBytes = 0;
+  for (const image of images) {
+    if (
+      !image ||
+      image.type !== "base64" ||
+      typeof image.data !== "string" ||
+      !image.data ||
+      typeof image.mimeType !== "string" ||
+      !image.mimeType.startsWith("image/")
+    ) {
+      return false;
+    }
+
+    const imageBytes = getImageAttachmentByteLength(image);
+    if (imageBytes === null || imageBytes > MAX_PENDING_IMAGE_BYTES) {
+      return false;
+    }
+    draftBytes += imageBytes;
+    if (draftBytes > MAX_PENDING_IMAGE_DRAFT_BYTES) return false;
+  }
+  return true;
+}
+
+/** Return whether an image can be added without exceeding draft limits. */
+export function canAddImageAttachmentToDraft(
+  images: readonly ImageAttachment[],
+  image: ImageAttachment,
+): boolean {
+  if (
+    !Array.isArray(images) ||
+    images.length >= MAX_PENDING_IMAGE_ATTACHMENTS
+  ) {
+    return false;
+  }
+  return isImageAttachmentDraftWithinLimits([...images, image]);
+}
+
+/** Add an image to the existing pending-attachment preview/send pipeline. */
+export function addImageAttachment(image: ImageAttachment): boolean {
+  if (!canAddImageAttachmentToDraft(pendingImages, image)) return false;
+
+  pendingImages = [
+    ...pendingImages,
+    {
+      type: image.type,
+      data: image.data,
+      mimeType: image.mimeType,
+      ...(image.name ? { name: image.name } : {}),
+    },
+  ];
+  syncPendingAttachmentsPreviews();
+  return true;
 }

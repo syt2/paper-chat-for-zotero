@@ -552,6 +552,21 @@ export function createChatContainer(
   });
   uploadFileBtn.appendChild(uploadIcon);
 
+  const figureScreenshotBtn = createElement(doc, "button", btnStyle, {
+    id: "chat-figure-screenshot-btn",
+    title: getString("chat-reader-figure-screenshot"),
+  });
+  figureScreenshotBtn.setAttribute("type", "button");
+  figureScreenshotBtn.setAttribute(
+    "aria-label",
+    getString("chat-reader-figure-screenshot"),
+  );
+  const figureScreenshotIcon = createElement(doc, "img", iconStyle, {
+    src: `chrome://${config.addonRef}/content/icons/figure-screenshot.svg`,
+    alt: "",
+  });
+  figureScreenshotBtn.appendChild(figureScreenshotIcon);
+
   // Presentation button. Capability checks happen on click so the entry stays
   // discoverable even when another provider is currently selected.
   const presentationBtn = createElement(doc, "button", btnStyle, {
@@ -601,6 +616,7 @@ export function createChatContainer(
 
   toolbarButtons.appendChild(newChatBtn);
   toolbarButtons.appendChild(uploadFileBtn);
+  toolbarButtons.appendChild(figureScreenshotBtn);
   toolbarButtons.appendChild(historyBtn);
   if (getPref("debugContextExportEnabled") === true) {
     // Internal debug-only export button. The pref defaults to false and is not exposed in settings.

@@ -172,7 +172,7 @@ export function applyThemeToContainer(container: HTMLElement): void {
   // Toolbar buttons
   container
     .querySelectorAll(
-      "#chat-new, #chat-upload-file, #chat-history-btn, #chat-summarize-conversation-note, #chat-generate-presentation",
+      "#chat-new, #chat-upload-file, #chat-figure-screenshot-btn, #chat-history-btn, #chat-summarize-conversation-note, #chat-generate-presentation",
     )
     .forEach((btn: Element) => {
       const el = btn as HTMLElement;
