@@ -236,4 +236,25 @@ describe("output truncation continuation", function () {
       "hello hello world",
     );
   });
+
+  it("does not deduplicate a continuation against unrelated display markup", async function () {
+    const continued = await continueTruncatedOutput({
+      initialResult: {
+        content: "the conclusion is clear because the data agrees",
+        stopReason: "end_turn" as const,
+      },
+      displayBeforeRound: "[tool card] the conclusion is clear",
+      currentMessages: [],
+      generateId: () => "message-1",
+      requestNext: async () => ({
+        content: "unreachable",
+        stopReason: "end_turn" as const,
+      }),
+    });
+
+    assert.equal(
+      continued.accumulatedDisplay,
+      "[tool card] the conclusion is clearthe conclusion is clear because the data agrees",
+    );
+  });
 });

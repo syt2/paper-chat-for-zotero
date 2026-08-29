@@ -136,18 +136,22 @@ export async function continueTruncatedOutput<
   const getSupplementalDisplay = params.getSupplementalDisplay || (() => "");
   let result = params.initialResult;
   let displayBeforeResult = params.displayBeforeRound;
+  let previousProviderFragment = "";
   let continuationCount = 0;
   let unexpectedToolProtocol = false;
+
+  // The display may already contain tool cards or other app-owned markup. Only
+  // compare adjacent provider fragments for overlap; comparing against the
+  // whole display can remove legitimate text that happens to repeat a card.
+  displayBeforeResult +=
+    getSupplementalDisplay(result) + (result.content || "");
+  previousProviderFragment = result.content || "";
 
   while (
     shouldContinueTruncatedOutput(result) &&
     continuationCount < MAX_OUTPUT_TRUNCATION_CONTINUATIONS
   ) {
     continuationCount += 1;
-    displayBeforeResult = mergeContinuationText(
-      displayBeforeResult,
-      getSupplementalDisplay(result) + (result.content || ""),
-    );
     appendOutputContinuationMessages(
       params.currentMessages,
       result.content || "",
@@ -164,16 +168,23 @@ export async function continueTruncatedOutput<
       unexpectedToolProtocol = true;
       break;
     }
+
+    const nextFragment = result.content || "";
+    if (previousProviderFragment && nextFragment) {
+      const merged = mergeContinuationText(
+        previousProviderFragment,
+        nextFragment,
+      );
+      displayBeforeResult += merged.slice(previousProviderFragment.length);
+    } else {
+      displayBeforeResult += nextFragment;
+    }
+    previousProviderFragment = nextFragment;
   }
 
   return {
     result,
-    accumulatedDisplay: unexpectedToolProtocol
-      ? displayBeforeResult
-      : mergeContinuationText(
-          displayBeforeResult,
-          getSupplementalDisplay(result) + (result.content || ""),
-        ),
+    accumulatedDisplay: displayBeforeResult,
     continuationCount,
     outputStillTruncated: result.stopReason === "max_tokens",
     unexpectedToolProtocol,
