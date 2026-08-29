@@ -1,3 +1,4 @@
+import { getPref } from "../../utils/prefs";
 import { generateTimestampId, getErrorMessage } from "../../utils/common";
 import { ReadingLoopHistoryRegistry } from "./ReadingLoopHistoryRegistry";
 import type {
@@ -81,6 +82,7 @@ export class ReadingLoopService {
   private readerSessionCounter = 0;
   private lastReaderProgressBucket = new Map<string, number>();
   private pendingProgressBucket: PendingProgressBucketState | null = null;
+  private refreshHighlightsOnNextReaderSync = false;
   private readerPageStates = new Map<string, ReaderPageState>();
   private paperActivityStates = new Map<string, PaperActivityState>();
   private recentQuestionSignals = new Map<string, number[]>();
@@ -98,10 +100,7 @@ export class ReadingLoopService {
   }
 
   destroy(): void {
-    if (this.readerStatePollTimer) {
-      clearInterval(this.readerStatePollTimer);
-      this.readerStatePollTimer = null;
-    }
+    this.stopReaderStatePolling();
     if (this.itemNotifierID) {
       Zotero.Notifier.unregisterObserver(this.itemNotifierID);
       this.itemNotifierID = null;
@@ -117,6 +116,7 @@ export class ReadingLoopService {
     this.dismissStates.clear();
     this.lastReaderProgressBucket.clear();
     this.pendingProgressBucket = null;
+    this.refreshHighlightsOnNextReaderSync = false;
     this.readerPageStates.clear();
     this.paperActivityStates.clear();
     this.recentQuestionSignals.clear();
@@ -125,7 +125,39 @@ export class ReadingLoopService {
   }
 
   refreshEnabledFromPrefs(): void {
-    this.enabled = true;
+    const wasEnabled = this.enabled;
+    const nextEnabled = getPref("readingLoopEnabled") !== false;
+    this.enabled = nextEnabled;
+    if (!nextEnabled) {
+      // Pending suggestions are no longer actionable while the automatic loop
+      // is disabled. Preserve every accepted-task state so toggling this
+      // preference cannot discard an in-flight result or failure.
+      if (this.activeSuggestion?.status === "suggested") {
+        this.activeSuggestion = undefined;
+      }
+      this.stopReaderStatePolling();
+      this.resetAutomaticSignalState();
+    } else {
+      if (!wasEnabled) {
+        // Treat re-enabling as the start of a new automatic reading session.
+        // Time and signals collected before or while disabled must not trigger
+        // an immediate suggestion after the preference is turned back on.
+        this.beginReaderSession(this.currentPaperKey);
+      }
+      // A running task may have completed while the loop was disabled. Do not
+      // resurrect an already-expired completion when the setting is enabled.
+      this.expireStaleSuggestion({ notify: false });
+      if (!wasEnabled) {
+        // Polling is paused while disabled, so currentPaperKey may be stale.
+        // Refresh existing highlights only after the next reader sync has
+        // confirmed which paper is actually open and the accepted-task slot
+        // is available again.
+        this.refreshHighlightsOnNextReaderSync = true;
+      }
+      if (this.initialized) {
+        this.startReaderStatePolling();
+      }
+    }
     this.notify();
   }
 
@@ -159,23 +191,40 @@ export class ReadingLoopService {
     const paperKey = this.resolvePaperKey(item);
     if (paperKey === this.currentPaperKey) {
       this.currentItem = item;
+      if (
+        this.enabled &&
+        paperKey &&
+        !this.activeSuggestion &&
+        this.refreshHighlightsOnNextReaderSync
+      ) {
+        this.refreshHighlightsOnNextReaderSync = false;
+        this.maybeSuggestExistingHighlightDigest(paperKey);
+      }
       return;
     }
 
     this.currentItem = item;
     this.currentPaperKey = paperKey;
-    this.beginReaderSession(paperKey);
+    if (this.enabled) {
+      this.beginReaderSession(paperKey);
+    }
     if (
       this.activeSuggestion &&
       paperKey &&
-      this.activeSuggestion.itemKey !== paperKey
+      this.activeSuggestion.itemKey !== paperKey &&
+      this.activeSuggestion.status === "suggested"
     ) {
       this.activeSuggestion = undefined;
       this.notify();
     }
 
-    if (paperKey) {
-      this.maybeSuggestExistingHighlightDigest(paperKey);
+    if (this.enabled && paperKey) {
+      if (this.activeSuggestion) {
+        this.refreshHighlightsOnNextReaderSync = true;
+      } else {
+        this.refreshHighlightsOnNextReaderSync = false;
+        this.maybeSuggestExistingHighlightDigest(paperKey);
+      }
     }
   }
 
@@ -450,9 +499,7 @@ export class ReadingLoopService {
     options: { requireRunning?: boolean } = {},
   ): void {
     if (
-      !this.enabled ||
-      (this.currentPaperKey !== null &&
-        this.currentPaperKey !== suggestion.itemKey) ||
+      (!this.enabled && this.activeSuggestion?.status !== "running") ||
       !this.activeSuggestion ||
       this.activeSuggestion.id !== suggestion.id ||
       this.activeSuggestion.itemKey !== suggestion.itemKey ||
@@ -472,9 +519,6 @@ export class ReadingLoopService {
 
   private isCurrentRunningSuggestion(suggestion: ReadingSuggestion): boolean {
     return (
-      this.enabled &&
-      (this.currentPaperKey === null ||
-        this.currentPaperKey === suggestion.itemKey) &&
       this.activeSuggestion?.id === suggestion.id &&
       this.activeSuggestion?.itemKey === suggestion.itemKey &&
       this.activeSuggestion?.status === "running"
@@ -489,7 +533,7 @@ export class ReadingLoopService {
   }
 
   private startReaderStatePolling(): void {
-    if (this.readerStatePollTimer) {
+    if (!this.enabled || this.readerStatePollTimer) {
       return;
     }
     this.readerStatePollTimer = setInterval(() => {
@@ -497,6 +541,14 @@ export class ReadingLoopService {
         ztoolkit.log("[ReadingLoop] Poll failed:", error);
       });
     }, READER_STATE_POLL_INTERVAL_MS);
+  }
+
+  private stopReaderStatePolling(): void {
+    if (!this.readerStatePollTimer) {
+      return;
+    }
+    clearInterval(this.readerStatePollTimer);
+    this.readerStatePollTimer = null;
   }
 
   private async pollReaderState(): Promise<void> {
@@ -521,13 +573,16 @@ export class ReadingLoopService {
     this.handleReaderProgressSignals();
   }
 
-  private expireStaleSuggestion(): void {
+  private expireStaleSuggestion(options: { notify?: boolean } = {}): void {
     if (
+      this.activeSuggestion?.status !== "running" &&
       this.activeSuggestion?.expiresAt &&
       this.activeSuggestion.expiresAt <= Date.now()
     ) {
       this.activeSuggestion = undefined;
-      this.notify();
+      if (options.notify !== false) {
+        this.notify();
+      }
     }
   }
 
@@ -993,6 +1048,18 @@ export class ReadingLoopService {
     );
     this.readerPageStates.delete(paperKey);
     this.lastReaderProgressBucket.delete(paperKey);
+  }
+
+  private resetAutomaticSignalState(): void {
+    this.currentItemStartedAt = 0;
+    this.currentReaderSessionId = null;
+    this.highlightSessionCounts.clear();
+    this.lastReaderProgressBucket.clear();
+    this.pendingProgressBucket = null;
+    this.refreshHighlightsOnNextReaderSync = false;
+    this.readerPageStates.clear();
+    this.paperActivityStates.clear();
+    this.recentQuestionSignals.clear();
   }
 
   private createEmptyPaperActivityState(): PaperActivityState {

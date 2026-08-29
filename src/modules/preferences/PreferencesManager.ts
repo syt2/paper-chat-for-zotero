@@ -42,6 +42,7 @@ import type {
 } from "../../types/tool";
 import { ANALYTICS_EVENTS, getAnalyticsService } from "../analytics";
 import { refreshPaperChatNoticeUI } from "./PaperChatNoticeRenderer";
+import { getReadingLoopService } from "../reading-loop";
 
 // Current selected provider ID
 let currentProviderId: string = "paperchat";
@@ -188,6 +189,9 @@ export async function refreshPrefsUI(
   // Initialize AI tools settings checkbox
   initAIToolsSettingsCheckbox(doc);
 
+  // Initialize Reading Loop settings checkbox
+  initReadingLoopSettings(doc);
+
   initPaperSkillSettings(doc);
 
   // Initialize AISummary settings
@@ -321,6 +325,9 @@ export function bindPrefEvents(): void {
   // Bind AI tools settings checkbox event
   bindAIToolsSettingsEvent(doc);
 
+  // Bind Reading Loop settings checkbox event
+  bindReadingLoopSettingsEvent(doc);
+
   bindPaperSkillSettingsEvents(doc);
 
   // Bind AISummary settings events
@@ -378,6 +385,56 @@ function bindAIToolsSettingsEvent(doc: Document): void {
   }
 
   bindToolPermissionDefaultsEvents(doc);
+}
+
+function initReadingLoopSettings(doc: Document): void {
+  const enabledCheckbox = doc.getElementById(
+    "pref-reading-loop-enabled",
+  ) as XUL.Checkbox | null;
+  if (enabledCheckbox) {
+    enabledCheckbox.checked = getPref("readingLoopEnabled") !== false;
+  }
+}
+
+export function applyReadingLoopEnabledPreference(enabled: boolean): void {
+  const previousEnabled = getPref("readingLoopEnabled") !== false;
+  const service = getReadingLoopService();
+  try {
+    setPref("readingLoopEnabled", enabled);
+    service.refreshEnabledFromPrefs();
+  } catch (error) {
+    try {
+      setPref("readingLoopEnabled", previousEnabled);
+      service.refreshEnabledFromPrefs();
+    } catch (rollbackError) {
+      ztoolkit.log(
+        "[Preferences] Failed to roll back Reading Loop setting:",
+        rollbackError,
+      );
+    }
+    throw error;
+  }
+}
+
+function bindReadingLoopSettingsEvent(doc: Document): void {
+  const enabledCheckbox = doc.getElementById(
+    "pref-reading-loop-enabled",
+  ) as XUL.Checkbox | null;
+  if (!enabledCheckbox) {
+    return;
+  }
+
+  enabledCheckbox.addEventListener("command", () => {
+    try {
+      applyReadingLoopEnabledPreference(enabledCheckbox.checked);
+    } catch (error) {
+      initReadingLoopSettings(doc);
+      ztoolkit.log(
+        "[Preferences] Failed to refresh Reading Loop setting:",
+        error,
+      );
+    }
+  });
 }
 
 function initAgentIterationLimitControl(doc: Document): void {

@@ -131,6 +131,11 @@ pref-tool-permission-mode-auto-allow = 自动允许
 pref-tool-permission-mode-ask = 每次询问
 pref-tool-permission-mode-deny = 始终拒绝
 
+# Reading Loop Settings
+pref-reading-loop-settings = 阅读伴随建议
+pref-reading-loop-enabled = 阅读时自动显示 PaperChat 建议
+pref-reading-loop-desc = 根据阅读停留、进度、高亮和连续提问等本地行为，在 PaperChat 入口和面板内显示轻量建议。关闭后不会影响手动聊天或其他明确触发的操作。
+
 # Paper Skills Settings
 pref-paper-skills-settings = Paper Skills
 pref-paper-skills-desc = 在数据目录下的 paper-chat/skills/<slug>/SKILL.md 新增或覆盖本地 skill。修改后可点击“刷新 Skills”重新加载。
