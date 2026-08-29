@@ -8,6 +8,7 @@ import {
   lightTheme,
   updateCurrentTheme,
 } from "../src/modules/ui/chat-panel/ChatPanelTheme.ts";
+import { chatFontSize } from "../src/modules/ui/chat-panel/ChatPanelTypography.ts";
 
 class FakeElement {
   readonly style: Record<string, string> = {};
@@ -187,6 +188,49 @@ describe("chat panel presentation toolbar entry", function () {
     assert.equal(screenshot?.style.background, darkTheme.buttonBg);
     assert.equal(screenshot?.style.borderColor, darkTheme.inputBorderColor);
     assert.equal(screenshot?.style.color, darkTheme.textPrimary);
+  });
+
+  it("registers the panel as a Zotero UI root and scales readable input text", function () {
+    let registeredRoot: FakeElement | null = null;
+    runtime.Zotero.UIProperties = {
+      registerRoot(root: FakeElement) {
+        registeredRoot = root;
+      },
+    };
+
+    const doc = new FakeDocument();
+    const container = createChatContainer(
+      doc as unknown as Document,
+      lightTheme,
+    ) as unknown as FakeElement;
+
+    assert.strictEqual(registeredRoot, container);
+    assert.equal(container.style.fontSize, chatFontSize(13));
+    assert.equal(
+      container.querySelector("#chat-message-input")?.style.fontSize,
+      chatFontSize(14),
+    );
+    assert.equal(
+      container.querySelector("#chat-history-search-input")?.style.fontSize,
+      chatFontSize(12),
+    );
+  });
+
+  it("keeps the next-question hint height flexible as its font scales", function () {
+    const controllerPath = fileURLToPath(
+      new URL(
+        "../src/modules/ui/chat-panel/NextQuestionHintController.ts",
+        import.meta.url,
+      ),
+    );
+    const source = readFileSync(controllerPath, "utf8");
+    const hintLayerSource = source.slice(
+      source.indexOf("private createHintLayer"),
+      source.indexOf("private syncNativePlaceholder"),
+    );
+
+    assert.include(hintLayerSource, "fontSize: chatFontSize(14)");
+    assert.notInclude(hintLayerSource, 'height: "18px"');
   });
 
   it("uses the supplied presentation-screen geometry with the shared icon theme", function () {

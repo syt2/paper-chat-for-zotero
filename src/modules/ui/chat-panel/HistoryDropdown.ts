@@ -17,6 +17,7 @@ import type {
 } from "../../chat/search/SearchTypes";
 import type { ThemeColors, SessionInfo } from "./types";
 import { createElement } from "./ChatPanelBuilder";
+import { chatFontSize } from "./ChatPanelTypography";
 
 // Number of sessions to show per page
 export const SESSIONS_PER_PAGE = 20;
@@ -296,7 +297,7 @@ export function createSessionItem(
   // Session title
   const titleEl = createElement(doc, "div", {
     fontWeight: "600",
-    fontSize: "13px",
+    fontSize: chatFontSize(13),
     marginBottom: "4px",
     overflow: "hidden",
     textOverflow: "ellipsis",
@@ -312,7 +313,7 @@ export function createSessionItem(
     const input = createElement(doc, "input", {
       width: "100%",
       boxSizing: "border-box",
-      fontSize: "13px",
+      fontSize: chatFontSize(13),
       fontWeight: "600",
       color: theme.textPrimary,
       background: theme.inputBg,
@@ -366,7 +367,7 @@ export function createSessionItem(
 
   // Message preview
   const previewEl = createElement(doc, "div", {
-    fontSize: "12px",
+    fontSize: chatFontSize(12),
     color: theme.textSecondary,
     overflow: "hidden",
     textOverflow: "ellipsis",
@@ -378,7 +379,7 @@ export function createSessionItem(
 
   // Meta info (message count and last update)
   const metaEl = createElement(doc, "div", {
-    fontSize: "11px",
+    fontSize: chatFontSize(11),
     color: theme.textMuted,
     display: "flex",
     justifyContent: "space-between",
@@ -448,8 +449,8 @@ function createSearchActionRow(
       overflow: "hidden",
       color: theme.textPrimary,
       fontFamily: "inherit",
-      fontSize: "12px",
-      lineHeight: "17px",
+      fontSize: chatFontSize(12),
+      lineHeight: "1.4",
       textAlign: "left",
       whiteSpace: "normal",
       cursor: "pointer",
@@ -485,9 +486,9 @@ function createTitleMatchRow(
   const label = createElement(doc, "span", {
     display: "block",
     color: theme.textMuted,
-    fontSize: "10px",
+    fontSize: chatFontSize(10),
     fontWeight: "600",
-    lineHeight: "14px",
+    lineHeight: "1.4",
   });
   label.textContent = getString("chat-history-search-title-match");
 
@@ -497,7 +498,7 @@ function createTitleMatchRow(
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
-    lineHeight: "17px",
+    lineHeight: "1.4",
   });
   appendHighlightedSearchText(
     snippet,
@@ -543,8 +544,8 @@ function createMessageMatchRow(
     columnGap: "8px",
     minWidth: "0",
     color: theme.textMuted,
-    fontSize: "10px",
-    lineHeight: "14px",
+    fontSize: chatFontSize(10),
+    lineHeight: "1.4",
   });
   const role = createElement(doc, "span", { fontWeight: "600" });
   role.textContent = getString(
@@ -568,8 +569,7 @@ function createMessageMatchRow(
     display: "-webkit-box",
     webkitLineClamp: "2",
     webkitBoxOrient: "vertical",
-    lineHeight: "17px",
-    maxHeight: "34px",
+    lineHeight: "1.4",
     whiteSpace: "normal",
     overflowWrap: "anywhere",
     wordBreak: "break-word",
@@ -661,7 +661,7 @@ function renderSearchEmptyState(
     padding: "24px 16px",
     textAlign: "center",
     color: theme.textMuted,
-    fontSize: "13px",
+    fontSize: chatFontSize(13),
   });
   empty.className = "history-search-empty";
   empty.textContent = getString("chat-history-search-no-results");
@@ -699,9 +699,9 @@ function renderSearchGroup(
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
     color: theme.textPrimary,
-    fontSize: "13px",
+    fontSize: chatFontSize(13),
     fontWeight: "600",
-    lineHeight: "18px",
+    lineHeight: "1.4",
   });
   title.textContent =
     group.sessionTitle ||
@@ -711,8 +711,8 @@ function renderSearchGroup(
   const updatedAt = createElement(doc, "div", {
     flexShrink: "0",
     color: theme.textMuted,
-    fontSize: "10px",
-    lineHeight: "14px",
+    fontSize: chatFontSize(10),
+    lineHeight: "1.4",
     whiteSpace: "nowrap",
     fontVariantNumeric: "tabular-nums",
   });
@@ -821,7 +821,7 @@ function renderOrdinaryHistory(
       padding: "20px",
       textAlign: "center",
       color: chatColors.emptyText,
-      fontSize: "13px",
+      fontSize: chatFontSize(13),
     });
     emptyMsg.textContent = getString("chat-no-history");
     body.appendChild(emptyMsg);
@@ -1397,7 +1397,7 @@ export function renderMoreSessions(
       color: chatColors.historyAccent,
       cursor: "pointer",
       fontWeight: "500",
-      fontSize: "13px",
+      fontSize: chatFontSize(13),
     });
     loadMoreBtn.className = "load-more-btn";
     loadMoreBtn.textContent = getString("chat-show-more", {
@@ -1476,7 +1476,7 @@ export function populateHistoryDropdown(
       padding: "20px",
       textAlign: "center",
       color: chatColors.emptyText,
-      fontSize: "13px",
+      fontSize: chatFontSize(13),
     });
     emptyMsg.textContent = getString("chat-no-history");
     body.appendChild(emptyMsg);

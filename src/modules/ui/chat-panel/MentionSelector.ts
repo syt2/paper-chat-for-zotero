@@ -9,6 +9,7 @@ import { getCurrentTheme } from "./ChatPanelTheme";
 import { chatColors } from "../../../utils/colors";
 import { getString } from "../../../utils/locale";
 import { getItemTitle } from "../../../utils/common";
+import { chatFontSize } from "./ChatPanelTypography";
 
 // Resource types that can be mentioned
 export type MentionResourceType = "item" | "attachment" | "note";
@@ -243,7 +244,7 @@ export function renderMentionPopup(
   if (filteredResources.length === 0) {
     const emptyMsg = createElement(doc, "div", {
       padding: "12px",
-      fontSize: "12px",
+      fontSize: chatFontSize(12),
       color: theme.textMuted,
       textAlign: "center",
     });
@@ -268,7 +269,7 @@ export function renderMentionPopup(
     // Group header - sticky with clear visual separation
     const header = createElement(doc, "div", {
       padding: "4px 12px",
-      fontSize: "10px",
+      fontSize: chatFontSize(10),
       fontWeight: "600",
       color: theme.textMuted,
       background: theme.buttonBg,
@@ -292,7 +293,7 @@ export function renderMentionPopup(
         padding: "6px 12px",
         cursor: "pointer",
         background: isSelected ? theme.dropdownItemHoverBg : "transparent",
-        fontSize: "12px",
+        fontSize: chatFontSize(12),
         borderBottom: `1px solid ${theme.borderColor}20`,
       });
       item.setAttribute("data-mention-index", String(currentIndex));
@@ -321,7 +322,7 @@ export function renderMentionPopup(
         overflow: "hidden",
         textOverflow: "ellipsis",
         whiteSpace: "nowrap",
-        fontSize: "12px",
+        fontSize: chatFontSize(12),
       });
       title.textContent = resource.title;
       titleContainer.appendChild(title);
@@ -329,7 +330,7 @@ export function renderMentionPopup(
       // Parent title (for attachments and notes)
       if (resource.parentTitle) {
         const parent = createElement(doc, "span", {
-          fontSize: "10px",
+          fontSize: chatFontSize(10),
           color: theme.textSecondary,
           overflow: "hidden",
           textOverflow: "ellipsis",
@@ -386,7 +387,7 @@ export function createResourceTag(
     border: `1px solid ${chatColors.attachmentBorder}`,
     borderRadius: "12px",
     padding: "4px 8px 4px 10px",
-    fontSize: "11px",
+    fontSize: chatFontSize(11),
     color: chatColors.attachmentText,
     maxWidth: "200px",
   });
@@ -541,7 +542,7 @@ export class MentionSelector {
     this.popup.style.borderColor = theme.borderColor;
     const loadingMsg = createElement(doc, "div", {
       padding: "12px",
-      fontSize: "12px",
+      fontSize: chatFontSize(12),
       color: theme.textMuted,
       textAlign: "center",
     });

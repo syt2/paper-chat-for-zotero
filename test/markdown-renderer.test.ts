@@ -10,6 +10,7 @@ import { sanitizeSourceGroupTargets } from "../src/modules/chat/note-source-prov
 import { getMessageMarkdownRenderOptions } from "../src/modules/ui/chat-panel/MessageRenderer.ts";
 import { createPdfPassageEvidenceRecord } from "../src/modules/chat/evidence/index.ts";
 import { MAX_ITERATIONS_MESSAGE } from "../src/modules/chat/agent-runtime/messages.ts";
+import { chatFontSize } from "../src/modules/ui/chat-panel/ChatPanelTypography.ts";
 
 class FakeElement {
   readonly ELEMENT_NODE = 1;
@@ -1269,8 +1270,16 @@ Missing label should not be parsed.
 
     it("resolves citations from message-local records and opens their preview", async function () {
       const originalZotero = (globalThis as { Zotero?: unknown }).Zotero;
+      const registeredRoots: FakeElement[] = [];
       (globalThis as { Zotero?: unknown }).Zotero = {
         getMainWindow: () => null,
+        UIProperties: {
+          registerRoot: (root: FakeElement) => {
+            registeredRoots.push(root);
+            root.style.fontSize = "1.85rem";
+            root.style["--zotero-font-size"] = "1.85rem";
+          },
+        },
       };
       const doc = new FakeDocument();
       const root = new FakeElement(doc, "div");
@@ -1305,9 +1314,17 @@ Missing label should not be parsed.
           "data-evidence-card",
           record.id,
         );
+        const firstCardContent = findByAttribute(
+          doc.body,
+          "data-evidence-card-content",
+          record.id,
+        );
         assert.equal(firstCard?.style.display, "block");
         assert.equal(firstCard?.style.position, "fixed");
         assert.strictEqual(firstCard?.parentNode, doc.body);
+        assert.include(registeredRoots, firstCard);
+        assert.equal(firstCard?.style.fontSize, "1.85rem");
+        assert.equal(firstCardContent?.style.fontSize, chatFontSize(12));
 
         secondCitation?.dispatch("click");
         const secondCard = findByAttribute(
@@ -1324,6 +1341,7 @@ Missing label should not be parsed.
         assert.equal(citation?.getAttribute("aria-expanded"), "false");
         assert.equal(secondCard?.style.display, "block");
         assert.strictEqual(secondCard?.parentNode, doc.body);
+        assert.include(registeredRoots, secondCard);
         sourceAction?.dispatch("click");
         await Promise.resolve();
         await Promise.resolve();
@@ -1671,6 +1689,40 @@ ${completedToolCall}
     } finally {
       (globalThis as { addon?: unknown }).addon = originalAddon;
       (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
+    }
+  });
+});
+
+describe("markdown typography", function () {
+  it("scales code blocks and tables with Zotero's native font variable", function () {
+    const runtime = globalThis as Record<string, any>;
+    const previousZotero = runtime.Zotero;
+    runtime.Zotero = { getMainWindow: () => null };
+    const doc = new FakeDocument();
+    const root = new FakeElement(doc, "div");
+
+    const findByTag = (
+      node: FakeElement,
+      tagName: string,
+    ): FakeElement | undefined => {
+      if (node.tagName === tagName) return node;
+      for (const child of node.children) {
+        const found = findByTag(child, tagName);
+        if (found) return found;
+      }
+      return undefined;
+    };
+
+    try {
+      renderMarkdownToElement(
+        root as unknown as HTMLElement,
+        "| A | B |\n| --- | --- |\n| one | two |\n\n```ts\nconst value = 1;\n```",
+      );
+
+      assert.equal(findByTag(root, "table")?.style.fontSize, chatFontSize(12));
+      assert.equal(findByTag(root, "pre")?.style.fontSize, chatFontSize(13));
+    } finally {
+      runtime.Zotero = previousZotero;
     }
   });
 });

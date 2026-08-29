@@ -34,6 +34,7 @@ import { isTerminalPresentationArtifact } from "../../chat/presentation-artifact
 import { selectChatMessagePresentations } from "../../chat/message-presentation";
 import { canSummarizeAssistantReply } from "./NoteSummaryActions";
 import { canQuoteAssistantReply } from "../../chat/quoted-messages";
+import { chatFontSize } from "./ChatPanelTypography";
 
 export function getStreamingContentSelector(messageId: string): string {
   return `[data-streaming-content-for="${messageId}"]`;
@@ -548,7 +549,7 @@ function createTopupButton(doc: Document): HTMLElement {
       background:
         "linear-gradient(135deg, rgba(255, 244, 214, 0.98), rgba(255, 223, 128, 0.98))",
       color: "#7c3e00",
-      fontSize: "12px",
+      fontSize: chatFontSize(12),
       fontWeight: "700",
       lineHeight: "1.2",
       textAlign: "center",
@@ -605,7 +606,7 @@ function createInterruptedFooter(
     marginTop: "10px",
     paddingTop: "9px",
     borderTop: `1px solid ${theme.borderColor}`,
-    fontSize: "12px",
+    fontSize: chatFontSize(12),
     lineHeight: "1.45",
     color: theme.textSecondary,
   });
@@ -666,7 +667,7 @@ function createSystemNoticeElement(
     {
       display: "inline-block",
       padding: "6px 16px",
-      fontSize: "12px",
+      fontSize: chatFontSize(12),
       color: theme.textMuted,
       background: theme.buttonBg,
       borderRadius: "12px",
@@ -771,8 +772,8 @@ function createQuotedMessagesElement(
         borderRadius: "0",
         background: "transparent",
         color: "inherit",
-        fontSize: "11px",
-        lineHeight: "16px",
+        fontSize: chatFontSize(11),
+        lineHeight: "1.45",
         textAlign: "left",
         whiteSpace: "nowrap",
         textOverflow: "ellipsis",
@@ -1104,7 +1105,7 @@ function createReasoningContainer(
     padding: "6px 10px",
     cursor: "pointer",
     userSelect: "none",
-    fontSize: "12px",
+    fontSize: chatFontSize(12),
     color: theme.textMuted,
     opacity: "0.7",
   });
@@ -1132,7 +1133,7 @@ function createReasoningContainer(
   // Body
   const body = createElement(doc, "div", {
     padding: "4px 10px 8px 10px",
-    fontSize: "13px",
+    fontSize: chatFontSize(13),
     lineHeight: "1.5",
     color: theme.textMuted,
     opacity: "0.75",
@@ -1532,7 +1533,7 @@ function createChatEmptyState(doc: Document, theme: ThemeColors): HTMLElement {
   emptyIcon.textContent = "\uD83D\uDCAC";
 
   const emptyText = createElement(doc, "div", {
-    fontSize: "15px",
+    fontSize: chatFontSize(15),
     color: theme.textMuted,
   });
   emptyText.textContent = getString("chat-start-conversation");
@@ -2186,7 +2187,7 @@ function populateExecutionBannerElement(
   });
 
   const title = createElement(doc, "span", {
-    fontSize: isApprovalDock ? "12px" : "11px",
+    fontSize: chatFontSize(isApprovalDock ? 12 : 11),
     fontWeight: "700",
     color: theme.textPrimary,
     lineHeight: "1.2",
@@ -2198,7 +2199,7 @@ function populateExecutionBannerElement(
   title.textContent = banner.title;
 
   const detail = createElement(doc, "div", {
-    fontSize: isApprovalDock ? "10px" : "10px",
+    fontSize: chatFontSize(10),
     color: theme.textSecondary,
     minWidth: "0",
     whiteSpace: "nowrap",
@@ -2214,7 +2215,7 @@ function populateExecutionBannerElement(
   textGroup.appendChild(detail);
   if (banner.subdetail) {
     const subdetail = createElement(doc, "div", {
-      fontSize: "9px",
+      fontSize: chatFontSize(9),
       color: theme.textMuted,
       minWidth: "0",
       whiteSpace: "nowrap",
@@ -2235,7 +2236,7 @@ function populateExecutionBannerElement(
       minHeight: isApprovalDock ? "22px" : "20px",
       padding: isApprovalDock ? "0 8px" : "0 7px",
       borderRadius: "999px",
-      fontSize: "9px",
+      fontSize: chatFontSize(9),
       fontWeight: "700",
       color: accent.color,
       background: accent.background,
@@ -2399,7 +2400,7 @@ function createApprovalActionsRow(
           : theme.textPrimary,
       borderRadius: "9px",
       padding: "4px 6px",
-      fontSize: "9px",
+      fontSize: chatFontSize(9),
       fontWeight: "600",
       lineHeight: "1",
       whiteSpace: "nowrap",
@@ -2491,7 +2492,7 @@ function populateUserInputRequestElement(
   });
 
   const title = createElement(doc, "div", {
-    fontSize: "12px",
+    fontSize: chatFontSize(12),
     fontWeight: "700",
     color: theme.textPrimary,
     lineHeight: "1.25",
@@ -2505,7 +2506,7 @@ function populateUserInputRequestElement(
       : getString("chat-user-input-title");
 
   const detail = createElement(doc, "div", {
-    fontSize: "10px",
+    fontSize: chatFontSize(10),
     color: theme.textSecondary,
     lineHeight: "1.3",
     whiteSpace: "normal",
@@ -2525,7 +2526,7 @@ function populateUserInputRequestElement(
   if (request.expiresAt) {
     const autoLabel = createElement(doc, "div", {
       color: theme.textMuted,
-      fontSize: "9px",
+      fontSize: chatFontSize(9),
       lineHeight: "1.2",
     });
     updateUserInputCountdownLabel(autoLabel, request.expiresAt);
@@ -2545,7 +2546,7 @@ function populateUserInputRequestElement(
     {
       display: "none",
       color: "#b91c1c",
-      fontSize: "10px",
+      fontSize: chatFontSize(10),
       lineHeight: "1.25",
     },
     { "data-user-input-error": "true" },
@@ -2566,7 +2567,7 @@ function populateUserInputRequestElement(
     color: theme.textSecondary,
     borderRadius: "9px",
     padding: "5px 8px",
-    fontSize: "10px",
+    fontSize: chatFontSize(10),
     fontWeight: "600",
     lineHeight: "1.15",
     cursor: actions ? "pointer" : "default",
@@ -2591,7 +2592,7 @@ function populateUserInputRequestElement(
     color: theme.textPrimary,
     borderRadius: "9px",
     padding: "5px 10px",
-    fontSize: "10px",
+    fontSize: chatFontSize(10),
     fontWeight: "700",
     lineHeight: "1.15",
     cursor: actions ? "pointer" : "default",
@@ -2682,7 +2683,7 @@ function createUserInputQuestionControl(
   });
   const label = createElement(doc, "label", {
     color: theme.textPrimary,
-    fontSize: "10px",
+    fontSize: chatFontSize(10),
     fontWeight: "700",
     lineHeight: "1.25",
     overflowWrap: "anywhere",
@@ -2692,7 +2693,7 @@ function createUserInputQuestionControl(
   if (question.required === false) {
     const optional = createElement(doc, "span", {
       color: theme.textMuted,
-      fontSize: "9px",
+      fontSize: chatFontSize(9),
       lineHeight: "1.2",
       whiteSpace: "nowrap",
     });
@@ -2721,7 +2722,7 @@ function createUserInputQuestionControl(
       color: theme.textPrimary,
       borderRadius: "9px",
       padding: "6px 7px",
-      fontSize: "11px",
+      fontSize: chatFontSize(11),
       lineHeight: "1.35",
       minHeight: question.type === "secret" ? "30px" : "54px",
       resize: question.type === "secret" ? "none" : "vertical",
@@ -2800,7 +2801,7 @@ function createChoiceQuestionControl(
       flex: "1 1 auto",
     });
     const optionTitle = createElement(doc, "span", {
-      fontSize: "10px",
+      fontSize: chatFontSize(10),
       fontWeight: option.recommended ? "700" : "600",
       lineHeight: "1.2",
       overflowWrap: "anywhere",
@@ -2810,7 +2811,7 @@ function createChoiceQuestionControl(
     if (option.description) {
       const optionDetail = createElement(doc, "span", {
         color: theme.textSecondary,
-        fontSize: "9px",
+        fontSize: chatFontSize(9),
         lineHeight: "1.25",
         overflowWrap: "anywhere",
       });
@@ -2852,7 +2853,7 @@ function createChoiceQuestionControl(
     otherInput.style.outline = "none";
     otherInput.style.background = "transparent";
     otherInput.style.color = theme.textPrimary;
-    otherInput.style.fontSize = "10px";
+    otherInput.style.fontSize = chatFontSize(10);
     otherInput.addEventListener("focus", () => {
       input.checked = true;
     });
@@ -2931,7 +2932,7 @@ function createNoteDestinationSelectControl(
     minWidth: "0",
   });
   const standaloneTitle = createElement(doc, "span", {
-    fontSize: "10px",
+    fontSize: chatFontSize(10),
     fontWeight: "700",
     lineHeight: "1.2",
   });
@@ -2940,7 +2941,7 @@ function createNoteDestinationSelectControl(
   if (standaloneOption.description) {
     const description = createElement(doc, "span", {
       color: theme.textSecondary,
-      fontSize: "9px",
+      fontSize: chatFontSize(9),
       lineHeight: "1.25",
     });
     description.textContent = standaloneOption.description;
@@ -2956,7 +2957,7 @@ function createNoteDestinationSelectControl(
     paperOptions[0].value || paperOptions[0].label,
   );
   const paperLabel = createElement(doc, "span", {
-    fontSize: "10px",
+    fontSize: chatFontSize(10),
     fontWeight: "600",
     whiteSpace: "nowrap",
   });
@@ -2971,7 +2972,7 @@ function createNoteDestinationSelectControl(
   select.style.padding = "4px 6px";
   select.style.background = theme.inputBg;
   select.style.color = theme.textPrimary;
-  select.style.fontSize = "10px";
+  select.style.fontSize = chatFontSize(10);
   for (const option of paperOptions) {
     const selectOption = doc.createElement("option") as HTMLOptionElement;
     selectOption.value = option.value || option.label;
