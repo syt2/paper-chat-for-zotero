@@ -46,7 +46,10 @@ import {
   type PanelMode,
 } from "./ChatPanelManager";
 import { startReaderFigureScreenshot } from "../ReaderFigureScreenshot";
-import { getImageAttachmentLimitMessage } from "./imageAttachmentPolicy";
+import {
+  getImageAttachmentLimitMessage,
+  refreshImageInputAvailability,
+} from "./imageAttachmentPolicy";
 import {
   MentionSelector,
   type MentionResource,
@@ -1342,14 +1345,24 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
   // Upload file button - supports both images and text files
   uploadFileBtn?.addEventListener("click", async () => {
     ztoolkit.log("Upload file button clicked");
-    const fp = new ztoolkit.FilePicker("Select File", "open", [
-      [
-        "All supported",
-        "*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp;*.txt;*.md;*.json;*.xml;*.csv;*.log",
-      ],
-      ["Images", "*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp"],
-      ["Text files", "*.txt;*.md;*.json;*.xml;*.csv;*.log"],
-    ]);
+    const imageInputAvailability = await refreshImageInputAvailability(
+      container,
+      chatManager,
+    );
+    const imageInputUnsupported = imageInputAvailability === "unsupported";
+    const textFilePattern = "*.txt;*.md;*.json;*.xml;*.csv;*.log";
+    const filters: Array<[string, string]> = [];
+    if (!imageInputUnsupported) {
+      filters.push(
+        [
+          "All supported",
+          `*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp;${textFilePattern}`,
+        ],
+        ["Images", "*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp"],
+      );
+    }
+    filters.push(["Text files", textFilePattern]);
+    const fp = new ztoolkit.FilePicker("Select File", "open", filters);
     const filePath = await fp.open();
     if (filePath) {
       const ext = filePath.toLowerCase().split(".").pop() || "";
@@ -1358,6 +1371,10 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
       const extractor = chatManager.getPdfExtractor();
 
       if (imageExts.includes(ext)) {
+        if (imageInputUnsupported) {
+          context.appendError(getString("chat-image-input-unsupported"));
+          return;
+        }
         // Handle as image
         const result = await extractor.imageFileToBase64(filePath);
         if (result) {
@@ -1418,7 +1435,14 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
     }
   });
 
-  figureScreenshotBtn?.addEventListener("click", () => {
+  figureScreenshotBtn?.addEventListener("click", async () => {
+    if (
+      (await refreshImageInputAvailability(container, chatManager)) ===
+      "unsupported"
+    ) {
+      context.appendError(getString("chat-image-input-unsupported"));
+      return;
+    }
     const started = startReaderFigureScreenshot(
       (image) => {
         if (!showPanelWithImageAttachment(image, "reader_selection")) {
@@ -2205,6 +2229,14 @@ async function sendMessage(
       context.appendError(getImageAttachmentLimitMessage());
       return;
     }
+    if (
+      initialAttachmentState.pendingImages.length > 0 &&
+      (await refreshImageInputAvailability(context.container, chatManager)) ===
+        "unsupported"
+    ) {
+      context.appendError(getString("chat-image-input-unsupported"));
+      return;
+    }
 
     // Get active reader item first (used for PDF attachment)
     const activeReaderItem = getActiveReaderItem();
@@ -2560,6 +2592,7 @@ export function focusInput(container: HTMLElement): void {
  * Update model selector display with current model
  */
 export function updateModelSelectorDisplay(container: HTMLElement): void {
+  void refreshImageInputAvailability(container, getChatManager());
   const modelSelectorText = container.querySelector(
     "#chat-model-selector-text",
   ) as HTMLElement | null;

@@ -79,6 +79,7 @@ import {
   type PaperChatTier,
 } from "../providers/paperchat-tier-routing";
 import { isPaperChatQuotaError } from "../providers/paperchat-errors";
+import { getPaperChatApiCapabilities } from "../providers/paperchat-routing-metadata";
 import {
   applyPaperChatSessionBinding,
   clearPaperChatRetryableState,
@@ -273,6 +274,10 @@ function getPresentationToolPromptMode(
     return "launcher";
   }
   return "unavailable";
+}
+
+function messagesRequireVision(messages: readonly ChatMessage[]): boolean {
+  return messages.some((message) => (message.images?.length ?? 0) > 0);
 }
 
 // 使用 common.ts 中的 getItemTitleSmart 获取 item 标题
@@ -624,6 +629,7 @@ export class ChatManager {
   private async ensurePaperChatModelResolved(
     session: ChatSession,
     persist: boolean = true,
+    syncProviderOverride: boolean = true,
   ): Promise<string> {
     const providerManager = getProviderManager();
     const paperchatProvider = providerManager.getProvider("paperchat");
@@ -644,19 +650,68 @@ export class ChatManager {
       getModelRoutingMeta(),
     );
 
+    const previousSessionState = {
+      selectedTier: session.selectedTier,
+      resolvedModelId: session.resolvedModelId,
+      updatedAt: session.updatedAt,
+    };
     const didChange = persist
       ? applyPaperChatSessionBinding(session, binding)
       : false;
 
     if (persist && didChange) {
-      await this.sessionStorage.updateSessionMeta(session);
+      try {
+        await this.sessionStorage.updateSessionMeta(session);
+      } catch (error) {
+        if (
+          session.selectedTier === binding.selectedTier &&
+          session.resolvedModelId === binding.modelId
+        ) {
+          session.selectedTier = previousSessionState.selectedTier;
+          session.resolvedModelId = previousSessionState.resolvedModelId;
+          session.updatedAt = previousSessionState.updatedAt;
+        }
+        throw error;
+      }
     }
 
-    paperchatProvider.updateConfig({
-      resolvedModelOverride: binding.modelId,
-    });
+    if (syncProviderOverride) {
+      paperchatProvider.updateConfig({
+        resolvedModelOverride: binding.modelId,
+      });
+    }
 
     return binding.modelId;
+  }
+
+  /**
+   * Resolve and persist the active session's concrete PaperChat model.
+   * UI capability checks use this instead of guessing from an "auto" tier.
+   */
+  async ensureCurrentPaperChatModelResolved(): Promise<string | null> {
+    if (!this.currentSession) {
+      await this.init();
+    }
+    const session = this.currentSession;
+    if (!session) {
+      return null;
+    }
+    const modelId = await this.ensurePaperChatModelResolved(
+      session,
+      true,
+      false,
+    );
+    if (
+      this.currentSession !== session ||
+      session.resolvedModelId !== modelId ||
+      getProviderManager().getActiveProviderId() !== "paperchat"
+    ) {
+      return null;
+    }
+    getProviderManager().getProvider("paperchat")?.updateConfig({
+      resolvedModelOverride: modelId,
+    });
+    return modelId;
   }
 
   private async insertSystemNotice(
@@ -1491,7 +1546,8 @@ export class ChatManager {
         endReroll: (sessionId) => {
           this.paperChatRerollSessions.delete(sessionId);
         },
-        rerollTier: () => this.rerollCurrentPaperChatTier(),
+        rerollTier: (requiresVision) =>
+          this.rerollCurrentPaperChatTier(requiresVision),
         buildReroutedNotice: (tier, previousModel, nextModel) =>
           this.paperChatRetry.buildReroutedNotice(
             tier,
@@ -1510,8 +1566,10 @@ export class ChatManager {
     return this.paperChatTierController;
   }
 
-  async rerollCurrentPaperChatTier(): Promise<PaperChatTierRerollResult | null> {
-    return this.paperChatTier.rerollCurrentPaperChatTier();
+  async rerollCurrentPaperChatTier(
+    requiresVision: boolean = false,
+  ): Promise<PaperChatTierRerollResult | null> {
+    return this.paperChatTier.rerollCurrentPaperChatTier(requiresVision);
   }
 
   async switchCurrentSessionPaperChatTier(
@@ -1938,6 +1996,19 @@ export class ChatManager {
       ) {
         const resolvedModelId =
           await this.ensurePaperChatModelResolved(sendingSession);
+        const currentRequestImages =
+          options.images ?? reusedUserMessage?.images;
+        const requestRequiresVision =
+          (currentRequestImages?.length ?? 0) > 0 ||
+          (options.modelRequestContent === undefined &&
+            messagesRequireVision(sendingSession.messages));
+        if (
+          requestRequiresVision &&
+          getPaperChatApiCapabilities(resolvedModelId, getModelRoutingMeta())
+            .vision === false
+        ) {
+          throw new Error(getString("chat-image-input-unsupported"));
+        }
         provider = new PaperChatProvider({
           ...provider.config,
           resolvedModelOverride: resolvedModelId,
@@ -2545,6 +2616,7 @@ export class ChatManager {
                     failedModelId: failedPaperChatModelId,
                     alreadyRerouted: paperChatHardRerouteUsed,
                     reason: "streaming",
+                    requiresVision: messagesRequireVision(messagesForApi),
                     ensureSessionTracked: ensureSendingSessionTracked,
                   },
                 );
@@ -3029,6 +3101,9 @@ export class ChatManager {
                     failedModelId: failedPaperChatModelId,
                     alreadyRerouted: paperChatHardRerouteUsed,
                     reason: "tool_calling",
+                    requiresVision: messagesRequireVision(
+                      attemptMessagesWithContext,
+                    ),
                     ensureSessionTracked: ensureSendingSessionTracked,
                   },
                 );

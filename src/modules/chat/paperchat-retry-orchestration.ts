@@ -19,6 +19,7 @@ type RepairPaperChatSessionAfterHardFailureOptions = {
   availableModels: string[];
   ratios: Record<string, number>;
   routingMeta?: PaperChatModelRoutingMetaMap;
+  requiresVision?: boolean;
   persistSessionMeta: (session: ChatSession) => Promise<void>;
   setTierStateRaw: (raw: string) => void;
   updateProviderOverride: (modelId: string | undefined) => void;
@@ -35,6 +36,7 @@ export async function repairPaperChatSessionAfterHardFailureWithRollback(
     availableModels,
     ratios,
     routingMeta,
+    requiresVision,
     persistSessionMeta,
     setTierStateRaw,
     updateProviderOverride,
@@ -53,6 +55,7 @@ export async function repairPaperChatSessionAfterHardFailureWithRollback(
     failedModelId,
     pickRandom,
     routingMeta,
+    { vision: requiresVision },
   );
 
   if (!repair || !repair.previousModelId) {
@@ -84,7 +87,9 @@ export async function repairPaperChatSessionAfterHardFailureWithRollback(
 
 type RerollPaperChatFailureAndReplayOptions<TItem> = {
   session: ChatSession;
-  rerollTier: () => Promise<PaperChatRerouteResult | null>;
+  rerollTier: (
+    requiresVision: boolean,
+  ) => Promise<PaperChatRerouteResult | null>;
   buildSystemNotice: (reroute: PaperChatRerouteResult) => string;
   insertSystemNotice: (
     session: ChatSession,
@@ -139,7 +144,10 @@ export async function rerollPaperChatFailureAndReplay<TItem>(
     return null;
   }
 
-  const reroute = await rerollTier();
+  const requiresVision = session.messages
+    .slice(0, userMessageIndex + 1)
+    .some((message) => (message.images?.length ?? 0) > 0);
+  const reroute = await rerollTier(requiresVision);
   if (!reroute) {
     return null;
   }

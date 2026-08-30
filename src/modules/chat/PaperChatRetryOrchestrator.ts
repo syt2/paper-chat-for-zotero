@@ -145,6 +145,7 @@ export class PaperChatRetryOrchestrator {
     session: ChatSession,
     failedModelId: string | null,
     persist: boolean = true,
+    requiresVision: boolean = false,
   ): Promise<PaperChatRerouteDetails | null> {
     const previousTierStateRaw =
       (getPref("paperchatTierState") as string | undefined) || "";
@@ -163,6 +164,7 @@ export class PaperChatRetryOrchestrator {
         failedModelId,
         pickRandomCandidate,
         getModelRoutingMeta(),
+        { vision: requiresVision },
       );
 
       if (!repair || !repair.previousModelId) {
@@ -187,6 +189,7 @@ export class PaperChatRetryOrchestrator {
       availableModels: getPaperChatChatModels(),
       ratios: getModelRatios(),
       routingMeta: getModelRoutingMeta(),
+      requiresVision,
       persistSessionMeta: (updatedSession) =>
         this.deps.updateSessionMeta(updatedSession),
       setTierStateRaw: (raw) => {
@@ -215,6 +218,7 @@ export class PaperChatRetryOrchestrator {
     failedModelId: string | null;
     alreadyRerouted: boolean;
     reason: "streaming" | "tool_calling";
+    requiresVision?: boolean;
     ensureSessionTracked: () => void;
   }): Promise<PaperChatRerouteDetails | null> {
     const {
@@ -224,6 +228,7 @@ export class PaperChatRetryOrchestrator {
       failedModelId,
       alreadyRerouted,
       reason,
+      requiresVision,
       ensureSessionTracked,
     } = params;
     if (
@@ -238,6 +243,8 @@ export class PaperChatRetryOrchestrator {
     const reroute = await this.repairSessionAfterHardFailure(
       session,
       failedModelId,
+      true,
+      requiresVision,
     );
     ensureSessionTracked();
     if (!reroute) {

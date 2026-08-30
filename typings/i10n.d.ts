@@ -132,6 +132,7 @@ export type FluentMessageId =
   | 'paperchat-chat-history-search-user'
   | 'paperchat-chat-history-title'
   | 'paperchat-chat-image-attachment-limit'
+  | 'paperchat-chat-image-input-unsupported'
   | 'paperchat-chat-input-placeholder'
   | 'paperchat-chat-interrupted'
   | 'paperchat-chat-jump-to-quote'

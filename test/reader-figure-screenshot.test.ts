@@ -19,6 +19,10 @@ import {
   unregisterAll,
 } from "../src/modules/ui/chat-panel/ChatPanelManager.ts";
 import type { ImageAttachment } from "../src/types/chat.ts";
+import {
+  applyImageInputAvailability,
+  getImageInputAvailability,
+} from "../src/modules/ui/chat-panel/imageAttachmentPolicy.ts";
 
 type FakeListener = (event: Record<string, any>) => void;
 
@@ -281,6 +285,27 @@ function createBase64Image(byteLength: number): ImageAttachment {
 }
 
 describe("reader figure screenshot", function () {
+  it("hides only the screenshot entry for an unsupported image model", function () {
+    const screenshotButton = {
+      hidden: false,
+      style: { display: "" },
+    };
+    const container = {
+      dataset: {} as Record<string, string>,
+      querySelector: (selector: string) =>
+        selector === "#chat-figure-screenshot-btn" ? screenshotButton : null,
+    } as unknown as HTMLElement;
+
+    applyImageInputAvailability(container, "unsupported");
+    assert.equal(getImageInputAvailability(container), "unsupported");
+    assert.isTrue(screenshotButton.hidden);
+    assert.equal(screenshotButton.style.display, "none");
+
+    applyImageInputAvailability(container, "unknown");
+    assert.isFalse(screenshotButton.hidden);
+    assert.equal(screenshotButton.style.display, "");
+  });
+
   afterEach(function () {
     cancelReaderFigureScreenshot();
   });

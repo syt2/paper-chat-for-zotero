@@ -6,6 +6,7 @@ import {
   type PaperChatTierState,
 } from "../providers/paperchat-tier-routing";
 import type { PaperChatModelRoutingMetaMap } from "../providers/paperchat-routing-metadata";
+import { getPaperChatApiCapabilities } from "../providers/paperchat-routing-metadata";
 import { resolveSessionPaperChatModel } from "./paperchat-session-routing";
 
 type ResolvePaperChatSessionBindingResult = {
@@ -76,6 +77,7 @@ export function repairPaperChatSessionBindingAfterHardFailure(
   failedModelId: string | null,
   pickRandom?: (candidates: string[]) => string | null | undefined,
   routingMeta: PaperChatModelRoutingMetaMap = {},
+  requirements: { vision?: boolean } = {},
 ): RepairPaperChatSessionBindingResult | null {
   const globalState = parseTierState(tierStateRaw);
   const requestedTier = session.selectedTier || globalState.selectedTier;
@@ -90,15 +92,27 @@ export function repairPaperChatSessionBindingAfterHardFailure(
   const selectedTier = resolution.state.selectedTier;
 
   const previousModelId = failedModelId ?? session.resolvedModelId ?? null;
+  const rerouteCandidates = requirements.vision
+    ? resolution.pools[selectedTier].filter(
+        (model) =>
+          getPaperChatApiCapabilities(model, routingMeta).vision === true,
+      )
+    : resolution.pools[selectedTier];
   const reroutedModelId = rerollTierModel(
-    resolution.pools[selectedTier],
+    rerouteCandidates,
     previousModelId,
     pickRandom ?? ((candidates) => candidates[0] ?? null),
     routingMeta,
   );
+  const resolvedFallbackModelId = resolution.modelId;
   const modelId =
     reroutedModelId ||
-    (resolution.modelId !== previousModelId ? resolution.modelId : null);
+    (resolvedFallbackModelId !== null &&
+    resolvedFallbackModelId !== previousModelId &&
+    (!requirements.vision ||
+      rerouteCandidates.includes(resolvedFallbackModelId))
+      ? resolvedFallbackModelId
+      : null);
 
   if (!modelId) {
     return null;
