@@ -23,6 +23,7 @@ import {
   type PaperChatTier,
 } from "../providers/paperchat-tier-routing";
 import { isPaperChatQuotaError } from "../providers/paperchat-errors";
+import { getPaperChatApiCapabilities } from "../providers/paperchat-routing-metadata";
 import {
   getModelRatios,
   getModelRoutingMeta,
@@ -123,7 +124,9 @@ export interface PaperChatTierHost {
    * Routes through ChatManager's public rerollCurrentPaperChatTier so
    * instance-level test stubs keep intercepting the reroll+retry flow.
    */
-  rerollTier(): Promise<PaperChatTierRerollResult | null>;
+  rerollTier(
+    requiresVision?: boolean,
+  ): Promise<PaperChatTierRerollResult | null>;
   buildReroutedNotice(
     tier: PaperChatTier,
     previousModel: string,
@@ -144,7 +147,9 @@ export interface PaperChatTierHost {
 export class PaperChatTierController {
   constructor(private readonly host: PaperChatTierHost) {}
 
-  async rerollCurrentPaperChatTier(): Promise<PaperChatTierRerollResult | null> {
+  async rerollCurrentPaperChatTier(
+    requiresVision: boolean = false,
+  ): Promise<PaperChatTierRerollResult | null> {
     await this.host.init();
 
     const session = this.host.getCurrentSession();
@@ -165,8 +170,14 @@ export class PaperChatTierController {
       getModelRatios(),
       routingMeta,
     );
+    const candidates = requiresVision
+      ? pools[session.selectedTier].filter(
+          (model) =>
+            getPaperChatApiCapabilities(model, routingMeta).vision === true,
+        )
+      : pools[session.selectedTier];
     const nextModel = rerollTierModel(
-      pools[session.selectedTier],
+      candidates,
       session.resolvedModelId,
       pickRandomCandidate,
       routingMeta,
@@ -380,7 +391,7 @@ export class PaperChatTierController {
     try {
       return await rerollPaperChatFailureAndReplay<Zotero.Item | null>({
         session,
-        rerollTier: () => this.host.rerollTier(),
+        rerollTier: (requiresVision) => this.host.rerollTier(requiresVision),
         buildSystemNotice: (reroute) =>
           this.host.buildReroutedNotice(
             reroute.tier,

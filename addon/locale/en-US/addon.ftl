@@ -87,6 +87,7 @@ paperchat-chat-reader-figure-screenshot-no-pdf = Open a rendered PDF page in the
 paperchat-chat-reader-figure-screenshot-prompt = Drag to select a PDF region. Press Esc to cancel.
 paperchat-chat-reader-figure-screenshot-attach-failed = Could not attach the PDF screenshot. Remove another image or reopen the chat panel, then try again.
 paperchat-chat-image-attachment-limit = Could not attach the image. Each image must be no larger than { $maxImageMiB } MiB; a draft can contain up to { $maxImages } images and { $maxDraftMiB } MiB total.
+paperchat-chat-image-input-unsupported = The current model does not support image input. Remove attached images or choose a model with vision support.
 paperchat-chat-reader-open-selection-tooltip = Open PaperChat with the selected text
 paperchat-chat-selected-text-label = Selection
 paperchat-chat-remove-selected-text = Remove selected text

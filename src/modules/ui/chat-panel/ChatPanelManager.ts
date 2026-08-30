@@ -122,9 +122,11 @@ import {
 } from "./NextQuestionHintController";
 import { cancelReaderFigureScreenshot } from "../ReaderFigureScreenshot";
 import {
+  getResolvedImageInputAvailability,
   MAX_PENDING_IMAGE_ATTACHMENTS,
   MAX_PENDING_IMAGE_BYTES,
   MAX_PENDING_IMAGE_DRAFT_BYTES,
+  refreshImageInputAvailability,
 } from "./imageAttachmentPolicy";
 
 // Panel display mode: 'sidebar' or 'floating'
@@ -1525,6 +1527,7 @@ async function initializeChatContentCommon(
 
   // Initialize ChatManager (handles migration and session loading)
   await manager.init();
+  await refreshImageInputAvailability(container, manager);
 
   // Get current item from reader
   const activeItem = requestedItem || getActiveReaderItem();
@@ -2375,6 +2378,9 @@ export function showPanelWithImageAttachment(
   image: ImageAttachment,
   source: ChatPanelOpenSource = "reader_selection",
 ): boolean {
+  if (getResolvedImageInputAvailability(getChatManager()) === "unsupported") {
+    return false;
+  }
   const previousImages = pendingImages;
   if (!addImageAttachment(image)) return false;
 

@@ -39,6 +39,10 @@ import {
   clearPaperchatModelCaches,
   loadCachedRatios,
 } from "../src/modules/preferences/ModelsFetcher.ts";
+import {
+  applyImageInputAvailability,
+  refreshImageInputAvailability,
+} from "../src/modules/ui/chat-panel/imageAttachmentPolicy.ts";
 import type { ChatMessage, ChatSession } from "../src/types/chat";
 import type { ToolDefinition } from "../src/types/tool";
 import type { ManagedAbortController } from "../src/utils/abort.ts";
@@ -2663,6 +2667,371 @@ describe("paperchat storage and chat manager", function () {
     assert.equal(session.updatedAt, 100);
   });
 
+  it("rolls back an automatically resolved model when persistence fails", async function () {
+    const providerManager = getProviderManager() as any;
+    const originalGetProvider = providerManager.getProvider;
+    const originalGetProviderConfig = providerManager.getProviderConfig;
+    let providerOverrideUpdates = 0;
+    providerManager.getProvider = (providerId: string) =>
+      providerId === "paperchat"
+        ? {
+            updateConfig: () => {
+              providerOverrideUpdates += 1;
+            },
+          }
+        : null;
+    providerManager.getProviderConfig = (providerId: string) =>
+      providerId === "paperchat"
+        ? { id: "paperchat", availableModels: ["m1"] }
+        : null;
+
+    const session: ChatSession = {
+      id: "session-resolve-persist-failure",
+      createdAt: 1,
+      updatedAt: 100,
+      lastActiveItemKey: null,
+      messages: [],
+      selectedTier: "paperchat-standard",
+    };
+    const manager = Object.create(ChatManager.prototype) as any;
+    manager.sessionStorage = {
+      updateSessionMeta: async () => {
+        throw new Error("session metadata unavailable");
+      },
+    };
+
+    try {
+      let thrown: unknown;
+      try {
+        await manager.ensurePaperChatModelResolved(session);
+      } catch (error) {
+        thrown = error;
+      }
+
+      assert.instanceOf(thrown, Error);
+      assert.equal((thrown as Error).message, "session metadata unavailable");
+      assert.equal(session.selectedTier, "paperchat-standard");
+      assert.isUndefined(session.resolvedModelId);
+      assert.equal(session.updatedAt, 100);
+      assert.equal(providerOverrideUpdates, 0);
+    } finally {
+      providerManager.getProvider = originalGetProvider;
+      providerManager.getProviderConfig = originalGetProviderConfig;
+    }
+  });
+
+  it("does not apply a late UI model resolution after its active target changes", async function () {
+    const providerManager = getProviderManager() as any;
+    const originalGetActiveProviderId = providerManager.getActiveProviderId;
+    const originalGetProvider = providerManager.getProvider;
+    const originalGetProviderConfig = providerManager.getProviderConfig;
+    const providerOverrides: string[] = [];
+    let activeProviderId = "paperchat";
+    providerManager.getActiveProviderId = () => activeProviderId;
+    providerManager.getProvider = (providerId: string) =>
+      providerId === "paperchat"
+        ? {
+            updateConfig: (config: { resolvedModelOverride?: string }) => {
+              if (config.resolvedModelOverride) {
+                providerOverrides.push(config.resolvedModelOverride);
+              }
+            },
+          }
+        : null;
+    providerManager.getProviderConfig = (providerId: string) =>
+      providerId === "paperchat"
+        ? { id: "paperchat", availableModels: ["m1"] }
+        : null;
+
+    const runLateResolutionCase = async (
+      id: string,
+      mutateTarget: (manager: any, session: ChatSession) => void,
+    ): Promise<ChatSession> => {
+      const session: ChatSession = {
+        id,
+        createdAt: 1,
+        updatedAt: 1,
+        lastActiveItemKey: null,
+        messages: [],
+        selectedTier: "paperchat-standard",
+      };
+      let markWriteStarted!: () => void;
+      let releaseWrite!: () => void;
+      const writeStarted = new Promise<void>((resolve) => {
+        markWriteStarted = resolve;
+      });
+      const waitForRelease = new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      });
+      const manager = Object.create(ChatManager.prototype) as any;
+      manager.currentSession = session;
+      manager.init = async () => undefined;
+      manager.sessionStorage = {
+        updateSessionMeta: async () => {
+          markWriteStarted();
+          await waitForRelease;
+        },
+      };
+
+      const resolution = manager.ensureCurrentPaperChatModelResolved();
+      await writeStarted;
+      mutateTarget(manager, session);
+      releaseWrite();
+
+      assert.isNull(await resolution);
+      assert.deepEqual(providerOverrides, []);
+      return session;
+    };
+
+    try {
+      const secondSession: ChatSession = {
+        id: "session-late-resolution-b",
+        createdAt: 2,
+        updatedAt: 2,
+        lastActiveItemKey: null,
+        messages: [],
+        selectedTier: "paperchat-standard",
+        resolvedModelId: "m2",
+      };
+      await runLateResolutionCase("session-late-resolution-a", (manager) => {
+        manager.currentSession = secondSession;
+      });
+      assert.equal(secondSession.resolvedModelId, "m2");
+
+      const changedSession = await runLateResolutionCase(
+        "session-late-model-change",
+        (_manager, session) => {
+          session.resolvedModelId = "m2";
+        },
+      );
+      assert.equal(changedSession.resolvedModelId, "m2");
+
+      await runLateResolutionCase("session-late-provider-change", () => {
+        activeProviderId = "openai";
+      });
+    } finally {
+      providerManager.getActiveProviderId = originalGetActiveProviderId;
+      providerManager.getProvider = originalGetProvider;
+      providerManager.getProviderConfig = originalGetProviderConfig;
+    }
+  });
+
+  it("keeps image capability refreshes bound to the active session", async function () {
+    const providerManager = getProviderManager() as any;
+    const originalGetActiveProviderId = providerManager.getActiveProviderId;
+    providerManager.getActiveProviderId = () => "paperchat";
+    prefStore.set(
+      `${PREFS_PREFIX}.paperchatRoutingConfigCache`,
+      JSON.stringify({
+        "vision-model": { apiCapabilities: { vision: true } },
+        "no-vision-model": { apiCapabilities: { vision: false } },
+      }),
+    );
+    loadCachedRatios();
+
+    const screenshotButton = {
+      hidden: false,
+      style: { display: "" },
+    };
+    const container = {
+      dataset: {} as Record<string, string>,
+      querySelector: (selector: string) =>
+        selector === "#chat-figure-screenshot-btn" ? screenshotButton : null,
+    } as unknown as HTMLElement;
+    const firstSession = {
+      id: "capability-session-a",
+      resolvedModelId: "vision-model",
+    };
+    const secondSession = { id: "capability-session-b" } as {
+      id: string;
+      resolvedModelId?: string;
+    };
+    let activeSession = firstSession;
+    const resolvers = new Map<string, (modelId: string) => void>();
+    const manager = {
+      getActiveSession: () => activeSession,
+      ensureCurrentPaperChatModelResolved: () => {
+        const requestedSession = activeSession;
+        return new Promise<string>((resolve) => {
+          resolvers.set(requestedSession.id, (modelId) => {
+            requestedSession.resolvedModelId = modelId;
+            resolve(modelId);
+          });
+        });
+      },
+    } as unknown as ChatManager;
+
+    try {
+      const firstRefresh = refreshImageInputAvailability(container, manager);
+      activeSession = secondSession;
+      const secondRefresh = refreshImageInputAvailability(container, manager);
+
+      resolvers.get(secondSession.id)?.("no-vision-model");
+      assert.equal(await secondRefresh, "unsupported");
+      assert.isTrue(screenshotButton.hidden);
+
+      resolvers.get(firstSession.id)?.("vision-model");
+      assert.equal(await firstRefresh, "unsupported");
+      assert.isTrue(screenshotButton.hidden);
+
+      const sameSessionResolvers: Array<(modelId: string | null) => void> = [];
+      (manager as any).ensureCurrentPaperChatModelResolved = () =>
+        new Promise<string | null>((resolve) => {
+          sameSessionResolvers.push(resolve);
+        });
+      const staleSameSessionRefresh = refreshImageInputAvailability(
+        container,
+        manager,
+      );
+      const currentSameSessionRefresh = refreshImageInputAvailability(
+        container,
+        manager,
+      );
+      secondSession.resolvedModelId = "no-vision-model";
+      sameSessionResolvers[1]("no-vision-model");
+      assert.equal(await currentSameSessionRefresh, "unsupported");
+      sameSessionResolvers[0](null);
+      assert.equal(await staleSameSessionRefresh, "unsupported");
+      assert.isTrue(screenshotButton.hidden);
+
+      applyImageInputAvailability(container, "supported");
+      const earlyStaleResolvers: Array<(modelId: string | null) => void> = [];
+      (manager as any).ensureCurrentPaperChatModelResolved = () =>
+        new Promise<string | null>((resolve) => {
+          earlyStaleResolvers.push(resolve);
+        });
+      let earlyStaleSettled = false;
+      const earlyStaleRefresh = refreshImageInputAvailability(
+        container,
+        manager,
+      ).finally(() => {
+        earlyStaleSettled = true;
+      });
+      const latestSlowRefresh = refreshImageInputAvailability(
+        container,
+        manager,
+      );
+      earlyStaleResolvers[0](null);
+      await Promise.resolve();
+      await Promise.resolve();
+      assert.isFalse(earlyStaleSettled);
+
+      secondSession.resolvedModelId = "no-vision-model";
+      earlyStaleResolvers[1]("no-vision-model");
+      assert.equal(await latestSlowRefresh, "unsupported");
+      assert.equal(await earlyStaleRefresh, "unsupported");
+      assert.isTrue(screenshotButton.hidden);
+
+      (manager as any).ensureCurrentPaperChatModelResolved = async () => {
+        throw new Error("routing metadata unavailable");
+      };
+      assert.equal(
+        await refreshImageInputAvailability(container, manager),
+        "unsupported",
+      );
+      assert.isTrue(screenshotButton.hidden);
+
+      (manager as any).ensureCurrentPaperChatModelResolved = async () => {
+        secondSession.resolvedModelId = "unknown-model";
+        return "unknown-model";
+      };
+      assert.equal(
+        await refreshImageInputAvailability(container, manager),
+        "unknown",
+      );
+      assert.isFalse(screenshotButton.hidden);
+    } finally {
+      providerManager.getActiveProviderId = originalGetActiveProviderId;
+      clearPaperchatModelCaches();
+    }
+  });
+
+  it("rerolls an image-bearing session only to an explicit vision model", async function () {
+    const providerManager = getProviderManager() as any;
+    const originalGetActiveProviderId = providerManager.getActiveProviderId;
+    const originalGetActiveProvider = providerManager.getActiveProvider;
+    const originalGetProvider = providerManager.getProvider;
+    const originalGetProviderConfig = providerManager.getProviderConfig;
+    const providerOverrides: string[] = [];
+    const paperchatProvider = {
+      updateConfig: (config: { resolvedModelOverride?: string }) => {
+        if (config.resolvedModelOverride) {
+          providerOverrides.push(config.resolvedModelOverride);
+        }
+      },
+    };
+    providerManager.getActiveProviderId = () => "paperchat";
+    providerManager.getActiveProvider = () => paperchatProvider;
+    providerManager.getProvider = (providerId: string) =>
+      providerId === "paperchat" ? paperchatProvider : null;
+    providerManager.getProviderConfig = (providerId: string) =>
+      providerId === "paperchat"
+        ? {
+            id: "paperchat",
+            availableModels: [
+              "current-vision",
+              "explicit-no-vision",
+              "unknown-vision",
+              "next-vision",
+            ],
+          }
+        : null;
+    prefStore.set(
+      `${PREFS_PREFIX}.paperchatRoutingConfigCache`,
+      JSON.stringify({
+        "current-vision": {
+          tier: "standard",
+          apiCapabilities: { vision: true },
+        },
+        "explicit-no-vision": {
+          tier: "standard",
+          apiCapabilities: { vision: false },
+        },
+        "unknown-vision": { tier: "standard" },
+        "next-vision": {
+          tier: "standard",
+          apiCapabilities: { vision: true },
+        },
+      }),
+    );
+    loadCachedRatios();
+
+    const session: ChatSession = {
+      id: "session-manual-reroll-vision",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      messages: [],
+      selectedTier: "paperchat-standard",
+      resolvedModelId: "current-vision",
+    };
+    let persistedModel: string | undefined;
+    const manager = Object.create(ChatManager.prototype) as any;
+    manager.currentSession = session;
+    manager.init = async () => undefined;
+    manager.sessionStorage = {
+      updateSessionMeta: async (updatedSession: ChatSession) => {
+        persistedModel = updatedSession.resolvedModelId;
+      },
+    };
+
+    try {
+      const result = await manager.rerollCurrentPaperChatTier(true);
+
+      assert.equal(result?.previousModel, "current-vision");
+      assert.equal(result?.nextModel, "next-vision");
+      assert.equal(session.resolvedModelId, "next-vision");
+      assert.equal(persistedModel, "next-vision");
+      assert.deepEqual(providerOverrides, ["next-vision"]);
+    } finally {
+      providerManager.getActiveProviderId = originalGetActiveProviderId;
+      providerManager.getActiveProvider = originalGetActiveProvider;
+      providerManager.getProvider = originalGetProvider;
+      providerManager.getProviderConfig = originalGetProviderConfig;
+      clearPaperchatModelCaches();
+    }
+  });
+
   it("does not mutate session paper context when syncing the current reader item", function () {
     const manager = Object.create(ChatManager.prototype) as ChatManager & {
       currentSession: ChatSession;
@@ -3717,11 +4086,14 @@ describe("paperchat storage and chat manager", function () {
 
     const result = await rerollPaperChatFailureAndReplay({
       session,
-      rerollTier: async () => ({
-        previousModel: "m3",
-        nextModel: "m4",
-        tier: "paperchat-standard",
-      }),
+      rerollTier: async (requiresVision) => {
+        assert.isTrue(requiresVision);
+        return {
+          previousModel: "m3",
+          nextModel: "m4",
+          tier: "paperchat-standard",
+        };
+      },
       buildSystemNotice: () => "rerouted notice",
       insertSystemNotice: async (
         targetSession: ChatSession,
@@ -3772,6 +4144,67 @@ describe("paperchat storage and chat manager", function () {
       session.messages.map((message) => message.id),
       ["system-1", "user-1", "assistant-1", "error-1", "notice-1"],
     );
+  });
+
+  it("keeps manual reroutes vision-capable when an earlier turn contains an image", async function () {
+    const session: ChatSession = {
+      id: "session-reroll-image-history",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      messages: [
+        {
+          id: "user-with-image",
+          role: "user",
+          content: "What is shown here?",
+          images: [
+            {
+              type: "url",
+              data: "https://example.com/figure.png",
+              mimeType: "image/png",
+            },
+          ],
+          timestamp: 1,
+        },
+        {
+          id: "assistant-before-retry",
+          role: "assistant",
+          content: "The figure shows...",
+          timestamp: 2,
+        },
+        {
+          id: "user-text-only",
+          role: "user",
+          content: "Can you explain that again?",
+          timestamp: 3,
+        },
+        {
+          id: "error-text-only",
+          role: "error",
+          content: "model failed",
+          timestamp: 4,
+        },
+      ],
+      lastRetryableUserMessageId: "user-text-only",
+      lastRetryableErrorMessageId: "error-text-only",
+    };
+    let requiresVision = false;
+
+    const result = await rerollPaperChatFailureAndReplay({
+      session,
+      rerollTier: async (required) => {
+        requiresVision = required;
+        return null;
+      },
+      buildSystemNotice: () => "unused",
+      insertSystemNotice: async () => assert.fail("unexpected notice"),
+      rollbackReroute: async () => assert.fail("unexpected rollback"),
+      resend: async () => assert.fail("unexpected resend"),
+      getItem: () => null,
+    });
+
+    assert.isNull(result);
+    assert.isTrue(requiresVision);
   });
 
   it("rolls back a reroute when replay is not accepted", async function () {
@@ -5824,7 +6257,27 @@ describe("paperchat storage and chat manager", function () {
       lastActiveItemKey: null,
       selectedTier: "paperchat-standard",
       resolvedModelId: "m1",
-      messages: [],
+      messages: [
+        {
+          id: "historical-image",
+          role: "user",
+          content: "What does this figure show?",
+          images: [
+            {
+              type: "base64",
+              data: "AA==",
+              mimeType: "image/png",
+            },
+          ],
+          timestamp: 1,
+        },
+        {
+          id: "historical-answer",
+          role: "assistant",
+          content: "It shows a trend.",
+          timestamp: 2,
+        },
+      ],
     };
     const errors = [
       new Error('API Error: 503 - {"error":{"code":"model_not_found"}}'),
@@ -5892,17 +6345,22 @@ describe("paperchat storage and chat manager", function () {
         insertSystemNotice: (targetSession: ChatSession, content: string) =>
           manager.insertSystemNotice(targetSession, content),
       });
-      (manager.paperChatRetry as any).repairSessionAfterHardFailure =
-        async () => {
-          repairCalls += 1;
-          currentModel = "m2";
-          session.resolvedModelId = currentModel;
-          return {
-            previousModel: "m1",
-            nextModel: "m2",
-            tier: "paperchat-standard",
-          };
+      (manager.paperChatRetry as any).repairSessionAfterHardFailure = async (
+        _session: ChatSession,
+        _failedModelId: string | null,
+        _persist: boolean,
+        requiresVision: boolean,
+      ) => {
+        assert.isTrue(requiresVision);
+        repairCalls += 1;
+        currentModel = "m2";
+        session.resolvedModelId = currentModel;
+        return {
+          previousModel: "m1",
+          nextModel: "m2",
+          tier: "paperchat-standard",
         };
+      };
       (manager.paperChatRetry as any).buildReroutedNotice = () => "rerouted";
       (manager.paperChatRetry as any).trackModelRerouted = () => undefined;
       manager.sessionStorage = {
@@ -6315,6 +6773,122 @@ describe("paperchat storage and chat manager", function () {
     }
   });
 
+  it("rejects current and historical images before persistence when vision is disabled", async function () {
+    const providerManager = getProviderManager() as any;
+    const originalGetActiveProviderId = providerManager.getActiveProviderId;
+    prefStore.set(
+      `${PREFS_PREFIX}.paperchatRoutingConfigCache`,
+      JSON.stringify({
+        "no-vision": { apiCapabilities: { vision: false } },
+      }),
+    );
+    loadCachedRatios();
+
+    const provider = {
+      config: {
+        id: "paperchat",
+        type: "paperchat",
+        defaultModel: "no-vision",
+      },
+      getName: () => "PaperChat",
+      isReady: () => true,
+      supportsPdfUpload: () => false,
+    };
+    providerManager.getActiveProviderId = () => "paperchat";
+
+    try {
+      const image: NonNullable<ChatMessage["images"]>[number] = {
+        type: "base64",
+        data: "AA==",
+        mimeType: "image/png",
+      };
+      const cases: Array<{
+        id: string;
+        messages: ChatMessage[];
+        images?: ChatMessage["images"];
+      }> = [
+        {
+          id: "current-image-request-without-vision",
+          messages: [],
+          images: [image],
+        },
+        {
+          id: "historical-image-request-without-vision",
+          messages: [
+            {
+              id: "earlier-image",
+              role: "user",
+              content: "What is shown?",
+              images: [image],
+              timestamp: 1,
+            },
+            {
+              id: "earlier-answer",
+              role: "assistant",
+              content: "A chart.",
+              timestamp: 2,
+            },
+          ],
+        },
+      ];
+
+      for (const testCase of cases) {
+        const originalMessages = testCase.messages.map((message) =>
+          message.images
+            ? {
+                ...message,
+                images: message.images.map((entry) => ({ ...entry })),
+              }
+            : { ...message },
+        );
+        const session: ChatSession = {
+          id: testCase.id,
+          createdAt: 1,
+          updatedAt: 1,
+          lastActiveItemKey: null,
+          messages: testCase.messages,
+        };
+        const insertedMessages: ChatMessage[] = [];
+        const manager = Object.create(ChatManager.prototype) as any;
+        manager.currentSession = session;
+        manager.activeSessionRunIds = new Map();
+        manager.sessionRunCounters = new Map();
+        manager.activeSessionAbortControllers = new Map();
+        manager.streamingSessions = new Map();
+        manager.currentItemKey = null;
+        manager.init = async () => undefined;
+        manager.getActiveProvider = () => provider;
+        manager.ensurePaperChatModelResolved = async () => "no-vision";
+        manager.isSessionActive = () => false;
+        manager.sessionStorage = {
+          insertMessage: async (_sessionId: string, message: ChatMessage) => {
+            insertedMessages.push(message);
+          },
+        };
+
+        let thrown: unknown;
+        try {
+          await manager.sendMessage("Explain this again", {
+            images: testCase.images,
+          });
+        } catch (error) {
+          thrown = error;
+        }
+
+        assert.instanceOf(thrown, Error);
+        assert.equal(
+          (thrown as Error).message,
+          "paperchat-chat-image-input-unsupported",
+        );
+        assert.deepEqual(session.messages, originalMessages);
+        assert.deepEqual(insertedMessages, []);
+      }
+    } finally {
+      providerManager.getActiveProviderId = originalGetActiveProviderId;
+      clearPaperchatModelCaches();
+    }
+  });
+
   it("keeps reply-summary source content ephemeral and retry-restricted", async function () {
     const providerManager = getProviderManager() as any;
     const contextManager = getContextManager() as any;
@@ -6557,7 +7131,10 @@ describe("paperchat storage and chat manager", function () {
           scope,
         });
       manager.paperChatRetry = {
-        reroutePaperChatSessionForHardFailure: async () => {
+        reroutePaperChatSessionForHardFailure: async (params: {
+          requiresVision?: boolean;
+        }) => {
+          assert.isTrue(params.requiresVision);
           hosted = reroutedHosted;
           provider.updateConfig({ resolvedModelOverride: "rerouted-model" });
           session.resolvedModelId = "rerouted-model";
@@ -6598,8 +7175,34 @@ describe("paperchat storage and chat manager", function () {
 
       await manager.sendMessageWithToolCalling(
         provider,
-        [{ id: "user", role: "user", content: "search", timestamp: 1 }],
-        { id: "assistant", role: "assistant", content: "", timestamp: 2 },
+        [
+          {
+            id: "historical-image",
+            role: "user",
+            content: "What is in this figure?",
+            images: [
+              {
+                type: "base64",
+                data: "AA==",
+                mimeType: "image/png",
+              },
+            ],
+            timestamp: 1,
+          },
+          {
+            id: "historical-answer",
+            role: "assistant",
+            content: "It is a chart.",
+            timestamp: 2,
+          },
+          {
+            id: "user",
+            role: "user",
+            content: "search this result",
+            timestamp: 3,
+          },
+        ],
+        { id: "assistant", role: "assistant", content: "", timestamp: 4 },
         false,
         false,
         false,

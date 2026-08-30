@@ -17,6 +17,8 @@ export interface PaperChatModelRoutingMeta {
   apiCapabilities?: {
     responses?: boolean;
     hostedWebSearch?: boolean;
+    /** true/false are explicit; omission means image support is unknown. */
+    vision?: boolean;
     reasoning?: ModelReasoningCapability;
   };
 }
@@ -194,11 +196,16 @@ export function parseModelRoutingConfig(
         unknown
       >;
       const responses = capabilities.responses === true;
+      const vision =
+        typeof capabilities.vision === "boolean"
+          ? capabilities.vision
+          : undefined;
       const reasoning = parseReasoningCapability(capabilities.reasoning);
-      if (responses || reasoning) {
+      if (responses || vision !== undefined || reasoning) {
         meta.apiCapabilities = {
           responses,
           hostedWebSearch: responses && capabilities.hostedWebSearch === true,
+          ...(vision !== undefined ? { vision } : {}),
           ...(reasoning ? { reasoning } : {}),
         };
       }
@@ -224,12 +231,14 @@ export function getPaperChatApiCapabilities(
 ): {
   responses: boolean;
   hostedWebSearch: boolean;
+  vision?: boolean;
   reasoning?: ModelReasoningCapability;
 } {
   const capabilities = routingMeta[model]?.apiCapabilities;
   return {
     responses: capabilities?.responses === true,
     hostedWebSearch: capabilities?.hostedWebSearch === true,
+    vision: capabilities?.vision,
     reasoning: capabilities?.reasoning,
   };
 }

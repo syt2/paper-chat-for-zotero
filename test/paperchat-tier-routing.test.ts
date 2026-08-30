@@ -188,6 +188,7 @@ describe("paperchat tier routing", function () {
           apiCapabilities: {
             responses: true,
             hostedWebSearch: true,
+            vision: true,
             reasoning: {
               protocol: "openai",
               efforts: ["none", "low", "medium", "high", "xhigh", "max"],
@@ -198,11 +199,15 @@ describe("paperchat tier routing", function () {
         m2: {
           tier: "ultra",
           priority: "3",
+          apiCapabilities: {
+            vision: false,
+          },
         },
         m3: {
           tier: "lite",
           apiCapabilities: {
             hostedWebSearch: true,
+            vision: "true",
             reasoning: {
               protocol: "deepseek",
               efforts: ["none", "high", "max", "invalid"],
@@ -222,6 +227,7 @@ describe("paperchat tier routing", function () {
         apiCapabilities: {
           responses: true,
           hostedWebSearch: true,
+          vision: true,
           reasoning: {
             protocol: "openai",
             efforts: ["none", "low", "medium", "high", "xhigh", "max"],
@@ -232,6 +238,11 @@ describe("paperchat tier routing", function () {
       m2: {
         tierCode: 4,
         priority: 3,
+        apiCapabilities: {
+          responses: false,
+          hostedWebSearch: false,
+          vision: false,
+        },
       },
       m3: {
         tierCode: 1,
@@ -840,6 +851,43 @@ describe("paperchat tier routing", function () {
         },
       },
     });
+  });
+
+  it("reroutes an image request only to an explicitly vision-capable model", function () {
+    const session: ChatSession = {
+      id: "s-hard-fail-vision",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      messages: [],
+      selectedTier: "paperchat-standard",
+      resolvedModelId: "m3",
+    };
+
+    const repaired = repairPaperChatSessionBindingAfterHardFailure(
+      session,
+      {
+        selectedTier: "paperchat-standard",
+        tiers: {
+          "paperchat-lite": { mode: "auto", modelId: "m1" },
+          "paperchat-standard": { mode: "auto", modelId: "m3" },
+          "paperchat-pro": { mode: "auto", modelId: "m5" },
+          "paperchat-ultra": { mode: "auto", modelId: "m5" },
+        },
+      },
+      ["m1", "m3", "m4", "m7", "m6", "m5"],
+      { m1: 0.1, m3: 0.6, m4: 0.7, m7: 0.8, m6: 0.9, m5: 1.2 },
+      "m3",
+      (candidates) => candidates[0] ?? null,
+      {
+        m3: { apiCapabilities: { vision: true } },
+        m4: { apiCapabilities: { vision: false } },
+        m6: { apiCapabilities: { vision: true } },
+      },
+      { vision: true },
+    );
+
+    assert.equal(repaired?.modelId, "m6");
   });
 
   it("returns null when a hard-failed tier has no alternate model", function () {
