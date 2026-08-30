@@ -8,6 +8,10 @@ import { getPref } from "../../../utils/prefs";
 import { MAX_SEARCH_QUERY_RAW_UTF16_LENGTH } from "../../chat/search/SearchQuery";
 import type { ThemeColors } from "./types";
 import { HTML_NS } from "./types";
+import {
+  chatFontSize,
+  registerChatTypographyRoot,
+} from "./ChatPanelTypography";
 
 /**
  * Helper to create an element with styles (using proper HTML namespace for XHTML)
@@ -46,7 +50,7 @@ export function createChatContainer(
       zIndex: "10000",
       fontFamily:
         '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-      fontSize: "13px",
+      fontSize: chatFontSize(13),
       pointerEvents: "auto",
     },
     { id: `${config.addonRef}-chat-container` },
@@ -82,7 +86,7 @@ export function createChatContainer(
   );
 
   const dragTitle = createElement(doc, "span", {
-    fontSize: "13px",
+    fontSize: chatFontSize(13),
     fontWeight: "600",
     color: theme.textPrimary,
     pointerEvents: "none",
@@ -142,7 +146,7 @@ export function createChatContainer(
       padding: "10px 14px",
       background: theme.userBubbleBg,
       color: theme.userBubbleText,
-      fontSize: "12px",
+      fontSize: chatFontSize(12),
     },
     { id: "chat-user-bar" },
   );
@@ -191,7 +195,7 @@ export function createChatContainer(
     "span",
     {
       fontWeight: "600",
-      fontSize: "14px",
+      fontSize: chatFontSize(14),
       overflow: "hidden",
       textOverflow: "ellipsis",
       whiteSpace: "nowrap",
@@ -203,7 +207,7 @@ export function createChatContainer(
     doc,
     "span",
     {
-      fontSize: "11px",
+      fontSize: chatFontSize(11),
       opacity: "0.9",
       flexShrink: "0",
       whiteSpace: "nowrap",
@@ -242,7 +246,7 @@ export function createChatContainer(
     doc,
     "span",
     {
-      fontSize: "10px",
+      fontSize: chatFontSize(10),
       fontWeight: "600",
       lineHeight: "1.2",
       opacity: "0.95",
@@ -295,7 +299,7 @@ export function createChatContainer(
       borderRadius: "4px",
       padding: "5px 14px",
       color: theme.userBubbleText,
-      fontSize: "12px",
+      fontSize: chatFontSize(12),
       cursor: "pointer",
     },
     { id: "chat-user-action-btn" },
@@ -311,7 +315,7 @@ export function createChatContainer(
       borderRadius: "4px",
       padding: "5px 10px",
       color: "inherit",
-      fontSize: "11px",
+      fontSize: chatFontSize(11),
       cursor: "pointer",
       display: "none",
       whiteSpace: "nowrap",
@@ -470,7 +474,7 @@ export function createChatContainer(
   emptyIcon.textContent = "\uD83D\uDCAC"; // 💬
 
   const emptyText = createElement(doc, "div", {
-    fontSize: "15px",
+    fontSize: chatFontSize(15),
     color: theme.textMuted,
   });
   emptyText.textContent = getString("chat-start-conversation");
@@ -629,9 +633,9 @@ export function createChatContainer(
       minWidth: "32px",
       paddingLeft: "7px",
       paddingRight: "7px",
-      fontSize: "11px",
+      fontSize: chatFontSize(11),
       fontWeight: "700",
-      lineHeight: "16px",
+      lineHeight: "1.45",
     });
     toolbarButtons.appendChild(debugContextBtn);
   }
@@ -698,8 +702,8 @@ export function createChatContainer(
       border: "none",
       boxSizing: "border-box",
       fontFamily: "inherit",
-      fontSize: "14px",
-      lineHeight: "18px",
+      fontSize: chatFontSize(14),
+      lineHeight: "1.3",
       resize: "none",
       outline: "none",
       overflowY: "hidden",
@@ -741,8 +745,8 @@ export function createChatContainer(
       alignItems: "center",
       gap: "4px",
       flexShrink: "0",
-      fontSize: "12px",
-      lineHeight: "16px",
+      fontSize: chatFontSize(12),
+      lineHeight: "1.35",
       color: theme.textSecondary,
       whiteSpace: "nowrap",
     },
@@ -792,8 +796,8 @@ export function createChatContainer(
       background: theme.dropdownBg,
       color: theme.textPrimary,
       boxShadow: "0 6px 18px rgba(0,0,0,0.22)",
-      fontSize: "12px",
-      lineHeight: "17px",
+      fontSize: chatFontSize(12),
+      lineHeight: "1.4",
       whiteSpace: "normal",
       textAlign: "left",
       zIndex: "10003",
@@ -851,7 +855,7 @@ export function createChatContainer(
       border: `1px solid ${theme.inputBorderColor}`,
       borderRadius: "8px",
       cursor: "pointer",
-      fontSize: "12px",
+      fontSize: chatFontSize(12),
       color: theme.textSecondary,
       width: "max-content",
       maxWidth: "100%",
@@ -877,7 +881,7 @@ export function createChatContainer(
   modelSelectorText.textContent = getString("chat-select-model");
 
   const modelSelectorArrow = createElement(doc, "span", {
-    fontSize: "10px",
+    fontSize: chatFontSize(10),
     opacity: "0.6",
   });
   modelSelectorArrow.textContent = "▼";
@@ -1066,7 +1070,7 @@ export function createChatContainer(
     {
       display: "block",
       width: "100%",
-      height: "32px",
+      minHeight: "32px",
       boxSizing: "border-box",
       padding: "6px 32px 6px 10px",
       color: theme.textPrimary,
@@ -1075,7 +1079,7 @@ export function createChatContainer(
       borderRadius: "7px",
       outline: "none",
       fontFamily: "inherit",
-      fontSize: "12px",
+      fontSize: chatFontSize(12),
     },
     {
       id: "chat-history-search-input",
@@ -1194,6 +1198,7 @@ export function createChatContainer(
   container.appendChild(root);
 
   doc.documentElement?.appendChild(container);
+  registerChatTypographyRoot(container);
   return container;
 }
 

@@ -5,6 +5,7 @@ import type {
 } from "../../presentation/contracts";
 import { isDarkMode } from "./ChatPanelTheme";
 import { HTML_NS } from "./types";
+import { chatFontSize } from "./ChatPanelTypography";
 
 export type PresentationProgressCardStatus =
   | "calling"
@@ -320,7 +321,7 @@ export function buildPresentationProgressCardElement(
     overflow: "hidden",
     fontFamily:
       '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif',
-    fontSize: "12px",
+    fontSize: chatFontSize(12),
   });
 
   const header = doc.createElementNS(HTML_NS, "div") as HTMLElement;
@@ -334,7 +335,7 @@ export function buildPresentationProgressCardElement(
   title.setAttribute("data-presentation-progress-title", "true");
   Object.assign(title.style, {
     color: palette.nameText,
-    fontSize: "13px",
+    fontSize: chatFontSize(13),
     fontWeight: "700",
   });
   title.textContent = getPresentationCardString(
@@ -347,7 +348,7 @@ export function buildPresentationProgressCardElement(
   elapsed.setAttribute("data-presentation-elapsed", "true");
   Object.assign(elapsed.style, {
     color: palette.mutedText,
-    fontSize: "10px",
+    fontSize: chatFontSize(10),
     fontVariantNumeric: "tabular-nums",
     flexShrink: "0",
   });
@@ -361,7 +362,7 @@ export function buildPresentationProgressCardElement(
     alignItems: "flex-start",
     gap: "7px",
     color: palette.nameText,
-    fontSize: "12px",
+    fontSize: chatFontSize(12),
     lineHeight: "1.4",
   });
   const activityMarker = doc.createElementNS(HTML_NS, "span") as HTMLElement;
@@ -488,7 +489,7 @@ export function buildPresentationProgressCardElement(
     stageElement.appendChild(marker);
     const label = doc.createElementNS(HTML_NS, "span") as HTMLElement;
     Object.assign(label.style, {
-      fontSize: "9px",
+      fontSize: chatFontSize(9),
       lineHeight: "1.25",
       textAlign: "center",
       whiteSpace: "normal",
@@ -511,7 +512,7 @@ export function buildPresentationProgressCardElement(
     Object.assign(longHint.style, {
       display: "none",
       color: palette.mutedText,
-      fontSize: "10px",
+      fontSize: chatFontSize(10),
       lineHeight: "1.4",
     });
     card.appendChild(longHint);
@@ -540,7 +541,7 @@ export function buildPresentationProgressCardElement(
       cursor: "pointer",
       color: palette.nameText,
       background: palette.cardBg,
-      fontSize: "11px",
+      fontSize: chatFontSize(11),
       fontWeight: "600",
     });
 
@@ -591,7 +592,7 @@ export function buildPresentationProgressCardElement(
       cursor: "pointer",
       color: palette.nameText,
       background: palette.cardBg,
-      fontSize: "11px",
+      fontSize: chatFontSize(11),
       fontWeight: "600",
     });
 

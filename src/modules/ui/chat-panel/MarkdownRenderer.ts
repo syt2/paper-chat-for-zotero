@@ -28,6 +28,10 @@ import {
   type PresentationProgressCancelAction,
   type PresentationProgressResumeAction,
 } from "./PresentationProgressCard";
+import {
+  chatFontSize,
+  registerChatTypographyRoot,
+} from "./ChatPanelTypography";
 
 // Initialize markdown-it with XHTML output
 const md = new MarkdownIt({
@@ -704,7 +708,7 @@ function buildToolCallCardElement(
   card.style.overflow = "hidden";
   card.style.fontFamily =
     '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
-  card.style.fontSize = "12px";
+  card.style.fontSize = chatFontSize(12);
 
   const header = doc.createElementNS(HTML_NS, "div") as HTMLElement;
   header.style.display = "flex";
@@ -720,7 +724,7 @@ function buildToolCallCardElement(
   let chevron: HTMLElement | null = null;
   if (canToggle) {
     chevron = doc.createElementNS(HTML_NS, "span") as HTMLElement;
-    chevron.style.fontSize = "10px";
+    chevron.style.fontSize = chatFontSize(10);
     chevron.style.color = colors.argsText;
     chevron.style.transition = "transform 0.2s";
     chevron.style.display = "inline-block";
@@ -750,7 +754,7 @@ function buildToolCallCardElement(
     if (status === "calling") {
       summaryEl.setAttribute("data-tool-progress", "true");
     }
-    summaryEl.style.fontSize = "10px";
+    summaryEl.style.fontSize = chatFontSize(10);
     summaryEl.style.color = colors.argsText;
     summaryEl.style.minWidth = "0";
     summaryEl.style.overflow = "hidden";
@@ -762,7 +766,7 @@ function buildToolCallCardElement(
   header.appendChild(textGroup);
 
   const statusEl = doc.createElementNS(HTML_NS, "span") as HTMLElement;
-  statusEl.style.fontSize = "11px";
+  statusEl.style.fontSize = chatFontSize(11);
   statusEl.style.color = getToolCardStatusColor(colors, status);
   statusEl.style.fontWeight = "500";
   statusEl.style.flexShrink = "0";
@@ -783,7 +787,7 @@ function buildToolCallCardElement(
       argsEl.style.padding = "6px 12px";
       argsEl.style.color = colors.argsText;
       argsEl.style.fontFamily = '"SF Mono", Monaco, Consolas, monospace';
-      argsEl.style.fontSize = "11px";
+      argsEl.style.fontSize = chatFontSize(11);
       argsEl.style.borderBottom = toolResult
         ? `1px solid ${colors.cardBorder}`
         : "none";
@@ -796,7 +800,7 @@ function buildToolCallCardElement(
       const resultEl = doc.createElementNS(HTML_NS, "div") as HTMLElement;
       resultEl.style.padding = "6px 12px";
       resultEl.style.color = isError ? colors.nameText : colors.resultText;
-      resultEl.style.fontSize = "11px";
+      resultEl.style.fontSize = chatFontSize(11);
       resultEl.style.background = isError ? colors.cardBg : colors.resultBg;
       resultEl.style.whiteSpace = "pre-wrap";
       resultEl.style.wordBreak = "break-word";
@@ -923,7 +927,7 @@ function buildPresentationArtifactElement(
       cursor: "pointer",
       color: colors.nameText,
       background: colors.cardBg,
-      fontSize: "11px",
+      fontSize: chatFontSize(11),
       fontWeight: "600",
     });
     button.addEventListener("click", (event) => {
@@ -945,7 +949,7 @@ function buildPresentationArtifactElement(
     Object.assign(pathEl.style, {
       color: colors.argsText,
       fontFamily: '"SF Mono", Monaco, Consolas, monospace',
-      fontSize: "10px",
+      fontSize: chatFontSize(10),
       lineHeight: "1.35",
       overflowWrap: "anywhere",
       userSelect: "text",
@@ -1056,7 +1060,7 @@ function renderToolCallGroup(
   const summary = doc.createElementNS(HTML_NS, "summary") as HTMLElement;
   summary.style.cursor = "pointer";
   summary.style.userSelect = "none";
-  summary.style.fontSize = "11px";
+  summary.style.fontSize = chatFontSize(11);
   summary.style.color = colors.argsText;
   summary.style.padding = "4px 2px";
   summary.textContent = getString("chat-tool-group-earlier", {
@@ -1386,7 +1390,7 @@ function renderSourceGroupCard(
   badge.style.alignItems = "center";
   badge.style.padding = "2px 8px";
   badge.style.borderRadius = "999px";
-  badge.style.fontSize = "11px";
+  badge.style.fontSize = chatFontSize(11);
   badge.style.fontWeight = "600";
   badge.style.flexShrink = "0";
   badge.style.background = palette.badgeBg;
@@ -1395,7 +1399,7 @@ function renderSourceGroupCard(
   header.appendChild(badge);
 
   const label = doc.createElementNS(HTML_NS, "span") as HTMLElement;
-  label.style.fontSize = "13px";
+  label.style.fontSize = chatFontSize(13);
   label.style.fontWeight = "600";
   label.style.color = colors.labelText;
   label.style.flex = "1";
@@ -1412,7 +1416,7 @@ function renderSourceGroupCard(
     const openIndicator = doc.createElementNS(HTML_NS, "span") as HTMLElement;
     openIndicator.setAttribute("aria-hidden", "true");
     openIndicator.style.color = colors.bodyText;
-    openIndicator.style.fontSize = "12px";
+    openIndicator.style.fontSize = chatFontSize(12);
     openIndicator.style.flexShrink = "0";
     openIndicator.textContent = "↗";
     header.appendChild(openIndicator);
@@ -1799,7 +1803,7 @@ function appendBlockquoteAction(
     background: dark ? "#21262d" : "#f6f8fa",
     color: dark ? "#c9d1d9" : "#57606a",
     cursor: "pointer",
-    fontSize: "11px",
+    fontSize: chatFontSize(11),
     lineHeight: "1.4",
   });
   button.addEventListener("click", (event) => {
@@ -1942,11 +1946,16 @@ function appendEvidenceReference(
       card.style.boxShadow = dark
         ? "0 8px 24px rgba(0, 0, 0, 0.45)"
         : "0 8px 24px rgba(15, 23, 42, 0.16)";
-      card.style.fontSize = "12px";
       card.style.fontWeight = "400";
       card.style.lineHeight = "1.5";
       card.style.textAlign = "left";
       card.style.whiteSpace = "normal";
+
+      const content = doc.createElementNS(HTML_NS, "span") as HTMLElement;
+      content.setAttribute("data-evidence-card-content", record.id);
+      content.style.display = "block";
+      content.style.fontSize = chatFontSize(12);
+      card.appendChild(content);
 
       const location = formatEvidenceLocation(record);
       if (location) {
@@ -1957,17 +1966,17 @@ function appendEvidenceReference(
         locationElement.style.display = "block";
         locationElement.style.marginBottom = "5px";
         locationElement.style.color = dark ? "#8b949e" : "#64748b";
-        locationElement.style.fontSize = "11px";
+        locationElement.style.fontSize = chatFontSize(11);
         locationElement.style.fontWeight = "600";
         locationElement.textContent = location;
-        card.appendChild(locationElement);
+        content.appendChild(locationElement);
       }
 
       const quote = doc.createElementNS(HTML_NS, "span") as HTMLElement;
       quote.style.display = "block";
       quote.style.whiteSpace = "pre-wrap";
       quote.textContent = record.quote;
-      card.appendChild(quote);
+      content.appendChild(quote);
 
       const viewSource = doc.createElementNS(HTML_NS, "button") as HTMLElement;
       viewSource.setAttribute("type", "button");
@@ -1980,7 +1989,7 @@ function appendEvidenceReference(
       viewSource.style.background = dark ? "#21262d" : "#f8fafc";
       viewSource.style.color = dark ? "#79c0ff" : "#2563eb";
       viewSource.style.cursor = "pointer";
-      viewSource.style.fontSize = "11px";
+      viewSource.style.fontSize = chatFontSize(11);
       viewSource.textContent = action.viewSourceLabel;
       viewSource.addEventListener("click", (event) => {
         event.preventDefault();
@@ -1994,7 +2003,8 @@ function appendEvidenceReference(
             );
           });
       });
-      card.appendChild(viewSource);
+      content.appendChild(viewSource);
+      let typographyRegistered = false;
 
       citation.addEventListener("click", (event) => {
         event.preventDefault();
@@ -2006,6 +2016,9 @@ function appendEvidenceReference(
         }
 
         closeActiveEvidencePopover(doc);
+        if (!typographyRegistered) {
+          typographyRegistered = registerChatTypographyRoot(card);
+        }
         const host = doc.body || doc.documentElement || wrapper;
         host.appendChild(card);
         card.style.display = "block";
@@ -2124,7 +2137,7 @@ export function buildDOMFromTokens(
         pre.style.padding = "12px";
         pre.style.borderRadius = "6px";
         pre.style.overflow = "auto";
-        pre.style.fontSize = "13px";
+        pre.style.fontSize = chatFontSize(13);
         pre.style.fontFamily =
           "'SF Mono', Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace";
         pre.style.lineHeight = "1.45";
@@ -2167,7 +2180,7 @@ export function buildDOMFromTokens(
         table.style.borderCollapse = "collapse";
         table.style.width = "100%";
         table.style.margin = "10px 0";
-        table.style.fontSize = "12px";
+        table.style.fontSize = chatFontSize(12);
         parent.appendChild(table);
         stack.push(table);
         break;

@@ -77,6 +77,10 @@ import {
 } from "../../analytics/errorClassify";
 import { getReadingLoopService } from "../../reading-loop";
 import {
+  chatFontSize,
+  registerChatTypographyRoot,
+} from "./ChatPanelTypography";
+import {
   hasConversationMessages,
   shouldResetSummaryButtonBusyState,
 } from "./NoteSummaryActions";
@@ -370,9 +374,9 @@ function confirmHighConsumptionTierSwitch(
     });
 
     const title = createElement(doc, "div", {
-      fontSize: "15px",
+      fontSize: chatFontSize(15),
       fontWeight: "700",
-      lineHeight: "20px",
+      lineHeight: "1.35",
       marginBottom: "8px",
     });
     title.textContent =
@@ -381,8 +385,8 @@ function confirmHighConsumptionTierSwitch(
         : getString("chat-high-tier-warning-title");
 
     const message = createElement(doc, "div", {
-      fontSize: "13px",
-      lineHeight: "20px",
+      fontSize: chatFontSize(13),
+      lineHeight: "1.5",
       color: theme.textSecondary,
       marginBottom: "14px",
     });
@@ -392,8 +396,8 @@ function confirmHighConsumptionTierSwitch(
       display: "flex",
       alignItems: "center",
       gap: "8px",
-      fontSize: "12px",
-      lineHeight: "16px",
+      fontSize: chatFontSize(12),
+      lineHeight: "1.35",
       color: theme.textSecondary,
       marginBottom: "16px",
       cursor: "pointer",
@@ -419,15 +423,15 @@ function confirmHighConsumptionTierSwitch(
       alignItems: "center",
       justifyContent: "center",
       minWidth: "72px",
-      height: "32px",
+      minHeight: "32px",
       padding: "0 12px",
       borderRadius: "6px",
       border: `1px solid ${theme.inputBorderColor}`,
       background: theme.buttonBg,
       color: theme.textPrimary,
       cursor: "pointer",
-      fontSize: "12px",
-      lineHeight: "16px",
+      fontSize: chatFontSize(12),
+      lineHeight: "1.35",
       boxSizing: "border-box",
     }) as HTMLButtonElement;
     cancelBtn.type = "button";
@@ -438,15 +442,15 @@ function confirmHighConsumptionTierSwitch(
       alignItems: "center",
       justifyContent: "center",
       minWidth: "88px",
-      height: "32px",
+      minHeight: "32px",
       padding: "0 12px",
       borderRadius: "6px",
       border: "none",
       background: theme.userBubbleBg,
       color: theme.userBubbleText,
       cursor: "pointer",
-      fontSize: "12px",
-      lineHeight: "16px",
+      fontSize: chatFontSize(12),
+      lineHeight: "1.35",
       fontWeight: "600",
       boxSizing: "border-box",
     }) as HTMLButtonElement;
@@ -468,6 +472,7 @@ function confirmHighConsumptionTierSwitch(
     dialog.appendChild(checkboxRow);
     dialog.appendChild(actions);
     overlay.appendChild(dialog);
+    registerChatTypographyRoot(overlay);
     const mountNode = doc.body ?? doc.documentElement;
     if (!mountNode) {
       resolve(false);
@@ -889,8 +894,8 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
         background: theme.dropdownBg,
         color: theme.textPrimary,
         boxShadow: "0 8px 24px rgba(0, 0, 0, 0.2)",
-        fontSize: "12px",
-        lineHeight: "18px",
+        fontSize: chatFontSize(12),
+        lineHeight: "1.5",
         textAlign: "center",
         pointerEvents: "none",
       },
@@ -1188,6 +1193,20 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
     resizeMessageInput(messageInput, chatHistory);
     syncSendButtonState(sendButton, chatManager);
   });
+
+  const resizeMessageInputForTypography = (): void => {
+    resizeMessageInput(messageInput, chatHistory);
+  };
+  container.addEventListener(
+    "UIPropertiesChanged",
+    resizeMessageInputForTypography,
+  );
+  disposers.push(() =>
+    container.removeEventListener(
+      "UIPropertiesChanged",
+      resizeMessageInputForTypography,
+    ),
+  );
 
   // Set current item when input is focused
   messageInput?.addEventListener("focus", () => {
@@ -1759,7 +1778,7 @@ export function updateAttachmentsPreviewDisplay(
       border: `1px solid ${theme.borderColor}`,
       borderRadius: "6px",
       padding: "4px 8px",
-      fontSize: "11px",
+      fontSize: chatFontSize(11),
       color: theme.textSecondary,
     });
 
@@ -2038,7 +2057,7 @@ function renderTurnQueue(container: HTMLElement, sessionId?: string): void {
       padding: "1px 0",
       gap: "4px",
       color: theme.textSecondary,
-      fontSize: "11px",
+      fontSize: chatFontSize(11),
     });
     const preview = createElement(queue.ownerDocument, "span", {
       flex: "1",
@@ -2066,7 +2085,7 @@ function renderTurnQueue(container: HTMLElement, sessionId?: string): void {
           background: "transparent",
           color: theme.textSecondary,
           cursor: "pointer",
-          fontSize: "11px",
+          fontSize: chatFontSize(11),
         },
         {
           type: "button",
@@ -2673,7 +2692,7 @@ function populateReasoningDropdown(
       background: isSelected ? theme.dropdownItemHoverBg : "transparent",
       color: isSelected ? theme.inputFocusBorderColor : theme.textPrimary,
       cursor: "pointer",
-      fontSize: "12px",
+      fontSize: chatFontSize(12),
       textAlign: "left",
     });
     item.setAttribute("type", "button");
@@ -2744,7 +2763,7 @@ function populateModelDropdown(
     // Provider section header
     const sectionHeader = createElement(doc, "div", {
       padding: "8px 12px",
-      fontSize: "11px",
+      fontSize: chatFontSize(11),
       fontWeight: "600",
       color: theme.textMuted,
       background: theme.buttonBg,
@@ -2788,8 +2807,8 @@ function populateModelDropdown(
           background: theme.dropdownBg,
           color: theme.textSecondary,
           cursor: "pointer",
-          fontSize: "11px",
-          lineHeight: "15px",
+          fontSize: chatFontSize(11),
+          lineHeight: "1.35",
           whiteSpace: "nowrap",
         },
         {
@@ -2991,7 +3010,7 @@ function populateModelDropdown(
         });
         const tierItem = createElement(doc, "button", {
           padding: "8px 12px",
-          fontSize: "12px",
+          fontSize: chatFontSize(12),
           color: isSelectedTier
             ? theme.inputFocusBorderColor
             : theme.textPrimary,
@@ -3116,7 +3135,7 @@ function populateModelDropdown(
 
         const autoItem = createElement(doc, "button", {
           padding: "7px 12px 7px 28px",
-          fontSize: "12px",
+          fontSize: chatFontSize(12),
           color:
             isSelectedTier && !isManualSelection
               ? theme.inputFocusBorderColor
@@ -3171,7 +3190,7 @@ function populateModelDropdown(
             tierEntry.modelId === model;
           const modelItem = createElement(doc, "button", {
             padding: "7px 12px 7px 28px",
-            fontSize: "12px",
+            fontSize: chatFontSize(12),
             color: isCurrentModel
               ? theme.inputFocusBorderColor
               : theme.textPrimary,
@@ -3232,7 +3251,7 @@ function populateModelDropdown(
       // No models - show placeholder
       const noModels = createElement(doc, "div", {
         padding: "8px 12px",
-        fontSize: "12px",
+        fontSize: chatFontSize(12),
         color: theme.textMuted,
         fontStyle: "italic",
       });
@@ -3246,7 +3265,7 @@ function populateModelDropdown(
 
         const modelItem = createElement(doc, "div", {
           padding: "8px 12px",
-          fontSize: "12px",
+          fontSize: chatFontSize(12),
           color: isCurrentModel
             ? theme.inputFocusBorderColor
             : theme.textPrimary,
@@ -3351,7 +3370,7 @@ function populateModelDropdown(
   if (providers.length === 0) {
     const noProviders = createElement(doc, "div", {
       padding: "12px",
-      fontSize: "12px",
+      fontSize: chatFontSize(12),
       color: theme.textMuted,
       textAlign: "center",
     });

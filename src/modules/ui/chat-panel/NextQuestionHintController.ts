@@ -11,6 +11,7 @@ import type {
   NextQuestionHintReadingContext,
 } from "../../chat/next-question-hint";
 import type { ChatPanelContext } from "./types";
+import { chatFontSize } from "./ChatPanelTypography";
 
 const CONTROLLER_KEY = "__paperchatNextQuestionHintController";
 const RECENT_COMPLETION_WINDOW_MS = 2 * 60 * 1000;
@@ -360,14 +361,13 @@ export class NextQuestionHintController {
       left: "14px",
       right: "12px",
       top: "12px",
-      height: "18px",
       alignItems: "center",
       gap: "8px",
       pointerEvents: "none",
       zIndex: "1",
       color: theme.textMuted,
-      fontSize: "14px",
-      lineHeight: "18px",
+      fontSize: chatFontSize(14),
+      lineHeight: "1.3",
       opacity: "0.72",
     });
 
@@ -385,8 +385,8 @@ export class NextQuestionHintController {
     action.setAttribute("data-next-question-hint-action", "true");
     Object.assign(action.style, {
       flexShrink: "0",
-      fontSize: "11px",
-      lineHeight: "16px",
+      fontSize: chatFontSize(11),
+      lineHeight: "1.45",
       color: theme.textSecondary,
       opacity: "0.85",
     });

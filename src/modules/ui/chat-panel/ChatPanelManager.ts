@@ -51,6 +51,10 @@ import {
 } from "./ChatPanelTheme";
 import { createChatContainer } from "./ChatPanelBuilder";
 import {
+  chatFontSize,
+  registerChatTypographyRoot,
+} from "./ChatPanelTypography";
+import {
   ensureStreamingTypingIndicator,
   getMessageMarkdownRenderOptions,
   getStreamingContentSelector,
@@ -1740,8 +1744,8 @@ function renderReadingLoopSuggestionStrip(
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
-    fontSize: "12px",
-    lineHeight: "18px",
+    fontSize: chatFontSize(12),
+    lineHeight: "1.5",
   } satisfies Partial<CSSStyleDeclaration>);
 
   const primary = strip.ownerDocument.createElementNS(
@@ -1757,7 +1761,7 @@ function renderReadingLoopSuggestionStrip(
     color: getReadingLoopAccent(snapshot.state),
     cursor: snapshot.state === "running" ? "default" : "pointer",
     padding: "2px 4px",
-    fontSize: "12px",
+    fontSize: chatFontSize(12),
     fontWeight: "600",
     flexShrink: "0",
     opacity: snapshot.state === "running" ? "0.75" : "1",
@@ -2922,6 +2926,7 @@ function getReadingLoopPopover(doc: Document): HTMLElement {
     pointerEvents: "none",
   } satisfies Partial<CSSStyleDeclaration>);
   doc.documentElement.appendChild(popover);
+  registerChatTypographyRoot(popover);
   return popover;
 }
 
@@ -2951,9 +2956,9 @@ function showReadingLoopPopover(anchor: HTMLElement): void {
   title.textContent = suggestion.title;
   Object.assign(title.style, {
     color: theme.textPrimary,
-    fontSize: "12px",
+    fontSize: chatFontSize(12),
     fontWeight: "600",
-    lineHeight: "16px",
+    lineHeight: "1.35",
     whiteSpace: "nowrap",
     overflow: "hidden",
     textOverflow: "ellipsis",
@@ -2969,8 +2974,8 @@ function showReadingLoopPopover(anchor: HTMLElement): void {
         });
   Object.assign(meta.style, {
     color: theme.textMuted,
-    fontSize: "11px",
-    lineHeight: "15px",
+    fontSize: chatFontSize(11),
+    lineHeight: "1.35",
     marginTop: "2px",
     whiteSpace: "nowrap",
     overflow: "hidden",
