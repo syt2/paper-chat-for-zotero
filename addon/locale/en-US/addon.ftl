@@ -128,7 +128,6 @@ paperchat-chat-close = Close
 paperchat-chat-open-settings = Open Settings
 paperchat-chat-error-paperchat-insufficient-quota = PaperChat balance is too low for this request. Open Settings to top up or redeem more tokens.
 paperchat-chat-error-paperchat-topup-action = Top Up
-paperchat-chat-switch-model-label = Switch model
 paperchat-chat-switch-model-help = More capable models usually consume tokens faster. Choose a model that fits your task complexity.
 paperchat-chat-select-model = Select Model
 paperchat-chat-reasoning-label = Reasoning

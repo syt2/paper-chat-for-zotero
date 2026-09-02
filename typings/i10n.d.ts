@@ -225,7 +225,6 @@ export type FluentMessageId =
   | 'paperchat-chat-summarize-reply-note'
   | 'paperchat-chat-summarize-reply-note-prompt'
   | 'paperchat-chat-switch-model-help'
-  | 'paperchat-chat-switch-model-label'
   | 'paperchat-chat-switch-to-floating'
   | 'paperchat-chat-switch-to-sidebar'
   | 'paperchat-chat-thinking'

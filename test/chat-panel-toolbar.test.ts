@@ -170,6 +170,25 @@ describe("chat panel presentation toolbar entry", function () {
     );
   });
 
+  it("places model help immediately to the right of the model selector", function () {
+    const doc = new FakeDocument();
+    const container = createChatContainer(
+      doc as unknown as Document,
+      lightTheme,
+    ) as unknown as FakeElement;
+    const selector = container.querySelector("#chat-model-selector-btn");
+    const selectorContainer = selector?.parentElement;
+    const help = container.querySelector("#chat-model-selector-help");
+    const siblings = selectorContainer?.parentElement?.children || [];
+
+    assert.isNull(container.querySelector("#chat-model-selector-label"));
+    assert.strictEqual(help?.parentElement, selectorContainer?.parentElement);
+    assert.equal(
+      siblings.indexOf(help as FakeElement),
+      siblings.indexOf(selectorContainer as FakeElement) + 1,
+    );
+  });
+
   it("updates the PPT button with the rest of the toolbar in dark mode", function () {
     const doc = new FakeDocument();
     const container = createChatContainer(

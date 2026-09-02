@@ -128,7 +128,6 @@ paperchat-chat-close = 关闭
 paperchat-chat-open-settings = 打开设置
 paperchat-chat-error-paperchat-insufficient-quota = PaperChat 额度不足，当前余额低于本次请求所需的预扣费额度。请前往设置页充值或兑换 Token。
 paperchat-chat-error-paperchat-topup-action = 去充值
-paperchat-chat-switch-model-label = 切换模型
 paperchat-chat-switch-model-help = 模型能力越强，消耗 Token 的速度通常也越快。请根据任务复杂度选择合适的模型。
 paperchat-chat-select-model = 选择模型
 paperchat-chat-reasoning-label = 思考

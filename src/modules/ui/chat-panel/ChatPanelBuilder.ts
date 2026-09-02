@@ -737,23 +737,6 @@ export function createChatContainer(
     minWidth: "0",
   });
 
-  const modelSelectorLabel = createElement(
-    doc,
-    "div",
-    {
-      display: "flex",
-      alignItems: "center",
-      gap: "4px",
-      flexShrink: "0",
-      fontSize: chatFontSize(12),
-      lineHeight: "1.35",
-      color: theme.textSecondary,
-      whiteSpace: "nowrap",
-    },
-    { id: "chat-model-selector-label" },
-  );
-  modelSelectorLabel.textContent = getString("chat-switch-model-label");
-
   const modelHelpText = getString("chat-switch-model-help");
   const modelSelectorHelp = createElement(
     doc,
@@ -831,8 +814,6 @@ export function createChatContainer(
 
   modelSelectorHelp.addEventListener("mouseenter", showModelHelp);
   modelSelectorHelp.addEventListener("mouseleave", hideModelHelp);
-
-  modelSelectorLabel.appendChild(modelSelectorHelp);
 
   // Model selector container
   const modelSelectorContainer = createElement(doc, "div", {
@@ -981,8 +962,8 @@ export function createChatContainer(
     `chrome://${config.addonRef}/content/icons/split.svg`;
   panelModeBtn.appendChild(panelModeIcon);
 
-  leftContainer.appendChild(modelSelectorLabel);
   leftContainer.appendChild(modelSelectorContainer);
+  leftContainer.appendChild(modelSelectorHelp);
   leftContainer.appendChild(settingsBtn);
   leftContainer.appendChild(panelModeBtn);
 

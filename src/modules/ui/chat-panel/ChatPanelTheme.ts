@@ -214,13 +214,6 @@ export function applyThemeToContainer(container: HTMLElement): void {
   }
 
   // Model selector button
-  const modelSelectorLabel = container.querySelector(
-    "#chat-model-selector-label",
-  ) as HTMLElement;
-  if (modelSelectorLabel) {
-    modelSelectorLabel.style.color = theme.textSecondary;
-  }
-
   const modelSelectorHelp = container.querySelector(
     "#chat-model-selector-help",
   ) as HTMLElement;
