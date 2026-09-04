@@ -778,7 +778,7 @@ function bindRedeemDialogWhenReady(options: {
   setTimeout(tryBind, 0);
 }
 
-function buildProductPurchaseChildren(
+export function buildProductPurchaseChildren(
   products: PaperChatProduct[],
 ): TagElementProps[] {
   const quotaProducts = products.filter(
@@ -787,12 +787,10 @@ function buildProductPurchaseChildren(
   const subscriptionProducts = products.filter(
     (product) => getProductCategory(product) === "subscription",
   );
-  const initialCategory: PaperChatProductCategory =
-    quotaProducts.length > 0 ? "quota" : "subscription";
-  const selectedProduct =
-    initialCategory === "quota"
-      ? quotaProducts[0]
-      : subscriptionProducts[0] || products[0];
+  const selectedProduct = getInitialPaperChatProduct(products);
+  const initialCategory: PaperChatProductCategory = selectedProduct
+    ? getProductCategory(selectedProduct)
+    : "subscription";
   const children: TagElementProps[] = [
     {
       tag: "div",
@@ -840,31 +838,18 @@ function buildProductPurchaseChildren(
           },
           children: [
             buildProductTab(
-              "quota",
-              "Token 额度",
-              quotaProducts.length,
-              initialCategory === "quota",
-            ),
-            buildProductTab(
               "subscription",
               "订阅计划",
               subscriptionProducts.length,
               initialCategory === "subscription",
             ),
+            buildProductTab(
+              "quota",
+              "Token 额度",
+              quotaProducts.length,
+              initialCategory === "quota",
+            ),
           ],
-        },
-        {
-          tag: "div",
-          id: "paperchat-product-grid-quota",
-          styles: {
-            display: initialCategory === "quota" ? "grid" : "none",
-            gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-            gap: "8px",
-            alignItems: "stretch",
-          },
-          children: quotaProducts.map((product) =>
-            buildProductOption(product, product.sku === selectedProduct?.sku),
-          ),
         },
         {
           tag: "div",
@@ -876,6 +861,19 @@ function buildProductPurchaseChildren(
             alignItems: "stretch",
           },
           children: subscriptionProducts.map((product) =>
+            buildProductOption(product, product.sku === selectedProduct?.sku),
+          ),
+        },
+        {
+          tag: "div",
+          id: "paperchat-product-grid-quota",
+          styles: {
+            display: initialCategory === "quota" ? "grid" : "none",
+            gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+            gap: "8px",
+            alignItems: "stretch",
+          },
+          children: quotaProducts.map((product) =>
             buildProductOption(product, product.sku === selectedProduct?.sku),
           ),
         },
@@ -1098,6 +1096,7 @@ function buildProductOption(
   product: PaperChatProduct,
   selected: boolean,
 ): TagElementProps {
+  const isQuotaProduct = getProductCategory(product) === "quota";
   return {
     tag: "button",
     id: getProductOptionId(product.sku),
@@ -1110,22 +1109,59 @@ function buildProductOption(
     children: [
       {
         tag: "span",
-        properties: {
-          textContent: product.quotaLabel || product.name,
-        },
         styles: {
-          minWidth: "0",
-          overflow: "visible",
-          textOverflow: "ellipsis",
-          whiteSpace: "normal",
-          fontSize: "14px",
-          fontWeight: "800",
-          lineHeight: "1.25",
-          color: selected
-            ? "var(--paperchat-purchase-accent-strong)"
-            : "var(--paperchat-purchase-text)",
-          wordBreak: "break-word",
+          display: "flex",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: "5px",
         },
+        children: [
+          {
+            tag: "span",
+            attributes: {
+              "data-product-label": "true",
+            },
+            properties: {
+              textContent: product.quotaLabel || product.name,
+            },
+            styles: {
+              minWidth: "0",
+              overflow: "visible",
+              textOverflow: "ellipsis",
+              whiteSpace: "normal",
+              fontSize: "14px",
+              fontWeight: "800",
+              lineHeight: "1.25",
+              color: selected
+                ? "var(--paperchat-purchase-accent-strong)"
+                : "var(--paperchat-purchase-text)",
+              wordBreak: "break-word",
+            },
+          },
+          ...(isQuotaProduct
+            ? [
+                {
+                  tag: "span",
+                  attributes: {
+                    "data-product-badge": "permanent",
+                  },
+                  properties: {
+                    textContent: "永久有效期",
+                  },
+                  styles: {
+                    flex: "0 0 auto",
+                    padding: "1px 5px",
+                    borderRadius: "999px",
+                    background: "var(--paperchat-purchase-badge-bg)",
+                    color: "var(--paperchat-purchase-muted)",
+                    fontSize: "10px",
+                    fontWeight: "800",
+                    lineHeight: "16px",
+                  },
+                } satisfies TagElementProps,
+              ]
+            : []),
+        ],
       },
       {
         tag: "span",
@@ -1213,7 +1249,8 @@ function applyProductOptionStyles(
     option.style.setProperty(toKebabCase(key), value);
   }
   option.setAttribute("aria-pressed", selected ? "true" : "false");
-  const [labelEl, priceEl] = Array.from(option.children) as HTMLElement[];
+  const labelEl = option.querySelector<HTMLElement>("[data-product-label]");
+  const priceEl = option.children[1] as HTMLElement | undefined;
   if (labelEl) {
     labelEl.style.color = selected
       ? "var(--paperchat-purchase-accent-strong)"
@@ -1269,6 +1306,18 @@ function getProductCategory(
   return "quota";
 }
 
+export function getInitialPaperChatProduct(
+  products: PaperChatProduct[],
+): PaperChatProduct | undefined {
+  return (
+    products.find(
+      (product) => getProductCategory(product) === "subscription",
+    ) ??
+    products.find((product) => getProductCategory(product) === "quota") ??
+    products[0]
+  );
+}
+
 export function getProductAnalyticsProps(
   product: PaperChatProduct,
 ): PaperChatPurchaseItemAnalytics {
@@ -1308,12 +1357,7 @@ function bindProductPurchaseEvents(
     "paperchat-buy-selected",
   ) as HTMLButtonElement | null;
   const buyButtonDefaultText = getString("pref-paperchat-buy-btn");
-  const initialSelectedProduct =
-    products.find((product) => getProductCategory(product) === "quota") ??
-    products.find(
-      (product) => getProductCategory(product) === "subscription",
-    ) ??
-    products[0];
+  const initialSelectedProduct = getInitialPaperChatProduct(products);
   let pollTimer: number | null = null;
   let selectedSku = initialSelectedProduct?.sku ?? "";
   let activeCategory: PaperChatProductCategory =
