@@ -288,7 +288,7 @@ import {
   getPaperChatErrorDisplayMessage,
   parsePaperChatQuotaError,
 } from "../../providers/paperchat-errors";
-import { darkTheme } from "./ChatPanelTheme";
+import { darkTheme, getUserMessageBubbleColors } from "./ChatPanelTheme";
 import {
   getAnalyticsService,
   trackPaperChatPurchaseEntryClicked,
@@ -863,8 +863,7 @@ export function createMessageElement(
   let bubbleStyle: Record<string, string>;
   if (msg.role === "user") {
     bubbleStyle = {
-      background: theme.userBubbleBg,
-      color: theme.userBubbleText,
+      ...getUserMessageBubbleColors(theme),
       borderBottomRightRadius: "4px",
     };
   } else if (msg.role === "error") {
@@ -882,6 +881,20 @@ export function createMessageElement(
       borderBottomLeftRadius: "4px",
       boxShadow: "0 1px 3px rgba(0, 0, 0, 0.08)",
     };
+  }
+
+  if (msg.role === "assistant") {
+    Object.assign(bubbleStyle, {
+      display: "block",
+      width: "100%",
+      maxWidth: "100%",
+      boxSizing: "border-box",
+      padding: "4px 0",
+      background: "transparent",
+      border: "none",
+      borderRadius: "0",
+      boxShadow: "none",
+    });
   }
 
   const bubble = createElement(

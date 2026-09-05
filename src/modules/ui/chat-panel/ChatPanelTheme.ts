@@ -65,6 +65,16 @@ export const darkTheme: ThemeColors = {
   scrollbarThumbHover: "#666",
 };
 
+/** Message-only colors; account controls and the send button keep their theme. */
+export function getUserMessageBubbleColors(theme: ThemeColors): {
+  background: string;
+  color: string;
+} {
+  return theme === darkTheme
+    ? { background: "#283b52", color: "#e1ebf7" }
+    : { background: "#eaf2fc", color: "#263b53" };
+}
+
 // Current theme state
 let currentTheme: ThemeColors = lightTheme;
 
@@ -366,8 +376,7 @@ export function applyThemeToContainer(container: HTMLElement): void {
     .querySelectorAll(".user-message .chat-bubble")
     .forEach((bubble: Element) => {
       const el = bubble as HTMLElement;
-      el.style.background = theme.userBubbleBg;
-      el.style.color = theme.userBubbleText;
+      Object.assign(el.style, getUserMessageBubbleColors(theme));
     });
 
   // Update existing assistant message bubbles
@@ -375,7 +384,7 @@ export function applyThemeToContainer(container: HTMLElement): void {
     .querySelectorAll(".assistant-message .chat-bubble")
     .forEach((bubble: Element) => {
       const el = bubble as HTMLElement;
-      el.style.background = theme.assistantBubbleBg;
+      el.style.background = "transparent";
       el.style.color = theme.textPrimary;
       el.style.borderColor = theme.borderColor;
     });
