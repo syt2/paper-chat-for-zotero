@@ -1069,7 +1069,13 @@ describe("chat message exact navigation", function () {
       imageTag.children[0].getAttribute("src"),
       "data:image/png;base64,YWJj",
     );
-    imageTag.children[2].listeners.get("click")?.[0]?.({
+    assert.lengthOf(
+      imageTag.children,
+      2,
+      "image has no visible filename label",
+    );
+    assert.equal(imageTag.children[1].tagName, "button");
+    imageTag.children[1].listeners.get("click")?.[0]?.({
       preventDefault: () => undefined,
       stopPropagation: () => undefined,
     });

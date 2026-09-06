@@ -14,6 +14,21 @@ interface StoredCookie {
   value: string;
 }
 
+const mockChannelIds = new Map<string, number>();
+let nextMockChannelId = 0;
+
+function registerHttpChannel(
+  url: string,
+  options: { requestObserver?: (xhr: unknown) => void },
+): number {
+  const channelId = ++nextMockChannelId;
+  mockChannelIds.set(url, channelId);
+  options.requestObserver?.({
+    channel: { QueryInterface: () => ({ channelId }) },
+  });
+  return channelId;
+}
+
 describe("AuthService NewAPI authentication", function () {
   let originalZotero: unknown;
   let originalZtoolkit: unknown;
@@ -22,10 +37,12 @@ describe("AuthService NewAPI authentication", function () {
   let originalAddon: unknown;
 
   beforeEach(function () {
+    mockChannelIds.clear();
     originalZotero = (globalThis as any).Zotero;
     originalZtoolkit = (globalThis as any).ztoolkit;
     originalServices = (globalThis as any).Services;
     originalCi = (globalThis as any).Ci;
+    (globalThis as any).Ci = { nsIHttpChannel: {} };
     originalAddon = (globalThis as any).addon;
     (globalThis as any).ztoolkit = { log: () => undefined };
     (globalThis as any).addon = {
@@ -113,6 +130,296 @@ describe("AuthService NewAPI authentication", function () {
         ["GET", "https://paperchat.test/api/user/logout"],
       ],
     );
+  });
+
+  it("clears local authentication before remote logout settles", async function () {
+    const cookieJar = installCookieServices([
+      { name: "session", path: "/", value: "legacy-session" },
+      {
+        name: "new_api_refresh",
+        path: "/api/user/auth",
+        value: "refresh-secret",
+      },
+    ]);
+    let resolveLogout!: (value: unknown) => void;
+    let sentHeaders: Record<string, string> = {};
+    (globalThis as any).Zotero = {
+      HTTP: {
+        request: (
+          _method: string,
+          _url: string,
+          options: { headers: Record<string, string> },
+        ) => {
+          sentHeaders = options.headers;
+          return new Promise((resolve) => {
+            resolveLogout = resolve;
+          });
+        },
+      },
+    };
+    const service = new AuthService("https://paperchat.test");
+    service.restoreSessionFromCookieJar();
+    service.setUserId(123);
+    const logout = service.logout();
+
+    assert.isFalse(service.hasAuthenticationState());
+    assert.isNull(service.getUserId());
+    assert.include(sentHeaders.Cookie, "new_api_refresh=refresh-secret");
+    assert.include(sentHeaders.Cookie, "session=legacy-session");
+    assert.isUndefined(cookieJar.find("session", "/"));
+    assert.isUndefined(cookieJar.find("new_api_refresh", "/api/user/auth"));
+    resolveLogout({
+      status: 503,
+      response: { success: false, message: "offline" },
+    });
+    assert.isFalse((await logout).success);
+    service.destroy();
+  });
+
+  it("does not restore authentication from a login that completes after logout", async function () {
+    let resolveLogin!: (value: unknown) => void;
+    (globalThis as any).Zotero = {
+      HTTP: {
+        request: (_method: string, url: string) =>
+          url.endsWith("/login")
+            ? new Promise((resolve) => {
+                resolveLogin = resolve;
+              })
+            : Promise.resolve({ status: 200, response: { success: true } }),
+      },
+    };
+    const service = new AuthService("https://paperchat.test");
+    const login = service.login({ username: "user", password: "pass" });
+    await service.logout();
+    resolveLogin({
+      status: 200,
+      response: {
+        success: true,
+        data: {
+          access_token: "stale-token",
+          user: { id: 123 },
+        },
+      },
+    });
+    assert.isFalse((await login).success);
+    assert.isFalse(service.hasAuthenticationState());
+    assert.isNull(service.getUserId());
+  });
+
+  it("preserves a new login when an older logout falls back to the legacy endpoint", async function () {
+    let resolveLogout!: (value: unknown) => void;
+    const calls: HttpCall[] = [];
+    const service = new AuthService("https://paperchat.test");
+    service.setUserId(123);
+    service.setDashboardAccessToken("old-token");
+    (globalThis as any).Zotero = {
+      HTTP: {
+        request: (
+          method: string,
+          url: string,
+          options: { headers: Record<string, string> },
+        ) => {
+          calls.push({ method, url, headers: options.headers });
+          if (url.endsWith("/auth/logout"))
+            return new Promise((resolve) => {
+              resolveLogout = resolve;
+            });
+          return Promise.resolve({
+            status: 200,
+            response: {
+              success: true,
+              data: {
+                access_token: "new-token",
+                user: { id: 456 },
+              },
+            },
+          });
+        },
+      },
+    };
+    const logout = service.logout();
+    await service.login({ username: "new-user", password: "pass" });
+    resolveLogout({ status: 404, response: { success: false } });
+    assert.isTrue((await logout).success);
+    assert.equal(calls[2].headers.Authorization, "Bearer old-token");
+    assert.equal(calls[2].headers["New-Api-User"], "123");
+    assert.equal(service.getUserId(), 456);
+    assert.isTrue(service.hasDashboardAccessToken());
+  });
+
+  it("ignores an old logout cookie response after a new login", async function () {
+    const cookieJar = installCookieServices();
+    const sid = "90d7cf27-e1eb-48bd-ae85-0f39ab0fd966";
+    let resolveLogout!: (value: unknown) => void;
+    (globalThis as any).Zotero = {
+      HTTP: {
+        request: (
+          _method: string,
+          url: string,
+          options: { requestObserver?: (xhr: unknown) => void },
+        ) => {
+          registerHttpChannel(url, options);
+          if (url.endsWith("/logout"))
+            return new Promise((resolve) => {
+              resolveLogout = resolve;
+            });
+          if (url.endsWith("/login"))
+            cookieJar.emitSetCookie(
+              url,
+              `new_api_refresh=${sid}.new-secret; Path=/api/user/auth`,
+            );
+          return Promise.resolve({
+            status: 200,
+            response: {
+              success: true,
+              data: {
+                access_token: "new-token",
+                session: { sid },
+                user: { id: 456 },
+              },
+            },
+          });
+        },
+      },
+    };
+    const service = new AuthService("https://paperchat.test");
+    const logout = service.logout();
+    await service.login({ username: "new-user", password: "pass" });
+    cookieJar.emitSetCookie(
+      "https://paperchat.test/api/user/auth/logout",
+      "new_api_refresh=; Path=/api/user/auth; Max-Age=0",
+    );
+    resolveLogout({ status: 200, response: { success: true } });
+    await logout;
+    await service.refreshDashboardSession();
+    assert.isTrue(service.hasDashboardRefreshCookie());
+    assert.equal(
+      cookieJar.find("new_api_refresh", "/api/user/auth")?.value,
+      `${sid}.new-secret`,
+    );
+    service.destroy();
+  });
+
+  it("does not apply a pre-logout refresh cookie to the next login", async function () {
+    const cookieJar = installCookieServices([
+      {
+        name: "new_api_refresh",
+        path: "/api/user/auth",
+        value: "old-session.secret",
+      },
+    ]);
+    let resolveRefresh!: (value: unknown) => void;
+    let resolveLogin!: (value: unknown) => void;
+    let oldRefreshChannel = 0;
+    (globalThis as any).Zotero = {
+      HTTP: {
+        request: (
+          _method: string,
+          url: string,
+          options: { requestObserver?: (xhr: unknown) => void },
+        ) => {
+          const channelId = registerHttpChannel(url, options);
+          if (url.endsWith("/refresh")) {
+            oldRefreshChannel = channelId;
+            return new Promise((resolve) => {
+              resolveRefresh = resolve;
+            });
+          }
+          if (url.endsWith("/login"))
+            return new Promise((resolve) => {
+              resolveLogin = resolve;
+            });
+          return Promise.resolve({ status: 200, response: { success: true } });
+        },
+      },
+    };
+    const service = new AuthService("https://paperchat.test");
+    service.restoreSessionFromCookieJar();
+    const refresh = service.refreshDashboardSession();
+    await service.logout();
+    const login = service.login({ username: "new-user", password: "pass" });
+    cookieJar.emitSetCookie(
+      "https://paperchat.test/api/user/auth/refresh",
+      "new_api_refresh=old-session.rotated-secret; Path=/api/user/auth",
+      oldRefreshChannel,
+    );
+    resolveRefresh({
+      status: 200,
+      response: {
+        success: true,
+        data: {
+          access_token: "old-token",
+          user: { id: 123 },
+        },
+      },
+    });
+    assert.isFalse((await refresh).success);
+    resolveLogin({
+      status: 200,
+      response: {
+        success: true,
+        data: {
+          access_token: "new-token",
+          user: { id: 456 },
+        },
+      },
+    });
+    assert.isTrue((await login).success);
+    assert.equal(service.getUserId(), 456);
+    assert.isFalse(service.hasDashboardRefreshCookie());
+    assert.isUndefined(cookieJar.find("new_api_refresh", "/api/user/auth"));
+    service.destroy();
+  });
+
+  it("finishes local logout without waiting for the server and ignores an old user refresh", async function () {
+    const prefs = new Map<string, unknown>();
+    (globalThis as any).Zotero = {
+      Prefs: {
+        set: (key: string, value: unknown) => prefs.set(key, value),
+      },
+    };
+    const manager = Object.create(AuthManager.prototype) as any;
+    manager.environmentGeneration = 0;
+    manager.state = { isLoggedIn: true, user: { id: 123 }, apiKey: "old-key" };
+    const loginUpdates: boolean[] = [];
+    manager.listeners = {
+      onLoginStatusChange: [(value: boolean) => loginUpdates.push(value)],
+      onUserInfoUpdate: [],
+      onBalanceUpdate: [],
+      onError: [],
+    };
+    let rejectLogout!: (error: Error) => void;
+    let resolveUser!: (value: unknown) => void;
+    manager.authService = {
+      logout: () =>
+        new Promise((_resolve, reject) => {
+          rejectLogout = reject;
+        }),
+      setUserId: () => undefined,
+      clearSessionCookie: () => undefined,
+      getUserInfo: () =>
+        new Promise((resolve) => {
+          resolveUser = resolve;
+        }),
+    };
+    const refresh = manager.refreshUserInfo();
+    await manager.logout();
+    assert.isFalse(manager.state.isLoggedIn);
+    assert.deepEqual(loginUpdates, [false]);
+    assert.equal(prefs.get("extensions.zotero.paperchat.loginPassword"), "");
+    resolveUser({
+      success: true,
+      data: { id: 123, username: "old-user", quota: 50 },
+    });
+    assert.deepEqual(await refresh, {
+      userInfo: false,
+      subscriptionInfo: false,
+    });
+    assert.isFalse(manager.state.isLoggedIn);
+    assert.isNull(manager.state.user);
+    rejectLogout(new Error("offline"));
+    await Promise.resolve();
+    assert.isFalse(manager.state.isLoggedIn);
   });
 
   it("revokes the current session before an interactive login", async function () {
@@ -600,8 +907,12 @@ function installHttpMock(
       request: async (
         method: string,
         url: string,
-        options: { headers?: Record<string, string> },
+        options: {
+          headers?: Record<string, string>;
+          requestObserver?: (xhr: unknown) => void;
+        },
       ) => {
+        registerHttpChannel(url, options);
         calls.push({ method, url, headers: options.headers || {} });
         onResponse?.(index);
         const response = responses[index];
@@ -614,7 +925,7 @@ function installHttpMock(
 }
 
 function installCookieServices(initial: StoredCookie[] = []): {
-  emitSetCookie: (url: string, value: string) => void;
+  emitSetCookie: (url: string, value: string, channelId?: number) => void;
   find: (name: string, path: string) => StoredCookie | undefined;
 } {
   const cookies = [...initial];
@@ -660,11 +971,12 @@ function installCookieServices(initial: StoredCookie[] = []): {
   };
 
   return {
-    emitSetCookie(url, value) {
+    emitSetCookie(url, value, channelId = mockChannelIds.get(url)) {
       observer?.observe(
         {
           QueryInterface: () => ({
             URI: { spec: url },
+            channelId,
             getResponseHeader: (name: string) => {
               if (name === "Set-Cookie") return value;
               throw new Error(`Unexpected response header: ${name}`);

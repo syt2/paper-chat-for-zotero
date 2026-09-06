@@ -70,6 +70,8 @@ export const PRESENTATION_DESIGN_SYSTEM_OPTIONS: ReadonlyArray<{
 ];
 
 export interface PresentationLaunchDialogOptions {
+  /** Trusted title of the source already bound to this launch. */
+  sourceTitle?: string;
   onSettingsFocusReady?: (focus: () => void) => void;
   abortSignal?: AbortSignal;
   /** Initial values suggested by the model, never an authorization source. */
@@ -241,6 +243,27 @@ async function showPresentationSettingsDialog(
   );
   let selection: PresentationLaunchSettings | null = null;
   const children: TagElementProps[] = [
+    ...(options.sourceTitle
+      ? [
+          {
+            tag: "div",
+            attributes: { id: "presentation-source-title" },
+            properties: {
+              textContent: getString("presentation-source-title", {
+                args: { title: options.sourceTitle },
+              }),
+            },
+            styles: {
+              padding: "10px 12px",
+              borderRadius: "8px",
+              background: "color-mix(in srgb, CanvasText 5%, Canvas)",
+              lineHeight: "1.5",
+              overflowWrap: "anywhere",
+              whiteSpace: "normal",
+            },
+          } satisfies TagElementProps,
+        ]
+      : []),
     {
       tag: "div",
       styles: {

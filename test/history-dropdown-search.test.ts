@@ -9,6 +9,7 @@ import {
   appendHighlightedSearchText,
   createHistoryDropdownState,
   populateHistoryDropdown,
+  positionHistoryDropdown,
   renderHistorySearchResults,
   setupHistoryDropdownSearch,
   type HistoryDropdownSearchCallbacks,
@@ -863,5 +864,31 @@ describe("history dropdown grouped search UI", function () {
       "cached",
     );
     assert.lengthOf(body.querySelectorAll(".load-more-btn"), 0);
+  });
+
+  describe("history dropdown footer placement", function () {
+    for (const [name, top, height] of [
+      ["sidebar", 0, 800],
+      ["floating panel", 120, 240],
+    ] as const) {
+      it(`opens above the trigger within a ${name}`, function () {
+        const container = {
+          getBoundingClientRect: () => ({ top, bottom: top + height, height }),
+        } as HTMLElement;
+        const trigger = {
+          getBoundingClientRect: () => ({ top: top + height - 42 }),
+        } as HTMLElement;
+        const dropdown = {
+          style: { top: "790px", bottom: "auto", maxHeight: "0px" },
+        } as HTMLElement;
+        positionHistoryDropdown(container, trigger, dropdown);
+        assert.equal(dropdown.style.top, "auto");
+        assert.equal(dropdown.style.bottom, "48px");
+        const menuHeight = parseFloat(dropdown.style.maxHeight);
+        assert.isAbove(menuHeight, 0);
+        assert.isAtMost(menuHeight, 350);
+        assert.isAtLeast(height - 48 - menuHeight, 12);
+      });
+    }
   });
 });

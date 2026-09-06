@@ -453,6 +453,39 @@ export function getSingleSelectedPresentationPaper(): Zotero.Item | null {
   }
 }
 
+/** New toolbar launches follow the visible Zotero tab, never cached chat context. */
+export function getCurrentPresentationPaper(): Zotero.Item | null {
+  try {
+    const tabs = (
+      Zotero.getMainWindow() as Window & {
+        Zotero_Tabs?: { selectedID: string; selectedType: string };
+      }
+    ).Zotero_Tabs;
+    if (!tabs) return null;
+    if (tabs.selectedType === "library") {
+      return resolveLaunchablePresentationPaper(
+        getSingleSelectedPresentationPaper(),
+      );
+    }
+    const reader = Zotero.Reader.getByTabID(tabs.selectedID);
+    const attachment = reader?.itemID
+      ? (Zotero.Items.get(reader.itemID) as Zotero.Item | false)
+      : null;
+    // An EPUB/HTML reader or unavailable tab must not fall back to a library row.
+    if (!attachment || !isPdfAttachment(attachment)) return null;
+    return resolveLaunchablePresentationPaper(attachment);
+  } catch {
+    return null;
+  }
+}
+
+function getPresentationSourceTitle(
+  paper: Zotero.Item | null,
+): string | undefined {
+  if (!paper) return undefined;
+  return String(paper.getField?.("title") || paper.key);
+}
+
 function showMissingPdfDialog(): void {
   Services.prompt.alert(
     Zotero.getMainWindow() as unknown as mozIDOMWindowProxy,
@@ -472,6 +505,7 @@ function showPresentationConcurrencyLimitDialog(parentWindow?: Window): void {
 }
 
 async function runSharedPresentationGuard(options: {
+  sourceTitle?: string;
   onSettingsFocusReady?: (focus: () => void) => void;
   abortSignal?: AbortSignal;
   suggestedSettings?: Partial<PresentationLaunchSettings>;
@@ -481,6 +515,7 @@ async function runSharedPresentationGuard(options: {
     providerManager: getProviderManager(),
     authManager: getAuthManager(),
     dialogs: createPresentationLaunchDialogs({
+      sourceTitle: options.sourceTitle,
       onSettingsFocusReady: options.onSettingsFocusReady,
       abortSignal: options.abortSignal,
     }),
@@ -505,6 +540,7 @@ async function runPresentationLaunch(
   }
 
   const guardResult = await runSharedPresentationGuard({
+    sourceTitle: getPresentationSourceTitle(paper),
     onSettingsFocusReady,
     paperChatTier: getConfiguredPaperChatTier(),
   }).finally(clearSettingsFocus);
@@ -579,6 +615,16 @@ export function createChatPresentationToolLaunchSession(
     abortSignal: options.abortSignal,
     runGuard: (onSettingsFocusReady, suggestedSettings) =>
       runSharedPresentationGuard({
+        sourceTitle: getPresentationSourceTitle(
+          resolvedSource?.itemKey && resolvedSource.libraryID
+            ? resolvePresentationPaper(
+                getPresentationItemByKey(
+                  resolvedSource.itemKey,
+                  resolvedSource.libraryID,
+                ),
+              )
+            : paper,
+        ),
         onSettingsFocusReady,
         abortSignal: options.abortSignal,
         suggestedSettings,

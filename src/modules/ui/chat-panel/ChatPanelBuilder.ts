@@ -8,6 +8,7 @@ import { getPref } from "../../../utils/prefs";
 import { MAX_SEARCH_QUERY_RAW_UTF16_LENGTH } from "../../chat/search/SearchQuery";
 import type { ThemeColors } from "./types";
 import { HTML_NS } from "./types";
+import { bindChatDisclosure, getChatChromeStyles } from "./ChatPanelChrome";
 import {
   chatFontSize,
   registerChatTypographyRoot,
@@ -135,7 +136,91 @@ export function createChatContainer(
     { id: "reading-loop-suggestion-strip" },
   );
 
-  // User Bar
+  const chromeStyles = createElement(
+    doc,
+    "style",
+    {},
+    { id: "chat-chrome-styles" },
+  );
+  chromeStyles.textContent = getChatChromeStyles(theme);
+  container.appendChild(chromeStyles);
+
+  const header = createElement(
+    doc,
+    "div",
+    { position: "relative" },
+    { id: "chat-header" },
+  );
+  const headerTitle = createElement(
+    doc,
+    "span",
+    {},
+    { id: "chat-header-title" },
+  );
+  headerTitle.textContent = getString("chat-new-chat");
+  const sessionActions = createElement(
+    doc,
+    "div",
+    {},
+    { id: "chat-session-actions" },
+  );
+  const accountMenu = createElement(
+    doc,
+    "details",
+    {},
+    { id: "chat-account-menu" },
+  ) as HTMLDetailsElement;
+  const accountTrigger = createElement(
+    doc,
+    "summary",
+    {},
+    {
+      id: "chat-account-trigger",
+      title: getString("chat-account-menu"),
+      "aria-label": getString("chat-account-menu"),
+    },
+  );
+  accountTrigger.appendChild(
+    createElement(
+      doc,
+      "img",
+      {},
+      {
+        src: `chrome://${config.addonRef}/content/icons/profile.svg`,
+        alt: "",
+      },
+    ),
+  );
+  const accountPanel = createElement(
+    doc,
+    "div",
+    {},
+    { id: "chat-account-panel" },
+  );
+  const accountDetails = createElement(
+    doc,
+    "div",
+    {},
+    { id: "chat-account-details" },
+  );
+  accountMenu.appendChild(accountTrigger);
+  accountMenu.appendChild(accountPanel);
+  bindChatDisclosure(container, accountMenu, accountTrigger);
+  const accountArea = createElement(
+    doc,
+    "div",
+    { display: "none" },
+    { id: "chat-header-account" },
+  );
+  const accountCaption = createElement(
+    doc,
+    "button",
+    {},
+    { id: "chat-header-account-caption", type: "button" },
+  );
+  accountArea.appendChild(accountCaption);
+
+  // Detailed account usage stays in the profile menu.
   const userBar = createElement(
     doc,
     "div",
@@ -150,45 +235,6 @@ export function createChatContainer(
     },
     { id: "chat-user-bar" },
   );
-
-  // Settings button in user bar (visible when not logged in)
-  const userBarSettingsBtn = createElement(
-    doc,
-    "button",
-    {
-      background: "rgba(0, 0, 0, 0.06)",
-      border: "1px solid rgba(0, 0, 0, 0.1)",
-      borderRadius: "4px",
-      padding: "6px",
-      cursor: "pointer",
-      display: "none",
-      alignItems: "center",
-      justifyContent: "center",
-      flexShrink: "0",
-    },
-    { id: "chat-user-bar-settings-btn" },
-  );
-  userBarSettingsBtn.title = getString("chat-open-settings");
-
-  const userBarSettingsIcon = createElement(doc, "img", {
-    width: "16px",
-    height: "16px",
-    opacity: "0.9",
-    filter: "brightness(0) invert(0.3)",
-  });
-  (userBarSettingsIcon as HTMLImageElement).src =
-    `chrome://${config.addonRef}/content/icons/config.svg`;
-  userBarSettingsBtn.appendChild(userBarSettingsIcon);
-
-  const userInfo = createElement(doc, "div", {
-    display: "flex",
-    flexDirection: "column",
-    gap: "2px",
-    flex: "1",
-    minWidth: "0",
-    overflow: "hidden",
-    marginRight: "8px",
-  });
 
   const userName = createElement(
     doc,
@@ -285,10 +331,11 @@ export function createChatContainer(
   userSubscription.appendChild(userSubscriptionTotal);
   userSubscription.appendChild(userSubscriptionProgress);
 
-  userInfo.appendChild(userName);
   userUsageRow.appendChild(userSubscription);
   userUsageRow.appendChild(userBalance);
-  userInfo.appendChild(userUsageRow);
+  userBar.appendChild(userUsageRow);
+  accountDetails.appendChild(userName);
+  accountDetails.appendChild(userBar);
 
   const userActionBtn = createElement(
     doc,
@@ -305,37 +352,41 @@ export function createChatContainer(
     { id: "chat-user-action-btn" },
   );
 
-  // Check-in button (visible when logged in)
+  // Keep the original check-in element and handlers, now directly in the header.
   const checkinBtn = createElement(
     doc,
     "button",
-    {
-      background: "rgba(0, 0, 0, 0.06)",
-      border: "1px solid rgba(0, 0, 0, 0.1)",
-      borderRadius: "4px",
-      padding: "5px 10px",
-      color: "inherit",
-      fontSize: chatFontSize(11),
-      cursor: "pointer",
-      display: "none",
-      whiteSpace: "nowrap",
-    },
-    { id: "chat-checkin-btn" },
+    { display: "none", whiteSpace: "nowrap", cursor: "pointer" },
+    { id: "chat-checkin-btn", type: "button" },
   );
 
-  // Right side container for settings button + action button
-  const userBarRight = createElement(doc, "div", {
-    display: "flex",
-    alignItems: "center",
-    gap: "8px",
-  });
+  accountArea.appendChild(checkinBtn);
+  accountArea.appendChild(accountMenu);
+  accountDetails.appendChild(userActionBtn);
+  accountPanel.appendChild(accountDetails);
+  header.appendChild(headerTitle);
+  header.appendChild(accountArea);
 
-  userBarRight.appendChild(checkinBtn);
-  userBarRight.appendChild(userActionBtn);
-  userBarRight.appendChild(userBarSettingsBtn);
-
-  userBar.appendChild(userInfo);
-  userBar.appendChild(userBarRight);
+  const balanceWarning = createElement(
+    doc,
+    "div",
+    { display: "none" },
+    {
+      id: "chat-balance-warning",
+      role: "status",
+      "aria-live": "polite",
+    },
+  );
+  const balanceWarningButton = createElement(
+    doc,
+    "button",
+    {},
+    {
+      id: "chat-balance-warning-button",
+      type: "button",
+    },
+  );
+  balanceWarning.appendChild(balanceWarningButton);
 
   const chatViewport = createElement(
     doc,
@@ -466,60 +517,72 @@ export function createChatContainer(
     { id: "chat-empty-state" },
   );
 
-  const emptyIcon = createElement(doc, "div", {
-    fontSize: "48px",
-    marginBottom: "16px",
-    opacity: "0.6",
-  });
-  emptyIcon.textContent = "\uD83D\uDCAC"; // 💬
-
   const emptyText = createElement(doc, "div", {
     fontSize: chatFontSize(15),
     color: theme.textMuted,
   });
   emptyText.textContent = getString("chat-start-conversation");
 
-  emptyState.appendChild(emptyIcon);
   emptyState.appendChild(emptyText);
   chatHistory.appendChild(emptyState);
 
-  // Toolbar
-  const toolbar = createElement(
+  // Native disclosure: keep existing action buttons and their event handlers.
+  const toolsMenu = createElement(
     doc,
-    "div",
+    "details",
+    {},
     {
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between",
-      padding: "10px 14px",
-      background: theme.toolbarBg,
-      borderTop: `1px solid ${theme.borderColor}`,
-      flexWrap: "wrap",
-      gap: "10px",
+      id: "chat-tools-menu",
     },
-    { id: "chat-toolbar" },
+  ) as HTMLDetailsElement;
+  const toolsTrigger = createElement(
+    doc,
+    "summary",
+    {},
+    {
+      id: "chat-tools-trigger",
+      title: getString("chat-more-actions"),
+      "aria-label": getString("chat-more-actions"),
+    },
   );
-
-  // Toolbar buttons
+  toolsTrigger.textContent = "+";
+  const toolbar = createElement(doc, "div", {}, { id: "chat-toolbar" });
   const toolbarButtons = createElement(
     doc,
     "div",
+    {},
     {
-      display: "flex",
-      gap: "6px",
+      id: "chat-toolbar-primary-actions",
+      role: "group",
+      "aria-label": getString("chat-tools-add"),
     },
-    { id: "chat-toolbar-primary-actions" },
   );
   const toolbarRightActions = createElement(
     doc,
     "div",
+    {},
     {
-      display: "flex",
-      gap: "6px",
-      marginLeft: "auto",
+      id: "chat-toolbar-secondary-actions",
+      role: "group",
+      "aria-label": getString("chat-tools-create"),
     },
-    { id: "chat-toolbar-secondary-actions" },
   );
+  for (const [group, label] of [
+    [toolbarButtons, getString("chat-tools-add")],
+    [toolbarRightActions, getString("chat-tools-create")],
+  ] as const) {
+    const heading = createElement(
+      doc,
+      "div",
+      {},
+      { class: "chat-tools-heading" },
+    );
+    heading.textContent = label;
+    group.appendChild(heading);
+  }
+  toolsMenu.appendChild(toolsTrigger);
+  toolsMenu.appendChild(toolbar);
+  bindChatDisclosure(container, toolsMenu, toolsTrigger);
 
   const btnStyle: Partial<CSSStyleDeclaration> = {
     background: theme.buttonBg,
@@ -571,12 +634,12 @@ export function createChatContainer(
   });
   figureScreenshotBtn.appendChild(figureScreenshotIcon);
 
-  // Presentation button. Capability checks happen on click so the entry stays
-  // discoverable even when another provider is currently selected.
+  // Keep the entry visible, but enable it only for the current visible source.
   const presentationBtn = createElement(doc, "button", btnStyle, {
     id: "chat-generate-presentation",
     title: getString("presentation-generate"),
   });
+  (presentationBtn as HTMLButtonElement).disabled = true;
   presentationBtn.setAttribute("type", "button");
   presentationBtn.setAttribute(
     "aria-label",
@@ -601,12 +664,13 @@ export function createChatContainer(
   const summarizeConversationBtn = createElement(
     doc,
     "button",
-    { ...btnStyle, display: "none" },
+    { ...btnStyle },
     {
       id: "chat-summarize-conversation-note",
       title: getString("chat-summarize-conversation-note"),
     },
   );
+  (summarizeConversationBtn as HTMLButtonElement).disabled = true;
   summarizeConversationBtn.setAttribute("type", "button");
   summarizeConversationBtn.setAttribute(
     "aria-label",
@@ -617,11 +681,26 @@ export function createChatContainer(
     alt: "",
   });
   summarizeConversationBtn.appendChild(summarizeConversationIcon);
+  for (const [button, label] of [
+    [uploadFileBtn, getString("chat-action-attach")],
+    [figureScreenshotBtn, getString("chat-action-capture")],
+    [summarizeConversationBtn, getString("chat-action-note")],
+    [presentationBtn, "PPT"],
+  ] as const) {
+    const text = createElement(doc, "span", {}, { class: "chat-tool-label" });
+    text.textContent = label;
+    button.appendChild(text);
+    // Register before the business handler so dialogs and capture can own focus.
+    button.addEventListener("click", () => {
+      toolsMenu.open = false;
+      toolsTrigger.focus();
+    });
+  }
 
-  toolbarButtons.appendChild(newChatBtn);
+  sessionActions.appendChild(newChatBtn);
   toolbarButtons.appendChild(uploadFileBtn);
   toolbarButtons.appendChild(figureScreenshotBtn);
-  toolbarButtons.appendChild(historyBtn);
+  sessionActions.appendChild(historyBtn);
   if (getPref("debugContextExportEnabled") === true) {
     // Internal debug-only export button. The pref defaults to false and is not exposed in settings.
     const debugContextBtn = createElement(doc, "button", btnStyle, {
@@ -661,13 +740,17 @@ export function createChatContainer(
   );
 
   // Input Area - ChatBox style with vertical layout
-  const inputArea = createElement(doc, "div", {
-    display: "flex",
-    flexDirection: "column",
-    padding: "14px",
-    background: theme.inputAreaBg,
-    borderTop: `1px solid ${theme.borderColor}`,
-  });
+  const inputArea = createElement(
+    doc,
+    "div",
+    {
+      display: "flex",
+      flexDirection: "column",
+      background: theme.inputAreaBg,
+    },
+    { id: "chat-input-area" },
+  );
+  const composer = createElement(doc, "div", {}, { id: "chat-composer" });
 
   const turnQueue = createElement(
     doc,
@@ -719,20 +802,19 @@ export function createChatContainer(
 
   inputWrapper.appendChild(messageInput);
 
-  // Bottom bar - model selector + settings on left, send button on right
-  const inputBottomBar = createElement(doc, "div", {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginTop: "10px",
-    gap: "8px",
-  });
+  // Composer controls: add menu, model selection, send.
+  const inputBottomBar = createElement(
+    doc,
+    "div",
+    {},
+    { id: "chat-input-bottom-bar" },
+  );
 
-  // Left side container (model selector + settings button)
+  // Outside the composer: session navigation and utility controls.
   const leftContainer = createElement(doc, "div", {
     display: "flex",
     alignItems: "center",
-    gap: "8px",
+    gap: "4px",
     flex: "1",
     minWidth: "0",
   });
@@ -759,6 +841,7 @@ export function createChatContainer(
     },
     {
       id: "chat-model-selector-help",
+      tabindex: "0",
       "aria-label": modelHelpText,
     },
   );
@@ -814,11 +897,15 @@ export function createChatContainer(
 
   modelSelectorHelp.addEventListener("mouseenter", showModelHelp);
   modelSelectorHelp.addEventListener("mouseleave", hideModelHelp);
+  modelSelectorHelp.addEventListener("focus", showModelHelp);
+  modelSelectorHelp.addEventListener("blur", hideModelHelp);
 
   // Model selector container
   const modelSelectorContainer = createElement(doc, "div", {
     position: "relative",
-    flex: "0 1 auto",
+    flex: "0 1 180px",
+    width: "180px",
+    marginLeft: "auto",
     minWidth: "0",
     maxWidth: "100%",
   });
@@ -836,7 +923,7 @@ export function createChatContainer(
       border: `1px solid ${theme.inputBorderColor}`,
       borderRadius: "8px",
       cursor: "pointer",
-      fontSize: chatFontSize(12),
+      fontSize: chatFontSize(11),
       color: theme.textSecondary,
       width: "max-content",
       maxWidth: "100%",
@@ -878,10 +965,11 @@ export function createChatContainer(
       display: "none",
       position: "absolute",
       bottom: "100%",
-      left: "0",
+      right: "0",
       marginBottom: "4px",
       minWidth: "220px",
       maxWidth: "300px",
+      boxSizing: "border-box",
       maxHeight: "300px",
       overflowY: "auto",
       background: theme.dropdownBg,
@@ -962,10 +1050,16 @@ export function createChatContainer(
     `chrome://${config.addonRef}/content/icons/split.svg`;
   panelModeBtn.appendChild(panelModeIcon);
 
-  leftContainer.appendChild(modelSelectorContainer);
-  leftContainer.appendChild(modelSelectorHelp);
-  leftContainer.appendChild(settingsBtn);
-  leftContainer.appendChild(panelModeBtn);
+  leftContainer.appendChild(sessionActions);
+  const utilityActions = createElement(
+    doc,
+    "div",
+    {},
+    { id: "chat-utility-actions" },
+  );
+  utilityActions.appendChild(modelSelectorHelp);
+  utilityActions.appendChild(settingsBtn);
+  utilityActions.appendChild(panelModeBtn);
 
   // Send button
   const sendButton = createElement(
@@ -1002,12 +1096,18 @@ export function createChatContainer(
   sendIcon.src = `chrome://${config.addonRef}/content/icons/send.svg`;
   sendButton.appendChild(sendIcon);
 
-  inputBottomBar.appendChild(leftContainer);
+  inputBottomBar.appendChild(toolsMenu);
+  inputBottomBar.appendChild(modelSelectorContainer);
   inputBottomBar.appendChild(sendButton);
+  leftContainer.appendChild(utilityActions);
+  leftContainer.setAttribute("id", "chat-footer");
 
   inputArea.appendChild(turnQueue);
-  inputArea.appendChild(inputWrapper);
-  inputArea.appendChild(inputBottomBar);
+  composer.appendChild(attachmentsPreview);
+  composer.appendChild(inputWrapper);
+  composer.appendChild(inputBottomBar);
+  inputArea.appendChild(composer);
+  inputArea.appendChild(leftContainer);
 
   // History dropdown panel - append to container for proper positioning
   const historyDropdown = createElement(
@@ -1016,9 +1116,11 @@ export function createChatContainer(
     {
       display: "none",
       position: "absolute",
-      bottom: "120px",
+      bottom: "56px",
+      boxSizing: "border-box",
       right: "10px",
       width: "300px",
+      maxWidth: "calc(100% - 20px)",
       maxHeight: "350px",
       overflow: "hidden",
       flexDirection: "column",
@@ -1164,15 +1266,14 @@ export function createChatContainer(
 
   // Assemble
   root.appendChild(dragBar);
-  root.appendChild(userBar);
+  root.appendChild(header);
+  root.appendChild(balanceWarning);
   root.appendChild(readingLoopStrip);
   chatViewport.appendChild(chatHistory);
   chatViewport.appendChild(executionPlanPanel);
   chatViewport.appendChild(executionApprovalPanel);
   chatViewport.appendChild(scrollBottomBtn);
   root.appendChild(chatViewport);
-  root.appendChild(attachmentsPreview);
-  root.appendChild(toolbar);
   root.appendChild(inputArea);
   root.appendChild(historyDropdown);
   root.appendChild(mentionPopup);

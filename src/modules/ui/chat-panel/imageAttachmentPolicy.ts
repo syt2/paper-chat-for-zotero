@@ -34,9 +34,15 @@ export function applyImageInputAvailability(
     "#chat-figure-screenshot-btn",
   ) as HTMLButtonElement | null;
   if (figureScreenshotBtn) {
-    figureScreenshotBtn.hidden = availability === "unsupported";
-    figureScreenshotBtn.style.display =
-      availability === "unsupported" ? "none" : "";
+    // Keep the capture entry discoverable when the selected model lacks vision.
+    figureScreenshotBtn.hidden = false;
+    figureScreenshotBtn.style.display = "";
+    figureScreenshotBtn.disabled = availability === "unsupported";
+    figureScreenshotBtn.title = getString(
+      availability === "unsupported"
+        ? "chat-image-input-unsupported"
+        : "chat-reader-figure-screenshot",
+    );
   }
 }
 

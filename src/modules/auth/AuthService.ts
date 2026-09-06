@@ -147,6 +147,7 @@ export class AuthService {
     promise: Promise<DashboardSessionRefreshResult>;
   } | null = null;
   private httpObserver: any = null;
+  private authRequestGenerations = new Map<number, number>();
   private environmentGeneration = 0;
 
   constructor(baseUrl?: string) {
@@ -163,8 +164,6 @@ export class AuthService {
     if (this.httpObserver) return;
 
     const baseUrl = this.baseUrl; // 捕获到闭包中
-    const generation = this.environmentGeneration;
-
     this.httpObserver = {
       observe: (subject: any, topic: string, _data: string) => {
         if (topic !== "http-on-examine-response") return;
@@ -174,6 +173,14 @@ export class AuthService {
           const url = channel.URI.spec;
 
           if (!url.startsWith(baseUrl)) return;
+          // Associate cookies with the request that produced them, not with
+          // whichever observer happens to be installed when it completes.
+          const requestGeneration = this.authRequestGenerations.get(
+            channel.channelId,
+          );
+          if (requestGeneration !== this.environmentGeneration) return;
+          // Logout responses must not overwrite cookies from a subsequent login.
+          if (new URL(url).pathname.endsWith("/logout")) return;
 
           try {
             const setCookie = channel.getResponseHeader("Set-Cookie");
@@ -183,7 +190,7 @@ export class AuthService {
                 if (value !== null) {
                   this.pendingAuthCookies.set(cookieName, {
                     value,
-                    generation,
+                    generation: requestGeneration,
                   });
                 }
               }
@@ -428,11 +435,13 @@ export class AuthService {
       body?: unknown;
       headers?: Record<string, string>;
       extractAuthCookies?: boolean;
+      includeAuthentication?: boolean;
     } = {},
   ): Promise<{ status: number; data: T | null; error?: string }> {
     const generation = this.environmentGeneration;
     const fullUrl = url.startsWith("http") ? url : `${this.baseUrl}${url}`;
     this.logRequest(method, fullUrl, options.body);
+    const requestChannels: number[] = [];
 
     try {
       const headers: Record<string, string> = { ...options.headers };
@@ -441,21 +450,25 @@ export class AuthService {
         headers["Content-Type"] = "application/json";
       }
 
-      if (this.userId !== null) {
+      if (options.includeAuthentication !== false && this.userId !== null) {
         headers["New-Api-User"] = String(this.userId);
       }
 
-      if (this.dashboardAccessToken) {
+      if (
+        options.includeAuthentication !== false &&
+        this.dashboardAccessToken
+      ) {
         headers["Authorization"] = `Bearer ${this.dashboardAccessToken}`;
       }
 
       const requestPath = new URL(fullUrl).pathname;
       const cookies: string[] = [];
-      if (this.sessionToken) {
+      if (options.includeAuthentication !== false && this.sessionToken) {
         cookies.push(`${LEGACY_SESSION_COOKIE}=${this.sessionToken}`);
       }
       // Refresh Cookie 只允许发送给 NewAPI 的 refresh/logout 路径。
       if (
+        options.includeAuthentication !== false &&
         this.dashboardRefreshToken &&
         (requestPath === DASHBOARD_REFRESH_COOKIE_PATH ||
           requestPath.startsWith(`${DASHBOARD_REFRESH_COOKIE_PATH}/`))
@@ -475,6 +488,13 @@ export class AuthService {
         body: options.body ? JSON.stringify(options.body) : undefined,
         responseType: "json",
         successCodes: false as const,
+        requestObserver: (xhr: XMLHttpRequest) => {
+          const channel = xhr.channel?.QueryInterface?.(Ci.nsIHttpChannel);
+          if (channel && options.extractAuthCookies) {
+            requestChannels.push(channel.channelId);
+            this.authRequestGenerations.set(channel.channelId, generation);
+          }
+        },
         // Quota errors must reach the UI immediately for its own handling.
         ...NO_RETRY_ON_THROTTLE,
       });
@@ -526,6 +546,10 @@ export class AuthService {
             ? error.message
             : getString("api-error-network"),
       };
+    } finally {
+      for (const channelId of requestChannels) {
+        this.authRequestGenerations.delete(channelId);
+      }
     }
   }
 
@@ -841,19 +865,36 @@ export class AuthService {
   }
 
   async logout(): Promise<ApiResponse> {
+    // Invalidate login/refresh requests before revoking the current session.
+    this.environmentGeneration += 1;
     const generation = this.environmentGeneration;
-    let result = await this.request<ApiResponse>(
+    const baseUrl = this.baseUrl;
+    const legacyHeaders: Record<string, string> = {};
+    if (this.userId !== null)
+      legacyHeaders["New-Api-User"] = String(this.userId);
+    if (this.dashboardAccessToken) {
+      legacyHeaders.Authorization = `Bearer ${this.dashboardAccessToken}`;
+    }
+    if (this.sessionToken) {
+      legacyHeaders.Cookie = `${LEGACY_SESSION_COOKIE}=${this.sessionToken}`;
+    }
+    const request = this.request<ApiResponse>(
       "POST",
       `${this.baseUrl}/api/user/auth/logout`,
       {
         headers: this.getDashboardSessionHeaders(),
-        extractAuthCookies: true,
       },
     );
-    if (result.status === 404) {
+    // request() captures the current credentials synchronously. Clear local
+    // authentication immediately, even if the server is slow or unreachable.
+    this.userId = null;
+    this.clearSessionCookie();
+    let result = await request;
+    if (result.status === 404 && generation === this.environmentGeneration) {
       result = await this.request<ApiResponse>(
         "GET",
-        `${this.baseUrl}/api/user/logout`,
+        `${baseUrl}/api/user/logout`,
+        { headers: legacyHeaders, includeAuthentication: false },
       );
     }
 
@@ -863,9 +904,6 @@ export class AuthService {
         message: "PaperChat service changed during logout",
       };
     }
-
-    this.userId = null;
-    this.clearSessionCookie();
 
     if (result.error) {
       return { success: false, message: result.error };

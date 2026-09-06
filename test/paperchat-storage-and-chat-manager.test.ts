@@ -2831,6 +2831,7 @@ describe("paperchat storage and chat manager", function () {
 
     const screenshotButton = {
       hidden: false,
+      disabled: false,
       style: { display: "" },
     };
     const container = {
@@ -2868,11 +2869,13 @@ describe("paperchat storage and chat manager", function () {
 
       resolvers.get(secondSession.id)?.("no-vision-model");
       assert.equal(await secondRefresh, "unsupported");
-      assert.isTrue(screenshotButton.hidden);
+      assert.isFalse(screenshotButton.hidden);
+      assert.isTrue(screenshotButton.disabled);
 
       resolvers.get(firstSession.id)?.("vision-model");
       assert.equal(await firstRefresh, "unsupported");
-      assert.isTrue(screenshotButton.hidden);
+      assert.isFalse(screenshotButton.hidden);
+      assert.isTrue(screenshotButton.disabled);
 
       const sameSessionResolvers: Array<(modelId: string | null) => void> = [];
       (manager as any).ensureCurrentPaperChatModelResolved = () =>
@@ -2892,7 +2895,8 @@ describe("paperchat storage and chat manager", function () {
       assert.equal(await currentSameSessionRefresh, "unsupported");
       sameSessionResolvers[0](null);
       assert.equal(await staleSameSessionRefresh, "unsupported");
-      assert.isTrue(screenshotButton.hidden);
+      assert.isFalse(screenshotButton.hidden);
+      assert.isTrue(screenshotButton.disabled);
 
       applyImageInputAvailability(container, "supported");
       const earlyStaleResolvers: Array<(modelId: string | null) => void> = [];
@@ -2920,7 +2924,8 @@ describe("paperchat storage and chat manager", function () {
       earlyStaleResolvers[1]("no-vision-model");
       assert.equal(await latestSlowRefresh, "unsupported");
       assert.equal(await earlyStaleRefresh, "unsupported");
-      assert.isTrue(screenshotButton.hidden);
+      assert.isFalse(screenshotButton.hidden);
+      assert.isTrue(screenshotButton.disabled);
 
       (manager as any).ensureCurrentPaperChatModelResolved = async () => {
         throw new Error("routing metadata unavailable");
@@ -2929,7 +2934,8 @@ describe("paperchat storage and chat manager", function () {
         await refreshImageInputAvailability(container, manager),
         "unsupported",
       );
-      assert.isTrue(screenshotButton.hidden);
+      assert.isFalse(screenshotButton.hidden);
+      assert.isTrue(screenshotButton.disabled);
 
       (manager as any).ensureCurrentPaperChatModelResolved = async () => {
         secondSession.resolvedModelId = "unknown-model";
@@ -2940,6 +2946,7 @@ describe("paperchat storage and chat manager", function () {
         "unknown",
       );
       assert.isFalse(screenshotButton.hidden);
+      assert.isFalse(screenshotButton.disabled);
     } finally {
       providerManager.getActiveProviderId = originalGetActiveProviderId;
       clearPaperchatModelCaches();

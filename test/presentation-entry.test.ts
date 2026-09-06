@@ -2,6 +2,7 @@ import { assert } from "chai";
 import {
   createDeferredPresentationFocus,
   getSingleSelectedPresentationPaper,
+  getCurrentPresentationPaper,
   paperHasPdf,
   resolvePresentationPaper,
   resolvePresentationPaperFromCandidates,
@@ -24,6 +25,85 @@ describe("presentation entry", function () {
 
   afterEach(function () {
     (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
+  });
+
+  it("uses only the visible PDF or exactly one library selection, never a hidden reader", function () {
+    const first = {
+      id: 1,
+      key: "FIRST",
+      libraryID: 1,
+      isAttachment: () => false,
+      getAttachments: () => [11],
+    };
+    const second = {
+      id: 2,
+      key: "SECOND",
+      libraryID: 1,
+      isAttachment: () => false,
+      getAttachments: () => [12],
+    };
+    const noPdf = {
+      id: 3,
+      key: "EMPTY",
+      libraryID: 1,
+      isAttachment: () => false,
+      getAttachments: () => [],
+    };
+    const pdf = (id: number, parentItemID: number) => ({
+      id,
+      parentItemID,
+      isAttachment: () => true,
+      isPDFAttachment: () => true,
+    });
+    const items: Record<number, unknown> = {
+      1: first,
+      2: second,
+      3: noPdf,
+      11: pdf(11, 1),
+      12: pdf(12, 2),
+      13: {
+        isAttachment: () => true,
+        attachmentContentType: "application/epub+zip",
+      },
+    };
+    const tabs = { selectedType: "reader", selectedID: "first" };
+    let selection = [second];
+    (globalThis as { Zotero?: unknown }).Zotero = {
+      getMainWindow: () => ({ Zotero_Tabs: tabs }),
+      getActiveZoteroPane: () => ({ getSelectedItems: () => selection }),
+      Reader: {
+        getByTabID: (id: string) => ({
+          itemID:
+            id === "first"
+              ? 11
+              : id === "second"
+                ? 12
+                : id === "epub"
+                  ? 13
+                  : 999,
+        }),
+      },
+      Items: { get: (id: number) => items[id] || false },
+    };
+    assert.strictEqual(getCurrentPresentationPaper(), first);
+    tabs.selectedID = "second";
+    assert.strictEqual(getCurrentPresentationPaper(), second);
+    tabs.selectedID = "epub";
+    assert.isNull(getCurrentPresentationPaper());
+    tabs.selectedID = "missing";
+    assert.isNull(getCurrentPresentationPaper());
+    tabs.selectedType = "library";
+    // A previously opened PDF cannot override the visible library selection.
+    tabs.selectedID = "first";
+    assert.strictEqual(getCurrentPresentationPaper(), second);
+    selection = [];
+    assert.isNull(getCurrentPresentationPaper());
+    selection = [first, second];
+    assert.isNull(getCurrentPresentationPaper());
+    selection = [noPdf];
+    assert.isNull(getCurrentPresentationPaper());
+    selection = [first];
+    assert.strictEqual(getCurrentPresentationPaper(), first);
   });
 
   it("normalizes a selected PDF attachment to its paper", function () {
@@ -442,6 +522,60 @@ describe("presentation entry", function () {
       { session: active, expectedActiveSession: active },
     );
     assert.equal(harness.createCalls, 0);
+  });
+
+  it("isolates a new toolbar task for another paper while retaining retry ownership", async function () {
+    const active = {
+      id: "old",
+      lastActiveItemKey: "PAPER-A",
+      lastActiveItemLibraryID: 1,
+    } as ChatSession;
+    const target = { itemKey: "PAPER-B", title: "Paper B", libraryID: 1 };
+    const fresh = createHarness(active);
+    const result = await selectPresentationSession(
+      fresh.manager,
+      "presentation_button",
+      active,
+      target,
+      1,
+    );
+    assert.strictEqual(result?.session, fresh.created);
+    assert.deepEqual(fresh.itemSessionCalls, [target]);
+    assert.equal(active.lastActiveItemKey, "PAPER-A");
+    const retry = createHarness(active);
+    const retryResult = await selectPresentationSession(
+      retry.manager,
+      "presentation_button",
+      active,
+      target,
+    );
+    assert.strictEqual(retryResult?.session, active);
+    assert.isEmpty(retry.itemSessionCalls);
+    const same = createHarness(active);
+    assert.strictEqual(
+      (
+        await selectPresentationSession(
+          same.manager,
+          "presentation_button",
+          active,
+          { ...target, itemKey: "PAPER-A" },
+          1,
+        )
+      )?.session,
+      active,
+    );
+    assert.isEmpty(same.itemSessionCalls);
+    const navigated = createHarness({ id: "different" } as ChatSession);
+    assert.isNull(
+      await selectPresentationSession(
+        navigated.manager,
+        "presentation_button",
+        active,
+        target,
+        1,
+      ),
+    );
+    assert.isEmpty(navigated.itemSessionCalls);
   });
 
   it("starts a fresh chat for the library context-menu entry", async function () {

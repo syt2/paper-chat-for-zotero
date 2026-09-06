@@ -29,7 +29,7 @@ import {
 import { normalizeSourceItemKeys } from "../../chat/note-source-provenance";
 import { isPathInsidePresentationRoot } from "../../presentation";
 import {
-  getSingleSelectedPresentationPaper,
+  getCurrentPresentationPaper,
   launchPresentationForItem,
   resolvePresentationPaperFromCandidates,
 } from "../../presentation/PresentationEntry";
@@ -108,6 +108,7 @@ import {
   syncSendButtonState,
   syncSessionNavigationState,
   updateConversationNoteSummaryButton,
+  updatePresentationButtonAvailability,
 } from "./ChatPanelEvents";
 import { loadCachedRatios } from "../../preferences/ModelsFetcher";
 import { Guide } from "../Guide";
@@ -1121,6 +1122,7 @@ let globalTabNotifierID: string | null = null; // Persistent notifier for sideba
 let contentInitialized = false;
 let moduleCurrentItem: Zotero.Item | null = null;
 let pendingPanelItem: Zotero.Item | null = null;
+let pendingModeDraft: string | null = null;
 let pendingPanelReadyAction: (() => void | Promise<void>) | null = null;
 let themeCleanup: (() => void) | null = null;
 
@@ -1137,6 +1139,7 @@ let panelOpenSource: ChatPanelOpenSource = "unknown";
 let suppressFloatingUnloadTracking = false;
 const readingLoopPanelSubscriptions = new WeakMap<HTMLElement, () => void>();
 const eventHandlerDisposers = new WeakMap<HTMLElement, () => void>();
+const authListenerDisposers = new WeakMap<HTMLElement, () => void>();
 const readyPanelContainers = new WeakSet<HTMLElement>();
 let readingLoopExecutorOwner: HTMLElement | null = null;
 let readingLoopToolbarUnsubscribe: (() => void) | null = null;
@@ -1178,6 +1181,12 @@ export function setPanelMode(mode: PanelMode): void {
 
   const wasShown = isPanelShown();
   const previousMode = currentPanelMode;
+  const previousContainer =
+    previousMode === "sidebar" ? chatContainer : floatingContainer;
+  const previousInput = previousContainer?.querySelector(
+    "#chat-message-input",
+  ) as HTMLTextAreaElement | null;
+  if (previousInput) pendingModeDraft = previousInput.value;
 
   currentPanelMode = mode;
   setPref("panelMode", mode);
@@ -1186,6 +1195,12 @@ export function setPanelMode(mode: PanelMode): void {
     // Close the previous mode's panel
     if (previousMode === "sidebar") {
       hideSidebarPanel();
+      // A different panel will own the shared callbacks. Recreate this view
+      // on return so its title, provider, drafts and menus cannot stay stale.
+      cleanupPanelIntegrations(chatContainer);
+      chatContainer?.remove();
+      chatContainer = null;
+      contentInitialized = false;
     } else {
       closeFloatingWindow();
     }
@@ -1486,6 +1501,13 @@ async function initializeChatContentCommon(
   readyPanelContainers.delete(container);
   const authManager = getAuthManager();
   const context = createContext(container);
+  const messageInput = container.querySelector(
+    "#chat-message-input",
+  ) as HTMLTextAreaElement | null;
+  if (messageInput && pendingModeDraft !== null) {
+    messageInput.value = pendingModeDraft;
+    pendingModeDraft = null;
+  }
   const requestedItem = pendingPanelItem;
   pendingPanelItem = null;
 
@@ -1494,19 +1516,24 @@ async function initializeChatContentCommon(
 
   // Initialize auth
   await authManager.initialize();
+  if (!container.isConnected) return;
   context.updateUserBar();
 
   // Set auth callbacks
-  authManager.addListener({
-    onBalanceUpdate: () => context.updateUserBar(),
-    onLoginStatusChange: () => {
-      context.updateUserBar();
-      // Re-fetch check-in status on login status change (e.g. auto-relogin after session expiry)
-      if (authManager.isLoggedIn()) {
-        refreshCheckinDisplay(container, authManager);
-      }
-    },
-  });
+  authListenerDisposers.get(container)?.();
+  authListenerDisposers.set(
+    container,
+    authManager.addListener({
+      onBalanceUpdate: () => context.updateUserBar(),
+      onLoginStatusChange: () => {
+        context.updateUserBar();
+        // Re-fetch check-in status on login status change (e.g. auto-relogin after session expiry)
+        if (authManager.isLoggedIn()) {
+          refreshCheckinDisplay(container, authManager);
+        }
+      },
+    }),
+  );
 
   // Set provider change callback
   const providerManager = getProviderManager();
@@ -1531,6 +1558,7 @@ async function initializeChatContentCommon(
 
   // Initialize ChatManager (handles migration and session loading)
   await manager.init();
+  if (!container.isConnected) return;
   await refreshImageInputAvailability(container, manager);
 
   // Get current item from reader
@@ -1645,6 +1673,8 @@ function cleanupPanelIntegrations(
     readyPanelContainers.delete(container);
     eventHandlerDisposers.get(container)?.();
     eventHandlerDisposers.delete(container);
+    authListenerDisposers.get(container)?.();
+    authListenerDisposers.delete(container);
   }
   NextQuestionHintController.detach(container);
   cleanupReadingLoopIntegration(container);
@@ -1838,6 +1868,7 @@ function getReadingLoopAccent(state: ReadingLoopState): string {
  * Note: This updates the current item tracking but does NOT switch sessions
  */
 async function refreshChatForContainer(container: HTMLElement): Promise<void> {
+  updatePresentationButtonAvailability(container);
   const activeItem = pendingPanelItem || getActiveReaderItem();
   pendingPanelItem = null;
   const manager = getChatManager();
@@ -2611,6 +2642,7 @@ export async function openPresentationForItem(
   settings: PresentationLaunchSettings,
   onTaskReady?: (focusTask: () => void) => void,
   expectedActiveSession: ChatSession | null = null,
+  newTask: boolean = false,
 ): Promise<boolean> {
   const manager = getChatManager();
   await manager.init();
@@ -2626,6 +2658,7 @@ export async function openPresentationForItem(
       title: String(item.getField?.("title") || "PaperChat PPT"),
       libraryID: item.libraryID,
     },
+    newTask ? Zotero.Libraries.userLibraryID : undefined,
   );
   if (!selection) {
     return false;
@@ -3457,20 +3490,9 @@ function createContext(container: HTMLElement): ChatPanelContext {
               message.id === assistantMessageId && message.role === "assistant",
           )
         : undefined;
-      const sessionItem = session?.lastActiveItemKey
-        ? getItemByLibraryKey(
-            session.lastActiveItemKey,
-            session.lastActiveItemLibraryID,
-          )
-        : null;
       const item = assistantMessageId
         ? getPresentationItemForMessage(taskMessage, session)
-        : resolvePresentationPaperFromCandidates(
-            sessionItem,
-            moduleCurrentItem,
-            getActiveReaderItem(),
-            getSingleSelectedPresentationPaper(),
-          );
+        : getCurrentPresentationPaper();
       if (!item) {
         Services.prompt.alert(
           Zotero.getMainWindow() as unknown as mozIDOMWindowProxy,
@@ -3490,6 +3512,7 @@ function createContext(container: HTMLElement): ChatPanelContext {
             settings,
             onTaskReady,
             session,
+            !assistantMessageId,
           ),
         container.ownerDocument.defaultView || undefined,
       );
@@ -3704,6 +3727,7 @@ export async function unregisterAll(): Promise<void> {
   // Reset initialization flags
   contentInitialized = false;
   floatingContentInitialized = false;
+  pendingModeDraft = null;
 
   // Remove toolbar button
   unregisterToolbarButton();

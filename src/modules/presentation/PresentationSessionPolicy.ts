@@ -48,14 +48,15 @@ export function isPresentationSessionCompatibleWithPaper(
 
 /**
  * Library launches are isolated in a fresh conversation. The in-chat button
- * intentionally keeps the active conversation and creates one only when the
- * panel has no session yet.
+ * keeps a compatible active conversation. New tasks for another paper may
+ * request an isolated session; retries keep their original conversation.
  */
 export async function selectPresentationSession(
   manager: PresentationSessionAccess,
   source: PresentationPanelOpenSource,
   expectedActiveSession: ChatSession | null = manager.getActiveSession(),
   paper?: { itemKey: string; title: string; libraryID?: number },
+  newTaskUserLibraryID?: number,
 ): Promise<PresentationSessionSelection | null> {
   if (source === "presentation_button") {
     // The button belongs to the chat that was active when it was clicked. If
@@ -63,6 +64,29 @@ export async function selectPresentationSession(
     // instead of silently rebinding the newly selected chat to the old paper.
     if (manager.getActiveSession() !== expectedActiveSession) {
       return null;
+    }
+    // New toolbar tasks may target a different visible paper. Keep the old
+    // conversation intact; retries omit this option and retain their owner.
+    if (
+      expectedActiveSession &&
+      paper?.libraryID &&
+      newTaskUserLibraryID !== undefined &&
+      !isPresentationSessionCompatibleWithPaper(
+        expectedActiveSession,
+        { itemKey: paper.itemKey, libraryID: paper.libraryID },
+        newTaskUserLibraryID,
+      )
+    ) {
+      const session = manager.createItemSession
+        ? await manager.createItemSession(
+            paper.itemKey,
+            paper.title,
+            paper.libraryID,
+          )
+        : await manager.createNewSession();
+      return manager.getActiveSession() === session
+        ? { session, expectedActiveSession }
+        : null;
     }
     const session = expectedActiveSession || (await manager.createNewSession());
     if (manager.getActiveSession() !== session) {

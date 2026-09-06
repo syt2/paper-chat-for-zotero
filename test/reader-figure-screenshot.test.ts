@@ -285,9 +285,10 @@ function createBase64Image(byteLength: number): ImageAttachment {
 }
 
 describe("reader figure screenshot", function () {
-  it("hides only the screenshot entry for an unsupported image model", function () {
+  it("keeps capture visible but disabled until image input is available", function () {
     const screenshotButton = {
       hidden: false,
+      disabled: false,
       style: { display: "" },
     };
     const container = {
@@ -296,14 +297,22 @@ describe("reader figure screenshot", function () {
         selector === "#chat-figure-screenshot-btn" ? screenshotButton : null,
     } as unknown as HTMLElement;
 
-    applyImageInputAvailability(container, "unsupported");
-    assert.equal(getImageInputAvailability(container), "unsupported");
-    assert.isTrue(screenshotButton.hidden);
-    assert.equal(screenshotButton.style.display, "none");
+    const previousAddon = (globalThis as any).addon;
+    (globalThis as any).addon = { data: {} };
+    try {
+      applyImageInputAvailability(container, "unsupported");
+      assert.equal(getImageInputAvailability(container), "unsupported");
+      assert.isFalse(screenshotButton.hidden);
+      assert.isTrue(screenshotButton.disabled);
+      assert.equal(screenshotButton.style.display, "");
 
-    applyImageInputAvailability(container, "unknown");
-    assert.isFalse(screenshotButton.hidden);
-    assert.equal(screenshotButton.style.display, "");
+      applyImageInputAvailability(container, "unknown");
+      assert.isFalse(screenshotButton.hidden);
+      assert.isFalse(screenshotButton.disabled);
+      assert.equal(screenshotButton.style.display, "");
+    } finally {
+      (globalThis as any).addon = previousAddon;
+    }
   });
 
   afterEach(function () {

@@ -1494,6 +1494,20 @@ export function populateHistoryDropdown(
   }
 }
 
+/** Keep the history list above its footer trigger in either panel mode. */
+export function positionHistoryDropdown(
+  container: HTMLElement,
+  trigger: HTMLElement,
+  dropdown: HTMLElement,
+): void {
+  const panelRect = container.getBoundingClientRect();
+  const buttonRect = trigger.getBoundingClientRect();
+  const bottom = Math.max(8, panelRect.bottom - buttonRect.top + 6);
+  dropdown.style.top = "auto";
+  dropdown.style.bottom = `${bottom}px`;
+  dropdown.style.maxHeight = `${Math.max(0, Math.min(350, panelRect.height - bottom - 12))}px`;
+}
+
 /**
  * Toggle history dropdown visibility
  */

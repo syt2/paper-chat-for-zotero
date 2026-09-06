@@ -942,14 +942,20 @@ export class AuthManager {
    * 用户登出
    */
   async logout(): Promise<void> {
-    const generation = this.environmentGeneration;
+    // Existing account requests must not restore state after explicit logout.
+    this.environmentGeneration += 1;
     this.passwordLoginBlockedUntil = 0;
     this.stopModelRefreshTimer();
-    await this.authService.logout();
-
-    if (generation !== this.environmentGeneration) {
-      return;
-    }
+    // AuthService dispatches with the old credentials before clearing them.
+    // Remote revocation is best-effort; local logout must not wait for network.
+    void this.authService.logout().then(
+      (result) => {
+        if (!result.success) {
+          ztoolkit.log("[AuthManager] Remote logout failed:", result.message);
+        }
+      },
+      (error) => ztoolkit.log("[AuthManager] Remote logout failed:", error),
+    );
 
     // 清除状态
     this.state = {

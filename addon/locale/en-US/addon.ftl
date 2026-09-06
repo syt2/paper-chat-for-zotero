@@ -70,6 +70,15 @@ paperchat-user-checked-in = ✓ Checked In
 
 # Balance display in sidebar
 paperchat-sidebar-balance = Token Balance: { $balance }
+paperchat-chat-header-balance = Balance { $balance }
+paperchat-chat-low-balance-warning = Low balance · { $balance } tokens remaining. Add credits
+paperchat-chat-account-menu = Account and options
+paperchat-chat-action-attach = Upload attachment
+paperchat-chat-more-actions = More actions
+paperchat-chat-tools-add = Add content
+paperchat-chat-tools-create = Create
+paperchat-chat-action-capture = Capture
+paperchat-chat-action-note = Note
 paperchat-sidebar-login-required = Please login first
 
 # Chat Panel
@@ -359,3 +368,6 @@ paperchat-presentation-launch-failed-title = Could Not Start Presentation
 paperchat-presentation-launch-failed-message = PaperChat could not start the presentation task. No PPT generation request was sent. Please try again.
 paperchat-presentation-concurrency-limit-title = Presentation Tasks Are Busy
 paperchat-presentation-concurrency-limit-message = PaperChat can generate up to { $maximum } presentations at the same time. Wait for one current task to finish or stop it, then try again.
+
+paperchat-presentation-select-source = Select one paper with a PDF
+paperchat-presentation-source-title = Source paper: { $title }

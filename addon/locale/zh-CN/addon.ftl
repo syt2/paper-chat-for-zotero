@@ -70,6 +70,15 @@ paperchat-user-checked-in = ✓ 已签到
 
 # Balance display in sidebar
 paperchat-sidebar-balance = Token余额: { $balance }
+paperchat-chat-header-balance = 余额 { $balance }
+paperchat-chat-low-balance-warning = 余额不足 · 剩余 { $balance } Token，点击补充额度
+paperchat-chat-account-menu = 账户与选项
+paperchat-chat-action-attach = 上传附件
+paperchat-chat-more-actions = 更多操作
+paperchat-chat-tools-add = 添加内容
+paperchat-chat-tools-create = 生成内容
+paperchat-chat-action-capture = 截图
+paperchat-chat-action-note = 笔记
 paperchat-sidebar-login-required = 请先登录
 
 # Chat Panel
@@ -359,3 +368,6 @@ paperchat-presentation-launch-failed-title = 无法开始制作 PPT
 paperchat-presentation-launch-failed-message = PaperChat 未能启动 PPT 制作任务，本次没有发送生成请求，请稍后重试。
 paperchat-presentation-concurrency-limit-title = PPT 任务已满
 paperchat-presentation-concurrency-limit-message = PaperChat 最多同时制作 { $maximum } 份 PPT。请等待一个当前任务完成或将其停止后再试。
+
+paperchat-presentation-select-source = 请选择一篇含 PDF 的论文
+paperchat-presentation-source-title = 来源论文：{ $title }

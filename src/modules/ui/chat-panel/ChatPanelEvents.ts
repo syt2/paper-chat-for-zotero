@@ -11,15 +11,23 @@ import {
   createHistoryDropdownState,
   refreshHistoryDropdownSearch,
   populateHistoryDropdown,
+  positionHistoryDropdown,
   setupHistoryDropdownSearch,
   setupClickOutsideHandler,
   toggleHistoryDropdown,
 } from "./HistoryDropdown";
 import { showAuthDialog } from "../AuthDialog";
+import { getCurrentPresentationPaper } from "../../presentation/PresentationEntry";
+import { updateAnimatedBalance } from "./AnimatedBalance";
 import { getString } from "../../../utils/locale";
 import { getProviderManager } from "../../providers";
 import type { PaperChatProviderConfig } from "../../../types/provider";
 import type { SubscriptionUsageSummary } from "../../../types/auth";
+import {
+  updateChatHeaderTitle,
+  updateChatBalanceWarning,
+  updateHeaderAccountCaption,
+} from "./ChatPanelChrome";
 import { getPref, setPref } from "../../../utils/prefs";
 import {
   formatModelLabel,
@@ -185,10 +193,14 @@ export function updateConversationNoteSummaryButton(
   if (shouldResetSummaryButtonBusyState(busySessionId, sessionId)) {
     resetConversationSummaryButtonBusyState(button);
   }
-  button.style.display =
-    supportsToolCalling && hasConversationMessages(messages)
-      ? "inline-flex"
-      : "none";
+  const available = supportsToolCalling && hasConversationMessages(messages);
+  button.style.display = "inline-flex";
+  button.disabled = !available || conversationSummaryRuns.has(button);
+  button.title = getString(
+    available
+      ? "chat-summarize-conversation-note"
+      : "chat-note-summary-unavailable",
+  );
 }
 
 interface AttachmentPreviewActions {
@@ -615,6 +627,7 @@ function getActiveReaderItem(): Zotero.Item | null {
 export async function refreshCheckinDisplay(
   container: HTMLElement,
   authManager: {
+    isLoggedIn(): boolean;
     fetchCheckinStatus(): Promise<{
       success: boolean;
       enabled: boolean;
@@ -629,7 +642,7 @@ export async function refreshCheckinDisplay(
   if (!checkinBtn) return;
 
   const result = await authManager.fetchCheckinStatus();
-  if (!result.success || !result.enabled) {
+  if (!authManager.isLoggedIn() || !result.success || !result.enabled) {
     checkinBtn.style.display = "none";
     return;
   }
@@ -688,6 +701,19 @@ export function createPresentationButtonLaunchHandler(
         }
       });
   };
+}
+
+export function updatePresentationButtonAvailability(
+  container: HTMLElement,
+): void {
+  const button = container.querySelector(
+    "#chat-generate-presentation",
+  ) as HTMLButtonElement | null;
+  if (!button) return;
+  button.disabled = !getCurrentPresentationPaper();
+  button.title = getString(
+    button.disabled ? "presentation-select-source" : "presentation-generate",
+  );
 }
 
 /**
@@ -1138,19 +1164,42 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
     refreshCheckinDisplay(container, authManager);
   }
 
-  // User action button - login/logout
-  userActionBtn?.addEventListener("click", async () => {
-    ztoolkit.log("User action button clicked");
-    if (authManager.isLoggedIn()) {
-      await authManager.logout();
-      context.updateUserBar();
-    } else {
-      const success = await showAuthDialog("login");
-      if (success) {
-        context.updateUserBar();
-        refreshCheckinDisplay(container, authManager);
+  // Keep the account menu open while an action is pending so its state is visible.
+  const headerLoginBtn = container.querySelector(
+    "#chat-header-account-caption",
+  ) as HTMLButtonElement | null;
+  const handleAccountAction = async () => {
+    if (!userActionBtn || userActionBtn.disabled) return;
+    if (headerLoginBtn) headerLoginBtn.disabled = true;
+    userActionBtn.disabled = true;
+    userActionBtn.setAttribute("aria-busy", "true");
+    userActionBtn.textContent = `${userActionBtn.textContent || ""}…`;
+    const accountMenu = container.querySelector(
+      "#chat-account-menu",
+    ) as HTMLDetailsElement | null;
+    try {
+      if (authManager.isLoggedIn()) {
+        await authManager.logout();
+        if (accountMenu) accountMenu.open = false;
+      } else {
+        if (accountMenu) accountMenu.open = false;
+        const success = await showAuthDialog("login");
+        if (success) await refreshCheckinDisplay(container, authManager);
       }
+    } catch (error) {
+      ztoolkit.log("[ChatPanel] Account action failed:", error);
+      context.appendError(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      userActionBtn.disabled = false;
+      userActionBtn.removeAttribute("aria-busy");
+      context.updateUserBar();
     }
+  };
+  userActionBtn?.addEventListener("click", handleAccountAction);
+  headerLoginBtn?.addEventListener("click", () => {
+    if (!authManager.isLoggedIn()) void handleAccountAction();
   });
 
   // Send button
@@ -1276,6 +1325,31 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
   });
 
   if (presentationBtn) {
+    const refreshSource = () => updatePresentationButtonAvailability(container);
+    const toolsMenu = container.querySelector("#chat-tools-menu");
+    // Refresh before pointer/keyboard activation as well as after tab changes.
+    toolsMenu?.addEventListener("click", refreshSource, true);
+    toolsMenu?.addEventListener("focusin", refreshSource);
+    toolsMenu?.addEventListener("toggle", refreshSource);
+    const win = container.ownerDocument.defaultView;
+    win?.addEventListener("focus", refreshSource);
+    const mainWindow = Zotero.getMainWindow();
+    const refreshVisibleMenu = () => {
+      if ((toolsMenu as HTMLDetailsElement | null)?.open) refreshSource();
+    };
+    // Library row selection is not a tab change. Refresh an already open menu
+    // after mouse/keyboard selection without polling or replacing Zotero handlers.
+    mainWindow?.addEventListener?.("click", refreshVisibleMenu);
+    mainWindow?.addEventListener?.("keyup", refreshVisibleMenu);
+    disposers.push(() => {
+      toolsMenu?.removeEventListener("click", refreshSource, true);
+      toolsMenu?.removeEventListener("focusin", refreshSource);
+      toolsMenu?.removeEventListener("toggle", refreshSource);
+      win?.removeEventListener("focus", refreshSource);
+      mainWindow?.removeEventListener?.("click", refreshVisibleMenu);
+      mainWindow?.removeEventListener?.("keyup", refreshVisibleMenu);
+    });
+    refreshSource();
     presentationBtn.addEventListener(
       "click",
       createPresentationButtonLaunchHandler(context, presentationBtn),
@@ -1469,6 +1543,8 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
     const isNowVisible = toggleHistoryDropdown(historyDropdown);
     if (!isNowVisible) return;
 
+    positionHistoryDropdown(container, historyBtn, historyDropdown);
+
     if (!historyBackfillStarted) {
       historyBackfillStarted = true;
       chatManager.startSearchHistoryBackfill();
@@ -1481,6 +1557,7 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
 
   // Helper function to refresh history dropdown
   const refreshHistoryDropdown = async () => {
+    updateChatHeaderTitle(container, chatManager.getActiveSession());
     if (!historyDropdown || historyIntegration.disposed) return;
 
     const sessions = await chatManager.getAllSessions();
@@ -1581,6 +1658,15 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
         modelDropdown.style.display = "none";
       } else {
         populateModelDropdown(container, modelDropdown, context);
+        const selectorRect = modelSelectorBtn.getBoundingClientRect();
+        const panelRect = container.getBoundingClientRect();
+        const menuWidth = Math.max(
+          0,
+          Math.min(340, selectorRect.right - panelRect.left - 12),
+        );
+        modelDropdown.style.width = `${menuWidth}px`;
+        modelDropdown.style.minWidth = "0";
+        modelDropdown.style.maxWidth = `${menuWidth}px`;
         modelDropdown.style.display = "block";
       }
     });
@@ -1621,25 +1707,6 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
     });
   }
 
-  // User bar settings button (visible when not logged in) - open preferences
-  const userBarSettingsBtn = container.querySelector(
-    "#chat-user-bar-settings-btn",
-  ) as HTMLButtonElement;
-  if (userBarSettingsBtn) {
-    userBarSettingsBtn.addEventListener("click", () => {
-      ztoolkit.log("User bar settings button clicked");
-      openPluginPreferencesSafely();
-    });
-
-    // Hover effect
-    userBarSettingsBtn.addEventListener("mouseenter", () => {
-      userBarSettingsBtn.style.background = "rgba(255, 255, 255, 0.3)";
-    });
-    userBarSettingsBtn.addEventListener("mouseleave", () => {
-      userBarSettingsBtn.style.background = "rgba(255, 255, 255, 0.15)";
-    });
-  }
-
   const userBalanceEl = container.querySelector(
     "#chat-user-balance",
   ) as HTMLElement;
@@ -1668,6 +1735,9 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
         });
     };
     userBalanceEl.addEventListener("click", openLowBalanceTopup);
+    container
+      .querySelector("#chat-balance-warning-button")
+      ?.addEventListener("click", openLowBalanceTopup);
     userBalanceEl.addEventListener("keydown", (event) => {
       if (event.key !== "Enter" && event.key !== " ") {
         return;
@@ -2012,7 +2082,6 @@ export function updateAttachmentsPreviewDisplay(
         },
       ),
     );
-    tag.appendChild(createLabel(image.name || "image"));
     if (actions.onRemoveImage) {
       tag.appendChild(
         createRemoveButton(`Remove ${image.name || "image"}`, () =>
@@ -2451,21 +2520,32 @@ export function updateUserBarDisplay(
   const userActionBtn = container.querySelector(
     "#chat-user-action-btn",
   ) as HTMLButtonElement;
-  const userBarSettingsBtn = container.querySelector(
-    "#chat-user-bar-settings-btn",
-  ) as HTMLButtonElement;
   const checkinBtn = container.querySelector(
     "#chat-checkin-btn",
   ) as HTMLButtonElement;
 
   if (!userBar || !userNameEl || !userBalanceEl || !userActionBtn) return;
 
-  // Only show user bar when PaperChat provider is active
+  // PaperChat account controls are absent when using an external provider.
   const providerManager = getProviderManager();
   const activeProviderId = providerManager.getActiveProviderId();
+  const accountTrigger = container.querySelector(
+    "#chat-account-trigger",
+  ) as HTMLElement | null;
+  const accountMenu = container.querySelector(
+    "#chat-account-menu",
+  ) as HTMLDetailsElement | null;
+  if (accountMenu && activeProviderId !== "paperchat") accountMenu.open = false;
 
   if (activeProviderId !== "paperchat") {
+    updateHeaderAccountCaption(container, {
+      paperChat: false,
+      label: "",
+      description: "",
+    });
+    updateChatBalanceWarning(container, false);
     userBar.style.display = "none";
+    accountTrigger?.setAttribute("title", getString("chat-account-menu"));
     return;
   }
 
@@ -2479,7 +2559,25 @@ export function updateUserBarDisplay(
     const shouldHideTokenBalance =
       !!subscriptionUsage &&
       subscriptionUsage.amountRemaining > LOW_BALANCE_WARNING_THRESHOLD;
+    updateChatBalanceWarning(
+      container,
+      !shouldHideTokenBalance && isLowBalance,
+      authManager.formatBalance(),
+    );
+    updateHeaderAccountCaption(container, {
+      paperChat: true,
+      label: getString("chat-header-balance", {
+        args: { balance: authManager.formatBalance() },
+      }),
+      description: `${getString("user-panel-balance")}: ${authManager.formatBalance()}`,
+      low: !shouldHideTokenBalance && isLowBalance,
+      balance: authManager.getBalance().quota,
+    });
     userNameEl.textContent = user?.username || "";
+    accountTrigger?.setAttribute(
+      "title",
+      user?.username || getString("chat-account-menu"),
+    );
     if (userSubscriptionEl) {
       if (
         subscriptionUsage &&
@@ -2516,12 +2614,20 @@ export function updateUserBarDisplay(
       }
     }
     if (shouldHideTokenBalance) {
-      userBalanceEl.textContent = "";
+      updateAnimatedBalance(userBalanceEl, "");
+      userBalanceEl.removeAttribute("title");
       userBalanceEl.style.display = "none";
       resetUserBalanceLowBalanceStyles(userBalanceEl);
     } else {
       userBalanceEl.style.display = "inline";
-      userBalanceEl.textContent = `${getString("user-panel-balance")}: ${authManager.formatBalance()}`;
+      updateAnimatedBalance(
+        userBalanceEl,
+        getString("chat-header-balance", {
+          args: { balance: authManager.formatBalance() },
+        }),
+        authManager.getBalance().quota,
+      );
+      userBalanceEl.title = `${getString("user-panel-balance")}: ${authManager.formatBalance()}`;
     }
     if (!shouldHideTokenBalance && isLowBalance) {
       applyUserBalanceLowBalanceStyles(userBalanceEl);
@@ -2529,14 +2635,21 @@ export function updateUserBarDisplay(
       resetUserBalanceLowBalanceStyles(userBalanceEl);
     }
     userActionBtn.textContent = getString("user-panel-logout-btn");
-    // Hide settings button when logged in
-    if (userBarSettingsBtn) {
-      userBarSettingsBtn.style.display = "none";
-    }
     // Check-in button visibility is owned by refreshCheckinDisplay (respects enabled flag).
     // Do NOT force-show it here — that would override the server's enabled:false response.
   } else {
     userNameEl.textContent = getString("user-panel-not-logged-in");
+    updateHeaderAccountCaption(container, {
+      paperChat: true,
+      interactive: true,
+      label: getString("user-panel-login-btn"),
+      description: getString("user-panel-not-logged-in"),
+    });
+    updateChatBalanceWarning(container, false);
+    accountTrigger?.setAttribute(
+      "title",
+      getString("user-panel-not-logged-in"),
+    );
     if (userSubscriptionEl) {
       if (userSubscriptionTotalEl) {
         userSubscriptionTotalEl.textContent = "";
@@ -2549,14 +2662,11 @@ export function updateUserBarDisplay(
       resetSubscriptionLimitStyles(userSubscriptionEl);
       userSubscriptionEl.style.display = "none";
     }
-    userBalanceEl.textContent = "";
+    updateAnimatedBalance(userBalanceEl, "");
+    userBalanceEl.removeAttribute("title");
     userBalanceEl.style.display = "inline";
     resetUserBalanceLowBalanceStyles(userBalanceEl);
     userActionBtn.textContent = getString("user-panel-login-btn");
-    // Show settings button when not logged in
-    if (userBarSettingsBtn) {
-      userBarSettingsBtn.style.display = "flex";
-    }
     // Hide check-in button when not logged in
     if (checkinBtn) {
       checkinBtn.style.display = "none";
@@ -2592,6 +2702,7 @@ export function focusInput(container: HTMLElement): void {
  * Update model selector display with current model
  */
 export function updateModelSelectorDisplay(container: HTMLElement): void {
+  updateChatHeaderTitle(container, getChatManager().getActiveSession());
   void refreshImageInputAvailability(container, getChatManager());
   const modelSelectorText = container.querySelector(
     "#chat-model-selector-text",
@@ -2604,6 +2715,7 @@ export function updateModelSelectorDisplay(container: HTMLElement): void {
   const activeProvider = providerManager.getActiveProvider();
   if (!activeProvider) {
     modelSelectorText.textContent = getString("chat-select-model");
+    modelSelectorText.removeAttribute("title");
     return;
   }
 
@@ -2614,9 +2726,11 @@ export function updateModelSelectorDisplay(container: HTMLElement): void {
         currentModel,
         providerManager.getActiveProviderId() || undefined,
       );
-      modelSelectorText.textContent = `${activeProvider.getName()}: ${modelShort}`;
+      modelSelectorText.textContent = `${activeProvider.getName()} · ${modelShort}`;
+      modelSelectorText.title = `${activeProvider.getName()}: ${currentModel}`;
     } else {
       modelSelectorText.textContent = activeProvider.getName();
+      modelSelectorText.title = activeProvider.getName();
     }
     return;
   }
@@ -2651,6 +2765,9 @@ export function updateModelSelectorDisplay(container: HTMLElement): void {
   const tierLabel = getPaperChatTierLabel(tier);
 
   modelSelectorText.textContent = effectiveModel
+    ? `PaperChat · ${tierLabel} · ${effectiveModel}`
+    : `PaperChat · ${tierLabel}`;
+  modelSelectorText.title = effectiveModel
     ? `PaperChat: ${tierLabel} · ${effectiveModel}`
     : `PaperChat: ${tierLabel}`;
 }

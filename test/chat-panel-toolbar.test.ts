@@ -5,10 +5,19 @@ import { createChatContainer } from "../src/modules/ui/chat-panel/ChatPanelBuild
 import {
   applyThemeToContainer,
   darkTheme,
+  getCurrentTheme,
   lightTheme,
   updateCurrentTheme,
 } from "../src/modules/ui/chat-panel/ChatPanelTheme.ts";
 import { chatFontSize } from "../src/modules/ui/chat-panel/ChatPanelTypography.ts";
+
+import {
+  updateConversationNoteSummaryButton,
+  updatePresentationButtonAvailability,
+  updateUserBarDisplay,
+  refreshCheckinDisplay,
+} from "../src/modules/ui/chat-panel/ChatPanelEvents.ts";
+import { getProviderManager } from "../src/modules/providers/ProviderManager.ts";
 
 class FakeElement {
   readonly style: Record<string, string> = {};
@@ -30,6 +39,10 @@ class FakeElement {
 
   setAttribute(name: string, value: string): void {
     this.attributes.set(name, value);
+  }
+
+  removeAttribute(name: string): void {
+    this.attributes.delete(name);
   }
 
   getAttribute(name: string): string | null {
@@ -94,10 +107,15 @@ describe("chat panel presentation toolbar entry", function () {
   const runtime = globalThis as Record<string, any>;
   let previousAddon: unknown;
   let previousZotero: unknown;
+  let previousToolkit: unknown;
+  let previousTheme: ReturnType<typeof getCurrentTheme>;
 
   beforeEach(function () {
+    previousTheme = getCurrentTheme();
     previousAddon = runtime.addon;
     previousZotero = runtime.Zotero;
+    previousToolkit = runtime.ztoolkit;
+    runtime.ztoolkit = { log: () => {} };
     runtime.addon = {
       data: {
         locale: {
@@ -117,11 +135,117 @@ describe("chat panel presentation toolbar entry", function () {
   });
 
   afterEach(function () {
+    runtime.Zotero.getMainWindow = () => ({
+      matchMedia: () => ({ matches: previousTheme === darkTheme }),
+    });
+    updateCurrentTheme();
     runtime.addon = previousAddon;
     runtime.Zotero = previousZotero;
+    runtime.ztoolkit = previousToolkit;
   });
 
-  it("places the PPT action at the far right of the toolbar", function () {
+  it("updates account warnings and the header login action when authentication or provider changes", function () {
+    const container = createChatContainer(
+      new FakeDocument() as unknown as Document,
+      lightTheme,
+    );
+    const manager = getProviderManager();
+    const original = manager.getActiveProviderId;
+    let provider = "paperchat";
+    let loggedIn = true;
+    const auth = {
+      isLoggedIn: () => loggedIn,
+      getUser: () => ({ username: "reader" }),
+      getBalance: () => ({ quota: 100, usedQuota: 0 }),
+      formatBalance: () => "100",
+      getSubscriptionUsageSummary: () => null,
+    };
+    manager.getActiveProviderId = () => provider;
+    try {
+      const warning = container.querySelector(
+        "#chat-balance-warning",
+      ) as HTMLElement;
+      const account = container.querySelector(
+        "#chat-header-account",
+      ) as HTMLElement;
+      const menu = container.querySelector(
+        "#chat-account-menu",
+      ) as HTMLDetailsElement;
+      const caption = container.querySelector(
+        "#chat-header-account-caption",
+      ) as HTMLButtonElement;
+      assert.equal(caption.tagName.toLowerCase(), "button");
+      assert.equal(caption.getAttribute("type"), "button");
+      updateUserBarDisplay(container, auth);
+      assert.equal(warning.style.display, "block");
+      assert.equal(account.style.display, "flex");
+      assert.isTrue(caption.disabled);
+      menu.open = true;
+      provider = "openai";
+      updateUserBarDisplay(container, auth);
+      assert.equal(account.style.display, "none");
+      assert.equal(warning.style.display, "none");
+      assert.isFalse(menu.open);
+      assert.isTrue(caption.disabled);
+      provider = "paperchat";
+      updateUserBarDisplay(container, auth);
+      assert.equal(account.style.display, "flex");
+      assert.equal(warning.style.display, "block");
+      loggedIn = false;
+      updateUserBarDisplay(container, auth);
+      assert.equal(account.style.display, "flex");
+      assert.equal(caption.textContent, "paperchat-user-panel-login-btn");
+      assert.isFalse(caption.disabled);
+      assert.equal(warning.style.display, "none");
+      assert.equal(
+        (container.querySelector("#chat-checkin-btn") as HTMLElement).style
+          .display,
+        "none",
+      );
+      provider = "openai";
+      updateUserBarDisplay(container, auth);
+      assert.equal(account.style.display, "none");
+      assert.isTrue(caption.disabled);
+    } finally {
+      manager.getActiveProviderId = original;
+    }
+  });
+
+  it("does not restore the exposed check-in button after logout during a refresh", async function () {
+    const container = createChatContainer(
+      new FakeDocument() as unknown as Document,
+      lightTheme,
+    );
+    let loggedIn = true;
+    let finish!: (value: {
+      success: boolean;
+      enabled: boolean;
+      checkedInToday: boolean;
+      checkinCount: number;
+    }) => void;
+    const pending = refreshCheckinDisplay(container, {
+      isLoggedIn: () => loggedIn,
+      fetchCheckinStatus: () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    });
+    loggedIn = false;
+    finish({
+      success: true,
+      enabled: true,
+      checkedInToday: false,
+      checkinCount: 0,
+    });
+    await pending;
+    assert.equal(
+      (container.querySelector("#chat-checkin-btn") as HTMLElement).style
+        .display,
+      "none",
+    );
+  });
+
+  it("groups note and PPT actions in the second tools section", function () {
     const doc = new FakeDocument();
     const container = createChatContainer(
       doc as unknown as Document,
@@ -170,23 +294,88 @@ describe("chat panel presentation toolbar entry", function () {
     );
   });
 
-  it("places model help immediately to the right of the model selector", function () {
-    const doc = new FakeDocument();
+  it("keeps add, model and send inside the composer and utilities outside", function () {
     const container = createChatContainer(
-      doc as unknown as Document,
+      new FakeDocument() as unknown as Document,
       lightTheme,
     ) as unknown as FakeElement;
+    const composer = container.querySelector("#chat-composer");
+    const bar = container.querySelector("#chat-input-bottom-bar");
     const selector = container.querySelector("#chat-model-selector-btn");
-    const selectorContainer = selector?.parentElement;
-    const help = container.querySelector("#chat-model-selector-help");
-    const siblings = selectorContainer?.parentElement?.children || [];
-
-    assert.isNull(container.querySelector("#chat-model-selector-label"));
-    assert.strictEqual(help?.parentElement, selectorContainer?.parentElement);
-    assert.equal(
-      siblings.indexOf(help as FakeElement),
-      siblings.indexOf(selectorContainer as FakeElement) + 1,
+    const tools = container.querySelector("#chat-tools-menu");
+    assert.strictEqual(bar?.parentElement, composer);
+    assert.strictEqual(bar?.children[0], tools);
+    assert.strictEqual(bar?.children[1], selector?.parentElement);
+    assert.equal(bar?.children[2]?.getAttribute("id"), "chat-send-button");
+    assert.equal(tools?.tagName, "details");
+    assert.equal(tools?.children[0]?.getAttribute("id"), "chat-tools-trigger");
+    const footer = container.querySelector("#chat-footer");
+    assert.strictEqual(footer?.parentElement, composer?.parentElement);
+    assert.deepEqual(
+      footer?.children.map((child) => child.getAttribute("id")),
+      ["chat-session-actions", "chat-utility-actions"],
     );
+    const utilities = container.querySelector("#chat-utility-actions");
+    assert.deepEqual(
+      utilities?.children.map((child) => child.getAttribute("id")),
+      ["chat-model-selector-help", "chat-settings-btn", "chat-panel-mode-btn"],
+    );
+  });
+
+  it("updates the PPT button when the visible library selection changes", function () {
+    let selected: unknown[] = [];
+    runtime.Zotero.getMainWindow = () => ({
+      Zotero_Tabs: { selectedID: "library", selectedType: "library" },
+    });
+    runtime.Zotero.getActiveZoteroPane = () => ({
+      getSelectedItems: () => selected,
+    });
+    const pdf = {
+      key: "PDF",
+      libraryID: 1,
+      isAttachment: () => true,
+      isPDFAttachment: () => true,
+    };
+    const container = createChatContainer(
+      new FakeDocument() as unknown as Document,
+      lightTheme,
+    );
+    const button = container.querySelector(
+      "#chat-generate-presentation",
+    ) as HTMLButtonElement;
+    updatePresentationButtonAvailability(container);
+    assert.isTrue(button.disabled);
+    assert.equal(button.title, "paperchat-presentation-select-source");
+    selected = [pdf];
+    updatePresentationButtonAvailability(container);
+    assert.isFalse(button.disabled);
+    selected = [pdf, pdf];
+    updatePresentationButtonAvailability(container);
+    assert.isTrue(button.disabled);
+    selected = [];
+    updatePresentationButtonAvailability(container);
+    assert.isTrue(button.disabled);
+  });
+
+  it("keeps the note menu item visible while disabling unavailable actions", function () {
+    const container = createChatContainer(
+      new FakeDocument() as unknown as Document,
+      lightTheme,
+    );
+    const note = container.querySelector(
+      "#chat-summarize-conversation-note",
+    ) as HTMLButtonElement;
+    const messages = [
+      { id: "one", role: "user" as const, content: "Hello", timestamp: 1 },
+    ];
+    updateConversationNoteSummaryButton(container, [], "empty", true);
+    assert.equal(note.style.display, "inline-flex");
+    assert.isTrue(note.disabled);
+    updateConversationNoteSummaryButton(container, messages, "one", true);
+    assert.isFalse(note.disabled);
+    updateConversationNoteSummaryButton(container, messages, "one", false);
+    assert.isTrue(note.disabled);
+    assert.equal(note.style.display, "inline-flex");
   });
 
   it("updates the PPT button with the rest of the toolbar in dark mode", function () {

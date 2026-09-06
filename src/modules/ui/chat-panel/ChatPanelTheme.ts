@@ -4,11 +4,12 @@
 
 import type { ThemeColors } from "./types";
 import { updateHistoryDropdownSearchTheme } from "./HistoryDropdown";
+import { getChatChromeStyles } from "./ChatPanelChrome";
 
 // Light theme colors
 export const lightTheme: ThemeColors = {
-  containerBg: "#f7f7f8",
-  chatHistoryBg: "#f7f7f8",
+  containerBg: "#ffffff",
+  chatHistoryBg: "#ffffff",
   toolbarBg: "#fff",
   inputAreaBg: "#fff",
   inputBg: "#fff",
@@ -19,8 +20,8 @@ export const lightTheme: ThemeColors = {
   dropdownBg: "#fff",
   dropdownItemHoverBg: "#f5f5f5",
   hoverBg: "#f0f0f0",
-  borderColor: "#e0e0e0",
-  inputBorderColor: "#ddd",
+  borderColor: "#e8eaed",
+  inputBorderColor: "#d9dde3",
   inputFocusBorderColor: "#6b7280",
   textPrimary: "#333",
   textSecondary: "#555",
@@ -29,8 +30,8 @@ export const lightTheme: ThemeColors = {
   inlineCodeColor: "#e83e8c",
   codeBlockBg: "#1e1e1e",
   codeBlockColor: "#d4d4d4",
-  userBubbleBg: "#e5e7eb",
-  userBubbleText: "#374151",
+  userBubbleBg: "#eaf2fc",
+  userBubbleText: "#263b53",
   scrollbarThumb: "#c1c1c1",
   scrollbarThumbHover: "#a1a1a1",
 };
@@ -39,9 +40,9 @@ export const lightTheme: ThemeColors = {
 export const darkTheme: ThemeColors = {
   containerBg: "#1e1e1e",
   chatHistoryBg: "#1e1e1e",
-  toolbarBg: "#252525",
-  inputAreaBg: "#252525",
-  inputBg: "#333",
+  toolbarBg: "#1e1e1e",
+  inputAreaBg: "#1e1e1e",
+  inputBg: "#252525",
   assistantBubbleBg: "#2d2d2d",
   attachmentPreviewBg: "#252525",
   buttonBg: "#333",
@@ -59,8 +60,8 @@ export const darkTheme: ThemeColors = {
   inlineCodeColor: "#ff79c6",
   codeBlockBg: "#0d0d0d",
   codeBlockColor: "#d4d4d4",
-  userBubbleBg: "linear-gradient(135deg, #6b7280 0%, #4b5563 100%)",
-  userBubbleText: "#ffffff",
+  userBubbleBg: "#283b52",
+  userBubbleText: "#e1ebf7",
   scrollbarThumb: "#555",
   scrollbarThumbHover: "#666",
 };
@@ -109,6 +110,8 @@ export function updateCurrentTheme(): ThemeColors {
  */
 export function applyThemeToContainer(container: HTMLElement): void {
   const theme = currentTheme;
+  const chromeStyles = container.querySelector("#chat-chrome-styles");
+  if (chromeStyles) chromeStyles.textContent = getChatChromeStyles(theme);
 
   // Main container
   container.style.backgroundColor = theme.containerBg;
@@ -205,7 +208,9 @@ export function applyThemeToContainer(container: HTMLElement): void {
     "#chat-input-wrapper",
   ) as HTMLElement;
   if (inputWrapper) {
-    const inputArea = inputWrapper.parentElement as HTMLElement;
+    const inputArea = container.querySelector(
+      "#chat-input-area",
+    ) as HTMLElement;
     if (inputArea) {
       inputArea.style.background = theme.inputAreaBg;
       inputArea.style.borderTopColor = theme.borderColor;
@@ -331,35 +336,6 @@ export function applyThemeToContainer(container: HTMLElement): void {
   if (userBar) {
     userBar.style.background = theme.userBubbleBg;
     userBar.style.color = theme.userBubbleText;
-  }
-
-  // User bar buttons (action btn + settings btn) - adapt to light/dark bg
-  const isDark = theme === darkTheme;
-  const btnBg = isDark ? "rgba(255, 255, 255, 0.2)" : "rgba(0, 0, 0, 0.06)";
-  const btnBorder = isDark ? "rgba(255, 255, 255, 0.3)" : "rgba(0, 0, 0, 0.1)";
-
-  const userActionBtn = container.querySelector(
-    "#chat-user-action-btn",
-  ) as HTMLElement;
-  if (userActionBtn) {
-    userActionBtn.style.background = btnBg;
-    userActionBtn.style.borderColor = btnBorder;
-    userActionBtn.style.color = theme.userBubbleText;
-  }
-
-  const userBarSettingsBtn = container.querySelector(
-    "#chat-user-bar-settings-btn",
-  ) as HTMLElement;
-  if (userBarSettingsBtn) {
-    userBarSettingsBtn.style.background = btnBg;
-    userBarSettingsBtn.style.borderColor = btnBorder;
-    // Update icon filter
-    const icon = userBarSettingsBtn.querySelector("img") as HTMLElement;
-    if (icon) {
-      icon.style.filter = isDark
-        ? "brightness(0) invert(1)"
-        : "brightness(0) invert(0.3)";
-    }
   }
 
   // Send button
