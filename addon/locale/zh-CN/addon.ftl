@@ -71,6 +71,13 @@ paperchat-user-checked-in = ✓ 已签到
 # Balance display in sidebar
 paperchat-sidebar-balance = Token余额: { $balance }
 paperchat-chat-header-balance = 余额 { $balance }
+paperchat-chat-subscription-detail = 套餐 #{ $plan } · 剩余 { $remaining } / { $total } · 已用 { $used } · 重置：{ $reset } · 到期：{ $expires }
+paperchat-chat-subscription-no-reset = 不自动重置
+paperchat-chat-subscription-in-days = { $count } 天后
+paperchat-chat-subscription-in-hours = { $count } 小时后
+paperchat-chat-subscription-in-minutes = { $count } 分钟后
+paperchat-chat-subscription-time-reached = 已到期
+paperchat-chat-subscription-unknown-expiry = 未提供
 paperchat-chat-low-balance-warning = 余额不足 · 剩余 { $balance } Token，点击补充额度
 paperchat-chat-account-menu = 账户与选项
 paperchat-chat-action-attach = 上传附件

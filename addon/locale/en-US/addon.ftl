@@ -71,6 +71,13 @@ paperchat-user-checked-in = ✓ Checked In
 # Balance display in sidebar
 paperchat-sidebar-balance = Token Balance: { $balance }
 paperchat-chat-header-balance = Balance { $balance }
+paperchat-chat-subscription-detail = Plan #{ $plan } · Remaining { $remaining } / { $total } · Used { $used } · Resets: { $reset } · Expires: { $expires }
+paperchat-chat-subscription-no-reset = No automatic reset
+paperchat-chat-subscription-in-days = In { $count } days
+paperchat-chat-subscription-in-hours = In { $count } hours
+paperchat-chat-subscription-in-minutes = In { $count } minutes
+paperchat-chat-subscription-time-reached = Due
+paperchat-chat-subscription-unknown-expiry = Not provided
 paperchat-chat-low-balance-warning = Low balance · { $balance } tokens remaining. Add credits
 paperchat-chat-account-menu = Account and options
 paperchat-chat-action-attach = Upload attachment

@@ -218,7 +218,6 @@ export function createChatContainer(
     {},
     { id: "chat-header-account-caption", type: "button" },
   );
-  accountArea.appendChild(accountCaption);
 
   // Detailed account usage stays in the profile menu.
   const userBar = createElement(
@@ -331,7 +330,8 @@ export function createChatContainer(
   userSubscription.appendChild(userSubscriptionTotal);
   userSubscription.appendChild(userSubscriptionProgress);
 
-  userUsageRow.appendChild(userSubscription);
+  accountArea.appendChild(userSubscription);
+  accountArea.appendChild(accountCaption);
   userUsageRow.appendChild(userBalance);
   userBar.appendChild(userUsageRow);
   accountDetails.appendChild(userName);

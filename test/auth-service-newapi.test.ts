@@ -30,6 +30,66 @@ function registerHttpChannel(
 }
 
 describe("AuthService NewAPI authentication", function () {
+  it("uses subscriptions for both totals and per-plan details, excluding historical records", function () {
+    const manager = Object.create(AuthManager.prototype) as any;
+    const plan = (
+      planId: number,
+      total: number,
+      status = "active",
+      used = 0,
+    ) => ({
+      subscription: {
+        plan_id: planId,
+        amount_total: total,
+        amount_used: used,
+        status,
+        next_reset_time: 1788710400,
+        end_time: 1791258934,
+      },
+    });
+    manager.state = {
+      subscription: {
+        subscriptions: [plan(6, 5000), plan(7, 4_000_000)],
+        all_subscriptions: [
+          plan(6, 5000),
+          plan(7, 4_000_000),
+          plan(1, 15_000_000, "expired"),
+        ],
+      },
+    };
+    const usage = manager.getSubscriptionUsageSummary();
+    assert.equal(usage.amountTotal, 4_005_000);
+    assert.equal(usage.amountRemaining, 4_005_000);
+    assert.deepEqual(usage.details, [
+      {
+        planId: 6,
+        amountTotalLabel: "5.0K",
+        amountUsedLabel: "0",
+        amountRemainingLabel: "5.0K",
+        nextResetTime: 1788710400,
+        endTime: 1791258934,
+      },
+      {
+        planId: 7,
+        amountTotalLabel: "4.0M",
+        amountUsedLabel: "0",
+        amountRemainingLabel: "4.0M",
+        nextResetTime: 1788710400,
+        endTime: 1791258934,
+      },
+    ]);
+    manager.state.subscription.subscriptions = [
+      plan(6, 5000, "active", 6000),
+      plan(1, 15_000_000, "expired"),
+    ];
+    const exhausted = manager.getSubscriptionUsageSummary();
+    assert.equal(exhausted.amountRemaining, 0);
+    assert.equal(exhausted.percentUsed, 100);
+    assert.lengthOf(exhausted.details, 1);
+    assert.equal(exhausted.details[0].amountRemainingLabel, "0");
+    manager.state.subscription.subscriptions = [];
+    assert.isNull(manager.getSubscriptionUsageSummary());
+  });
   let originalZotero: unknown;
   let originalZtoolkit: unknown;
   let originalServices: unknown;

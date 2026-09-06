@@ -27,6 +27,7 @@ import {
   updateChatHeaderTitle,
   updateChatBalanceWarning,
   updateHeaderAccountCaption,
+  getSubscriptionUsageTooltip,
 } from "./ChatPanelChrome";
 import { getPref, setPref } from "../../../utils/prefs";
 import {
@@ -1200,6 +1201,10 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
   userActionBtn?.addEventListener("click", handleAccountAction);
   headerLoginBtn?.addEventListener("click", () => {
     if (!authManager.isLoggedIn()) void handleAccountAction();
+    else
+      (
+        container.querySelector("#chat-user-balance") as HTMLElement | null
+      )?.click();
   });
 
   // Send button
@@ -1711,39 +1716,43 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
     "#chat-user-balance",
   ) as HTMLElement;
   if (userBalanceEl) {
-    const openLowBalanceTopup = () => {
-      if (userBalanceEl.getAttribute("data-low-balance-clickable") !== "true") {
-        return;
-      }
-      getAnalyticsService().track(ANALYTICS_EVENTS.paperChatLowBalanceClicked, {
-        source: "chat_user_bar_balance",
-        low_balance: true,
-      });
+    const openBalanceSettings = () => {
+      if (!authManager.isLoggedIn()) return;
+      const lowBalance =
+        userBalanceEl.getAttribute("data-low-balance-clickable") === "true";
+      if (lowBalance)
+        getAnalyticsService().track(
+          ANALYTICS_EVENTS.paperChatLowBalanceClicked,
+          {
+            source: "chat_user_bar_balance",
+            low_balance: true,
+          },
+        );
       trackPaperChatPurchaseEntryClicked(
         getAnalyticsService(),
         "chat_user_bar_balance",
-        { low_balance: true },
+        { low_balance: lowBalance },
       );
       void import("../../preferences/UserAuthUI")
         .then((module) => module.openPaperChatSettingsForTopup())
         .catch((error) => {
           ztoolkit.log(
-            "[Chat] Failed to open PaperChat settings for low balance:",
+            "[Chat] Failed to open PaperChat settings for balance:",
             error,
           );
           Zotero.Utilities.Internal.openPreferences("paperchat-prefpane");
         });
     };
-    userBalanceEl.addEventListener("click", openLowBalanceTopup);
+    userBalanceEl.addEventListener("click", openBalanceSettings);
     container
       .querySelector("#chat-balance-warning-button")
-      ?.addEventListener("click", openLowBalanceTopup);
+      ?.addEventListener("click", openBalanceSettings);
     userBalanceEl.addEventListener("keydown", (event) => {
       if (event.key !== "Enter" && event.key !== " ") {
         return;
       }
       event.preventDefault();
-      openLowBalanceTopup();
+      openBalanceSettings();
     });
   }
 
@@ -1751,13 +1760,20 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
     "#chat-user-subscription",
   ) as HTMLElement;
   if (userSubscriptionEl) {
+    const refreshSubscriptionTooltip = () => {
+      const usage = authManager.getSubscriptionUsageSummary();
+      if (!usage) return;
+      const label = getSubscriptionUsageTooltip(usage);
+      userSubscriptionEl.title = label;
+      userSubscriptionEl.setAttribute("aria-label", label);
+    };
+    userSubscriptionEl.addEventListener(
+      "mouseenter",
+      refreshSubscriptionTooltip,
+    );
+    userSubscriptionEl.addEventListener("focus", refreshSubscriptionTooltip);
     const openSubscriptionTopup = () => {
-      if (
-        userSubscriptionEl.getAttribute("data-subscription-limit-clickable") !==
-        "true"
-      ) {
-        return;
-      }
+      if (!authManager.isLoggedIn()) return;
       trackPaperChatPurchaseEntryClicked(
         getAnalyticsService(),
         "chat_user_bar_subscription",
@@ -1766,7 +1782,7 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
         .then((module) => module.openPaperChatSettingsForTopup())
         .catch((error) => {
           ztoolkit.log(
-            "[Chat] Failed to open PaperChat settings for subscription limit:",
+            "[Chat] Failed to open PaperChat settings for subscription:",
             error,
           );
           Zotero.Utilities.Internal.openPreferences("paperchat-prefpane");
@@ -2566,12 +2582,14 @@ export function updateUserBarDisplay(
     );
     updateHeaderAccountCaption(container, {
       paperChat: true,
+      interactive: true,
       label: getString("chat-header-balance", {
         args: { balance: authManager.formatBalance() },
       }),
       description: `${getString("user-panel-balance")}: ${authManager.formatBalance()}`,
       low: !shouldHideTokenBalance && isLowBalance,
       balance: authManager.getBalance().quota,
+      hidden: shouldHideTokenBalance,
     });
     userNameEl.textContent = user?.username || "";
     accountTrigger?.setAttribute(
@@ -2591,7 +2609,7 @@ export function updateUserBarDisplay(
           },
         );
         userSubscriptionProgressFillEl.style.width = `${subscriptionUsage.percentUsed}%`;
-        const usageLabel = `${getString("user-panel-used")}: ${subscriptionUsage.amountUsedLabel} / ${subscriptionUsage.amountTotalLabel}`;
+        const usageLabel = getSubscriptionUsageTooltip(subscriptionUsage);
         userSubscriptionEl.title = usageLabel;
         userSubscriptionEl.setAttribute("aria-label", usageLabel);
         if (subscriptionUsage.percentUsed >= 99) {
@@ -2600,6 +2618,9 @@ export function updateUserBarDisplay(
           resetSubscriptionLimitStyles(userSubscriptionEl);
         }
         userSubscriptionEl.style.display = "flex";
+        userSubscriptionEl.style.cursor = "pointer";
+        userSubscriptionEl.setAttribute("role", "button");
+        userSubscriptionEl.setAttribute("tabindex", "0");
       } else {
         if (userSubscriptionTotalEl) {
           userSubscriptionTotalEl.textContent = "";
@@ -2635,6 +2656,11 @@ export function updateUserBarDisplay(
       resetUserBalanceLowBalanceStyles(userBalanceEl);
     }
     userActionBtn.textContent = getString("user-panel-logout-btn");
+    if (!shouldHideTokenBalance) {
+      userBalanceEl.style.cursor = "pointer";
+      userBalanceEl.setAttribute("role", "button");
+      userBalanceEl.setAttribute("tabindex", "0");
+    }
     // Check-in button visibility is owned by refreshCheckinDisplay (respects enabled flag).
     // Do NOT force-show it here — that would override the server's enabled:false response.
   } else {

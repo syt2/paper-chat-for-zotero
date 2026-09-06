@@ -1,6 +1,51 @@
 import type { ThemeColors } from "./types";
 import { getString } from "../../../utils/locale";
 import { updateAnimatedBalance } from "./AnimatedBalance";
+import type { SubscriptionUsageSummary } from "../../../types/auth";
+
+/** Native multiline tooltip: one line per current subscription, no historical plans. */
+export function getSubscriptionUsageTooltip(
+  usage: SubscriptionUsageSummary,
+  now: number = Date.now(),
+): string {
+  const summary = `${getString("user-panel-used")}: ${usage.amountUsedLabel} / ${usage.amountTotalLabel}`;
+  if (!usage.details?.length) return summary;
+  const dateLabel = (timestamp: number, fallback: string): string => {
+    if (!Number.isFinite(timestamp) || timestamp <= 0) return fallback;
+    const remaining =
+      (timestamp >= 1_000_000_000_000 ? timestamp : timestamp * 1000) - now;
+    if (remaining <= 0) return getString("chat-subscription-time-reached");
+    const [unit, duration] =
+      remaining >= 86_400_000
+        ? (["days", 86_400_000] as const)
+        : remaining >= 3_600_000
+          ? (["hours", 3_600_000] as const)
+          : (["minutes", 60_000] as const);
+    return getString(`chat-subscription-in-${unit}`, {
+      args: { count: Math.max(1, Math.floor(remaining / duration)) },
+    });
+  };
+  return usage.details
+    .map((detail) =>
+      getString("chat-subscription-detail", {
+        args: {
+          plan: detail.planId,
+          remaining: detail.amountRemainingLabel,
+          total: detail.amountTotalLabel,
+          used: detail.amountUsedLabel,
+          reset: dateLabel(
+            detail.nextResetTime,
+            getString("chat-subscription-no-reset"),
+          ),
+          expires: dateLabel(
+            detail.endTime,
+            getString("chat-subscription-unknown-expiry"),
+          ),
+        },
+      }),
+    )
+    .join("\n");
+}
 
 export function updateChatHeaderTitle(
   container: HTMLElement,
@@ -44,6 +89,7 @@ export function updateHeaderAccountCaption(
     description: string;
     low?: boolean;
     balance?: number;
+    hidden?: boolean;
   },
 ): void {
   const caption = container.querySelector(
@@ -55,6 +101,7 @@ export function updateHeaderAccountCaption(
   if (accountArea)
     accountArea.style.display = options.paperChat ? "flex" : "none";
   if (caption) {
+    caption.style.display = options.hidden ? "none" : "";
     caption.disabled = !options.interactive;
     updateAnimatedBalance(caption, options.label, options.balance);
     caption.title = options.description;

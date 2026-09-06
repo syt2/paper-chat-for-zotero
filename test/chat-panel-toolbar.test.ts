@@ -18,6 +18,8 @@ import {
   refreshCheckinDisplay,
 } from "../src/modules/ui/chat-panel/ChatPanelEvents.ts";
 import { getProviderManager } from "../src/modules/providers/ProviderManager.ts";
+import { getSubscriptionUsageTooltip } from "../src/modules/ui/chat-panel/ChatPanelChrome.ts";
+import type { SubscriptionUsageSummary } from "../src/types/auth.ts";
 
 class FakeElement {
   readonly style: Record<string, string> = {};
@@ -179,7 +181,8 @@ describe("chat panel presentation toolbar entry", function () {
       updateUserBarDisplay(container, auth);
       assert.equal(warning.style.display, "block");
       assert.equal(account.style.display, "flex");
-      assert.isTrue(caption.disabled);
+      assert.isFalse(caption.disabled);
+      assert.equal(caption.getAttribute("data-low-balance"), "true");
       menu.open = true;
       provider = "openai";
       updateUserBarDisplay(container, auth);
@@ -208,6 +211,167 @@ describe("chat panel presentation toolbar entry", function () {
       assert.isTrue(caption.disabled);
     } finally {
       manager.getActiveProviderId = original;
+    }
+  });
+
+  it("keeps header subscription and wallet visibility aligned with the original user bar", function () {
+    const container = createChatContainer(
+      new FakeDocument() as unknown as Document,
+      lightTheme,
+    );
+    const manager = getProviderManager();
+    const original = manager.getActiveProviderId;
+    let provider = "paperchat";
+    let loggedIn = true;
+    let usage: SubscriptionUsageSummary | null = {
+      amountTotal: 1_000_000,
+      amountUsed: 989_999,
+      amountRemaining: 10_001,
+      amountTotalLabel: "1.0M",
+      amountUsedLabel: "990.0K",
+      percentUsed: 98.9999,
+    };
+    const auth = {
+      isLoggedIn: () => loggedIn,
+      getUser: () => ({ username: "reader" }),
+      getBalance: () => ({ quota: 100, usedQuota: 0 }),
+      formatBalance: () => "100",
+      getSubscriptionUsageSummary: () => usage,
+    };
+    manager.getActiveProviderId = () => provider;
+    const subscription = container.querySelector(
+      "#chat-user-subscription",
+    ) as HTMLElement;
+    const header = container.querySelector(
+      "#chat-header-account",
+    ) as HTMLElement;
+    const wallet = container.querySelector(
+      "#chat-header-account-caption",
+    ) as HTMLButtonElement;
+    const menuWallet = container.querySelector(
+      "#chat-user-balance",
+    ) as HTMLElement;
+    const warning = container.querySelector(
+      "#chat-balance-warning",
+    ) as HTMLElement;
+    try {
+      assert.equal(subscription.parentElement, header);
+      updateUserBarDisplay(container, auth);
+      assert.equal(subscription.style.display, "flex");
+      assert.equal(subscription.getAttribute("role"), "button");
+      assert.equal(subscription.getAttribute("tabindex"), "0");
+      assert.equal(wallet.style.display, "none");
+      assert.equal(menuWallet.style.display, "none");
+      assert.equal(warning.style.display, "none");
+      usage = {
+        ...usage,
+        amountUsed: 990_000,
+        amountRemaining: 10_000,
+        percentUsed: 99,
+      };
+      updateUserBarDisplay(container, auth);
+      assert.notEqual(wallet.style.display, "none");
+      assert.isFalse(wallet.disabled);
+      assert.equal(menuWallet.getAttribute("role"), "button");
+      assert.notEqual(menuWallet.style.display, "none");
+      assert.equal(warning.style.display, "block");
+      assert.equal(
+        subscription.getAttribute("data-subscription-limit-clickable"),
+        "true",
+      );
+      assert.equal(
+        (
+          container.querySelector(
+            "#chat-user-subscription-progress-fill",
+          ) as HTMLElement
+        ).style.width,
+        "99%",
+      );
+      provider = "deepseek";
+      updateUserBarDisplay(container, auth);
+      assert.equal(header.style.display, "none");
+      assert.equal(warning.style.display, "none");
+      provider = "paperchat";
+      usage = null;
+      updateUserBarDisplay(container, auth);
+      assert.equal(header.style.display, "flex");
+      assert.equal(subscription.style.display, "none");
+      assert.isNull(subscription.getAttribute("aria-label"));
+      assert.isNull(subscription.getAttribute("tabindex"));
+      assert.isNull(
+        subscription.getAttribute("data-subscription-limit-clickable"),
+      );
+      assert.notEqual(wallet.style.display, "none");
+      loggedIn = false;
+      updateUserBarDisplay(container, auth);
+      assert.isFalse(wallet.disabled);
+      assert.equal(subscription.style.display, "none");
+      assert.equal(warning.style.display, "none");
+    } finally {
+      manager.getActiveProviderId = original;
+    }
+  });
+
+  it("lists one tooltip line per current plan with quotas, reset and expiry dates", function () {
+    runtime.addon.data.locale.current.formatMessagesSync = (requests: any[]) =>
+      requests.map(({ id, args }) => ({
+        value: args
+          ? "count" in args
+            ? `${id}: ${args.count}`
+            : Object.values(args).join(" | ")
+          : id,
+        attributes: null,
+      }));
+    const usage: SubscriptionUsageSummary = {
+      amountTotal: 4_005_000,
+      amountUsed: 0,
+      amountRemaining: 4_005_000,
+      amountTotalLabel: "4.0M",
+      amountUsedLabel: "0",
+      percentUsed: 0,
+      details: [
+        {
+          planId: 6,
+          amountTotalLabel: "5.0K",
+          amountUsedLabel: "0",
+          amountRemainingLabel: "5.0K",
+          nextResetTime: Date.UTC(2026, 8, 7) / 1000,
+          endTime: Date.UTC(2027, 8, 6) / 1000,
+        },
+        {
+          planId: 7,
+          amountTotalLabel: "4.0M",
+          amountUsedLabel: "0",
+          amountRemainingLabel: "4.0M",
+          nextResetTime: 0,
+          endTime: 0,
+        },
+      ],
+    };
+    const now = Date.UTC(2026, 8, 6);
+    const lines = getSubscriptionUsageTooltip(usage, now).split("\n");
+    assert.lengthOf(lines, 2);
+    assert.include(lines[0], "6 | 5.0K | 5.0K | 0");
+    assert.include(lines[0], "paperchat-chat-subscription-in-days: 1");
+    assert.include(lines[0], "paperchat-chat-subscription-in-days: 365");
+    assert.include(lines[1], "7 | 4.0M | 4.0M | 0");
+    assert.include(lines[1], "paperchat-chat-subscription-no-reset");
+    assert.include(lines[1], "paperchat-chat-subscription-unknown-expiry");
+    for (const [remaining, expected] of [
+      [1_000, "minutes: 1"],
+      [59_000, "minutes: 1"],
+      [120_000, "minutes: 2"],
+      [3_600_000, "hours: 1"],
+      [7_200_000, "hours: 2"],
+      [86_400_000, "days: 1"],
+      [0, "time-reached"],
+      [-60_000, "time-reached"],
+    ] as const) {
+      usage.details![0].nextResetTime = (now + remaining) / 1000;
+      assert.include(
+        getSubscriptionUsageTooltip(usage, now),
+        `paperchat-chat-subscription-${expected.startsWith("time") ? "" : "in-"}${expected}`,
+      );
     }
   });
 

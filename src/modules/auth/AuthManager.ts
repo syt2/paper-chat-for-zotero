@@ -1186,6 +1186,21 @@ export class AuthManager {
       amountTotalLabel: AuthService.formatQuota(amountTotal),
       amountUsedLabel: AuthService.formatQuota(amountUsed),
       percentUsed: Math.min(100, Math.max(0, (amountUsed / amountTotal) * 100)),
+      details: records.map((subscription) => {
+        const used = Number.isFinite(subscription.amount_used)
+          ? Math.max(0, subscription.amount_used)
+          : 0;
+        return {
+          planId: subscription.plan_id,
+          amountTotalLabel: AuthService.formatQuota(subscription.amount_total),
+          amountUsedLabel: AuthService.formatQuota(used),
+          amountRemainingLabel: AuthService.formatQuota(
+            Math.max(0, subscription.amount_total - used),
+          ),
+          nextResetTime: subscription.next_reset_time,
+          endTime: subscription.end_time,
+        };
+      }),
     };
   }
 

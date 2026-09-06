@@ -86,6 +86,14 @@ export interface SubscriptionUsageSummary {
   amountTotalLabel: string;
   amountUsedLabel: string;
   percentUsed: number;
+  details?: Array<{
+    planId: number;
+    amountTotalLabel: string;
+    amountUsedLabel: string;
+    amountRemainingLabel: string;
+    nextResetTime: number;
+    endTime: number;
+  }>;
 }
 
 /**
