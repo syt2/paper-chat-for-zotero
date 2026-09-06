@@ -1,13 +1,76 @@
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 const states = new WeakMap<HTMLElement, BalanceState>();
+const failedWindows = new WeakSet<Window>();
+
+export interface BalanceNumberParts {
+  number: number;
+  decimals: number;
+  prefix: string;
+  suffix: string;
+}
+
+export interface BalanceFlowElement extends HTMLElement {
+  updateBalance(
+    number: number,
+    decimals: number,
+    prefix: string,
+    suffix: string,
+    trend: number,
+    animated: boolean,
+  ): void;
+}
+
+interface NumberFlowBundle {
+  create(): BalanceFlowElement | null;
+}
+
+type BalanceWindow = Window & {
+  PaperChatNumberFlowBundle?: NumberFlowBundle;
+};
 
 interface BalanceState {
   label: string;
   value?: number;
-  animations: Animation[];
+  flow?: BalanceFlowElement;
 }
 
-/** Animate only the presentation; the formatted balance remains authoritative. */
+/** Preserve the existing formatter's precision and compact units exactly. */
+export function parseBalanceNumber(label: string): BalanceNumberParts | null {
+  const match = /-?\d+(?:\.\d+)?/.exec(label);
+  if (!match) return null;
+  const number = Number(match[0]);
+  const decimals = match[0].split(".")[1]?.length || 0;
+  if (!Number.isFinite(number) || decimals > 20) return null;
+  return {
+    number,
+    decimals,
+    prefix: label.slice(0, match.index),
+    suffix: label.slice(match.index + match[0].length),
+  };
+}
+
+function createBalanceFlow(win: BalanceWindow): BalanceFlowElement | null {
+  // Zotero 7 (Firefox 115) cannot animate NumberFlow's registered properties.
+  // Leave the normal label intact and avoid loading browser-only code there.
+  if (!win.CSS?.registerProperty || failedWindows.has(win)) return null;
+  try {
+    if (!win.PaperChatNumberFlowBundle) {
+      // Custom element definitions and CSS registrations live for the window's
+      // lifetime. Reuse this bundle across plugin reloads; never register twice.
+      Services.scriptloader.loadSubScript(
+        "chrome://paperchat/content/scripts/paperchat-number-flow.js",
+        win,
+      );
+    }
+    return win.PaperChatNumberFlowBundle?.create() || null;
+  } catch (error) {
+    failedWindows.add(win);
+    ztoolkit.log("[AnimatedBalance] NumberFlow unavailable:", error);
+    return null;
+  }
+}
+
+/** Animate presentation only. API quota values and formatting remain authoritative. */
 export function updateAnimatedBalance(
   element: HTMLElement,
   label: string,
@@ -18,122 +81,59 @@ export function updateAnimatedBalance(
     previous.value = value;
     return;
   }
-  previous?.animations.forEach((animation) => animation.cancel());
-  const state: BalanceState = { label, value, animations: [] };
+  const state: BalanceState = { label, value, flow: previous?.flow };
   states.set(element, state);
-  element.textContent = label;
-
-  const win = element.ownerDocument.defaultView;
-  if (
-    !previous ||
-    !Number.isFinite(previous.value) ||
-    !Number.isFinite(value) ||
-    !element.isConnected ||
-    !element.getClientRects().length ||
-    win?.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ||
-    typeof element.animate !== "function"
-  ) {
+  const parts = Number.isFinite(value) ? parseBalanceNumber(label) : null;
+  const win = element.ownerDocument.defaultView as BalanceWindow | null;
+  if (!parts || !win) {
+    element.textContent = label;
+    state.flow = undefined;
     return;
   }
 
-  const oldNumber = previous.label.match(/-?\d+(?:\.\d+)?/);
-  const newNumber = label.match(/-?\d+(?:\.\d+)?/);
-  if (!oldNumber || !newNumber) return;
-  const oldParts = oldNumber[0].replace("-", "").split(".");
-  const newParts = newNumber[0].replace("-", "").split(".");
-  const increasing = value! > previous.value!;
-  const span = (text = "") => {
-    const node = element.ownerDocument.createElementNS(HTML_NS, "span");
-    node.textContent = text;
-    return node;
-  };
-  const visual = span();
-  visual.setAttribute("aria-hidden", "true");
-  visual.style.fontVariantNumeric = "tabular-nums";
-  visual.appendChild(span(label.slice(0, newNumber.index)));
-  let integerIndex = 0;
-  let fractionIndex = 0;
-  let fractional = false;
-  for (const character of newNumber[0]) {
-    if (!/\d/.test(character)) {
-      visual.appendChild(span(character));
-      if (character === ".") fractional = true;
-      continue;
-    }
-    const oldDigit = fractional
-      ? oldParts[1]?.[fractionIndex++]
-      : oldParts[0][oldParts[0].length - newParts[0].length + integerIndex++];
-    const cell = span(character);
-    visual.appendChild(cell);
-    if (oldDigit === character) continue;
-    Object.assign(cell.style, {
-      display: "inline-block",
-      position: "relative",
-      height: "1.4em",
-      lineHeight: "1.4",
-      width: "1ch",
-      overflow: "hidden",
-      verticalAlign: "bottom",
-    });
-    const outgoing = span(oldDigit || "0");
-    const incoming = span(character);
-    for (const digit of [outgoing, incoming]) {
-      Object.assign(digit.style, {
-        position: "absolute",
-        inset: "0",
-        textAlign: "center",
-      });
-    }
-    cell.textContent = "";
-    cell.appendChild(outgoing);
-    cell.appendChild(incoming);
-    const distance = increasing ? 100 : -100;
-    const timing = {
-      duration: 420,
-      easing: "cubic-bezier(.22,1,.36,1)",
-      fill: "forwards" as const,
-    };
-    state.animations.push(
-      outgoing.animate(
-        [
-          { transform: "translateY(0)" },
-          { transform: `translateY(${-distance}%)` },
-        ],
-        timing,
-      ),
-      incoming.animate(
-        [
-          { transform: `translateY(${distance}%)` },
-          { transform: "translateY(0)" },
-        ],
-        timing,
-      ),
-    );
+  state.flow ||= createBalanceFlow(win) || undefined;
+  if (!state.flow) {
+    element.textContent = label;
+    return;
   }
-  visual.appendChild(span(label.slice(newNumber.index! + newNumber[0].length)));
-  const accessible = span(label);
-  Object.assign(accessible.style, {
-    position: "absolute",
-    width: "1px",
-    height: "1px",
-    overflow: "hidden",
-    clipPath: "inset(50%)",
-    whiteSpace: "nowrap",
-  });
-  element.textContent = "";
-  element.appendChild(accessible);
-  element.appendChild(visual);
-  void Promise.all(
-    state.animations.map((animation) => animation.finished),
-  ).then(
-    () => {
-      if (states.get(element) !== state) return;
-      element.textContent = label;
-      state.animations.forEach((animation) => animation.cancel());
-      state.animations = [];
-    },
-    () => {
-      /* A newer balance cancelled this transition. */
-    },
-  );
+  try {
+    if (state.flow.parentElement !== element) {
+      element.textContent = "";
+      // Expose a single exact label, independent of animated/intermediate digits.
+      const accessible = element.ownerDocument.createElementNS(HTML_NS, "span");
+      accessible.setAttribute("data-balance-label", "true");
+      Object.assign(accessible.style, {
+        position: "absolute",
+        width: "1px",
+        height: "1px",
+        overflow: "hidden",
+        clipPath: "inset(50%)",
+        whiteSpace: "nowrap",
+      });
+      state.flow.setAttribute("aria-hidden", "true");
+      element.appendChild(accessible);
+      element.appendChild(state.flow);
+    }
+    const accessible = element.querySelector("[data-balance-label]");
+    if (accessible) accessible.textContent = label;
+    const animated =
+      Number.isFinite(previous?.value) &&
+      element.isConnected &&
+      element.getClientRects().length > 0 &&
+      !win.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+    state.flow.updateBalance(
+      parts.number,
+      parts.decimals,
+      parts.prefix,
+      parts.suffix,
+      Math.sign(value! - (previous?.value ?? value!)),
+      animated,
+    );
+  } catch (error) {
+    // A visual failure must never block login controls or display stale quota.
+    failedWindows.add(win);
+    state.flow = undefined;
+    element.textContent = label;
+    ztoolkit.log("[AnimatedBalance] Failed to update NumberFlow:", error);
+  }
 }

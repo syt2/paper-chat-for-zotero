@@ -6043,6 +6043,114 @@ describe("paperchat storage and chat manager", function () {
     );
   });
 
+  it("refreshes PaperChat balance after background completion, errors and cancellation only while logged in", async function () {
+    for (const outcome of [
+      "complete",
+      "error",
+      "cancel",
+      "other-provider",
+      "logged-out",
+      "refresh-error",
+    ] as const) {
+      const providerManager = getProviderManager() as any;
+      const contextManager = getContextManager() as any;
+      const authManager = getAuthManager() as any;
+      const originals = {
+        providerId: providerManager.getActiveProviderId,
+        retry: providerManager.executeWithRetry,
+        compact: contextManager.compactBeforeSendIfNeeded,
+        filter: contextManager.filterMessages,
+        loggedIn: authManager.isLoggedIn,
+        refresh: authManager.refreshUserInfo,
+      };
+      let refreshes = 0;
+      let activeProviderId =
+        outcome === "other-provider" ? "deepseek" : "paperchat";
+      const session: ChatSession = {
+        id: "balance-background",
+        title: "Balance test",
+        createdAt: 1,
+        updatedAt: 1,
+        lastActiveItemKey: null,
+        messages: [],
+      };
+      const manager = Object.create(ChatManager.prototype) as any;
+      const provider = {
+        config: { id: activeProviderId },
+        getName: () => "test",
+        isReady: () => true,
+        supportsPdfUpload: () => false,
+        streamChatCompletion: (_messages: ChatMessage[], callbacks: any) => {
+          activeProviderId = "deepseek";
+          if (outcome === "error") {
+            callbacks.onError(
+              new Error("network disconnected after partial output"),
+            );
+          } else if (outcome === "cancel") {
+            manager.activeSessionAbortControllers.get(session.id).abort();
+            const error = new Error("cancelled");
+            error.name = "AbortError";
+            callbacks.onError(error);
+          } else {
+            callbacks.onComplete("done");
+          }
+        },
+      };
+      Object.assign(manager, {
+        currentSession: session,
+        activeSessionRunIds: new Map(),
+        sessionRunCounters: new Map(),
+        activeSessionAbortControllers: new Map(),
+        streamingSessions: new Map(),
+        currentItemKey: null,
+        init: async () => undefined,
+        getActiveProvider: () => provider,
+        isSessionActive: () => false,
+        applyFailureStateSafely: async () => undefined,
+        paperChatRetry: {
+          reroutePaperChatSessionForHardFailure: async () => null,
+        },
+        sessionStorage: {
+          insertMessage: async () => undefined,
+          updateMessageContent: async () => undefined,
+          updateSessionMeta: async () => undefined,
+          deleteMessage: async () => undefined,
+        },
+      });
+      providerManager.getActiveProviderId = () => activeProviderId;
+      providerManager.executeWithRetry = async (
+        _provider: unknown,
+        operation: () => Promise<unknown>,
+      ) => operation();
+      contextManager.compactBeforeSendIfNeeded = async () => false;
+      contextManager.filterMessages = (target: ChatSession) => ({
+        messages: [...target.messages],
+        summaryTriggered: false,
+      });
+      authManager.isLoggedIn = () => outcome !== "logged-out";
+      authManager.refreshUserInfo = async () => {
+        refreshes++;
+        if (outcome === "refresh-error") throw new Error("balance unavailable");
+        return { userInfo: true, subscriptionInfo: true };
+      };
+      try {
+        assert.isTrue(await manager.sendMessage("hello"));
+        assert.equal(
+          refreshes,
+          outcome === "other-provider" || outcome === "logged-out" ? 0 : 1,
+        );
+        assert.isFalse(manager.activeSessionRunIds.has(session.id));
+      } finally {
+        providerManager.getActiveProviderId = originals.providerId;
+        providerManager.executeWithRetry = originals.retry;
+        contextManager.compactBeforeSendIfNeeded = originals.compact;
+        contextManager.filterMessages = originals.filter;
+        authManager.isLoggedIn = originals.loggedIn;
+        authManager.refreshUserInfo = originals.refresh;
+      }
+    }
+  });
+
   it("sends and persists every selected passage with file context", async function () {
     const providerManager = getProviderManager() as any;
     const originalGetActiveProviderId = providerManager.getActiveProviderId;

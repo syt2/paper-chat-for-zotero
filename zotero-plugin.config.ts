@@ -142,6 +142,16 @@ export default defineConfig({
     },
     esbuildOptions: [
       {
+        entryPoints: ["src/modules/ui/chat-panel/number-flow-entry.ts"],
+        bundle: true,
+        format: "iife",
+        globalName: "PaperChatNumberFlowBundle",
+        platform: "browser",
+        target: "firefox115",
+        outfile:
+          ".scaffold/build/addon/content/scripts/paperchat-number-flow.js",
+      },
+      {
         entryPoints: ["src/index.ts"],
         define: {
           __env__: `"${process.env.NODE_ENV}"`,

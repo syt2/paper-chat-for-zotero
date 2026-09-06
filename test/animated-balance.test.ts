@@ -1,40 +1,24 @@
 import { assert } from "chai";
-import { updateAnimatedBalance } from "../src/modules/ui/chat-panel/AnimatedBalance.ts";
-
-class TestAnimation {
-  cancelled = false;
-  finish!: () => void;
-  reject!: (reason: Error) => void;
-  finished = new Promise<void>((resolve, reject) => {
-    this.finish = resolve;
-    this.reject = reject;
-  });
-  constructor(readonly frames: Keyframe[]) {}
-  cancel() {
-    this.cancelled = true;
-    this.reject(new Error("cancelled"));
-  }
-}
-
-class TestDocument {
-  reduced = false;
-  animations: TestAnimation[] = [];
-  defaultView = { matchMedia: () => ({ matches: this.reduced }) };
-  createElementNS() {
-    return new TestElement(this);
-  }
-}
+import {
+  parseBalanceNumber,
+  updateAnimatedBalance,
+  type BalanceFlowElement,
+} from "../src/modules/ui/chat-panel/AnimatedBalance.ts";
 
 class TestElement {
   isConnected = true;
   visible = true;
   style = {};
   children: TestElement[] = [];
+  parentElement: TestElement | null = null;
   attributes = new Map<string, string>();
   private text = "";
   constructor(readonly ownerDocument: TestDocument) {}
   set textContent(text: string) {
     this.text = text;
+    this.children.forEach((child) => {
+      child.parentElement = null;
+    });
     this.children = [];
   }
   get textContent(): string {
@@ -47,12 +31,41 @@ class TestElement {
     return this.visible ? [{}] : [];
   }
   appendChild(child: TestElement) {
+    child.parentElement = this;
     this.children.push(child);
   }
-  animate(frames: Keyframe[]) {
-    const animation = new TestAnimation(frames);
-    this.ownerDocument.animations.push(animation);
-    return animation;
+  querySelector() {
+    return (
+      this.children.find((child) =>
+        child.attributes.has("data-balance-label"),
+      ) || null
+    );
+  }
+}
+
+class TestFlow extends TestElement {
+  updates: Array<Parameters<BalanceFlowElement["updateBalance"]>> = [];
+  updateBalance(...args: Parameters<BalanceFlowElement["updateBalance"]>) {
+    this.updates.push(args);
+  }
+}
+
+class TestDocument {
+  reduced = false;
+  flows: TestFlow[] = [];
+  defaultView = {
+    CSS: { registerProperty: (() => {}) as (() => void) | undefined },
+    matchMedia: () => ({ matches: this.reduced }),
+    PaperChatNumberFlowBundle: {
+      create: () => {
+        const flow = new TestFlow(this);
+        this.flows.push(flow);
+        return flow;
+      },
+    },
+  };
+  createElementNS() {
+    return new TestElement(this);
   }
 }
 
@@ -61,98 +74,125 @@ function fixture() {
   const element = new TestElement(doc);
   const update = (label: string, value?: number) =>
     updateAnimatedBalance(element as unknown as HTMLElement, label, value);
-  const finish = async () => {
-    doc.animations.forEach((animation) => animation.finish());
-    await Promise.resolve();
-    await Promise.resolve();
-  };
-  return { doc, element, update, finish };
+  return { doc, element, update };
 }
 
-describe("animated chat balance", function () {
-  it("shows the initial balance immediately and leaves unchanged text alone", function () {
+describe("NumberFlow chat balance", function () {
+  it("preserves decimal precision, signs and compact-unit labels", function () {
+    for (const [label, number, decimals, prefix, suffix] of [
+      ["余额 999", 999, 0, "余额 ", ""],
+      ["余额 1.0K", 1, 1, "余额 ", "K"],
+      ["订阅额度: 12.30M", 12.3, 2, "订阅额度: ", "M"],
+      ["余额 -0.5", -0.5, 1, "余额 ", ""],
+    ]) {
+      assert.deepEqual(parseBalanceNumber(label as string), {
+        number,
+        decimals,
+        prefix,
+        suffix,
+      });
+    }
+    assert.isNull(parseBalanceNumber("登录/注册"));
+  });
+
+  it("does not animate initial values or unchanged formatted numbers", function () {
     const { doc, element, update } = fixture();
     update("余额 12.3K", 12300);
     update("余额 12.3K", 12320);
+    assert.lengthOf(doc.flows, 1);
+    assert.lengthOf(doc.flows[0].updates, 1);
+    assert.isFalse(doc.flows[0].updates[0][5]);
     assert.equal(element.textContent, "余额 12.3K");
-    assert.isEmpty(doc.animations);
+    assert.equal(doc.flows[0].attributes.get("aria-hidden"), "true");
   });
 
-  it("rolls changed digits upward and preserves the accessible target", async function () {
-    const { doc, element, update, finish } = fixture();
-    update("余额 12.3K", 12300);
-    update("余额 12.8K", 12800);
-    assert.lengthOf(doc.animations, 2);
-    assert.equal(doc.animations[1].frames[0].transform, "translateY(100%)");
-    assert.equal(element.children[0].textContent, "余额 12.8K");
-    assert.equal(element.children[1].attributes.get("aria-hidden"), "true");
-    await finish();
-    assert.equal(element.textContent, "余额 12.8K");
-    assert.isEmpty(element.children);
+  it("animates toward the raw quota direction across decimal and unit boundaries", function () {
+    const { doc, element, update } = fixture();
+    update("余额 999", 999);
+    update("余额 1.0K", 1000);
+    assert.deepEqual(doc.flows[0].updates.at(-1), [
+      1,
+      1,
+      "余额 ",
+      "K",
+      1,
+      true,
+    ]);
+    update("余额 999", 999);
+    assert.deepEqual(doc.flows[0].updates.at(-1), [
+      999,
+      0,
+      "余额 ",
+      "",
+      -1,
+      true,
+    ]);
+    assert.equal(element.textContent, "余额 999");
   });
 
-  it("uses the actual quota direction across compact-unit boundaries", async function () {
-    const { doc, element, update, finish } = fixture();
-    update("Balance 999.9K", 999900);
-    update("Balance 1.0M", 1000000);
-    assert.equal(doc.animations[1].frames[0].transform, "translateY(100%)");
-    await finish();
-    assert.equal(element.textContent, "Balance 1.0M");
-  });
-
-  it("rolls down for a decrease, including a negative balance", async function () {
-    const { doc, element, update, finish } = fixture();
-    update("余额 2", 2);
-    update("余额 -1", -1);
-    assert.equal(doc.animations[1].frames[0].transform, "translateY(-100%)");
-    await finish();
-    assert.equal(element.textContent, "余额 -1");
-  });
-
-  it("cancels old transitions when a newer balance arrives", async function () {
-    const { doc, element, update, finish } = fixture();
+  it("reuses one NumberFlow instance for rapid successive updates", function () {
+    const { doc, update } = fixture();
     update("余额 9", 9);
     update("余额 10", 10);
-    const old = [...doc.animations];
     update("余额 11", 11);
-    assert.isTrue(old.every((animation) => animation.cancelled));
-    await finish();
-    assert.equal(element.textContent, "余额 11");
+    assert.lengthOf(doc.flows, 1);
+    assert.equal(doc.flows[0].updates.at(-1)?.[0], 11);
   });
 
-  it("never restores account information after logout during a transition", async function () {
-    const { element, update, finish } = fixture();
+  it("discards the old renderer at logout and starts the next account without animation", function () {
+    const { doc, element, update } = fixture();
     update("余额 9", 9);
     update("余额 8", 8);
+    const oldFlow = doc.flows[0];
     update("登录/注册");
-    await finish();
     assert.equal(element.textContent, "登录/注册");
+    assert.isNull(oldFlow.parentElement);
+    update("余额 20", 20);
+    assert.lengthOf(doc.flows, 2);
+    assert.isFalse(doc.flows[1].updates[0][5]);
   });
 
-  it("updates immediately with reduced motion", function () {
+  it("renders ordinary text without loading NumberFlow on Zotero 7", function () {
+    const { doc, element, update } = fixture();
+    doc.defaultView.CSS.registerProperty = undefined;
+    update("余额 9", 9);
+    update("余额 10", 10);
+    assert.equal(element.textContent, "余额 10");
+    assert.isEmpty(doc.flows);
+  });
+
+  it("falls back to the current label after a renderer failure", function () {
+    const originalToolkit = (globalThis as { ztoolkit?: unknown }).ztoolkit;
+    (globalThis as { ztoolkit?: unknown }).ztoolkit = { log: () => {} };
+    try {
+      const { doc, element, update } = fixture();
+      update("余额 9", 9);
+      doc.flows[0].updateBalance = () => {
+        throw new Error("animation unavailable");
+      };
+      update("余额 10", 10);
+      assert.equal(element.textContent, "余额 10");
+      update("余额 11", 11);
+      assert.equal(element.textContent, "余额 11");
+      assert.lengthOf(doc.flows, 1, "Do not repeatedly load a failed renderer");
+      update("登录/注册");
+      assert.equal(element.textContent, "登录/注册");
+    } finally {
+      (globalThis as { ztoolkit?: unknown }).ztoolkit = originalToolkit;
+    }
+  });
+
+  it("disables motion for hidden, detached, and reduced-motion views", function () {
     const { doc, element, update } = fixture();
     update("余额 9", 9);
     doc.reduced = true;
     update("余额 10", 10);
-    assert.equal(element.textContent, "余额 10");
-    assert.isEmpty(doc.animations);
-  });
-
-  it("does not animate a hidden account menu", function () {
-    const { doc, element, update } = fixture();
-    update("余额 9", 9);
+    doc.reduced = false;
     element.visible = false;
-    update("余额 10", 10);
-    assert.equal(element.textContent, "余额 10");
-    assert.isEmpty(doc.animations);
-  });
-
-  it("does not animate a detached panel", function () {
-    const { doc, element, update } = fixture();
-    update("余额 9", 9);
+    update("余额 11", 11);
+    element.visible = true;
     element.isConnected = false;
-    update("余额 10", 10);
-    assert.equal(element.textContent, "余额 10");
-    assert.isEmpty(doc.animations);
+    update("余额 12", 12);
+    assert.isTrue(doc.flows[0].updates.every((args) => !args[5]));
   });
 });

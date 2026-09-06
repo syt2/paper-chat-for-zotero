@@ -50,6 +50,15 @@ export async function registerPrefsScripts(_window: Window): Promise<void> {
   } catch (error) {
     ztoolkit.log("[Preferences] Failed to bind prefs events:", error);
   }
+
+  // Bind controls before fetching balances: a slow request must not leave the
+  // visible login/logout buttons inert. Auth listeners update the open view.
+  const authManager = getAuthManager();
+  if (authManager.isLoggedIn()) {
+    void authManager.refreshUserInfo().catch((error) => {
+      ztoolkit.log("[Preferences] Failed to refresh account on open:", error);
+    });
+  }
 }
 
 export async function refreshPrefsUI(

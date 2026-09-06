@@ -20,7 +20,6 @@ import type {
 import { getAuthManager } from "../../auth";
 import { getProviderManager } from "../../providers";
 import { providerSupportsToolCalling } from "../../providers/provider-capabilities";
-import { isPaperChatQuotaError } from "../../providers/paperchat-errors";
 import { getPref, setPref } from "../../../utils/prefs";
 import {
   createNoteSummaryContext,
@@ -2189,8 +2188,6 @@ function setupChatManagerCallbacks(
   context: ChatPanelContext,
   container: HTMLElement,
 ): void {
-  const authManager = getAuthManager();
-
   manager.setCallbacks({
     onMessageUpdate: (messages) => {
       ztoolkit.log(
@@ -2276,20 +2273,6 @@ function setupChatManagerCallbacks(
     onError: (error) => {
       ztoolkit.log("[ChatPanel] API Error:", error.message);
       context.appendError(error.message);
-      if (isPaperChatQuotaError(error)) {
-        void (async () => {
-          try {
-            ztoolkit.log("[Balance] Refreshing balance after quota error");
-            await authManager.refreshUserInfo();
-            context.updateUserBar();
-          } catch (refreshError) {
-            ztoolkit.log(
-              "[Balance] Failed to refresh balance after quota error:",
-              refreshError,
-            );
-          }
-        })();
-      }
     },
     onPdfAttached: () => {
       if (container) {
@@ -2304,17 +2287,7 @@ function setupChatManagerCallbacks(
         }
       }
     },
-    onMessageComplete: async () => {
-      const providerManager = getProviderManager();
-      if (providerManager.getActiveProviderId() === "paperchat") {
-        try {
-          ztoolkit.log("[Balance] Refreshing balance after message completion");
-          await authManager.refreshUserInfo();
-          context.updateUserBar();
-        } catch (error) {
-          ztoolkit.log("[Balance] Failed to refresh after completion:", error);
-        }
-      }
+    onMessageComplete: () => {
       void NextQuestionHintController.get(container)
         ?.requestForLatestCompletion()
         .catch((error) => {

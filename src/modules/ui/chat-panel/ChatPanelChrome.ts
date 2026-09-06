@@ -237,7 +237,16 @@ export function getChatChromeStyles(theme: ThemeColors): string {
     .chat-panel-root #chat-checkin-btn:hover:not(:disabled) { background: ${theme.hoverBg}; }
     .chat-panel-root #chat-checkin-btn:disabled { border-color: transparent; }
     .chat-panel-root #chat-user-subscription { min-width: 64px; }
-    .chat-panel-root #chat-user-subscription-progress { height: 3px !important; }
+    .chat-panel-root #chat-user-subscription-progress {
+      height: 3px !important; background: rgba(96, 145, 195, .28);
+    }
+    .chat-panel-root #chat-user-subscription-progress-fill { background: #6a91b9; }
+    .chat-panel-root #chat-user-subscription[data-subscription-limit-clickable="true"] #chat-user-subscription-progress {
+      background: rgba(215, 107, 104, .2);
+    }
+    .chat-panel-root #chat-user-subscription[data-subscription-limit-clickable="true"] #chat-user-subscription-progress-fill {
+      background: #d76b68;
+    }
     .chat-panel-root #chat-balance-warning {
       flex-shrink: 0; padding: 5px 14px 7px; border-bottom: 1px solid ${theme.borderColor};
     }
@@ -283,7 +292,6 @@ export function getChatChromeStyles(theme: ThemeColors): string {
     .chat-panel-root summary:focus-visible {
       outline: 2px solid ${theme.inputFocusBorderColor}; outline-offset: 2px;
     }
-    .chat-panel-root #chat-history { padding: 12px 18px 18px !important; }
     .chat-panel-root .chat-message { margin: 16px 0 !important; }
     .chat-panel-root .assistant-message > .chat-bubble {
       display: block !important; width: 100%; max-width: 100% !important;

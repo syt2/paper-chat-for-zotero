@@ -126,6 +126,46 @@ describe("AuthService NewAPI authentication", function () {
     (globalThis as any).addon = originalAddon;
   });
 
+  it("bypasses cached wallet and subscription balances on every refresh", async function () {
+    let serverQuota = 58000;
+    let serverUsed = 0;
+    (globalThis as any).Zotero = {
+      HTTP: {
+        request: async (
+          _method: string,
+          url: string,
+          options: { noCache?: boolean },
+        ) => ({
+          status: 200,
+          response: {
+            success: true,
+            data: url.endsWith("/subscription/self")
+              ? {
+                  subscriptions: [
+                    {
+                      subscription: {
+                        amount_used: options.noCache ? serverUsed : 0,
+                      },
+                    },
+                  ],
+                }
+              : { quota: options.noCache ? serverQuota : 58000 },
+          },
+        }),
+      },
+    };
+    const service = new AuthService("https://paperchat.test");
+    assert.equal((await service.getUserInfo()).data?.quota, 58000);
+    serverQuota = 0;
+    serverUsed = 10000;
+    assert.equal((await service.getUserInfo()).data?.quota, 0);
+    assert.equal(
+      (await service.getSubscriptionSelf()).data?.subscriptions?.[0]
+        .subscription.amount_used,
+      10000,
+    );
+  });
+
   it("uses the dashboard bearer token for user APIs and the new logout route", async function () {
     const calls: HttpCall[] = [];
     const logs: string[] = [];

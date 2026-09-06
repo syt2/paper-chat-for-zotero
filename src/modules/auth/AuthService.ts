@@ -436,6 +436,7 @@ export class AuthService {
       headers?: Record<string, string>;
       extractAuthCookies?: boolean;
       includeAuthentication?: boolean;
+      noCache?: boolean;
     } = {},
   ): Promise<{ status: number; data: T | null; error?: string }> {
     const generation = this.environmentGeneration;
@@ -487,6 +488,7 @@ export class AuthService {
         headers,
         body: options.body ? JSON.stringify(options.body) : undefined,
         responseType: "json",
+        noCache: options.noCache,
         successCodes: false as const,
         requestObserver: (xhr: XMLHttpRequest) => {
           const channel = xhr.channel?.QueryInterface?.(Ci.nsIHttpChannel);
@@ -926,7 +928,9 @@ export class AuthService {
 
   async getUserInfo(): Promise<ApiResponse<UserInfo>> {
     const url = `${this.baseUrl}/api/user/self`;
-    const result = await this.request<ApiResponse<UserInfo>>("GET", url);
+    const result = await this.request<ApiResponse<UserInfo>>("GET", url, {
+      noCache: true,
+    });
 
     if (result.error) {
       return { success: false, message: result.error };
@@ -952,6 +956,7 @@ export class AuthService {
     const result = await this.request<ApiResponse<SubscriptionSelfInfo>>(
       "GET",
       url,
+      { noCache: true },
     );
 
     if (result.error) {

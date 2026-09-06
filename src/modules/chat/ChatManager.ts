@@ -2707,6 +2707,17 @@ export class ChatManager {
     } finally {
       presentationLaunchSession?.finish();
       this.completeSessionRun(sendingSession, sessionRunId);
+      // Billing belongs to the sending turn, even when its panel is hidden,
+      // the active provider changes, or the turn fails after consuming tokens.
+      // Auth listeners update all mounted balance displays without blocking send.
+      if (chatProviderId === "paperchat") {
+        const authManager = getAuthManager();
+        if (authManager.isLoggedIn()) {
+          void authManager.refreshUserInfo().catch((error) => {
+            ztoolkit.log("[Balance] Failed to refresh after turn:", error);
+          });
+        }
+      }
     }
   }
 

@@ -55,6 +55,7 @@ import {
   type PanelMode,
 } from "./ChatPanelManager";
 import { startReaderFigureScreenshot } from "../ReaderFigureScreenshot";
+import { updateAnimatedBalance } from "./AnimatedBalance";
 import {
   getImageAttachmentLimitMessage,
   refreshImageInputAvailability,
@@ -2543,6 +2544,8 @@ export function updateUserBarDisplay(
   }
 
   if (activeProviderId !== "paperchat") {
+    if (userSubscriptionTotalEl)
+      updateAnimatedBalance(userSubscriptionTotalEl, "");
     updateAccountBalance(container, {
       paperChat: false,
       label: "",
@@ -2586,17 +2589,16 @@ export function updateUserBarDisplay(
         userSubscriptionTotalEl &&
         userSubscriptionProgressFillEl
       ) {
-        userSubscriptionTotalEl.textContent = getString(
-          "user-panel-subscription",
-          {
-            args: { total: subscriptionUsage.amountTotalLabel },
-          },
+        const subscriptionLabel = getString("user-panel-subscription", {
+          args: { total: subscriptionUsage.amountTotalLabel },
+        });
+        updateAnimatedBalance(
+          userSubscriptionTotalEl,
+          subscriptionLabel,
+          subscriptionUsage.amountTotal,
         );
         userSubscriptionProgressFillEl.style.width = `${subscriptionUsage.percentUsed}%`;
-        userSubscriptionEl.setAttribute(
-          "aria-label",
-          userSubscriptionTotalEl.textContent || "",
-        );
+        userSubscriptionEl.setAttribute("aria-label", subscriptionLabel);
         if (subscriptionUsage.percentUsed >= 99) {
           applySubscriptionLimitStyles(userSubscriptionEl);
         } else {
@@ -2608,7 +2610,7 @@ export function updateUserBarDisplay(
         userSubscriptionEl.setAttribute("tabindex", "0");
       } else {
         if (userSubscriptionTotalEl) {
-          userSubscriptionTotalEl.textContent = "";
+          updateAnimatedBalance(userSubscriptionTotalEl, "");
         }
         if (userSubscriptionProgressFillEl) {
           userSubscriptionProgressFillEl.style.width = "0%";
@@ -2632,7 +2634,7 @@ export function updateUserBarDisplay(
     updateChatBalanceWarning(container, false);
     if (userSubscriptionEl) {
       if (userSubscriptionTotalEl) {
-        userSubscriptionTotalEl.textContent = "";
+        updateAnimatedBalance(userSubscriptionTotalEl, "");
       }
       if (userSubscriptionProgressFillEl) {
         userSubscriptionProgressFillEl.style.width = "0%";
