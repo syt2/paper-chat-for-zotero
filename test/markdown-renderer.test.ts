@@ -1177,6 +1177,56 @@ Missing label should not be parsed.
     }
   });
 
+  it("does not offer PDF navigation for summaries or missing and unsupported source targets", function () {
+    const originalZotero = (globalThis as { Zotero?: unknown }).Zotero;
+    (globalThis as { Zotero?: unknown }).Zotero = {
+      getMainWindow: () => null,
+    };
+    const doc = new FakeDocument();
+    const quote = "> 加入通道注意力机制可以降低测试误差。";
+    const contents = [
+      quote,
+      // A title or page alone does not identify the source document.
+      `<source-group label="Paper A" type="paper" page="6">\n${quote}\n</source-group>`,
+      `<source-group label="Paper A" type="paper" key="invalid">\n${quote}\n</source-group>`,
+      ...["note", "collection", "unknown"].map(
+        (type) =>
+          `<source-group label="Source" type="${type}" key="PAPER123">\n${quote}\n</source-group>`,
+      ),
+      `<source-group label="Website" type="web" url="https://example.com">\n${quote}\n</source-group>`,
+    ];
+    const hasAction = (node: FakeElement): boolean =>
+      node.getAttribute("data-blockquote-action") === "true" ||
+      node.children.some(hasAction);
+    const hasQuote = (node: FakeElement): boolean =>
+      node.tagName === "blockquote" || node.children.some(hasQuote);
+
+    try {
+      for (const content of contents) {
+        const root = new FakeElement(doc, "div");
+        renderMarkdownToElement(
+          root as unknown as HTMLElement,
+          content,
+          "summary",
+          {
+            blockquoteAction: {
+              label: "View source",
+              title: "Open quote",
+              onClick: () => assert.fail("Summary must not navigate to a PDF"),
+            },
+          },
+        );
+        assert.isTrue(
+          hasQuote(root),
+          "Keep the blockquote's content and formatting",
+        );
+        assert.isFalse(hasAction(root), content);
+      }
+    } finally {
+      (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
+    }
+  });
+
   it("passes the enclosing paper source to blockquote navigation", async function () {
     const originalZotero = (globalThis as { Zotero?: unknown }).Zotero;
     (globalThis as { Zotero?: unknown }).Zotero = {

@@ -164,115 +164,56 @@ export function createChatContainer(
     {},
     { id: "chat-session-actions" },
   );
-  const accountMenu = createElement(
-    doc,
-    "details",
-    {},
-    { id: "chat-account-menu" },
-  ) as HTMLDetailsElement;
-  const accountTrigger = createElement(
-    doc,
-    "summary",
-    {},
-    {
-      id: "chat-account-trigger",
-      title: getString("chat-account-menu"),
-      "aria-label": getString("chat-account-menu"),
-    },
-  );
-  accountTrigger.appendChild(
-    createElement(
-      doc,
-      "img",
-      {},
-      {
-        src: `chrome://${config.addonRef}/content/icons/profile.svg`,
-        alt: "",
-      },
-    ),
-  );
-  const accountPanel = createElement(
-    doc,
-    "div",
-    {},
-    { id: "chat-account-panel" },
-  );
-  const accountDetails = createElement(
-    doc,
-    "div",
-    {},
-    { id: "chat-account-details" },
-  );
-  accountMenu.appendChild(accountTrigger);
-  accountMenu.appendChild(accountPanel);
-  bindChatDisclosure(container, accountMenu, accountTrigger);
   const accountArea = createElement(
     doc,
     "div",
     { display: "none" },
-    { id: "chat-header-account" },
+    { id: "chat-account-area" },
   );
   const accountCaption = createElement(
     doc,
     "button",
     {},
-    { id: "chat-header-account-caption", type: "button" },
+    { id: "chat-account-balance", type: "button" },
   );
 
-  // Detailed account usage stays in the profile menu.
-  const userBar = createElement(
+  const quotaArea = createElement(doc, "div", {}, { id: "chat-account-quota" });
+  const quotaPopover = createElement(
     doc,
     "div",
+    {},
     {
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between",
-      padding: "10px 14px",
-      background: theme.userBubbleBg,
-      color: theme.userBubbleText,
-      fontSize: chatFontSize(12),
+      id: "chat-quota-popover",
+      role: "tooltip",
     },
-    { id: "chat-user-bar" },
   );
-
-  const userName = createElement(
-    doc,
-    "span",
-    {
-      fontWeight: "600",
-      fontSize: chatFontSize(14),
-      overflow: "hidden",
-      textOverflow: "ellipsis",
-      whiteSpace: "nowrap",
-    },
-    { id: "chat-user-name" },
-  );
-
-  const userBalance = createElement(
-    doc,
-    "span",
-    {
-      fontSize: chatFontSize(11),
-      opacity: "0.9",
-      flexShrink: "0",
-      whiteSpace: "nowrap",
-    },
-    { id: "chat-user-balance" },
-  );
-
-  const userUsageRow = createElement(
-    doc,
-    "div",
-    {
-      display: "flex",
-      alignItems: "flex-start",
-      justifyContent: "flex-start",
-      gap: "8px",
-      minWidth: "0",
-      width: "100%",
-    },
-    { id: "chat-user-usage-row" },
-  );
+  for (const [id, label] of [
+    ["subscription", getString("chat-quota-subscriptions")],
+    ["wallet", getString("chat-quota-wallet")],
+  ]) {
+    const section = createElement(
+      doc,
+      "section",
+      {},
+      { class: "chat-quota-section" },
+    );
+    const heading = createElement(
+      doc,
+      "div",
+      {},
+      { class: "chat-quota-heading" },
+    );
+    heading.textContent = label;
+    const content = createElement(
+      doc,
+      "div",
+      {},
+      { id: `chat-quota-${id}-details` },
+    );
+    section.appendChild(heading);
+    section.appendChild(content);
+    quotaPopover.appendChild(section);
+  }
 
   const userSubscription = createElement(
     doc,
@@ -330,29 +271,12 @@ export function createChatContainer(
   userSubscription.appendChild(userSubscriptionTotal);
   userSubscription.appendChild(userSubscriptionProgress);
 
-  accountArea.appendChild(userSubscription);
-  accountArea.appendChild(accountCaption);
-  userUsageRow.appendChild(userBalance);
-  userBar.appendChild(userUsageRow);
-  accountDetails.appendChild(userName);
-  accountDetails.appendChild(userBar);
+  quotaArea.appendChild(userSubscription);
+  quotaArea.appendChild(accountCaption);
+  quotaArea.appendChild(quotaPopover);
+  accountArea.appendChild(quotaArea);
 
-  const userActionBtn = createElement(
-    doc,
-    "button",
-    {
-      background: "rgba(0, 0, 0, 0.06)",
-      border: "1px solid rgba(0, 0, 0, 0.1)",
-      borderRadius: "4px",
-      padding: "5px 14px",
-      color: theme.userBubbleText,
-      fontSize: chatFontSize(12),
-      cursor: "pointer",
-    },
-    { id: "chat-user-action-btn" },
-  );
-
-  // Keep the original check-in element and handlers, now directly in the header.
+  // Keep the original check-in element and its existing handler.
   const checkinBtn = createElement(
     doc,
     "button",
@@ -361,11 +285,15 @@ export function createChatContainer(
   );
 
   accountArea.appendChild(checkinBtn);
-  accountArea.appendChild(accountMenu);
-  accountDetails.appendChild(userActionBtn);
-  accountPanel.appendChild(accountDetails);
   header.appendChild(headerTitle);
-  header.appendChild(accountArea);
+  const headerLogin = createElement(
+    doc,
+    "button",
+    { display: "none" },
+    { id: "chat-header-login", type: "button", disabled: "true" },
+  );
+  headerLogin.textContent = getString("user-panel-login-btn");
+  header.appendChild(headerLogin);
 
   const balanceWarning = createElement(
     doc,
@@ -1099,6 +1027,7 @@ export function createChatContainer(
   inputBottomBar.appendChild(toolsMenu);
   inputBottomBar.appendChild(modelSelectorContainer);
   inputBottomBar.appendChild(sendButton);
+  leftContainer.appendChild(accountArea);
   leftContainer.appendChild(utilityActions);
   leftContainer.setAttribute("id", "chat-footer");
 

@@ -18,7 +18,6 @@ import {
 } from "./HistoryDropdown";
 import { showAuthDialog } from "../AuthDialog";
 import { getCurrentPresentationPaper } from "../../presentation/PresentationEntry";
-import { updateAnimatedBalance } from "./AnimatedBalance";
 import { getString } from "../../../utils/locale";
 import { getProviderManager } from "../../providers";
 import type { PaperChatProviderConfig } from "../../../types/provider";
@@ -26,8 +25,9 @@ import type { SubscriptionUsageSummary } from "../../../types/auth";
 import {
   updateChatHeaderTitle,
   updateChatBalanceWarning,
-  updateHeaderAccountCaption,
-  getSubscriptionUsageTooltip,
+  updateAccountBalance,
+  updateAccountQuotaDetails,
+  bindAccountQuotaPopover,
 } from "./ChatPanelChrome";
 import { getPref, setPref } from "../../../utils/prefs";
 import {
@@ -69,6 +69,7 @@ import {
   scrollToAndHighlightMessage,
   scrollChatHistoryToBottom,
   shouldAutoScrollChatHistory,
+  syncChatHistoryAfterLayout,
   updateChatHistoryAutoScrollState,
   updateChatHistoryScrollBottomButton,
 } from "./MessageRenderer";
@@ -79,7 +80,10 @@ import {
   trackPaperChatPurchaseEntryClicked,
 } from "../../analytics";
 import { buildErrorProps } from "../../analytics/errorProps";
-import { LOW_BALANCE_WARNING_THRESHOLD } from "../../preferences/UserAuthUI";
+import {
+  LOW_BALANCE_WARNING_THRESHOLD,
+  isPaperChatLowBalance,
+} from "../../preferences/UserAuthUI";
 import {
   extractStatusCode,
   isNetworkErrorMessage,
@@ -117,30 +121,6 @@ let queuedTurnSequence = 0;
 
 // Duration (ms) to show the "+quota" flash on the check-in button after a successful check-in
 const CHECKIN_FLASH_DURATION_MS = 5000;
-
-function resetUserBalanceLowBalanceStyles(userBalanceEl: HTMLElement): void {
-  userBalanceEl.style.color = "";
-  userBalanceEl.style.fontWeight = "";
-  userBalanceEl.style.textDecoration = "";
-  userBalanceEl.style.textUnderlineOffset = "";
-  userBalanceEl.style.cursor = "";
-  userBalanceEl.style.opacity = "0.9";
-  userBalanceEl.removeAttribute("role");
-  userBalanceEl.removeAttribute("tabindex");
-  userBalanceEl.removeAttribute("data-low-balance-clickable");
-}
-
-function applyUserBalanceLowBalanceStyles(userBalanceEl: HTMLElement): void {
-  userBalanceEl.style.color = "#dc2626";
-  userBalanceEl.style.fontWeight = "700";
-  userBalanceEl.style.textDecoration = "underline";
-  userBalanceEl.style.textUnderlineOffset = "2px";
-  userBalanceEl.style.cursor = "pointer";
-  userBalanceEl.style.opacity = "1";
-  userBalanceEl.setAttribute("role", "button");
-  userBalanceEl.setAttribute("tabindex", "0");
-  userBalanceEl.setAttribute("data-low-balance-clickable", "true");
-}
 
 function resetSubscriptionLimitStyles(subscriptionEl: HTMLElement): void {
   subscriptionEl.style.color = "";
@@ -663,6 +643,48 @@ export async function refreshCheckinDisplay(
   }
 }
 
+/** Keep the entry clickable while the shared login dialog owns the pending result. */
+export function createLoginButtonHandler(
+  context: Pick<
+    ChatPanelContext,
+    "container" | "authManager" | "appendError" | "updateUserBar"
+  >,
+  openLogin: () => Promise<boolean> = () => showAuthDialog("login"),
+): () => Promise<void> {
+  const accountBalanceBtn = context.container.querySelector(
+    "#chat-account-balance",
+  ) as HTMLButtonElement | null;
+  const loginButtons = context.container.querySelectorAll(
+    "#chat-account-balance, #chat-header-login",
+  );
+  let loginPending = false;
+  return async () => {
+    if (!accountBalanceBtn || accountBalanceBtn.disabled) return;
+    if (loginPending) {
+      // Re-enter the dialog singleton to raise its window. Only the original
+      // invocation refreshes account state or reports a failure.
+      void openLogin().catch(() => undefined);
+      return;
+    }
+    loginPending = true;
+    loginButtons.forEach((button) => button.setAttribute("aria-busy", "true"));
+    try {
+      const success = await openLogin();
+      if (success)
+        await refreshCheckinDisplay(context.container, context.authManager);
+    } catch (error) {
+      ztoolkit.log("[ChatPanel] Login failed:", error);
+      context.appendError(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      loginPending = false;
+      loginButtons.forEach((button) => button.removeAttribute("aria-busy"));
+      context.updateUserBar();
+    }
+  };
+}
+
 export function createPresentationButtonLaunchHandler(
   context: Pick<ChatPanelContext, "launchPresentation" | "appendError">,
   presentationBtn: Pick<HTMLButtonElement, "setAttribute" | "removeAttribute">,
@@ -770,9 +792,6 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
   const attachmentsPreview = container.querySelector(
     "#chat-attachments-preview",
   ) as HTMLElement;
-  const userActionBtn = container.querySelector(
-    "#chat-user-action-btn",
-  ) as HTMLButtonElement;
   const checkinBtn = container.querySelector(
     "#chat-checkin-btn",
   ) as HTMLButtonElement;
@@ -866,6 +885,13 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
   });
 
   if (chatHistory) {
+    // Images can finish loading after a tab-switch render has scrolled to the
+    // bottom. Capture load events because image loads do not bubble.
+    chatHistory.addEventListener(
+      "load",
+      () => syncChatHistoryAfterLayout(chatHistory),
+      true,
+    );
     chatHistory.addEventListener("scroll", () => {
       updateChatHistoryAutoScrollState(chatHistory);
     });
@@ -1165,46 +1191,19 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
     refreshCheckinDisplay(container, authManager);
   }
 
-  // Keep the account menu open while an action is pending so its state is visible.
-  const headerLoginBtn = container.querySelector(
-    "#chat-header-account-caption",
-  ) as HTMLButtonElement | null;
-  const handleAccountAction = async () => {
-    if (!userActionBtn || userActionBtn.disabled) return;
-    if (headerLoginBtn) headerLoginBtn.disabled = true;
-    userActionBtn.disabled = true;
-    userActionBtn.setAttribute("aria-busy", "true");
-    userActionBtn.textContent = `${userActionBtn.textContent || ""}…`;
-    const accountMenu = container.querySelector(
-      "#chat-account-menu",
-    ) as HTMLDetailsElement | null;
-    try {
-      if (authManager.isLoggedIn()) {
-        await authManager.logout();
-        if (accountMenu) accountMenu.open = false;
-      } else {
-        if (accountMenu) accountMenu.open = false;
-        const success = await showAuthDialog("login");
-        if (success) await refreshCheckinDisplay(container, authManager);
-      }
-    } catch (error) {
-      ztoolkit.log("[ChatPanel] Account action failed:", error);
-      context.appendError(
-        error instanceof Error ? error.message : String(error),
-      );
-    } finally {
-      userActionBtn.disabled = false;
-      userActionBtn.removeAttribute("aria-busy");
-      context.updateUserBar();
-    }
-  };
-  userActionBtn?.addEventListener("click", handleAccountAction);
-  headerLoginBtn?.addEventListener("click", () => {
-    if (!authManager.isLoggedIn()) void handleAccountAction();
-    else
-      (
-        container.querySelector("#chat-user-balance") as HTMLElement | null
-      )?.click();
+  const handleLogin = createLoginButtonHandler(context);
+  container
+    .querySelector("#chat-header-login")
+    ?.addEventListener("click", () => {
+      if (!authManager.isLoggedIn()) void handleLogin();
+    });
+  bindAccountQuotaPopover(container, () => {
+    if (!authManager.isLoggedIn()) return;
+    updateAccountQuotaDetails(
+      container,
+      authManager.getSubscriptionUsageSummary(),
+      authManager.formatBalance(),
+    );
   });
 
   // Send button
@@ -1713,13 +1712,16 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
   }
 
   const userBalanceEl = container.querySelector(
-    "#chat-user-balance",
+    "#chat-account-balance",
   ) as HTMLElement;
   if (userBalanceEl) {
     const openBalanceSettings = () => {
-      if (!authManager.isLoggedIn()) return;
+      if (!authManager.isLoggedIn()) {
+        void handleLogin();
+        return;
+      }
       const lowBalance =
-        userBalanceEl.getAttribute("data-low-balance-clickable") === "true";
+        userBalanceEl.getAttribute("data-low-balance") === "true";
       if (lowBalance)
         getAnalyticsService().track(
           ANALYTICS_EVENTS.paperChatLowBalanceClicked,
@@ -1734,7 +1736,9 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
         { low_balance: lowBalance },
       );
       void import("../../preferences/UserAuthUI")
-        .then((module) => module.openPaperChatSettingsForTopup())
+        .then((module) =>
+          module.openPaperChatSettingsForTopup({ highlight: lowBalance }),
+        )
         .catch((error) => {
           ztoolkit.log(
             "[Chat] Failed to open PaperChat settings for balance:",
@@ -1747,31 +1751,12 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
     container
       .querySelector("#chat-balance-warning-button")
       ?.addEventListener("click", openBalanceSettings);
-    userBalanceEl.addEventListener("keydown", (event) => {
-      if (event.key !== "Enter" && event.key !== " ") {
-        return;
-      }
-      event.preventDefault();
-      openBalanceSettings();
-    });
   }
 
   const userSubscriptionEl = container.querySelector(
     "#chat-user-subscription",
   ) as HTMLElement;
   if (userSubscriptionEl) {
-    const refreshSubscriptionTooltip = () => {
-      const usage = authManager.getSubscriptionUsageSummary();
-      if (!usage) return;
-      const label = getSubscriptionUsageTooltip(usage);
-      userSubscriptionEl.title = label;
-      userSubscriptionEl.setAttribute("aria-label", label);
-    };
-    userSubscriptionEl.addEventListener(
-      "mouseenter",
-      refreshSubscriptionTooltip,
-    );
-    userSubscriptionEl.addEventListener("focus", refreshSubscriptionTooltip);
     const openSubscriptionTopup = () => {
       if (!authManager.isLoggedIn()) return;
       trackPaperChatPurchaseEntryClicked(
@@ -1779,7 +1764,14 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
         "chat_user_bar_subscription",
       );
       void import("../../preferences/UserAuthUI")
-        .then((module) => module.openPaperChatSettingsForTopup())
+        .then((module) =>
+          module.openPaperChatSettingsForTopup({
+            highlight:
+              userSubscriptionEl.getAttribute(
+                "data-subscription-limit-clickable",
+              ) === "true",
+          }),
+        )
         .catch((error) => {
           ztoolkit.log(
             "[Chat] Failed to open PaperChat settings for subscription:",
@@ -2519,8 +2511,6 @@ export function updateUserBarDisplay(
     getSubscriptionUsageSummary(): SubscriptionUsageSummary | null;
   },
 ): void {
-  const userBar = container.querySelector("#chat-user-bar") as HTMLElement;
-  const userNameEl = container.querySelector("#chat-user-name") as HTMLElement;
   const userSubscriptionEl = container.querySelector(
     "#chat-user-subscription",
   ) as HTMLElement;
@@ -2531,46 +2521,40 @@ export function updateUserBarDisplay(
     "#chat-user-subscription-progress-fill",
   ) as HTMLElement;
   const userBalanceEl = container.querySelector(
-    "#chat-user-balance",
+    "#chat-account-balance",
   ) as HTMLElement;
-  const userActionBtn = container.querySelector(
-    "#chat-user-action-btn",
-  ) as HTMLButtonElement;
   const checkinBtn = container.querySelector(
     "#chat-checkin-btn",
   ) as HTMLButtonElement;
 
-  if (!userBar || !userNameEl || !userBalanceEl || !userActionBtn) return;
+  if (!userBalanceEl) return;
 
   // PaperChat account controls are absent when using an external provider.
   const providerManager = getProviderManager();
   const activeProviderId = providerManager.getActiveProviderId();
-  const accountTrigger = container.querySelector(
-    "#chat-account-trigger",
-  ) as HTMLElement | null;
-  const accountMenu = container.querySelector(
-    "#chat-account-menu",
-  ) as HTMLDetailsElement | null;
-  if (accountMenu && activeProviderId !== "paperchat") accountMenu.open = false;
+  const headerLogin = container.querySelector(
+    "#chat-header-login",
+  ) as HTMLButtonElement | null;
+  if (headerLogin) {
+    const showLogin =
+      activeProviderId === "paperchat" && !authManager.isLoggedIn();
+    headerLogin.style.display = showLogin ? "inline-flex" : "none";
+    headerLogin.disabled = !showLogin;
+  }
 
   if (activeProviderId !== "paperchat") {
-    updateHeaderAccountCaption(container, {
+    updateAccountBalance(container, {
       paperChat: false,
       label: "",
       description: "",
     });
     updateChatBalanceWarning(container, false);
-    userBar.style.display = "none";
-    accountTrigger?.setAttribute("title", getString("chat-account-menu"));
+    updateAccountQuotaDetails(container, null, null);
     return;
   }
 
-  userBar.style.display = "flex";
-
   if (authManager.isLoggedIn()) {
-    const user = authManager.getUser();
-    const isLowBalance =
-      authManager.getBalance().quota < LOW_BALANCE_WARNING_THRESHOLD;
+    const isLowBalance = isPaperChatLowBalance(authManager);
     const subscriptionUsage = authManager.getSubscriptionUsageSummary();
     const shouldHideTokenBalance =
       !!subscriptionUsage &&
@@ -2580,7 +2564,7 @@ export function updateUserBarDisplay(
       !shouldHideTokenBalance && isLowBalance,
       authManager.formatBalance(),
     );
-    updateHeaderAccountCaption(container, {
+    updateAccountBalance(container, {
       paperChat: true,
       interactive: true,
       label: getString("chat-header-balance", {
@@ -2591,10 +2575,10 @@ export function updateUserBarDisplay(
       balance: authManager.getBalance().quota,
       hidden: shouldHideTokenBalance,
     });
-    userNameEl.textContent = user?.username || "";
-    accountTrigger?.setAttribute(
-      "title",
-      user?.username || getString("chat-account-menu"),
+    updateAccountQuotaDetails(
+      container,
+      subscriptionUsage,
+      authManager.formatBalance(),
     );
     if (userSubscriptionEl) {
       if (
@@ -2609,9 +2593,10 @@ export function updateUserBarDisplay(
           },
         );
         userSubscriptionProgressFillEl.style.width = `${subscriptionUsage.percentUsed}%`;
-        const usageLabel = getSubscriptionUsageTooltip(subscriptionUsage);
-        userSubscriptionEl.title = usageLabel;
-        userSubscriptionEl.setAttribute("aria-label", usageLabel);
+        userSubscriptionEl.setAttribute(
+          "aria-label",
+          userSubscriptionTotalEl.textContent || "",
+        );
         if (subscriptionUsage.percentUsed >= 99) {
           applySubscriptionLimitStyles(userSubscriptionEl);
         } else {
@@ -2634,48 +2619,17 @@ export function updateUserBarDisplay(
         userSubscriptionEl.style.display = "none";
       }
     }
-    if (shouldHideTokenBalance) {
-      updateAnimatedBalance(userBalanceEl, "");
-      userBalanceEl.removeAttribute("title");
-      userBalanceEl.style.display = "none";
-      resetUserBalanceLowBalanceStyles(userBalanceEl);
-    } else {
-      userBalanceEl.style.display = "inline";
-      updateAnimatedBalance(
-        userBalanceEl,
-        getString("chat-header-balance", {
-          args: { balance: authManager.formatBalance() },
-        }),
-        authManager.getBalance().quota,
-      );
-      userBalanceEl.title = `${getString("user-panel-balance")}: ${authManager.formatBalance()}`;
-    }
-    if (!shouldHideTokenBalance && isLowBalance) {
-      applyUserBalanceLowBalanceStyles(userBalanceEl);
-    } else {
-      resetUserBalanceLowBalanceStyles(userBalanceEl);
-    }
-    userActionBtn.textContent = getString("user-panel-logout-btn");
-    if (!shouldHideTokenBalance) {
-      userBalanceEl.style.cursor = "pointer";
-      userBalanceEl.setAttribute("role", "button");
-      userBalanceEl.setAttribute("tabindex", "0");
-    }
     // Check-in button visibility is owned by refreshCheckinDisplay (respects enabled flag).
     // Do NOT force-show it here — that would override the server's enabled:false response.
   } else {
-    userNameEl.textContent = getString("user-panel-not-logged-in");
-    updateHeaderAccountCaption(container, {
+    updateAccountQuotaDetails(container, null, null);
+    updateAccountBalance(container, {
       paperChat: true,
       interactive: true,
       label: getString("user-panel-login-btn"),
       description: getString("user-panel-not-logged-in"),
     });
     updateChatBalanceWarning(container, false);
-    accountTrigger?.setAttribute(
-      "title",
-      getString("user-panel-not-logged-in"),
-    );
     if (userSubscriptionEl) {
       if (userSubscriptionTotalEl) {
         userSubscriptionTotalEl.textContent = "";
@@ -2688,11 +2642,6 @@ export function updateUserBarDisplay(
       resetSubscriptionLimitStyles(userSubscriptionEl);
       userSubscriptionEl.style.display = "none";
     }
-    updateAnimatedBalance(userBalanceEl, "");
-    userBalanceEl.removeAttribute("title");
-    userBalanceEl.style.display = "inline";
-    resetUserBalanceLowBalanceStyles(userBalanceEl);
-    userActionBtn.textContent = getString("user-panel-login-btn");
     // Hide check-in button when not logged in
     if (checkinBtn) {
       checkinBtn.style.display = "none";

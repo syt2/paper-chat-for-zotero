@@ -13,6 +13,7 @@ import type { EvidenceRecord } from "../../../types/evidence";
 import type { PresentationToolCardArtifact } from "../../../types/chat";
 import type { PresentationCardProgress } from "../../presentation/contracts";
 import { normalizeEvidenceRecords } from "../../chat/evidence";
+import { normalizeZoteroKey } from "../../chat/note-source-provenance";
 import { isTerminalPresentationArtifact } from "../../chat/presentation-artifacts";
 import {
   getToolCallCardExpandKey,
@@ -1782,6 +1783,18 @@ function appendBlockquoteAction(
   action: NonNullable<MarkdownRenderOptions["blockquoteAction"]>,
   sourceGroup?: SourceGroupActionContext,
 ): void {
+  // A Markdown blockquote may be an AI summary, not a passage from a PDF.
+  // Only offer quote navigation with an explicit target the PDF action supports.
+  // Notes and web sources retain their source-card header actions.
+  if (
+    !sourceGroup ||
+    !["paper", "item", "annotation"].includes(
+      sourceGroup.type.trim().toLowerCase(),
+    ) ||
+    !normalizeZoteroKey(sourceGroup.key)
+  ) {
+    return;
+  }
   const quoteText = getBlockquoteActionText(blockquote).trim();
   if (!quoteText) {
     return;

@@ -4,6 +4,7 @@ import {
   getInitialPaperChatProduct,
   getProductAnalyticsProps,
   updateUserDisplay,
+  openPaperChatSettingsForTopup,
 } from "../src/modules/preferences/UserAuthUI";
 
 class FakeElement {
@@ -61,6 +62,67 @@ describe("PaperChat user auth preferences", function () {
 
   afterEach(function () {
     (globalThis as any).addon = originalAddon;
+  });
+
+  it("does not force purchase highlighting for normal quota navigation, but keeps low-balance warnings", function () {
+    const runtime = globalThis as any;
+    const originalZotero = runtime.Zotero;
+    const originalSetTimeout = runtime.setTimeout;
+    let opened = 0;
+    runtime.Zotero = {
+      Utilities: {
+        Internal: {
+          openPreferences: () => {
+            opened++;
+          },
+        },
+      },
+    };
+    // Do not start preference-refresh/animation timers in this unit test.
+    runtime.setTimeout = () => 0;
+    const purchase = new FakeElement();
+    const doc = {
+      getElementById: (id: string) =>
+        id === "pref-get-redeem-code-btn" ? purchase : null,
+    } as unknown as Document;
+    let quota = 100_000;
+    let subscription: { amountRemaining: number } | null = null;
+    const auth = {
+      isLoggedIn: () => true,
+      getUser: () => ({ username: "reader" }),
+      getBalance: () => ({ quota }),
+      getSubscriptionUsageSummary: () => subscription,
+    } as any;
+    try {
+      openPaperChatSettingsForTopup();
+      assert.isAbove(
+        runtime.addon.data.paperchatTopupAttentionUntil,
+        Date.now(),
+      );
+      openPaperChatSettingsForTopup({ highlight: false });
+      assert.equal(opened, 2);
+      assert.isUndefined(runtime.addon.data.paperchatTopupAttentionUntil);
+      updateUserDisplay(doc, auth);
+      assert.equal(purchase.style.background, "");
+      quota = 9_999;
+      updateUserDisplay(doc, auth);
+      assert.include(purchase.style.background, "linear-gradient");
+      subscription = { amountRemaining: 10_001 };
+      updateUserDisplay(doc, auth);
+      assert.equal(purchase.style.background, "");
+      subscription = { amountRemaining: 10_000 };
+      updateUserDisplay(doc, auth);
+      assert.equal(purchase.style.background, "");
+      subscription = { amountRemaining: 9_999 };
+      updateUserDisplay(doc, auth);
+      assert.include(purchase.style.background, "linear-gradient");
+      quota = 10_000;
+      updateUserDisplay(doc, auth);
+      assert.equal(purchase.style.background, "");
+    } finally {
+      runtime.Zotero = originalZotero;
+      runtime.setTimeout = originalSetTimeout;
+    }
   });
 
   it("replaces stale XUL text when the authenticated user changes", function () {

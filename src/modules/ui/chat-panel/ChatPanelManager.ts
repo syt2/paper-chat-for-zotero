@@ -62,6 +62,7 @@ import {
   getStreamingReasoningSelector,
   renderMessages as renderMessageElementsBase,
   scrollChatHistoryToBottom,
+  syncChatHistoryAfterLayout,
   scrollToAndHighlightMessage,
   shouldAutoScrollChatHistory,
   updateChatHistoryScrollBottomButton,
@@ -1348,7 +1349,12 @@ function updateSidebarContainerPosition(): void {
   // Use requestAnimationFrame to ensure layout is updated after expanding
   const win = Zotero.getMainWindow();
   win.requestAnimationFrame(() => {
-    if (!chatContainer || !sidebar) return;
+    if (
+      !chatContainer ||
+      currentPanelMode !== "sidebar" ||
+      sidebar !== getSidebar()
+    )
+      return;
 
     const rect = sidebar.getBoundingClientRect();
     chatContainer.style.width = `${rect.width}px`;
@@ -1361,6 +1367,9 @@ function updateSidebarContainerPosition(): void {
     chatContainer.style.boxShadow = "none";
     chatContainer.style.border = "none";
     chatContainer.style.borderLeft = "1px solid var(--fill-quinary)";
+    const chatHistory =
+      chatContainer.querySelector<HTMLElement>("#chat-history");
+    if (chatHistory) syncChatHistoryAfterLayout(chatHistory);
   });
 }
 

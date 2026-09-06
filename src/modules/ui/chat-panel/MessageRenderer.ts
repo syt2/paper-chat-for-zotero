@@ -118,6 +118,15 @@ export function scrollChatHistoryToBottom(chatHistory: HTMLElement): void {
   updateChatHistoryScrollBottomButton(chatHistory);
 }
 
+/** Reconcile late layout changes without pulling a reader away from older messages. */
+export function syncChatHistoryAfterLayout(chatHistory: HTMLElement): void {
+  if (shouldAutoScrollChatHistory(chatHistory)) {
+    scrollChatHistoryToBottom(chatHistory);
+  } else {
+    updateChatHistoryScrollBottomButton(chatHistory);
+  }
+}
+
 /**
  * Find a rendered message by exact ID without interpolating the ID into a CSS
  * selector. Message IDs are opaque and may contain selector metacharacters.
@@ -1572,6 +1581,7 @@ export function renderMessages(
   const doc = chatHistory.ownerDocument;
   if (!doc) return;
   const shouldScrollToBottom = shouldAutoScrollChatHistory(chatHistory);
+  const previousScrollTop = chatHistory.scrollTop;
 
   chatHistory.textContent = "";
 
@@ -1632,6 +1642,7 @@ export function renderMessages(
   if (shouldScrollToBottom) {
     scrollChatHistoryToBottom(chatHistory);
   } else {
+    chatHistory.scrollTop = previousScrollTop;
     updateChatHistoryScrollBottomButton(chatHistory);
   }
   renderOptions.onRenderComplete?.();

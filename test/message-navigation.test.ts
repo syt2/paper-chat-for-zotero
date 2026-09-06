@@ -7,6 +7,7 @@ import {
   findRenderedMessageElement,
   renderMessages,
   scrollToAndHighlightMessage,
+  syncChatHistoryAfterLayout,
   updateUserInputRequestView,
 } from "../src/modules/ui/chat-panel/MessageRenderer.ts";
 import {
@@ -400,6 +401,46 @@ describe("chat message exact navigation", function () {
     );
 
     assert.equal(renderedId, "rendered");
+  });
+
+  it("keeps the bottom after a resize or delayed image load, but preserves manual reading", function () {
+    const history = new FakeElement(new FakeDocument(), "div");
+    history.clientHeight = 500;
+    history.scrollHeight = 1000;
+    history.scrollTop = 500;
+    history.setAttribute("data-auto-scroll", "true");
+
+    // A narrower sidebar or an image adds content after the initial render.
+    history.scrollHeight = 1300;
+    syncChatHistoryAfterLayout(asElement(history));
+    assert.equal(history.scrollTop, history.scrollHeight);
+
+    history.setAttribute("data-auto-scroll", "false");
+    history.scrollTop = 230;
+    history.scrollHeight = 1500;
+    syncChatHistoryAfterLayout(asElement(history));
+    assert.equal(history.scrollTop, 230);
+    assert.equal(history.getAttribute("data-auto-scroll"), "false");
+  });
+
+  it("restores the reading position when a tab refresh rebuilds messages", function () {
+    const history = new FakeElement(new FakeDocument(), "div");
+    history.setAttribute("data-auto-scroll", "false");
+    history.scrollTop = 230;
+    // Real scroll containers clamp scrollTop when their content is cleared.
+    Object.defineProperty(history, "textContent", {
+      set() {
+        history.children.splice(0);
+        history.scrollTop = 0;
+      },
+    });
+    renderMessages(
+      asElement(history),
+      null,
+      [message("refreshed", { role: "system", isSystemNotice: true })],
+      darkTheme,
+    );
+    assert.equal(history.scrollTop, 230);
   });
 
   it("groups an adjacent failure into the interrupted assistant footer", async function () {

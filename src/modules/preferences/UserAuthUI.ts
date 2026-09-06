@@ -85,10 +85,17 @@ function hasActiveTopupAttention(): boolean {
   return typeof attentionUntil === "number" && attentionUntil > Date.now();
 }
 
-export function isPaperChatLowBalance(authManager: AuthManagerType): boolean {
+export function isPaperChatLowBalance(
+  authManager: Pick<
+    AuthManagerType,
+    "isLoggedIn" | "getBalance" | "getSubscriptionUsageSummary"
+  >,
+): boolean {
   return (
     authManager.isLoggedIn() &&
-    authManager.getBalance().quota < LOW_BALANCE_WARNING_THRESHOLD
+    authManager.getBalance().quota < LOW_BALANCE_WARNING_THRESHOLD &&
+    (authManager.getSubscriptionUsageSummary()?.amountRemaining ?? 0) <
+      LOW_BALANCE_WARNING_THRESHOLD
   );
 }
 
@@ -100,7 +107,7 @@ function shouldHighlightTopup(authManager: AuthManagerType): {
   const subscriptionUsage = authManager.getSubscriptionUsageSummary();
   if (
     subscriptionUsage &&
-    subscriptionUsage.amountRemaining > LOW_BALANCE_WARNING_THRESHOLD
+    subscriptionUsage.amountRemaining >= LOW_BALANCE_WARNING_THRESHOLD
   ) {
     return {
       highlight: false,
@@ -277,8 +284,11 @@ function applyTopupAttentionStyles(
   }
 }
 
-export function openPaperChatSettingsForTopup(): void {
-  markTopupAttentionRequested();
+export function openPaperChatSettingsForTopup(
+  options: { highlight?: boolean } = {},
+): void {
+  if (options.highlight !== false) markTopupAttentionRequested();
+  else delete getTopupAttentionAddonData().paperchatTopupAttentionUntil;
   Zotero.Utilities.Internal.openPreferences("paperchat-prefpane");
   schedulePrefsRefresh({
     syncUserInfo: true,

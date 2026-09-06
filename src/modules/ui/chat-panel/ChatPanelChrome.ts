@@ -32,7 +32,6 @@ export function getSubscriptionUsageTooltip(
           plan: detail.planId,
           remaining: detail.amountRemainingLabel,
           total: detail.amountTotalLabel,
-          used: detail.amountUsedLabel,
           reset: dateLabel(
             detail.nextResetTime,
             getString("chat-subscription-no-reset"),
@@ -45,6 +44,63 @@ export function getSubscriptionUsageTooltip(
       }),
     )
     .join("\n");
+}
+
+/** Shared details for either visible quota control. No account state is mutated here. */
+export function updateAccountQuotaDetails(
+  container: HTMLElement,
+  usage: SubscriptionUsageSummary | null,
+  balance: string | null,
+): void {
+  const area = container.querySelector("#chat-account-quota");
+  area?.setAttribute("data-available", balance === null ? "false" : "true");
+  const plans = container.querySelector("#chat-quota-subscription-details");
+  const wallet = container.querySelector("#chat-quota-wallet-details");
+  if (plans)
+    plans.textContent =
+      balance === null
+        ? ""
+        : usage
+          ? getSubscriptionUsageTooltip(usage)
+          : getString("chat-quota-no-subscriptions");
+  if (wallet)
+    wallet.textContent =
+      balance === null
+        ? ""
+        : getString("chat-quota-wallet-remaining", { args: { balance } });
+  for (const selector of ["#chat-user-subscription", "#chat-account-balance"]) {
+    const trigger = container.querySelector(selector);
+    if (balance === null) trigger?.removeAttribute("aria-describedby");
+    else {
+      trigger?.setAttribute("aria-describedby", "chat-quota-popover");
+      trigger?.removeAttribute("title");
+    }
+  }
+}
+
+/** Element-owned listeners: hover/focus refresh relative times; Escape dismisses. */
+export function bindAccountQuotaPopover(
+  container: HTMLElement,
+  refresh: () => void,
+): void {
+  const area = container.querySelector(
+    "#chat-account-quota",
+  ) as HTMLElement | null;
+  if (!area) return;
+  const show = () => {
+    area.removeAttribute("data-dismissed");
+    refresh();
+  };
+  area.addEventListener("mouseenter", show);
+  area.addEventListener("focusin", show);
+  area.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    area.setAttribute("data-dismissed", "true");
+    event.stopPropagation();
+  });
+  area.addEventListener("click", () =>
+    area.setAttribute("data-dismissed", "true"),
+  );
 }
 
 export function updateChatHeaderTitle(
@@ -80,7 +136,7 @@ export function updateChatBalanceWarning(
   strip.style.display = show ? "block" : "none";
 }
 
-export function updateHeaderAccountCaption(
+export function updateAccountBalance(
   container: HTMLElement,
   options: {
     paperChat: boolean;
@@ -93,10 +149,10 @@ export function updateHeaderAccountCaption(
   },
 ): void {
   const caption = container.querySelector(
-    "#chat-header-account-caption",
+    "#chat-account-balance",
   ) as HTMLButtonElement | null;
   const accountArea = container.querySelector(
-    "#chat-header-account",
+    "#chat-account-area",
   ) as HTMLElement | null;
   if (accountArea)
     accountArea.style.display = options.paperChat ? "flex" : "none";
@@ -114,7 +170,7 @@ export function getChatChromeStyles(theme: ThemeColors): string {
   return `
     .chat-panel-root { min-width: 0; color: ${theme.textPrimary}; color-scheme: light dark; }
     .chat-panel-root #chat-header {
-      display: grid; grid-template-columns: minmax(0, 1fr); align-items: center;
+      display: flex; align-items: center;
       column-gap: 8px; row-gap: 6px; flex-shrink: 0; min-height: 48px; padding: 8px 14px; box-sizing: border-box;
       border-bottom: 1px solid ${theme.borderColor}; background: ${theme.toolbarBg};
     }
@@ -124,38 +180,62 @@ export function getChatChromeStyles(theme: ThemeColors): string {
       line-height: 1.45; max-height: 2.9em; overflow-wrap: anywhere;
       overflow: hidden; text-overflow: ellipsis; min-width: 0;
     }
-    .chat-panel-root #chat-session-actions { display: flex; gap: 2px; flex-shrink: 0; }
-    .chat-panel-root #chat-header-account {
-      grid-column: 1 / -1; display: flex; align-items: center; gap: 10px;
-      min-width: 0; padding-top: 2px;
+    .chat-panel-root #chat-header-login {
+      flex: 0 0 auto; margin-left: auto; white-space: nowrap;
+      border: 1px solid ${theme.borderColor}; border-radius: 6px; padding: 4px 8px;
+      background: transparent; color: ${theme.textSecondary}; font: inherit;
+      font-size: .85em; line-height: 1.4; cursor: pointer;
     }
-    .chat-panel-root #chat-header-account-caption {
-      max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-      border: 0; padding: 0; background: transparent; font: inherit; text-align: left;
-      font-size: .85em; line-height: 1.4; color: ${theme.textSecondary}; opacity: 1;
+    .chat-panel-root #chat-header-login:hover { background: ${theme.hoverBg}; }
+    .chat-panel-root #chat-session-actions { display: flex; gap: 2px; flex-shrink: 0; }
+    .chat-panel-root #chat-account-area {
+      display: flex; align-items: center; justify-content: flex-start; gap: 4px;
+      min-width: 0; flex: 0 1 auto; flex-wrap: wrap; align-self: stretch;
+      margin-inline-start: 8px;
+    }
+    .chat-panel-root #chat-account-quota {
+      display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap;
+      gap: 3px 6px; min-width: 0; align-self: stretch;
+    }
+    .chat-panel-root #chat-quota-popover {
+      visibility: hidden; position: absolute; left: 0; right: 0; bottom: calc(100% - 5px);
+      z-index: 10005; padding: 12px; border: 1px solid ${theme.borderColor};
+      border-radius: 9px; background: ${theme.dropdownBg}; color: ${theme.textPrimary};
+      box-shadow: 0 4px 16px rgba(0,0,0,.12); font-size: .85em; line-height: 1.6;
+      max-height: min(360px, 60vh); overflow-y: auto; overflow-wrap: anywhere;
+    }
+    .chat-panel-root #chat-account-quota[data-available="true"]:not([data-dismissed]):hover #chat-quota-popover {
+      visibility: visible; transition: visibility 0s linear 0.3s;
+    }
+    .chat-panel-root #chat-account-quota[data-available="true"]:not([data-dismissed]):focus-within #chat-quota-popover {
+      visibility: visible; transition: none;
+    }
+    .chat-panel-root .chat-quota-section + .chat-quota-section {
+      margin-top: 10px; padding-top: 10px; border-top: 1px solid ${theme.borderColor};
+    }
+    .chat-panel-root .chat-quota-heading { font-weight: 600; margin-bottom: 4px; }
+    .chat-panel-root #chat-quota-subscription-details { white-space: pre-line; color: ${theme.textSecondary}; }
+    .chat-panel-root #chat-quota-wallet-details { color: ${theme.textSecondary}; font-variant-numeric: tabular-nums;
+    }
+    .chat-panel-root #chat-account-balance {
+      flex: 0 0 auto; width: max-content; min-width: max-content; white-space: nowrap;
+      border: 0; padding: 2px 0; background: transparent; font: inherit; text-align: left;
+      font-size: .8em; line-height: 1.4; color: ${theme.textSecondary}; opacity: 1;
       cursor: default; font-variant-numeric: tabular-nums;
     }
-    .chat-panel-root #chat-header-account-caption:not(:disabled) { cursor: pointer; }
-    .chat-panel-root #chat-header-account-caption:not(:disabled):hover { text-decoration: underline; }
-    .chat-panel-root #chat-header-account-caption[data-low-balance="true"] {
+    .chat-panel-root #chat-account-balance:not(:disabled) { cursor: pointer; }
+    .chat-panel-root #chat-account-balance:not(:disabled):hover { text-decoration: underline; }
+    .chat-panel-root #chat-account-balance[data-low-balance="true"] {
       color: ${theme.containerBg === "#1e1e1e" ? "#fca5a5" : "#b42318"};
     }
     .chat-panel-root #chat-checkin-btn {
-      align-items: center; justify-content: center; min-height: 26px;
-      padding: 3px 9px; border: 1px solid ${theme.borderColor}; border-radius: 6px;
-      background: transparent; color: ${theme.textSecondary}; font: inherit;
-      font-size: .85em; line-height: 1.4; flex-shrink: 0;
+      align-items: center; justify-content: center; min-height: 22px;
+      padding: 2px 4px; border: 0; border-radius: 4px;
+      background: ${theme.buttonBg}; color: ${theme.textSecondary}; font: inherit;
+      font-size: .8em; line-height: 1.4; flex-shrink: 0;
     }
     .chat-panel-root #chat-checkin-btn:hover:not(:disabled) { background: ${theme.hoverBg}; }
     .chat-panel-root #chat-checkin-btn:disabled { border-color: transparent; }
-    .chat-panel-root #chat-user-bar {
-      padding: 0 8px 10px; margin: 0; min-width: 0;
-      background: transparent !important; color: ${theme.textSecondary} !important;
-    }
-    .chat-panel-root #chat-user-usage-row {
-      align-items: flex-start; flex-direction: column; gap: 8px;
-    }
-    .chat-panel-root #chat-user-balance { font-variant-numeric: tabular-nums; font-size: 1em !important; }
     .chat-panel-root #chat-user-subscription { min-width: 64px; }
     .chat-panel-root #chat-user-subscription-progress { height: 3px !important; }
     .chat-panel-root #chat-balance-warning {
@@ -167,32 +247,6 @@ export function getChatChromeStyles(theme: ThemeColors): string {
       font: inherit; font-size: .92em; line-height: 1.5; text-align: left; cursor: pointer;
     }
     .chat-panel-root #chat-balance-warning-button:hover { text-decoration: underline; }
-    .chat-panel-root #chat-account-menu { flex-shrink: 0; margin-left: auto; }
-    .chat-panel-root #chat-account-trigger {
-      display: flex; align-items: center; justify-content: center; list-style: none;
-      width: 26px; height: 26px; border-radius: 50%; cursor: pointer;
-      background: ${theme.buttonBg};
-    }
-    .chat-panel-root #chat-account-trigger::-webkit-details-marker { display: none; }
-    .chat-panel-root #chat-account-trigger img { width: 19px; height: 19px; }
-    .chat-panel-root #chat-account-panel {
-      position: absolute; right: 10px; top: 100%; z-index: 10004;
-      width: 220px; max-width: calc(100% - 20px); box-sizing: border-box;
-      padding: 8px; border-radius: 10px; border: 1px solid ${theme.borderColor};
-      background: ${theme.dropdownBg}; color: ${theme.textPrimary};
-      box-shadow: 0 8px 24px rgba(0,0,0,.12);
-    }
-    .chat-panel-root #chat-account-details {
-      padding-bottom: 0; margin-bottom: 0;
-    }
-    .chat-panel-root #chat-user-name { display: block; padding: 8px; }
-    .chat-panel-root #chat-account-panel button {
-      width: 100% !important; height: auto !important; min-height: 32px;
-      padding: 7px 8px !important; gap: 8px; justify-content: flex-start !important;
-      text-align: left; border: 0 !important; border-radius: 5px !important;
-      background: transparent !important; color: ${theme.textSecondary} !important;
-      font: inherit;
-    }
     .chat-panel-root #chat-session-actions button,
     .chat-panel-root #chat-toolbar button {
       display: flex; align-items: center; justify-content: center;
@@ -222,9 +276,7 @@ export function getChatChromeStyles(theme: ThemeColors): string {
     .chat-panel-root #chat-utility-actions { display: flex; flex-shrink: 0; gap: 2px; }
     .chat-panel-root #chat-session-actions button:hover,
     .chat-panel-root #chat-toolbar button:hover:not(:disabled),
-    .chat-panel-root #chat-utility-actions button:hover,
-    .chat-panel-root #chat-account-panel button:hover,
-    .chat-panel-root #chat-account-trigger:hover {
+    .chat-panel-root #chat-utility-actions button:hover {
       background: ${theme.hoverBg} !important;
     }
     .chat-panel-root button:focus-visible,
@@ -280,7 +332,7 @@ export function getChatChromeStyles(theme: ThemeColors): string {
     .chat-panel-root #chat-toolbar-secondary-actions {
       border-top: 1px solid ${theme.borderColor}; margin-top: 4px; padding-top: 4px;
     }
-    .chat-panel-root #chat-footer { padding-top: 5px; }
+    .chat-panel-root #chat-footer { position: relative; padding-top: 5px; width: 100%; flex: none !important; }
     .chat-panel-root #chat-utility-actions { margin-left: auto; align-items: center; }
     .chat-panel-root #chat-tools-trigger,
     .chat-panel-root #chat-model-selector-btn,

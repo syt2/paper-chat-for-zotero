@@ -331,13 +331,6 @@ export function applyThemeToContainer(container: HTMLElement): void {
     mentionPopup.style.borderColor = theme.borderColor;
   }
 
-  // User bar
-  const userBar = container.querySelector("#chat-user-bar") as HTMLElement;
-  if (userBar) {
-    userBar.style.background = theme.userBubbleBg;
-    userBar.style.color = theme.userBubbleText;
-  }
-
   // Send button
   const sendButton = container.querySelector(
     "#chat-send-button",

@@ -15,6 +15,7 @@ import {
   updateConversationNoteSummaryButton,
   updatePresentationButtonAvailability,
   updateUserBarDisplay,
+  createLoginButtonHandler,
   refreshCheckinDisplay,
 } from "../src/modules/ui/chat-panel/ChatPanelEvents.ts";
 import { getProviderManager } from "../src/modules/providers/ProviderManager.ts";
@@ -146,7 +147,58 @@ describe("chat panel presentation toolbar entry", function () {
     runtime.ztoolkit = previousToolkit;
   });
 
-  it("updates account warnings and the header login action when authentication or provider changes", function () {
+  it("keeps login clickable to raise the pending dialog without duplicating completion or errors", async function () {
+    const container = createChatContainer(
+      new FakeDocument() as unknown as Document,
+      lightTheme,
+    );
+    const button = container.querySelector(
+      "#chat-account-balance",
+    ) as HTMLButtonElement;
+    button.disabled = false;
+    let rejectDialog!: (error: Error) => void;
+    const pending = new Promise<boolean>((_resolve, reject) => {
+      rejectDialog = reject;
+    });
+    let opens = 0;
+    let updates = 0;
+    const errors: string[] = [];
+    const context = {
+      container,
+      authManager: {} as Parameters<
+        typeof createLoginButtonHandler
+      >[0]["authManager"],
+      updateUserBar: () => {
+        updates++;
+      },
+      appendError: (message: string) => {
+        errors.push(message);
+      },
+    };
+    const login = createLoginButtonHandler(context, () => {
+      opens++;
+      return opens <= 2 ? pending : Promise.resolve(false);
+    });
+    const first = login();
+    assert.isFalse(button.disabled);
+    assert.equal(button.getAttribute("aria-busy"), "true");
+    await login();
+    assert.equal(
+      opens,
+      2,
+      "a repeat click must reach the dialog singleton to focus its window",
+    );
+    rejectDialog(new Error("Dialog test failure"));
+    await first;
+    assert.deepEqual(errors, ["Dialog test failure"]);
+    assert.equal(updates, 1);
+    assert.isNull(button.getAttribute("aria-busy"));
+    await login();
+    assert.equal(opens, 3);
+    assert.equal(updates, 2);
+  });
+
+  it("updates account warnings and the footer login action when authentication or provider changes", function () {
     const container = createChatContainer(
       new FakeDocument() as unknown as Document,
       lightTheme,
@@ -168,27 +220,31 @@ describe("chat panel presentation toolbar entry", function () {
         "#chat-balance-warning",
       ) as HTMLElement;
       const account = container.querySelector(
-        "#chat-header-account",
+        "#chat-account-area",
       ) as HTMLElement;
-      const menu = container.querySelector(
-        "#chat-account-menu",
-      ) as HTMLDetailsElement;
       const caption = container.querySelector(
-        "#chat-header-account-caption",
+        "#chat-account-balance",
       ) as HTMLButtonElement;
+      const headerLogin = container.querySelector(
+        "#chat-header-login",
+      ) as HTMLButtonElement;
+      assert.equal(
+        headerLogin.parentElement,
+        container.querySelector("#chat-header"),
+      );
       assert.equal(caption.tagName.toLowerCase(), "button");
       assert.equal(caption.getAttribute("type"), "button");
       updateUserBarDisplay(container, auth);
       assert.equal(warning.style.display, "block");
       assert.equal(account.style.display, "flex");
+      assert.equal(headerLogin.style.display, "none");
+      assert.isTrue(headerLogin.disabled);
       assert.isFalse(caption.disabled);
       assert.equal(caption.getAttribute("data-low-balance"), "true");
-      menu.open = true;
       provider = "openai";
       updateUserBarDisplay(container, auth);
       assert.equal(account.style.display, "none");
       assert.equal(warning.style.display, "none");
-      assert.isFalse(menu.open);
       assert.isTrue(caption.disabled);
       provider = "paperchat";
       updateUserBarDisplay(container, auth);
@@ -198,6 +254,8 @@ describe("chat panel presentation toolbar entry", function () {
       updateUserBarDisplay(container, auth);
       assert.equal(account.style.display, "flex");
       assert.equal(caption.textContent, "paperchat-user-panel-login-btn");
+      assert.equal(headerLogin.style.display, "inline-flex");
+      assert.isFalse(headerLogin.disabled);
       assert.isFalse(caption.disabled);
       assert.equal(warning.style.display, "none");
       assert.equal(
@@ -209,12 +267,20 @@ describe("chat panel presentation toolbar entry", function () {
       updateUserBarDisplay(container, auth);
       assert.equal(account.style.display, "none");
       assert.isTrue(caption.disabled);
+      assert.equal(headerLogin.style.display, "none");
+      assert.isTrue(headerLogin.disabled);
+      provider = "paperchat";
+      updateUserBarDisplay(container, auth);
+      assert.equal(headerLogin.style.display, "inline-flex");
+      loggedIn = true;
+      updateUserBarDisplay(container, auth);
+      assert.equal(headerLogin.style.display, "none");
     } finally {
       manager.getActiveProviderId = original;
     }
   });
 
-  it("keeps header subscription and wallet visibility aligned with the original user bar", function () {
+  it("keeps footer subscription and wallet visibility aligned with the original thresholds", function () {
     const container = createChatContainer(
       new FakeDocument() as unknown as Document,
       lightTheme,
@@ -242,26 +308,45 @@ describe("chat panel presentation toolbar entry", function () {
     const subscription = container.querySelector(
       "#chat-user-subscription",
     ) as HTMLElement;
-    const header = container.querySelector(
-      "#chat-header-account",
-    ) as HTMLElement;
+    const header = container.querySelector("#chat-account-area") as HTMLElement;
     const wallet = container.querySelector(
-      "#chat-header-account-caption",
+      "#chat-account-balance",
     ) as HTMLButtonElement;
-    const menuWallet = container.querySelector(
-      "#chat-user-balance",
-    ) as HTMLElement;
     const warning = container.querySelector(
       "#chat-balance-warning",
     ) as HTMLElement;
     try {
-      assert.equal(subscription.parentElement, header);
+      assert.equal(
+        header.parentElement,
+        container.querySelector("#chat-footer"),
+      );
+      assert.equal(
+        subscription.parentElement,
+        container.querySelector("#chat-account-quota"),
+      );
+      assert.isNull(container.querySelector("#chat-account-trigger"));
+      assert.isNull(container.querySelector("#chat-user-action-btn"));
       updateUserBarDisplay(container, auth);
       assert.equal(subscription.style.display, "flex");
       assert.equal(subscription.getAttribute("role"), "button");
       assert.equal(subscription.getAttribute("tabindex"), "0");
       assert.equal(wallet.style.display, "none");
-      assert.equal(menuWallet.style.display, "none");
+      const quota = container.querySelector(
+        "#chat-account-quota",
+      ) as HTMLElement;
+      const plans = container.querySelector(
+        "#chat-quota-subscription-details",
+      ) as HTMLElement;
+      const permanent = container.querySelector(
+        "#chat-quota-wallet-details",
+      ) as HTMLElement;
+      assert.equal(quota.getAttribute("data-available"), "true");
+      assert.isNotEmpty(plans.textContent || "");
+      assert.isNotEmpty(permanent.textContent || "");
+      assert.equal(
+        subscription.getAttribute("aria-describedby"),
+        "chat-quota-popover",
+      );
       assert.equal(warning.style.display, "none");
       usage = {
         ...usage,
@@ -272,9 +357,8 @@ describe("chat panel presentation toolbar entry", function () {
       updateUserBarDisplay(container, auth);
       assert.notEqual(wallet.style.display, "none");
       assert.isFalse(wallet.disabled);
-      assert.equal(menuWallet.getAttribute("role"), "button");
-      assert.notEqual(menuWallet.style.display, "none");
-      assert.equal(warning.style.display, "block");
+      assert.equal(warning.style.display, "none");
+      assert.equal(wallet.getAttribute("data-low-balance"), "false");
       assert.equal(
         subscription.getAttribute("data-subscription-limit-clickable"),
         "true",
@@ -287,9 +371,16 @@ describe("chat panel presentation toolbar entry", function () {
         ).style.width,
         "99%",
       );
+      usage = { ...usage, amountRemaining: 9_999 };
+      updateUserBarDisplay(container, auth);
+      assert.equal(warning.style.display, "block");
+      assert.equal(wallet.getAttribute("data-low-balance"), "true");
       provider = "deepseek";
       updateUserBarDisplay(container, auth);
       assert.equal(header.style.display, "none");
+      assert.equal(quota.getAttribute("data-available"), "false");
+      assert.equal(permanent.textContent, "");
+      assert.equal(plans.textContent, "");
       assert.equal(warning.style.display, "none");
       provider = "paperchat";
       usage = null;
@@ -302,8 +393,11 @@ describe("chat panel presentation toolbar entry", function () {
         subscription.getAttribute("data-subscription-limit-clickable"),
       );
       assert.notEqual(wallet.style.display, "none");
+      assert.equal(plans.textContent, "paperchat-chat-quota-no-subscriptions");
       loggedIn = false;
       updateUserBarDisplay(container, auth);
+      assert.equal(quota.getAttribute("data-available"), "false");
+      assert.isNull(wallet.getAttribute("aria-describedby"));
       assert.isFalse(wallet.disabled);
       assert.equal(subscription.style.display, "none");
       assert.equal(warning.style.display, "none");
@@ -351,10 +445,10 @@ describe("chat panel presentation toolbar entry", function () {
     const now = Date.UTC(2026, 8, 6);
     const lines = getSubscriptionUsageTooltip(usage, now).split("\n");
     assert.lengthOf(lines, 2);
-    assert.include(lines[0], "6 | 5.0K | 5.0K | 0");
+    assert.include(lines[0], "6 | 5.0K | 5.0K");
     assert.include(lines[0], "paperchat-chat-subscription-in-days: 1");
     assert.include(lines[0], "paperchat-chat-subscription-in-days: 365");
-    assert.include(lines[1], "7 | 4.0M | 4.0M | 0");
+    assert.include(lines[1], "7 | 4.0M | 4.0M");
     assert.include(lines[1], "paperchat-chat-subscription-no-reset");
     assert.include(lines[1], "paperchat-chat-subscription-unknown-expiry");
     for (const [remaining, expected] of [
@@ -477,7 +571,7 @@ describe("chat panel presentation toolbar entry", function () {
     assert.strictEqual(footer?.parentElement, composer?.parentElement);
     assert.deepEqual(
       footer?.children.map((child) => child.getAttribute("id")),
-      ["chat-session-actions", "chat-utility-actions"],
+      ["chat-session-actions", "chat-account-area", "chat-utility-actions"],
     );
     const utilities = container.querySelector("#chat-utility-actions");
     assert.deepEqual(

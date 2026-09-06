@@ -71,7 +71,11 @@ paperchat-user-checked-in = ✓ 已签到
 # Balance display in sidebar
 paperchat-sidebar-balance = Token余额: { $balance }
 paperchat-chat-header-balance = 余额 { $balance }
-paperchat-chat-subscription-detail = 套餐 #{ $plan } · 剩余 { $remaining } / { $total } · 已用 { $used } · 重置：{ $reset } · 到期：{ $expires }
+paperchat-chat-quota-subscriptions = 订阅额度
+paperchat-chat-quota-wallet = 永久 Token 余额
+paperchat-chat-quota-no-subscriptions = 暂无有效订阅
+paperchat-chat-quota-wallet-remaining = 剩余 { $balance } Token
+paperchat-chat-subscription-detail = 套餐 #{ $plan } · 剩余 { $remaining } / { $total } · 重置：{ $reset } · 到期：{ $expires }
 paperchat-chat-subscription-no-reset = 不自动重置
 paperchat-chat-subscription-in-days = { $count } 天后
 paperchat-chat-subscription-in-hours = { $count } 小时后

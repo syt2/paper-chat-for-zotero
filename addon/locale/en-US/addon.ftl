@@ -71,7 +71,11 @@ paperchat-user-checked-in = ✓ Checked In
 # Balance display in sidebar
 paperchat-sidebar-balance = Token Balance: { $balance }
 paperchat-chat-header-balance = Balance { $balance }
-paperchat-chat-subscription-detail = Plan #{ $plan } · Remaining { $remaining } / { $total } · Used { $used } · Resets: { $reset } · Expires: { $expires }
+paperchat-chat-quota-subscriptions = Subscriptions
+paperchat-chat-quota-wallet = Permanent token balance
+paperchat-chat-quota-no-subscriptions = No active subscriptions
+paperchat-chat-quota-wallet-remaining = { $balance } tokens remaining
+paperchat-chat-subscription-detail = Plan #{ $plan } · Remaining { $remaining } / { $total } · Resets: { $reset } · Expires: { $expires }
 paperchat-chat-subscription-no-reset = No automatic reset
 paperchat-chat-subscription-in-days = In { $count } days
 paperchat-chat-subscription-in-hours = In { $count } hours
