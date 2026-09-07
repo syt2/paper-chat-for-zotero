@@ -188,6 +188,13 @@ export function getChatChromeStyles(theme: ThemeColors): string {
     }
     .chat-panel-root #chat-header-login:hover { background: ${theme.hoverBg}; }
     .chat-panel-root #chat-session-actions { display: flex; gap: 2px; flex-shrink: 0; }
+    .chat-panel-root #chat-history-btn { position: relative; }
+    .chat-panel-root .chat-unread-dot {
+      position: absolute; width: 6px; height: 6px; border-radius: 50%;
+      background: #16a34a; pointer-events: none;
+    }
+    .chat-panel-root #chat-history-btn > .chat-unread-dot { top: 2px; right: 2px; }
+    .chat-panel-root [data-history-session-id] > .chat-unread-dot { top: 18px; left: 4px; }
     .chat-panel-root #chat-account-area {
       display: flex; align-items: center; justify-content: flex-start; gap: 4px;
       min-width: 0; flex: 0 1 auto; flex-wrap: wrap; align-self: stretch;

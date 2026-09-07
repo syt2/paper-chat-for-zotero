@@ -15,6 +15,7 @@ import {
   setupHistoryDropdownSearch,
   setupClickOutsideHandler,
   toggleHistoryDropdown,
+  updateHistoryUnreadIndicators,
 } from "./HistoryDropdown";
 import { showAuthDialog } from "../AuthDialog";
 import { getCurrentPresentationPaper } from "../../presentation/PresentationEntry";
@@ -908,6 +909,16 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
 
   // History dropdown state
   const historyState = createHistoryDropdownState();
+  disposers.push(
+    chatManager.subscribeRunActivity((activity) => {
+      updateHistoryUnreadIndicators(
+        container,
+        historyState,
+        activity.unreadSessionIds,
+        activity.hasUnseenCompletion,
+      );
+    }),
+  );
   let historySearchDisposer: (() => void) | null = null;
   const historyIntegration = { disposed: false };
   let historyBackfillStarted = false;
@@ -1564,6 +1575,7 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
 
   // History button - toggle dropdown with pagination
   historyBtn?.addEventListener("click", async () => {
+    chatManager.acknowledgeRunCompletion();
     ztoolkit.log("History button clicked");
     if (!historyDropdown) return;
 

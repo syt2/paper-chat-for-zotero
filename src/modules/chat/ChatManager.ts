@@ -285,6 +285,7 @@ function messagesRequireVision(messages: readonly ChatMessage[]): boolean {
 export interface ChatRunActivity {
   runningCount: number;
   hasUnseenCompletion: boolean;
+  unreadSessionIds: readonly string[];
 }
 
 export class ChatManager {
@@ -305,7 +306,10 @@ export class ChatManager {
   private sessionRunCounters = new Map<string, number>();
   private activeSessionRunIds = new Map<string, number>();
   private runActivityListeners?: Set<(activity: ChatRunActivity) => void>;
-  private hasUnseenRunCompletion = false;
+  private unreadCompletedSessions?: Set<string>;
+  // Entry notifications can be acknowledged without reading their sessions.
+  private unacknowledgedCompletions?: Set<string>;
+  private getVisibleSessionId?: () => string | null;
   private activeSessionAbortControllers = new Map<
     string,
     ManagedAbortController
@@ -825,7 +829,7 @@ export class ChatManager {
     this.activeSessionRunIds.delete(session.id);
     this.activeSessionAbortControllers.delete(session.id);
     this.streamingSessions.delete(session.id);
-    this.hasUnseenRunCompletion = true;
+    this.markSessionCompletion(session.id);
     this.notifyRunActivity();
   }
 
@@ -843,7 +847,7 @@ export class ChatManager {
     }
     if (wasRunning) {
       if (options?.notifyCompletion) {
-        this.hasUnseenRunCompletion = true;
+        this.markSessionCompletion(sessionId);
       }
       this.notifyRunActivity();
     }
@@ -852,7 +856,8 @@ export class ChatManager {
   getRunActivity(): ChatRunActivity {
     return {
       runningCount: this.activeSessionRunIds.size,
-      hasUnseenCompletion: this.hasUnseenRunCompletion === true,
+      hasUnseenCompletion: (this.unacknowledgedCompletions?.size ?? 0) > 0,
+      unreadSessionIds: [...(this.unreadCompletedSessions || [])],
     };
   }
 
@@ -866,8 +871,29 @@ export class ChatManager {
     return () => this.runActivityListeners?.delete(listener);
   }
 
+  setVisibleSessionResolver(resolver: (() => string | null) | undefined): void {
+    this.getVisibleSessionId = resolver;
+  }
+
+  private markSessionCompletion(sessionId: string): void {
+    if (this.getVisibleSessionId?.() !== sessionId) {
+      this.unreadCompletedSessions ??= new Set();
+      this.unreadCompletedSessions.add(sessionId);
+      this.unacknowledgedCompletions ??= new Set();
+      this.unacknowledgedCompletions.add(sessionId);
+    }
+  }
+
+  markSessionRead(sessionId: string): void {
+    this.unacknowledgedCompletions?.delete(sessionId);
+    if (this.unreadCompletedSessions?.delete(sessionId)) {
+      this.notifyRunActivity();
+    }
+  }
+
   acknowledgeRunCompletion(): void {
-    this.hasUnseenRunCompletion = false;
+    if (!this.unacknowledgedCompletions?.size) return;
+    this.unacknowledgedCompletions.clear();
     this.notifyRunActivity();
   }
 
@@ -1394,6 +1420,7 @@ export class ChatManager {
     // denying them before the delete would leave approvals killed while the
     // session still exists on disk.
     await this.sessionStorage.deleteSession(sessionId);
+    this.markSessionRead(sessionId);
     clearOpenAIResponsesStateForSession(sessionId);
 
     getToolPermissionManager().denyPendingApprovals({
@@ -3764,6 +3791,7 @@ export class ChatManager {
 
     await this.sessionStorage.deleteAllMessages(clearedSession.id);
     await this.sessionStorage.updateSessionMeta(clearedSession);
+    this.markSessionRead(clearedSession.id);
     this.onExecutionPlanUpdate?.(clearedSession.executionPlan);
     this.onMessageUpdate?.(clearedSession.messages);
 
@@ -3911,7 +3939,9 @@ export class ChatManager {
     }
     this.sessionRunCounters.clear();
     this.activeSessionRunIds.clear();
-    this.hasUnseenRunCompletion = false;
+    this.unreadCompletedSessions?.clear();
+    this.unacknowledgedCompletions?.clear();
+    this.getVisibleSessionId = undefined;
     this.notifyRunActivity();
     this.runActivityListeners?.clear();
     this.activeSessionAbortControllers.clear();

@@ -2266,6 +2266,20 @@ export function isPanelShown(): boolean {
   }
 }
 
+function getVisibleChatSessionId(): string | null {
+  if (!isPanelShown()) return null;
+  const container =
+    currentPanelMode === "sidebar" ? chatContainer : floatingContainer;
+  return container?.isConnected
+    ? container.dataset.displayedSessionId || null
+    : null;
+}
+
+function markVisibleChatSessionRead(): void {
+  const sessionId = getVisibleChatSessionId();
+  if (sessionId) getChatManager().markSessionRead(sessionId);
+}
+
 function trackChatPanelClosed(): void {
   if (panelVisibleSince == null) {
     return;
@@ -2702,6 +2716,7 @@ export function hidePanel(): void {
  * Update toolbar button pressed state
  */
 function updateToolbarButtonState(pressed: boolean): void {
+  if (pressed) markVisibleChatSessionRead();
   const doc = Zotero.getMainWindow().document;
   const button = doc.getElementById(
     `${config.addonRef}-toolbar-button`,
@@ -2885,6 +2900,7 @@ function ensureReadingLoopIndicatorStyles(doc: Document): void {
 }
 
 function ensureReadingLoopToolbarSubscription(): void {
+  getChatManager().setVisibleSessionResolver(getVisibleChatSessionId);
   chatRunToolbarUnsubscribe?.();
   chatRunToolbarUnsubscribe = getChatManager().subscribeRunActivity(
     updateToolbarEntryIndicator,
@@ -3535,6 +3551,8 @@ function createContext(container: HTMLElement): ChatPanelContext {
             ? session?.lastRetryableErrorMessageId
             : undefined);
         if (chatHistory) {
+          container.dataset.displayedSessionId = session?.id || "";
+          markVisibleChatSessionRead();
           renderMessageElementsWithMarkdownActions(
             chatHistory,
             emptyState,

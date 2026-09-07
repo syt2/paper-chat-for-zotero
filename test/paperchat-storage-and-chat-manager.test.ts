@@ -160,7 +160,7 @@ describe("paperchat storage and chat manager", function () {
     return manager;
   }
 
-  it("keeps background runs active when the toolbar is acknowledged", function () {
+  it("keeps background runs active when a completed session is read", function () {
     const manager = createRunActivityManager();
     const first = { id: "background-first" };
     const second = { id: "background-second" };
@@ -174,26 +174,95 @@ describe("paperchat storage and chat manager", function () {
     assert.deepEqual(manager.getRunActivity(), {
       runningCount: 1,
       hasUnseenCompletion: true,
+      unreadSessionIds: [first.id],
     });
-    manager.acknowledgeRunCompletion();
+    manager.markSessionRead(first.id);
     assert.deepEqual(manager.getRunActivity(), {
       runningCount: 1,
       hasUnseenCompletion: false,
+      unreadSessionIds: [],
     });
     manager.completeSessionRun(second, secondRun.runId);
     assert.deepEqual(manager.getRunActivity(), {
       runningCount: 0,
       hasUnseenCompletion: true,
+      unreadSessionIds: [second.id],
     });
-    manager.acknowledgeRunCompletion();
+    manager.markSessionRead(second.id);
     assert.deepEqual(manager.getRunActivity(), {
       runningCount: 0,
       hasUnseenCompletion: false,
+      unreadSessionIds: [],
     });
     const count = updates.length;
     unsubscribe();
     manager.beginSessionRun(first);
     assert.lengthOf(updates, count);
+  });
+
+  it("acknowledges entry notifications without reading sessions and notifies again for a new round", function () {
+    const manager = createRunActivityManager();
+    const complete = (id: string) => {
+      const session = { id };
+      const run = manager.beginSessionRun(session);
+      manager.completeSessionRun(session, run.runId);
+    };
+    complete("A");
+    complete("B");
+    assert.isTrue(manager.getRunActivity().hasUnseenCompletion);
+    manager.acknowledgeRunCompletion();
+    assert.deepEqual(manager.getRunActivity(), {
+      runningCount: 0,
+      hasUnseenCompletion: false,
+      unreadSessionIds: ["A", "B"],
+    });
+    const a2 = manager.beginSessionRun({ id: "A" });
+    manager.acknowledgeRunCompletion();
+    assert.equal(manager.getRunActivity().runningCount, 1);
+    assert.isFalse(manager.getRunActivity().hasUnseenCompletion);
+    manager.completeSessionRun({ id: "A" }, a2.runId);
+    assert.isTrue(manager.getRunActivity().hasUnseenCompletion);
+    assert.deepEqual(manager.getRunActivity().unreadSessionIds, ["A", "B"]);
+    manager.acknowledgeRunCompletion();
+    complete("C");
+    assert.isTrue(manager.getRunActivity().hasUnseenCompletion);
+    manager.markSessionRead("C");
+    assert.isFalse(manager.getRunActivity().hasUnseenCompletion);
+    assert.deepEqual(manager.getRunActivity().unreadSessionIds, ["A", "B"]);
+  });
+
+  it("tracks unread completions per session and excludes the visible conversation", function () {
+    const manager = createRunActivityManager();
+    let visible: string | null = "visible";
+    manager.setVisibleSessionResolver(() => visible);
+    const complete = (id: string) => {
+      const session = { id };
+      const run = manager.beginSessionRun(session);
+      manager.completeSessionRun(session, run.runId);
+    };
+    complete("visible");
+    assert.isFalse(manager.getRunActivity().hasUnseenCompletion);
+    complete("background-a");
+    complete("background-b");
+    assert.deepEqual(manager.getRunActivity().unreadSessionIds, [
+      "background-a",
+      "background-b",
+    ]);
+    manager.markSessionRead("visible");
+    assert.lengthOf(manager.getRunActivity().unreadSessionIds, 2);
+    manager.markSessionRead("background-a");
+    assert.deepEqual(manager.getRunActivity().unreadSessionIds, [
+      "background-b",
+    ]);
+    visible = null; // A hidden panel must not mark the selected session as read.
+    complete("visible");
+    assert.deepEqual(manager.getRunActivity().unreadSessionIds, [
+      "background-b",
+      "visible",
+    ]);
+    manager.markSessionRead("background-b");
+    manager.markSessionRead("visible");
+    assert.isFalse(manager.getRunActivity().hasUnseenCompletion);
   });
 
   it("does not let an invalidated run clear a newer run or restore its badge", function () {
@@ -204,19 +273,22 @@ describe("paperchat storage and chat manager", function () {
     assert.deepEqual(manager.getRunActivity(), {
       runningCount: 0,
       hasUnseenCompletion: false,
+      unreadSessionIds: [],
     });
     const newRun = manager.beginSessionRun(session);
     manager.completeSessionRun(session, oldRun.runId);
     assert.deepEqual(manager.getRunActivity(), {
       runningCount: 1,
       hasUnseenCompletion: false,
+      unreadSessionIds: [],
     });
     manager.invalidateSessionRun(session.id, { notifyCompletion: true });
     assert.deepEqual(manager.getRunActivity(), {
       runningCount: 0,
       hasUnseenCompletion: true,
+      unreadSessionIds: [session.id],
     });
-    manager.acknowledgeRunCompletion();
+    manager.markSessionRead(session.id);
     manager.completeSessionRun(session, newRun.runId);
     assert.isFalse(manager.getRunActivity().hasUnseenCompletion);
   });
@@ -6226,6 +6298,7 @@ describe("paperchat storage and chat manager", function () {
         assert.deepEqual(manager.getRunActivity(), {
           runningCount: 0,
           hasUnseenCompletion: true,
+          unreadSessionIds: [session.id],
         });
       } finally {
         providerManager.getActiveProviderId = originals.providerId;

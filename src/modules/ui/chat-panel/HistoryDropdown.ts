@@ -30,6 +30,55 @@ const HISTORY_BODY_ID = "chat-history-dropdown-body";
 const HISTORY_SEARCH_INPUT_ID = "chat-history-search-input";
 const HISTORY_SEARCH_CLEAR_BUTTON_ID = "chat-history-search-clear";
 
+function setUnreadIndicator(element: HTMLElement, unread: boolean): void {
+  const existing = element.querySelector(".chat-unread-dot");
+  if (!unread) {
+    existing?.remove();
+  } else if (!existing) {
+    const dot = createElement(
+      element.ownerDocument,
+      "span",
+      {},
+      {
+        title: getString("chat-toolbar-completed"),
+        "aria-label": getString("chat-toolbar-completed"),
+      },
+    );
+    dot.className = "chat-unread-dot";
+    element.appendChild(dot);
+  }
+}
+
+/** Update badges in place without resetting search, pagination or scroll. */
+export function updateHistoryUnreadIndicators(
+  container: HTMLElement,
+  state: HistoryDropdownState,
+  unreadSessionIds: readonly string[],
+  hasUnseenCompletion: boolean,
+): void {
+  state.unreadSessionIds = new Set(unreadSessionIds);
+  const button = container.querySelector<HTMLElement>("#chat-history-btn");
+  if (button) {
+    const unread = hasUnseenCompletion;
+    setUnreadIndicator(button, unread);
+    // Keep the icon's accessible name when its only text is the badge label.
+    button.setAttribute(
+      "aria-label",
+      unread
+        ? `${getString("chat-history")} · ${getString("chat-toolbar-completed")}`
+        : getString("chat-history"),
+    );
+  }
+  for (const item of Array.from(
+    container.querySelectorAll("[data-history-session-id]"),
+  ) as HTMLElement[]) {
+    setUnreadIndicator(
+      item,
+      state.unreadSessionIds.has(item.getAttribute("data-history-session-id")!),
+    );
+  }
+}
+
 /**
  * Format timestamp to display string
  */
@@ -204,6 +253,7 @@ export function createSessionItem(
   onSelect: (session: SessionInfo) => void,
   onDelete?: (session: SessionInfo) => void,
   onEditTitle?: (session: SessionInfo, title: string | null) => Promise<void>,
+  unread = false,
 ): HTMLElement {
   const sessionItem = createElement(doc, "div", {
     padding: "12px 14px",
@@ -212,6 +262,8 @@ export function createSessionItem(
     transition: "background 0.2s",
     position: "relative",
   });
+  sessionItem.setAttribute("data-history-session-id", session.id);
+  setUnreadIndicator(sessionItem, unread);
 
   // Edit button (hidden by default, shown on hover)
   const editBtn = createElement(doc, "button", {
@@ -679,11 +731,14 @@ function renderSearchGroup(
   actionsDisabled: boolean,
 ): void {
   const wrapper = createElement(doc, "section", {
+    position: "relative",
     padding: "10px 8px 12px",
     borderBottom: `1px solid ${theme.borderColor}`,
   });
   wrapper.className = "history-search-group";
   wrapper.setAttribute("data-session-id", group.sessionId);
+  wrapper.setAttribute("data-history-session-id", group.sessionId);
+  setUnreadIndicator(wrapper, state.unreadSessionIds.has(group.sessionId));
 
   const header = createElement(doc, "div", {
     display: "grid",
@@ -771,6 +826,7 @@ function renderSearchGroup(
  * State for history dropdown pagination
  */
 export interface HistoryDropdownState {
+  unreadSessionIds: ReadonlySet<string>;
   allSessions: SessionInfo[];
   displayedCount: number;
   query: string;
@@ -792,6 +848,7 @@ export interface HistoryDropdownState {
  */
 export function createHistoryDropdownState(): HistoryDropdownState {
   return {
+    unreadSessionIds: new Set(),
     allSessions: [],
     displayedCount: 0,
     query: "",
@@ -1384,6 +1441,7 @@ export function renderMoreSessions(
         onSelect,
         onDelete,
         onEditTitle,
+        state.unreadSessionIds.has(state.allSessions[i].id),
       ),
     );
   }

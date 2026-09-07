@@ -12,6 +12,7 @@ import {
   positionHistoryDropdown,
   renderHistorySearchResults,
   setupHistoryDropdownSearch,
+  updateHistoryUnreadIndicators,
   type HistoryDropdownSearchCallbacks,
 } from "../src/modules/ui/chat-panel/HistoryDropdown.ts";
 import type { SessionInfo } from "../src/modules/ui/chat-panel/types.ts";
@@ -152,6 +153,9 @@ class FakeElement extends FakeNode {
   querySelectorAll(selector: string): FakeElement[] {
     const matches: FakeElement[] = [];
     const matchesSelector = (element: FakeElement) => {
+      if (selector.startsWith("[") && selector.endsWith("]")) {
+        return element.getAttribute(selector.slice(1, -1)) !== null;
+      }
       if (selector.startsWith("#")) {
         return element.getAttribute("id") === selector.slice(1);
       }
@@ -485,6 +489,69 @@ describe("history dropdown grouped search UI", function () {
     assert.equal(container.textContent, unsafe);
     assert.isNull(container.querySelector("img"));
     assert.lengthOf(container.querySelectorAll(".history-search-highlight"), 1);
+  });
+
+  it("keeps unread badges synchronized across history pagination and search", function () {
+    const doc = new FakeDocument();
+    const { dropdown, body } = createShell(doc);
+    const state = createHistoryDropdownState();
+    const button = doc.createElementNS("", "button");
+    button.setAttribute("id", "chat-history-btn");
+    dropdown.appendChild(button);
+    const sessions = Array.from({ length: 21 }, (_, index) => session(index));
+    updateHistoryUnreadIndicators(
+      asElement(dropdown),
+      state,
+      [sessions[0].id, sessions[20].id],
+      true,
+    );
+    populateHistoryDropdown(
+      asElement(dropdown),
+      asDocument(doc),
+      sessions,
+      state,
+      darkTheme,
+      () => {},
+    );
+    assert.lengthOf(button.querySelectorAll(".chat-unread-dot"), 1);
+    assert.lengthOf(body.querySelectorAll(".chat-unread-dot"), 1);
+    body.querySelector(".load-more-btn")!.dispatch("click");
+    assert.lengthOf(body.querySelectorAll(".chat-unread-dot"), 2);
+    const firstRow = body.children[0];
+    body.scrollTop = 80;
+    updateHistoryUnreadIndicators(
+      asElement(dropdown),
+      state,
+      [sessions[20].id],
+      true,
+    );
+    assert.strictEqual(body.children[0], firstRow);
+    assert.equal(body.scrollTop, 80);
+    assert.lengthOf(body.querySelectorAll(".chat-unread-dot"), 1);
+    assert.lengthOf(button.querySelectorAll(".chat-unread-dot"), 1);
+    updateHistoryUnreadIndicators(
+      asElement(dropdown),
+      state,
+      [sessions[20].id],
+      false,
+    );
+    assert.lengthOf(button.querySelectorAll(".chat-unread-dot"), 0);
+    assert.lengthOf(body.querySelectorAll(".chat-unread-dot"), 1);
+    state.query = "topic";
+    state.groups = page("q", sessions[20].id).groups;
+    renderHistorySearchResults(
+      asElement(dropdown),
+      asDocument(doc),
+      state,
+      darkTheme,
+      callbacks(async () => page("q", sessions[20].id)),
+      () => {},
+      () => {},
+    );
+    assert.lengthOf(body.querySelectorAll(".chat-unread-dot"), 1);
+    updateHistoryUnreadIndicators(asElement(dropdown), state, [], false);
+    assert.lengthOf(body.querySelectorAll(".chat-unread-dot"), 0);
+    assert.lengthOf(button.querySelectorAll(".chat-unread-dot"), 0);
   });
 
   it("renders passive groups with separate clickable title and message rows", function () {
