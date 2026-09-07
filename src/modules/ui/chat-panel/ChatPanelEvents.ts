@@ -2321,7 +2321,7 @@ function createTurnRunner(options: {
  * Send a message
  * PDF is automatically detected and attached if the item has a PDF
  */
-async function sendMessage(
+export async function sendMessage(
   context: ChatPanelContext,
   messageInput: HTMLTextAreaElement | null,
   sendButton: HTMLButtonElement | null,
@@ -2526,6 +2526,11 @@ async function sendMessage(
     }
     context.clearAttachments();
     context.updateAttachmentsPreview();
+    // An explicit send resumes following this conversation after reading older
+    // messages. Apply after the composer shrinks; rejected drafts never scroll.
+    if (chatHistory && chatManager.getActiveSession()?.id === session.id) {
+      scrollChatHistoryToBottom(chatHistory);
+    }
   } catch (error) {
     ztoolkit.log("Error in sendMessage:", error);
     context.appendError(error instanceof Error ? error.message : String(error));

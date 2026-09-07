@@ -1904,55 +1904,10 @@ async function refreshChatForContainer(container: HTMLElement): Promise<void> {
 
   // Render current session messages (session doesn't change on tab switch)
   const session = manager.getActiveSession();
-  const chatHistory = container.querySelector("#chat-history") as HTMLElement;
-  const emptyState = container.querySelector(
-    "#chat-empty-state",
-  ) as HTMLElement;
-  if (chatHistory && session) {
-    const refreshContext = createContext(container);
-    const supportsToolCalling = providerSupportsToolCalling(
-      getProviderManager().getActiveProvider(),
-    );
-    renderMessageElementsWithMarkdownActions(
-      chatHistory,
-      emptyState,
-      session.messages,
-      () => getQuoteNavigationItem(session, moduleCurrentItem),
-      {
-        onFork: (assistantMessageId) =>
-          continueInNewChatFromMessage(refreshContext, assistantMessageId),
-        onQuoteReply: (assistantMessageId) =>
-          addAssistantReplyQuote(refreshContext, assistantMessageId),
-        onNavigateToQuotedMessage: (quote) =>
-          navigateToQuotedMessage(refreshContext, quote),
-        onSummarizeReply: supportsToolCalling
-          ? (assistantMessageId) =>
-              summarizeReplyToNote(refreshContext, assistantMessageId)
-          : undefined,
-        onSummarizeReplyError: (error) => {
-          refreshContext.appendError(error.message);
-        },
-        onResumePresentation: (assistantMessageId) =>
-          refreshContext.launchPresentation(assistantMessageId),
-        onCancelPresentation: () =>
-          session ? manager.cancelSessionTurn(session.id) : false,
-        onCancelPresentationError: (error) => {
-          refreshContext.appendError(error.message);
-        },
-        onMarkdownError: refreshContext.appendError,
-      },
-    );
-    updateConversationNoteSummaryButton(
-      container,
-      session.messages,
-      session.id,
-      supportsToolCalling,
-    );
-    updateExecutionInsetsForContainer(
-      container,
-      manager,
-      session.executionPlan,
-    );
+  if (session) {
+    // Tab changes replace message nodes too. Use the normal render path so
+    // navigation anchors and message actions remain in sync with those nodes.
+    createContext(container).renderMessages(session.messages);
   }
 
   focusInput(container);
