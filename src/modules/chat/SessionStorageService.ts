@@ -20,6 +20,10 @@ import type {
   ToolExecutionState,
 } from "../../types/chat";
 import type { EvidenceRecord } from "../../types/evidence";
+import {
+  cleanupDeletedSessionAttachmentCopies,
+  type AttachmentFileRow,
+} from "./AttachmentFileCache";
 import { filterValidMessages, generateShortId } from "../../utils/common";
 import { normalizeEvidenceRecords } from "./evidence";
 import { normalizeSourceItemKeys } from "./note-source-provenance";
@@ -1786,7 +1790,13 @@ export class SessionStorageService {
   }
 
   private async deleteSessionData(sessionId: string): Promise<void> {
+    let attachmentRows: AttachmentFileRow[] = [];
     await this.runTransaction(async (db) => {
+      attachmentRows =
+        (await db.queryAsync(
+          "SELECT files FROM messages WHERE session_id = ? AND files IS NOT NULL",
+          [sessionId],
+        )) || [];
       const sessionRows =
         (await db.queryAsync("SELECT id FROM sessions WHERE id = ?", [
           sessionId,
@@ -1811,6 +1821,18 @@ export class SessionStorageService {
         await incrementSearchRevision(db);
       }
     });
+    try {
+      await cleanupDeletedSessionAttachmentCopies(
+        attachmentRows,
+        await getStorageDatabase().ensureInit(),
+      );
+    } catch (error) {
+      // Cache cleanup must not turn a committed deletion into a reported failure.
+      ztoolkit.log(
+        "[SessionStorageService] Attachment cache cleanup failed:",
+        error,
+      );
+    }
   }
 
   /**

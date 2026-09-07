@@ -1,6 +1,10 @@
 import type { FileAttachment, ImageAttachment } from "../../../types/chat";
 import { getString } from "../../../utils/locale";
 import { createElement } from "./ChatPanelBuilder";
+import {
+  getAttachmentCacheDirectory,
+  getAttachmentCopyPath,
+} from "../../chat/AttachmentFileCache";
 
 /** Older messages lack original paths, but still retain their text contents. */
 export async function revealAttachedFile(file: FileAttachment): Promise<void> {
@@ -12,19 +16,9 @@ export async function revealAttachedFile(file: FileAttachment): Promise<void> {
     await Zotero.File.reveal(file.sourcePath);
     return;
   }
-  const name =
-    (file.name || "attachment.txt")
-      // eslint-disable-next-line no-control-regex -- Strip control characters from cached file names.
-      .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_")
-      .slice(0, 120)
-      .replace(/[. ]+$/, "") || "attachment.txt";
-  const directory = PathUtils.join(
-    Zotero.getTempDirectory().path,
-    "paperchat-attachments",
-  );
+  const directory = getAttachmentCacheDirectory();
   await IOUtils.makeDirectory(directory, { ignoreExisting: true });
-  const hash = Zotero.Utilities.Internal.md5(file.content);
-  const path = PathUtils.join(directory, `${hash}-${name}`);
+  const path = getAttachmentCopyPath(file);
   await IOUtils.writeUTF8(path, file.content);
   await Zotero.File.reveal(path);
 }
