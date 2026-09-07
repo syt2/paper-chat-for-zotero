@@ -18,6 +18,7 @@ import type {
   CreateTokenRequest,
   SubscriptionSelfInfo,
   SubscriptionUsageSummary,
+  LoginInteraction,
 } from "../../types/auth";
 import { clearPref, getPref, setPref } from "../../utils/prefs";
 import { getString } from "../../utils/locale";
@@ -209,6 +210,7 @@ export class AuthManager {
     promise: Promise<void>;
   } | null = null;
   private passwordLoginBlockedUntil = 0;
+  private interactiveLoginGeneration: number | null = null;
   private modelRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private environmentGeneration = 0;
 
@@ -707,6 +709,40 @@ export class AuthManager {
   async login(
     username: string,
     password: string,
+    interaction?: LoginInteraction,
+  ): Promise<{ success: boolean; message: string }> {
+    if (
+      this.interactiveLoginGeneration === this.environmentGeneration ||
+      interaction?.signal.aborted
+    ) {
+      return { success: false, message: getString("auth-login-cancelled") };
+    }
+    const generation = ++this.environmentGeneration;
+    this.interactiveLoginGeneration = generation;
+    const cancel = () => {
+      if (generation !== this.environmentGeneration) return;
+      // Verification may already have succeeded while account/token setup is
+      // still pending. Use the full logout path to clear any saved identity.
+      void this.logout();
+    };
+    interaction?.signal.addEventListener("abort", cancel, { once: true });
+    try {
+      return await this.performInteractiveLogin(
+        username,
+        password,
+        interaction,
+      );
+    } finally {
+      interaction?.signal.removeEventListener("abort", cancel);
+      if (this.interactiveLoginGeneration === generation)
+        this.interactiveLoginGeneration = null;
+    }
+  }
+
+  private async performInteractiveLogin(
+    username: string,
+    password: string,
+    interaction?: LoginInteraction,
   ): Promise<{ success: boolean; message: string }> {
     const generation = this.environmentGeneration;
     this.passwordLoginBlockedUntil = 0;
@@ -742,7 +778,10 @@ export class AuthManager {
     this.authService.clearSessionCookie();
     setPref("userSubscriptionJson", "");
 
-    const result = await this.authService.login({ username, password });
+    const result = await this.authService.login(
+      { username, password },
+      interaction,
+    );
 
     if (generation !== this.environmentGeneration) {
       return {
@@ -835,6 +874,9 @@ export class AuthManager {
 
   /** 优先刷新已有 Dashboard Session，仅在刷新凭据失效后回退密码登录。 */
   async autoRelogin(): Promise<boolean> {
+    // An interactive second-factor challenge owns the pending login cookie.
+    if (this.interactiveLoginGeneration === this.environmentGeneration)
+      return false;
     const generation = this.environmentGeneration;
     const pending = this.autoReloginAttempt;
     if (pending?.generation === generation) {
@@ -911,6 +953,10 @@ export class AuthManager {
     }
 
     if (!result.success) {
+      if (result.code === "AUTH_2FA_REQUIRED") {
+        // Wait for interactive login; background refresh cannot supply a code.
+        this.passwordLoginBlockedUntil = Number.POSITIVE_INFINITY;
+      }
       if (result.status === 409 || result.code === "AUTH_SESSION_LIMIT") {
         this.passwordLoginBlockedUntil =
           Date.now() + PASSWORD_LOGIN_CONFLICT_COOLDOWN_MS;

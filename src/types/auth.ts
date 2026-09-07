@@ -10,6 +10,12 @@ export interface LoginRequest {
   password: string;
 }
 
+/** Interactive second factor. Codes stay in memory and are never saved. */
+export interface LoginInteraction {
+  requestTwoFactorCode: (errorMessage?: string) => Promise<string | null>;
+  signal: AbortSignal;
+}
+
 /**
  * 注册请求
  */

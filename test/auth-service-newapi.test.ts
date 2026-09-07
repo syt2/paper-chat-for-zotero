@@ -6,6 +6,7 @@ interface HttpCall {
   method: string;
   url: string;
   headers: Record<string, string>;
+  body?: unknown;
 }
 
 interface StoredCookie {
@@ -204,6 +205,422 @@ describe("AuthService NewAPI authentication", function () {
     assert.equal(calls[2].headers.Authorization, "Bearer dashboard-token");
     assert.notInclude(logs.join("\n"), "super-secret-password");
     assert.notInclude(logs.join("\n"), "dashboard-token");
+  });
+
+  it("verifies legacy 2FA with the pending cookie, retries explicitly, and does not log codes", async function () {
+    const jar = installCookieServices();
+    const calls: HttpCall[] = [];
+    const logs: string[] = [];
+    (globalThis as any).ztoolkit = {
+      log: (...args: unknown[]) => logs.push(args.map(String).join(" ")),
+    };
+    installHttpMock(
+      calls,
+      [
+        { success: true, data: { require_2fa: true } },
+        { success: false, message: "Incorrect verification code" },
+        { success: true, data: { id: 123 } },
+      ],
+      [],
+      (index) => {
+        if (index === 0)
+          jar.emitSetCookie(
+            "https://paperchat.test/api/user/login",
+            "session=pending-cookie; Path=/",
+          );
+        if (index === 2)
+          jar.emitSetCookie(
+            "https://paperchat.test/api/user/login/2fa",
+            "session=verified-cookie; Path=/",
+          );
+      },
+    );
+    const service = new AuthService("https://paperchat.test");
+    const prompts: Array<string | undefined> = [];
+    const result = await service.login(
+      { username: "user", password: "password-secret" },
+      {
+        signal: new AbortController().signal,
+        requestTwoFactorCode: async (error) => {
+          assert.isNull(
+            service.getUserId(),
+            "a challenge must not authenticate the user",
+          );
+          prompts.push(error);
+          return prompts.length === 1 ? "001234" : "backup-secret-code";
+        },
+      },
+    );
+    assert.isTrue(result.success);
+    assert.deepEqual(prompts, [undefined, "Incorrect verification code"]);
+    assert.equal(service.getUserId(), 123);
+    assert.equal(service.getSessionToken(), "verified-cookie");
+    assert.equal(calls[1].headers.Cookie, "session=pending-cookie");
+    assert.deepEqual(
+      calls.slice(1).map((call) => call.body),
+      [{ code: "001234" }, { code: "backup-secret-code" }],
+    );
+    assert.notInclude(logs.join("\n"), "001234");
+    assert.notInclude(logs.join("\n"), "backup-secret-code");
+    service.destroy();
+  });
+
+  it("supports flow-token verification and retains the resulting dashboard session", async function () {
+    const jar = installCookieServices();
+    const calls: HttpCall[] = [];
+    const logs: string[] = [];
+    (globalThis as any).ztoolkit = {
+      log: (...args: unknown[]) => logs.push(args.map(String).join(" ")),
+    };
+    installHttpMock(
+      calls,
+      [
+        {
+          success: true,
+          data: {
+            require_verification: true,
+            flow_token: "private-flow",
+            expires_at: Math.floor(Date.now() / 1000) + 120,
+            methods: [{ method: "2fa", available: true }],
+          },
+        },
+        {
+          success: true,
+          data: {
+            access_token: "verified-access",
+            user: { id: 321 },
+            session: { sid: "verified-sid" },
+          },
+        },
+      ],
+      [],
+      (index) => {
+        if (index === 1)
+          jar.emitSetCookie(
+            "https://paperchat.test/api/user/login/verify",
+            "new_api_refresh=verified-refresh; Path=/api/user/auth",
+          );
+      },
+    );
+    const service = new AuthService("https://paperchat.test");
+    const result = await service.login(
+      { username: "user", password: "pass" },
+      {
+        signal: new AbortController().signal,
+        requestTwoFactorCode: async () => "009876",
+      },
+    );
+    assert.isTrue(result.success);
+    assert.equal(calls[1].url, "https://paperchat.test/api/user/login/verify");
+    assert.deepEqual(calls[1].body, {
+      code: "009876",
+      flow_token: "private-flow",
+      method: "2fa",
+    });
+    assert.isTrue(service.hasDashboardAccessToken());
+    assert.isTrue(service.hasDashboardRefreshCookie());
+    assert.equal(service.getUserId(), 321);
+    assert.notInclude(logs.join("\n"), "private-flow");
+    assert.notInclude(logs.join("\n"), "009876");
+    service.destroy();
+  });
+
+  it("clears pending cookies when 2FA requires interaction or the user cancels", async function () {
+    const jar = installCookieServices();
+    const calls: HttpCall[] = [];
+    installHttpMock(
+      calls,
+      [
+        { success: true, data: { require_2fa: true } },
+        { success: true, data: { require_2fa: true } },
+      ],
+      [],
+      () =>
+        jar.emitSetCookie(
+          "https://paperchat.test/api/user/login",
+          "session=pending-cookie; Path=/",
+        ),
+    );
+    const service = new AuthService("https://paperchat.test");
+    const background = await service.login({
+      username: "user",
+      password: "pass",
+    });
+    assert.isFalse(background.success);
+    assert.equal(background.code, "AUTH_2FA_REQUIRED");
+    assert.isFalse(service.hasAuthenticationState());
+    const cancelled = await service.login(
+      { username: "user", password: "pass" },
+      {
+        signal: new AbortController().signal,
+        requestTwoFactorCode: async () => null,
+      },
+    );
+    assert.isFalse(cancelled.success);
+    assert.isFalse(service.hasAuthenticationState());
+    assert.isUndefined(jar.find("session", "/"));
+    assert.lengthOf(
+      calls,
+      2,
+      "neither case should submit a verification request",
+    );
+    service.destroy();
+  });
+
+  it("ignores a successful verification response arriving after dialog cancellation", async function () {
+    const calls: HttpCall[] = [];
+    const controller = new AbortController();
+    installHttpMock(
+      calls,
+      [
+        { success: true, data: { require_2fa: true } },
+        { success: true, data: { id: 123, access_token: "late-access" } },
+      ],
+      [],
+      (index) => {
+        if (index === 1) controller.abort();
+      },
+    );
+    const service = new AuthService("https://paperchat.test");
+    const result = await service.login(
+      { username: "user", password: "pass" },
+      {
+        signal: controller.signal,
+        requestTwoFactorCode: async () => "012345",
+      },
+    );
+    assert.isFalse(result.success);
+    assert.isNull(service.getUserId());
+    assert.isFalse(service.hasAuthenticationState());
+    service.destroy();
+  });
+
+  it("does not submit an expired verification flow", async function () {
+    const calls: HttpCall[] = [];
+    installHttpMock(calls, [
+      {
+        success: true,
+        data: {
+          require_verification: true,
+          flow_token: "expired-flow",
+          expires_at: 1,
+          methods: [{ method: "2fa", available: true }],
+        },
+      },
+    ]);
+    const service = new AuthService("https://paperchat.test");
+    const result = await service.login(
+      { username: "user", password: "pass" },
+      {
+        signal: new AbortController().signal,
+        requestTwoFactorCode: async () => "012345",
+      },
+    );
+    assert.isFalse(result.success);
+    assert.equal(result.code, "AUTH_2FA_EXPIRED");
+    assert.lengthOf(calls, 1);
+    service.destroy();
+  });
+
+  it("sends the rc.26 flow token to login/2fa and saves credentials only after verification", async function () {
+    const calls: HttpCall[] = [];
+    installHttpMock(calls, [
+      { success: true, data: { require_2fa: true, flow_token: "rc26-flow" } },
+      {
+        success: true,
+        data: { user: { id: 123 }, access_token: "verified-access" },
+      },
+    ]);
+    const prefs = new Map<string, unknown>();
+    (globalThis as any).Zotero.Prefs = {
+      set: (key: string, value: unknown) => prefs.set(key, value),
+    };
+    const service = new AuthService("https://paperchat.test");
+    const manager = Object.create(AuthManager.prototype) as any;
+    manager.environmentGeneration = 0;
+    manager.state = { isLoggedIn: false };
+    manager.authService = service;
+    const completed: string[] = [];
+    manager.refreshUserInfo = async () => completed.push("user");
+    manager.ensurePluginToken = async () => completed.push("token");
+    manager.fetchAndSetDefaultModel = async () => completed.push("models");
+    manager.saveState = () => completed.push("save");
+    manager.notifyLoginStatusChange = () => undefined;
+    manager.startModelRefreshTimer = () => undefined;
+    manager.syncLocalLanguagePreference = async () => undefined;
+    const result = await manager.login("user", "saved-password", {
+      signal: new AbortController().signal,
+      requestTwoFactorCode: async () => {
+        assert.isFalse(manager.state.isLoggedIn);
+        assert.isFalse(prefs.has("extensions.zotero.paperchat.loginPassword"));
+        assert.deepEqual(completed, []);
+        assert.isFalse(
+          await manager.autoRelogin(),
+          "background refresh must not consume the interactive challenge",
+        );
+        return "012345";
+      },
+    });
+    assert.isTrue(result.success);
+    assert.isTrue(manager.state.isLoggedIn);
+    assert.equal(calls[1].url, "https://paperchat.test/api/user/login/2fa");
+    assert.deepEqual(calls[1].body, {
+      code: "012345",
+      flow_token: "rc26-flow",
+    });
+    assert.deepEqual(completed, ["user", "token", "models", "save"]);
+    assert.isString(prefs.get("extensions.zotero.paperchat.loginPassword"));
+    assert.notInclude(JSON.stringify([...prefs]), "012345");
+    service.destroy();
+  });
+
+  it("clears account state when login is cancelled after verification but before initialization finishes", async function () {
+    const prefs = new Map<string, unknown>();
+    (globalThis as any).Zotero = {
+      Prefs: { set: (key: string, value: unknown) => prefs.set(key, value) },
+    };
+    const controller = new AbortController();
+    let revoked = 0;
+    let tokenSetup = 0;
+    const manager = Object.create(AuthManager.prototype) as any;
+    manager.environmentGeneration = 0;
+    manager.state = { isLoggedIn: false };
+    manager.authService = {
+      hasAuthenticationState: () => false,
+      clearSessionCookie: () => undefined,
+      setUserId: () => undefined,
+      getUserId: () => 123,
+      getSessionToken: () => "verified-session",
+      login: async () => ({ success: true }),
+      logout: async () => {
+        revoked++;
+        return { success: true };
+      },
+    };
+    manager.refreshUserInfo = async () => {
+      manager.state.user = { id: 123 };
+      controller.abort();
+    };
+    manager.ensurePluginToken = async () => {
+      tokenSetup++;
+    };
+    manager.notifyLoginStatusChange = () => undefined;
+    manager.notifyUserInfoUpdate = () => undefined;
+    const result = await manager.login("user", "pass", {
+      signal: controller.signal,
+      requestTwoFactorCode: async () => null,
+    });
+    assert.isFalse(result.success);
+    assert.equal(revoked, 1);
+    assert.equal(tokenSetup, 0);
+    assert.isFalse(manager.state.isLoggedIn);
+    assert.isNull(manager.state.user);
+    assert.isNull(manager.state.userId);
+    assert.equal(prefs.get("extensions.zotero.paperchat.apiKey"), "");
+    assert.equal(prefs.get("extensions.zotero.paperchat.loginPassword"), "");
+  });
+
+  it("allows login immediately after cancellation without an older attempt releasing the new login guard", async function () {
+    (globalThis as any).Zotero = { Prefs: { set: () => undefined } };
+    const manager = Object.create(AuthManager.prototype) as any;
+    manager.environmentGeneration = 0;
+    manager.authService = {
+      logout: async () => ({ success: true }),
+      setUserId: () => undefined,
+      clearSessionCookie: () => undefined,
+    };
+    manager.notifyLoginStatusChange = () => undefined;
+    manager.notifyUserInfoUpdate = () => undefined;
+    const finishes: Array<
+      (result: { success: boolean; message: string }) => void
+    > = [];
+    manager.performInteractiveLogin = () =>
+      new Promise((resolve) => finishes.push(resolve));
+    const controller = new AbortController();
+    const first = manager.login("user", "pass", {
+      signal: controller.signal,
+      requestTwoFactorCode: async () => null,
+    });
+    controller.abort();
+    const second = manager.login("user", "pass");
+    assert.lengthOf(finishes, 2);
+    finishes[0]({ success: false, message: "cancelled" });
+    await first;
+    assert.isFalse((await manager.login("user", "pass")).success);
+    assert.lengthOf(finishes, 2);
+    finishes[1]({ success: true, message: "ok" });
+    assert.isTrue((await second).success);
+  });
+
+  it("does not repeatedly submit a saved password when background recovery requires 2FA", async function () {
+    (globalThis as any).Zotero = {
+      Prefs: {
+        get: (key: string) =>
+          key.endsWith(".username")
+            ? "user"
+            : key.endsWith(".loginPassword")
+              ? btoa("pass")
+              : undefined,
+      },
+      DataDirectory: { dir: "/test" },
+    };
+    let calls = 0;
+    const manager = Object.create(AuthManager.prototype) as any;
+    manager.environmentGeneration = 0;
+    manager.authService = {
+      hasDashboardRefreshCookie: () => false,
+      clearSessionCookie: () => undefined,
+      login: async () => {
+        calls++;
+        return { success: false, code: "AUTH_2FA_REQUIRED" };
+      },
+    };
+    assert.isFalse(await manager.autoRelogin());
+    assert.isFalse(await manager.autoRelogin());
+    assert.equal(calls, 1);
+  });
+
+  it("lets an interactive login supersede an in-flight password fallback", async function () {
+    let finishBackground!: (value: unknown) => void;
+    let requests = 0;
+    (globalThis as any).Zotero = {
+      HTTP: {
+        request: async () => {
+          requests++;
+          if (requests === 1)
+            return new Promise((resolve) => {
+              finishBackground = resolve;
+            });
+          return {
+            status: 200,
+            response:
+              requests === 2
+                ? { success: true, data: { require_2fa: true } }
+                : { success: true, data: { id: 321 } },
+          };
+        },
+      },
+    };
+    const service = new AuthService("https://paperchat.test");
+    const background = service.login({
+      username: "old-user",
+      password: "old-pass",
+    });
+    const interactive = await service.login(
+      { username: "user", password: "pass" },
+      {
+        signal: new AbortController().signal,
+        requestTwoFactorCode: async () => "012345",
+      },
+    );
+    assert.isTrue(interactive.success);
+    finishBackground({
+      status: 200,
+      response: { success: true, data: { id: 123 } },
+    });
+    assert.isFalse((await background).success);
+    assert.equal(service.getUserId(), 321);
+    service.destroy();
   });
 
   it("falls back to the legacy logout route on older NewAPI versions", async function () {
@@ -1009,11 +1426,17 @@ function installHttpMock(
         url: string,
         options: {
           headers?: Record<string, string>;
+          body?: string;
           requestObserver?: (xhr: unknown) => void;
         },
       ) => {
         registerHttpChannel(url, options);
-        calls.push({ method, url, headers: options.headers || {} });
+        calls.push({
+          method,
+          url,
+          headers: options.headers || {},
+          body: options.body ? JSON.parse(options.body) : undefined,
+        });
         onResponse?.(index);
         const response = responses[index];
         const status = statuses[index] ?? 200;

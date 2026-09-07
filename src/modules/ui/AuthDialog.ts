@@ -503,6 +503,8 @@ export async function showAuthDialog(
                 id: "auth-password",
                 attributes: {
                   type: "password",
+                  name: "password",
+                  autocomplete: "current-password",
                   "data-bind": "password",
                   placeholder: getString("auth-password-placeholder"),
                 },
@@ -510,6 +512,55 @@ export async function showAuthDialog(
                   padding: "8px",
                   borderRadius: "4px",
                   border: `1px solid ${authColors.inputBorder}`,
+                },
+              },
+            ],
+          },
+          {
+            tag: "div",
+            id: "two-factor-field",
+            styles: { display: "none", flexDirection: "column", gap: "8px" },
+            children: [
+              {
+                tag: "label",
+                attributes: { for: "auth-two-factor-code" },
+                properties: { textContent: getString("auth-two-factor-code") },
+              },
+              {
+                tag: "div",
+                properties: {
+                  textContent: getString("auth-two-factor-description"),
+                },
+                styles: { fontSize: "13px", lineHeight: "1.5" },
+              },
+              {
+                tag: "input",
+                id: "auth-two-factor-code",
+                attributes: {
+                  type: "text",
+                  name: "one-time-code",
+                  autocomplete: "one-time-code",
+                  maxlength: "128",
+                  spellcheck: "false",
+                  placeholder: getString("auth-two-factor-code"),
+                },
+                styles: {
+                  padding: "8px",
+                  borderRadius: "4px",
+                  border: `1px solid ${authColors.inputBorder}`,
+                },
+              },
+              {
+                tag: "button",
+                id: "auth-two-factor-back",
+                properties: { textContent: getString("auth-two-factor-back") },
+                styles: {
+                  alignSelf: "flex-start",
+                  padding: "4px 0",
+                  border: "none",
+                  background: "transparent",
+                  color: authColors.link,
+                  cursor: "pointer",
                 },
               },
             ],
@@ -548,6 +599,7 @@ export async function showAuthDialog(
                 id: "auth-confirm-password",
                 attributes: {
                   type: "password",
+                  autocomplete: "new-password",
                   "data-bind": "confirmPassword",
                   placeholder: getString("auth-confirm-password-placeholder"),
                 },
@@ -644,9 +696,21 @@ export async function showAuthDialog(
           // 保存窗口引用
           currentDialogWindow = dialogWinRef;
           let countdownTimer: ReturnType<typeof setInterval> | null = null;
+          let submitController: AbortController | null = null;
+          let resolveTwoFactorCode: ((code: string | null) => void) | null =
+            null;
+          let submitting = false;
+          let twoFactorActive = false;
+
+          const cancelLogin = () => {
+            submitController?.abort();
+            resolveTwoFactorCode?.(null);
+            resolveTwoFactorCode = null;
+          };
 
           // 监听窗口关闭事件，清理单例引用
           dialogWinRef.addEventListener("unload", () => {
+            if (!settled) cancelLogin();
             if (countdownTimer) clearInterval(countdownTimer);
             clearCurrentDialog();
             finish(false);
@@ -730,6 +794,21 @@ export async function showAuthDialog(
             doc,
             "auth-confirm-password",
           );
+          const twoFactorField = requireAuthElement<HTMLElement>(
+            doc,
+            "two-factor-field",
+          );
+          const twoFactorInput = requireAuthElement<HTMLInputElement>(
+            doc,
+            "auth-two-factor-code",
+          );
+          const twoFactorBack = requireAuthElement<HTMLButtonElement>(
+            doc,
+            "auth-two-factor-back",
+          );
+          usernameInput.setAttribute("name", "username");
+          usernameInput.setAttribute("autocomplete", "username");
+          twoFactorBack.addEventListener("click", cancelLogin);
           if (!passwordField) {
             throw new Error(
               "Auth dialog element missing: #auth-password parent",
@@ -774,8 +853,16 @@ export async function showAuthDialog(
             tabRegister.style.opacity = isRegister ? "1" : "0.6";
 
             // 字段显示
-            usernameField.style.display = "flex";
-            passwordField.style.display = "flex";
+            usernameField.style.display = twoFactorActive ? "none" : "flex";
+            passwordField.style.display = twoFactorActive ? "none" : "flex";
+            twoFactorField.style.display = twoFactorActive ? "flex" : "none";
+            passwordInput.setAttribute(
+              "autocomplete",
+              isRegister ? "new-password" : "current-password",
+            );
+            submitBtn.textContent = getString(
+              twoFactorActive ? "auth-two-factor-verify" : "auth-submit",
+            );
             usernameLabel.textContent = getString(
               isRegister ? "auth-username" : "auth-login-identity",
             );
@@ -790,7 +877,8 @@ export async function showAuthDialog(
             } else {
               usernameInput.removeAttribute("maxlength");
             }
-            forgotPasswordField.style.display = isRegister ? "none" : "flex";
+            forgotPasswordField.style.display =
+              isRegister || twoFactorActive ? "none" : "flex";
             emailField.style.display = isRegister ? "flex" : "none";
             verificationField.style.display = isRegister ? "flex" : "none";
             confirmPasswordField.style.display = isRegister ? "flex" : "none";
@@ -955,6 +1043,22 @@ export async function showAuthDialog(
 
           // 提交
           const handleSubmit = async () => {
+            if (resolveTwoFactorCode) {
+              const code = twoFactorInput.value.trim();
+              if (!code) {
+                showMessage(getString("auth-error-code-required"), true);
+                return;
+              }
+              const resolve = resolveTwoFactorCode;
+              resolveTwoFactorCode = null;
+              twoFactorInput.value = "";
+              twoFactorInput.disabled = true;
+              submitBtn.disabled = true;
+              hideMessage();
+              resolve(code);
+              return;
+            }
+            if (submitting || settled) return;
             hideMessage();
 
             const username = usernameInput?.value?.trim();
@@ -1003,15 +1107,39 @@ export async function showAuthDialog(
             }
 
             // 禁用提交按钮
+            submitting = true;
+            submitController = new AbortController();
+            const controller = submitController;
             const buttons = doc.querySelectorAll("button");
             buttons.forEach((btn: HTMLButtonElement) => (btn.disabled = true));
+            cancelBtn.disabled = currentMode !== "login";
+            usernameInput.disabled = true;
+            passwordInput.disabled = true;
 
             try {
               const authManager = getAuthManager();
               let result;
 
               if (currentMode === "login") {
-                result = await authManager.login(username, password);
+                result = await authManager.login(username, password, {
+                  signal: controller.signal,
+                  requestTwoFactorCode: (errorMessage) => {
+                    if (dialogWinRef.closed || controller.signal.aborted)
+                      return Promise.resolve(null);
+                    twoFactorActive = true;
+                    updateUI();
+                    if (errorMessage) showMessage(errorMessage, true);
+                    else hideMessage();
+                    twoFactorInput.disabled = false;
+                    twoFactorInput.value = "";
+                    submitBtn.disabled = false;
+                    twoFactorBack.disabled = false;
+                    twoFactorInput.focus();
+                    return new Promise((resolve) => {
+                      resolveTwoFactorCode = resolve;
+                    });
+                  },
+                });
               } else {
                 // 注册模式：使用用户名和邮箱
                 result = await authManager.register(
@@ -1022,7 +1150,10 @@ export async function showAuthDialog(
                 );
               }
 
+              if (controller.signal.aborted || dialogWinRef.closed) return;
               if (result.success) {
+                passwordInput.value = "";
+                twoFactorInput.value = "";
                 trackAuthCompleted(currentMode, true);
                 showMessage(getString("auth-success"), false);
                 finish(true);
@@ -1041,6 +1172,7 @@ export async function showAuthDialog(
                 );
               }
             } catch (error) {
+              if (controller.signal.aborted || dialogWinRef.closed) return;
               trackAuthCompleted(currentMode, false, error);
               showMessage(
                 error instanceof Error
@@ -1051,6 +1183,21 @@ export async function showAuthDialog(
               buttons.forEach(
                 (btn: HTMLButtonElement) => (btn.disabled = false),
               );
+            } finally {
+              submitting = false;
+              submitController = null;
+              resolveTwoFactorCode = null;
+              twoFactorActive = false;
+              twoFactorInput.value = "";
+              if (!dialogWinRef.closed && !settled) {
+                buttons.forEach(
+                  (btn: HTMLButtonElement) => (btn.disabled = false),
+                );
+                usernameInput.disabled = false;
+                passwordInput.disabled = false;
+                updateUI();
+                if (controller.signal.aborted) hideMessage();
+              }
             }
           };
 
@@ -1059,6 +1206,7 @@ export async function showAuthDialog(
 
           // 绑定取消按钮
           cancelBtn?.addEventListener("click", () => {
+            cancelLogin();
             if (countdownTimer) clearInterval(countdownTimer);
             finish(false);
             closeDialogWindow(dialogHelper.window);
@@ -1070,9 +1218,11 @@ export async function showAuthDialog(
             passwordInput,
             confirmPasswordInput,
             verificationInput,
+            twoFactorInput,
           ].forEach((input) => {
             input?.addEventListener("keypress", (e: KeyboardEvent) => {
               if (e.key === "Enter") {
+                e.preventDefault();
                 handleSubmit();
               }
             });

@@ -7,6 +7,7 @@
 
 import type {
   LoginRequest,
+  LoginInteraction,
   RegisterRequest,
   ApiResponse,
   UserInfo,
@@ -87,6 +88,15 @@ interface DashboardAuthData {
   user?: { id?: number };
 }
 
+interface LoginResponseData extends DashboardAuthData {
+  id?: number;
+  require_2fa?: boolean;
+  require_verification?: boolean;
+  flow_token?: string;
+  expires_at?: number;
+  methods?: Array<{ method: string; available: boolean }>;
+}
+
 export interface DashboardSessionRefreshResult extends ApiResponse<DashboardAuthData> {
   status: number;
 }
@@ -114,6 +124,9 @@ const SENSITIVE_LOG_FIELDS = new Set([
   "session_token",
   "token",
   "verification_code",
+  "code",
+  "flow_token",
+  "backup_code",
 ]);
 
 function stringifyForAuthLog(value: unknown): string {
@@ -141,6 +154,7 @@ export class AuthService {
   private loginAttempt: {
     generation: number;
     promise: Promise<ApiResponse>;
+    interactive: boolean;
   } | null = null;
   private refreshAttempt: {
     generation: number;
@@ -661,19 +675,41 @@ export class AuthService {
     return result.data;
   }
 
-  async login(request: LoginRequest): Promise<ApiResponse> {
-    const generation = this.environmentGeneration;
-    const pending = this.loginAttempt;
-    if (pending?.generation === generation) {
-      return pending.promise;
+  async login(
+    request: LoginRequest,
+    interaction?: LoginInteraction,
+  ): Promise<ApiResponse> {
+    if (interaction?.signal.aborted) {
+      return { success: false, message: getString("auth-login-cancelled") };
     }
+    const pending = this.loginAttempt;
+    if (pending?.generation === this.environmentGeneration) {
+      if (!interaction || pending.interactive) return pending.promise;
+      // A manual login must own its own challenge, not inherit an automatic
+      // password fallback that cannot ask the user for a verification code.
+      this.environmentGeneration += 1;
+      this.clearSessionCookie();
+      this.userId = null;
+    }
+    const generation = this.environmentGeneration;
 
-    const promise = this.performLogin(request, generation);
-    const attempt = { generation, promise };
+    const cancel = () => {
+      if (generation !== this.environmentGeneration) return;
+      this.environmentGeneration += 1;
+      this.clearSessionCookie();
+      this.userId = null;
+    };
+    interaction?.signal.addEventListener("abort", cancel, { once: true });
+    const promise = this.performLogin(request, generation, interaction);
+    const attempt = { generation, promise, interactive: Boolean(interaction) };
     this.loginAttempt = attempt;
     try {
       return await promise;
+    } catch (error) {
+      if (generation === this.environmentGeneration) this.clearSessionCookie();
+      throw error;
     } finally {
+      interaction?.signal.removeEventListener("abort", cancel);
       if (this.loginAttempt === attempt) {
         this.loginAttempt = null;
       }
@@ -683,12 +719,31 @@ export class AuthService {
   private async performLogin(
     request: LoginRequest,
     generation: number,
+    interaction?: LoginInteraction,
   ): Promise<ApiResponse> {
     const url = `${this.baseUrl}/api/user/login`;
-    const result = await this.request<ApiResponse>("POST", url, {
-      body: request,
-      extractAuthCookies: true,
-    });
+    let result = await this.request<ApiResponse<LoginResponseData>>(
+      "POST",
+      url,
+      {
+        body: request,
+        extractAuthCookies: true,
+      },
+    );
+
+    const challenge = result.data?.data;
+    if (
+      result.status < 400 &&
+      result.data?.success &&
+      (challenge?.require_2fa || challenge?.require_verification) &&
+      generation === this.environmentGeneration
+    ) {
+      result = await this.completeTwoFactorLogin(
+        challenge,
+        generation,
+        interaction,
+      );
+    }
 
     if (result.error) {
       return {
@@ -722,16 +777,7 @@ export class AuthService {
       };
     }
 
-    // 不支持 2FA
-    const responseData = result.data as ApiResponse<
-      DashboardAuthData & { id?: number; require_2fa?: boolean }
-    >;
-    if (responseData.data?.require_2fa) {
-      return {
-        success: false,
-        message: getString("api-error-2fa-not-supported"),
-      };
-    }
+    const responseData = result.data;
 
     // 提取用户ID
     const userId = responseData.data?.id ?? responseData.data?.user?.id;
@@ -753,6 +799,87 @@ export class AuthService {
     }
 
     return result.data;
+  }
+
+  /** Older NewAPI uses a pending session cookie; newer versions use a flow token. */
+  private async completeTwoFactorLogin(
+    challenge: LoginResponseData,
+    generation: number,
+    interaction?: LoginInteraction,
+  ): Promise<{
+    status: number;
+    data: ApiResponse<LoginResponseData> | null;
+    error?: string;
+  }> {
+    const fail = (message: string, code: string) => {
+      if (generation === this.environmentGeneration) this.clearSessionCookie();
+      return { status: 0, data: { success: false, message, code } };
+    };
+    if (!interaction) {
+      return fail(getString("auth-two-factor-required"), "AUTH_2FA_REQUIRED");
+    }
+    if (
+      challenge.require_verification &&
+      (!challenge.flow_token ||
+        !challenge.methods?.some(
+          (method) => method.method === "2fa" && method.available,
+        ))
+    ) {
+      return fail(
+        getString("auth-verification-unsupported"),
+        "AUTH_VERIFICATION_UNSUPPORTED",
+      );
+    }
+    let errorMessage: string | undefined;
+    while (
+      generation === this.environmentGeneration &&
+      !interaction.signal.aborted
+    ) {
+      const code = await interaction.requestTwoFactorCode(errorMessage);
+      if (
+        code === null ||
+        interaction.signal.aborted ||
+        generation !== this.environmentGeneration
+      ) {
+        return fail(getString("auth-login-cancelled"), "AUTH_LOGIN_CANCELLED");
+      }
+      if (challenge.expires_at && challenge.expires_at * 1000 <= Date.now()) {
+        return fail(getString("auth-two-factor-expired"), "AUTH_2FA_EXPIRED");
+      }
+      if (!code.trim()) {
+        errorMessage = getString("auth-error-code-required");
+        continue;
+      }
+      const result = await this.request<ApiResponse<LoginResponseData>>(
+        "POST",
+        `${this.baseUrl}/api/user/login/${challenge.require_verification ? "verify" : "2fa"}`,
+        {
+          body: {
+            code: code.trim(),
+            ...(challenge.flow_token
+              ? { flow_token: challenge.flow_token }
+              : {}),
+            ...(challenge.require_verification ? { method: "2fa" } : {}),
+          },
+          extractAuthCookies: true,
+        },
+      );
+      if (
+        generation !== this.environmentGeneration ||
+        interaction.signal.aborted
+      ) {
+        return fail(getString("auth-login-cancelled"), "AUTH_LOGIN_CANCELLED");
+      }
+      if (result.status < 400 && result.data?.success) return result;
+      errorMessage =
+        result.error ||
+        this.parseErrorMessage(
+          result.data,
+          getString("auth-two-factor-failed"),
+        );
+      // No automatic retries: each verification request needs a new explicit submit.
+    }
+    return fail(getString("auth-login-cancelled"), "AUTH_LOGIN_CANCELLED");
   }
 
   async refreshDashboardSession(): Promise<DashboardSessionRefreshResult> {
