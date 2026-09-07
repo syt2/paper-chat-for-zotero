@@ -23,16 +23,14 @@ function rounds(count: number): ChatMessage[] {
 }
 
 describe("conversation turn navigator", function () {
-  it("hides at 400px and uses the available height with 24px margins and 2px gaps", function () {
-    assert.equal(getConversationNavigatorCapacity(400, 1000), 0);
-    assert.equal(getConversationNavigatorCapacity(260, 1000), 0);
-    assert.equal(getConversationNavigatorCapacity(401, 1000), 106);
-    assert.equal(getConversationNavigatorCapacity(500, 160), 12);
-    assert.equal(getConversationNavigatorCapacity(500, 0), 0);
-    assert.equal(getConversationNavigatorCapacity(500, 54), 0);
-    assert.equal(getConversationNavigatorCapacity(500, 55), 1);
-    assert.equal(getConversationNavigatorCapacity(500, 63), 1);
-    assert.equal(getConversationNavigatorCapacity(500, 64), 2);
+  it("uses only the available height with 24px margins and 2px gaps", function () {
+    assert.equal(getConversationNavigatorCapacity(1000), 106);
+    assert.equal(getConversationNavigatorCapacity(160), 12);
+    assert.equal(getConversationNavigatorCapacity(0), 0);
+    assert.equal(getConversationNavigatorCapacity(54), 0);
+    assert.equal(getConversationNavigatorCapacity(55), 1);
+    assert.equal(getConversationNavigatorCapacity(63), 1);
+    assert.equal(getConversationNavigatorCapacity(64), 2);
   });
 
   it("groups long conversations into balanced consecutive ranges without losing any turn", function () {

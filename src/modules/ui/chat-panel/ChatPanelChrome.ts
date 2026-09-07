@@ -293,15 +293,15 @@ export function getChatChromeStyles(theme: ThemeColors): string {
       outline: 2px solid ${theme.inputFocusBorderColor}; outline-offset: 2px;
     }
     .chat-panel-root .chat-message { margin: 16px 0 !important; }
-    .chat-panel-root #chat-viewport[data-turn-navigation] #chat-history { padding-left: 32px !important; }
+    .chat-panel-root #chat-viewport[data-turn-navigation] #chat-history { padding-left: 20px !important; }
     .chat-panel-root .chat-turn-rail {
-      position: absolute; left: 2px; width: 24px; z-index: 3;
+      position: absolute; left: 2px; width: 16px; z-index: 3;
       flex-direction: column; align-items: stretch; gap: var(--turn-marker-gap);
       overflow: hidden;
     }
     .chat-panel-root .chat-turn-tick {
-      display: flex; align-items: center; justify-content: center;
-      flex: 0 0 var(--turn-marker-size); width: 24px; min-height: 0; height: var(--turn-marker-size); padding: 0 4px;
+      display: flex; align-items: center; justify-content: flex-start;
+      flex: 0 0 var(--turn-marker-size); width: 16px; min-height: 0; height: var(--turn-marker-size); padding: 0 2px;
       border: 0; border-radius: 3px; background: transparent; cursor: pointer;
     }
     .chat-panel-root .chat-turn-tick::before {

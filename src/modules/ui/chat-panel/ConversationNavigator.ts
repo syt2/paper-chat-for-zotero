@@ -57,7 +57,6 @@ export function shouldShowConversationNavigator(
   return turns.filter((turn) => turn.complete).length > 5;
 }
 
-export const CONVERSATION_NAV_MIN_WIDTH = 400;
 const RAIL_MARGIN = 24;
 const MARKER_SIZE = 7;
 const MARKER_GAP = 2;
@@ -81,10 +80,8 @@ export function groupConversationTurns(
 }
 
 export function getConversationNavigatorCapacity(
-  width: number,
   availableHeight: number,
 ): number {
-  if (width <= CONVERSATION_NAV_MIN_WIDTH) return 0;
   return Math.max(
     0,
     Math.floor(
@@ -194,7 +191,7 @@ export class ConversationNavigator {
       if (this.previewIndex >= 0) this.showPreview(this.previewIndex);
     }
     this.resizeObserver?.disconnect();
-    // Keep observing the viewport even while hidden, so widening reveals the rail.
+    // Keep observing the viewport even while hidden, so height changes update capacity.
     this.resizeObserver?.observe(this.viewport);
     if (shouldShowConversationNavigator(this.turns)) {
       for (const element of Array.from(this.history.children))
@@ -270,10 +267,7 @@ export class ConversationNavigator {
       0,
       this.viewport.clientHeight - topInset - bottomInset,
     );
-    const capacity = getConversationNavigatorCapacity(
-      this.viewport.clientWidth,
-      available,
-    );
+    const capacity = getConversationNavigatorCapacity(available);
     const visible = capacity > 0 && shouldShowConversationNavigator(this.turns);
     const changed =
       visible !== this.viewport.hasAttribute("data-turn-navigation");
