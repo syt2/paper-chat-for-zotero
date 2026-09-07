@@ -1,3 +1,4 @@
+import { createPresentationResumeRound } from "../../presentation/PresentationResumeRound";
 import type {
   AgentRuntimeEvent,
   AgentRuntimeEventType,
@@ -612,20 +613,23 @@ export class AgentRuntime {
             stableRequestTools,
           );
         };
-        const result = await this.runStreamingRound(
-          provider,
-          currentMessages,
-          iterationControl.toolsForRound,
-          sendingSession,
-          sessionRunId,
-          abortSignal,
-          assistantMessage,
-          displayBeforeThisRound,
-          iteration,
-          iterationControl.toolChoice,
-          executeProviderRequest,
-          refreshRoundToolsAfterProviderChange,
-        );
+        const result =
+          (iteration === 1 &&
+            createPresentationResumeRound(presentationAuthorization)) ||
+          (await this.runStreamingRound(
+            provider,
+            currentMessages,
+            iterationControl.toolsForRound,
+            sendingSession,
+            sessionRunId,
+            abortSignal,
+            assistantMessage,
+            displayBeforeThisRound,
+            iteration,
+            iterationControl.toolChoice,
+            executeProviderRequest,
+            refreshRoundToolsAfterProviderChange,
+          ));
 
         this.ensureSessionTracked(sendingSession, sessionRunId);
 
@@ -999,30 +1003,33 @@ export class AgentRuntime {
           );
         }
 
-        const result = await executeProviderRequest(
-          () =>
-            provider.chatCompletionWithTools(
-              currentMessages,
-              iterationControl.toolsForRound,
-              abortSignal,
-              {
-                toolChoice: iterationControl.toolChoice,
-              },
-            ),
-          () => {
-            stableRequestTools = (requestTools || tools).slice();
-            this.refreshIterationToolsForProvider(
-              iterationControl,
-              iteration,
-              tools,
-              maxIterations,
-              sendingSession,
-              budgetLimits,
-              provider.supportsHostedWebSearch?.() === true,
-              stableRequestTools,
-            );
-          },
-        );
+        const result =
+          (iteration === 1 &&
+            createPresentationResumeRound(presentationAuthorization)) ||
+          (await executeProviderRequest(
+            () =>
+              provider.chatCompletionWithTools(
+                currentMessages,
+                iterationControl.toolsForRound,
+                abortSignal,
+                {
+                  toolChoice: iterationControl.toolChoice,
+                },
+              ),
+            () => {
+              stableRequestTools = (requestTools || tools).slice();
+              this.refreshIterationToolsForProvider(
+                iterationControl,
+                iteration,
+                tools,
+                maxIterations,
+                sendingSession,
+                budgetLimits,
+                provider.supportsHostedWebSearch?.() === true,
+                stableRequestTools,
+              );
+            },
+          ));
 
         this.ensureSessionTracked(sendingSession, sessionRunId);
 
@@ -1780,6 +1787,18 @@ export class AgentRuntime {
     const activePresentationAuthorization =
       presentationAuthorization ||
       presentationLaunchSession?.getAuthorization();
+    const resumedArtifact = assistantMessage.presentationArtifacts?.find(
+      (artifact) =>
+        artifact.checkpointId ===
+          activePresentationAuthorization?.checkpoint?.id &&
+        !!artifact.checkpointId &&
+        artifact.isDraft !== false,
+    );
+    if (resumedArtifact?.localId) {
+      for (const call of normalizedToolCalls)
+        if (call.function.name === "presentation")
+          presentationLocalIds.set(call, resumedArtifact.localId);
+    }
     const presentationSource =
       activePresentationAuthorization?.source ||
       presentationLaunchSession?.source ||
@@ -2010,6 +2029,7 @@ export class AgentRuntime {
         artifacts[index] = {
           ...previous,
           ...artifact,
+          checkpointId: artifact.checkpointId || previous.checkpointId,
           sourceItemKey: artifact.sourceItemKey || previous.sourceItemKey,
           sourceLibraryID: artifact.sourceLibraryID || previous.sourceLibraryID,
           path: artifact.path || previous.path,
@@ -2048,10 +2068,15 @@ export class AgentRuntime {
       activeProgressByToolCall.set(localId, tracker);
       const nextProgress = tracker.update(update);
       await createPresentationProgress(toolCall, localId)(update, nextProgress);
-      if (update.pptxPath || update.previewPaths?.length) {
+      if (
+        update.checkpointId ||
+        update.pptxPath ||
+        update.previewPaths?.length
+      ) {
         upsertPresentationArtifact({
           toolCallId: toolCall.id,
           localId,
+          checkpointId: update.checkpointId,
           path: update.pptxPath,
           previewPaths: update.previewPaths,
           isDraft: update.isDraft,
@@ -2063,7 +2088,11 @@ export class AgentRuntime {
       const display = activeCallingDisplay + progressCards;
       assistantMessage.content = display;
       assistantMessage.streamingState = "in_progress";
-      if (update.pptxPath || update.previewPaths?.length) {
+      if (
+        update.checkpointId ||
+        update.pptxPath ||
+        update.previewPaths?.length
+      ) {
         // A presentation milestone points at a real file that already exists.
         // Persist it before returning to the renderer so a Zotero crash cannot
         // leave the PPTX on disk without its chat entry/open action.
@@ -2105,6 +2134,7 @@ export class AgentRuntime {
               sourceItemKey: presentationSource?.itemKey,
               sourceLibraryID: presentationSource?.libraryID,
               isDraft: true,
+              interruptedAt: undefined,
             });
           }
           this.executionPlanManager.addOrUpdateToolStep(

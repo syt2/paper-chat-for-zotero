@@ -62,6 +62,7 @@ const MESSAGE_ACTION_ICON_SIZE = "15px";
 const MESSAGE_HIGHLIGHT_DURATION_MS = 1050;
 const MESSAGE_HIGHLIGHT_OVERLAY_CLASS = "paperchat-message-highlight-overlay";
 type MessageActionIconName =
+  | "play"
   | "change"
   | "copy"
   | "fork"
@@ -452,9 +453,13 @@ interface ExecutionBannerState {
 }
 
 export interface MessageRenderOptions {
+  resumeMessageId?: string;
+  onResume?: () => void | Promise<void>;
+  onResumeError?: (error: Error) => void;
   markdown?: MarkdownRenderOptions;
   onResumePresentation?: (
     assistantMessageId: string,
+    checkpointId?: string,
   ) => void | boolean | Promise<void | boolean>;
   onResumePresentationError?: (error: Error) => void;
   onCancelPresentation?: (
@@ -489,12 +494,16 @@ export function getMessageMarkdownRenderOptions(
     streamingState === "in_progress"
       ? new Set(
           [...artifactsByToolCallId.entries()]
-            .filter(([, artifact]) => !isTerminalPresentationArtifact(artifact))
+            .filter(
+              ([, artifact]) =>
+                !isTerminalPresentationArtifact(artifact) &&
+                !artifact.interruptedAt,
+            )
             .map(([toolCallId]) => toolCallId),
         )
       : new Set<string>();
   const presentationInterruption =
-    streamingState === "interrupted"
+    streamingState !== "in_progress"
       ? {
           endedAt: messageTimestamp ?? 0,
         }
@@ -512,12 +521,15 @@ export function getMessageMarkdownRenderOptions(
       : undefined;
   }
   if (streamingState === undefined) {
-    return evidenceRecords?.length || artifactsByToolCallId.size
+    return evidenceRecords?.length ||
+      artifactsByToolCallId.size ||
+      presentationInterruption
       ? {
           ...markdown,
           evidenceRecords,
           presentationArtifacts: artifactsByToolCallId,
           presentationActiveToolCallIds,
+          presentationInterruption,
         }
       : markdown;
   }
@@ -986,7 +998,8 @@ export function createMessageElement(
       const action = messageMarkdownOptions.presentationResumeAction;
       messageMarkdownOptions.presentationResumeAction = {
         ...action,
-        onResume: () => renderOptions.onResumePresentation!(msg.id),
+        onResume: (checkpointId) =>
+          renderOptions.onResumePresentation!(msg.id, checkpointId),
         onError: renderOptions.onResumePresentationError || action.onError,
       };
     }
@@ -1120,6 +1133,12 @@ export function createMessageElement(
     renderOptions.onQuoteReply,
     renderOptions.onSummarizeReply,
     renderOptions.onSummarizeReplyError,
+    renderOptions.resumeMessageId &&
+      (renderOptions.resumeMessageId === msg.id ||
+        renderOptions.resumeMessageId === attachedError?.id)
+      ? renderOptions.onResume
+      : undefined,
+    renderOptions.onResumeError,
   );
   if (actions) {
     wrapper.appendChild(actions);
@@ -1215,7 +1234,7 @@ function createRetryActionButton(
   theme: ThemeColors,
   label: string,
   className: string,
-  iconName: Extract<MessageActionIconName, "change" | "refresh">,
+  iconName: Extract<MessageActionIconName, "change" | "refresh" | "play">,
   onClick: () => void | Promise<void>,
   onError?: (error: Error) => void,
   onBusyChange?: (busy: boolean) => void,
@@ -1425,6 +1444,8 @@ function createMessageActions(
   onQuoteReply?: (assistantMessageId: string) => void,
   onSummarizeReply?: (assistantMessageId: string) => void | Promise<void>,
   onSummarizeReplyError?: (error: Error) => void,
+  onResume?: () => void | Promise<void>,
+  onResumeError?: (error: Error) => void,
 ): HTMLElement | null {
   const actions = createElement(
     doc,
@@ -1508,7 +1529,22 @@ function createMessageActions(
     );
   }
 
-  if (showReroll && onRetry) {
+  if (onResume) {
+    const resumeButton = createRetryActionButton(
+      doc,
+      theme,
+      getString("chat-resume-reply"),
+      "resume-reply-btn",
+      "play",
+      onResume,
+      onResumeError,
+      setRetryActionsBusy,
+    );
+    retryActionButtons.push(resumeButton);
+    actions.appendChild(resumeButton);
+  }
+
+  if (showReroll && onRetry && !onResume) {
     const retryButton = createRetryActionButton(
       doc,
       theme,

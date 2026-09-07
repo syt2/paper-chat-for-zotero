@@ -632,13 +632,17 @@ function buildToolCallCardElement(
   );
   const presentationWasInterrupted =
     entry.status === "calling" &&
-    options.presentationInterruption !== undefined &&
+    (options.presentationInterruption !== undefined ||
+      (trustedPresentationArtifact &&
+        Boolean(presentationArtifact?.interruptedAt))) &&
     !presentationIsTerminal;
   const isTrustedPresentationCard =
     normalizedToolName === "presentation" && trustedPresentationArtifact;
   const interruptedAt = Math.max(
     1,
-    options.presentationInterruption?.endedAt || 1,
+    presentationArtifact?.interruptedAt ||
+      options.presentationInterruption?.endedAt ||
+      1,
   );
   const presentationProgress =
     entry.presentationProgress ||
@@ -669,10 +673,18 @@ function buildToolCallCardElement(
             : entry.status,
         progress: presentationProgress,
         errorText: unescapeXml(entry.toolResult || entry.statusText || ""),
-        interruptedAt: options.presentationInterruption?.endedAt,
-        resumeAction: canResumePresentation
-          ? options.presentationResumeAction
-          : undefined,
+        interruptedAt: presentationWasInterrupted ? interruptedAt : undefined,
+        hasCheckpoint: Boolean(presentationArtifact?.checkpointId),
+        resumeAction:
+          canResumePresentation && options.presentationResumeAction
+            ? {
+                ...options.presentationResumeAction,
+                onResume: () =>
+                  options.presentationResumeAction!.onResume(
+                    presentationArtifact?.checkpointId,
+                  ),
+              }
+            : undefined,
         cancelAction: canCancelPresentation
           ? options.presentationCancelAction
           : undefined,

@@ -1,3 +1,4 @@
+import type { PresentationCheckpoint } from "./PresentationCheckpoint";
 import type { PresentationSourceContext } from "./contracts";
 import {
   DEFAULT_PRESENTATION_LAUNCH_SETTINGS,
@@ -6,6 +7,7 @@ import {
 } from "./PresentationLaunchSettings";
 
 export interface PresentationLaunchAuthorization {
+  readonly checkpoint?: PresentationCheckpoint;
   readonly providerId: "paperchat";
   readonly source: Readonly<PresentationSourceContext>;
   readonly settings: Readonly<PresentationLaunchSettings>;
@@ -43,10 +45,12 @@ const authorizationStates = new WeakMap<
 export function createPresentationLaunchAuthorization(
   source: PresentationSourceContext,
   settings: PresentationLaunchSettings = DEFAULT_PRESENTATION_LAUNCH_SETTINGS,
+  checkpoint?: PresentationCheckpoint,
 ): PresentationLaunchAuthorization {
   const normalizedSettings = normalizePresentationLaunchSettings(settings);
   const authorization: PresentationLaunchAuthorization = {
     providerId: "paperchat",
+    checkpoint,
     source: Object.freeze({ ...source }),
     settings: Object.freeze({ ...normalizedSettings }),
   };

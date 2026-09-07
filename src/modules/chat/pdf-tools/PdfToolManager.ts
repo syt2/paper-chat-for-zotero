@@ -18,6 +18,8 @@
  * - get_full_text: 获取完整原文（高 token 消耗）
  */
 
+import { resolvePresentationLanguage } from "../../presentation/PresentationCapability";
+import { PresentationCheckpoint } from "../../presentation/PresentationCheckpoint";
 import type {
   ToolDefinition,
   ToolParameterProperty,
@@ -1958,18 +1960,8 @@ export class PdfToolManager {
           return formatPresentationAuthorizationBlock(attempt.reason);
         }
         try {
-          const paper = sourceItemKey
-            ? await this.extractAndParsePaper(
-                sourceItemKey,
-                true,
-                sourceContext?.libraryID,
-                abortSignal,
-              )
-            : fallbackStructure
-              ? this.ensureExtendedStructure(fallbackStructure)
-              : null;
           const authorizedArgs: Record<string, unknown> = {
-            ...args,
+            ...(presentationAuthorization.checkpoint?.args || args),
             // The app-owned capability is the source of truth. Never let a
             // later model round redirect planning metadata to another library
             // after the user has confirmed the native settings.
@@ -1981,11 +1973,52 @@ export class PdfToolManager {
             slideCount: presentationAuthorization.settings.slideCount,
             designSystem: presentationAuthorization.settings.designSystem,
           };
+          authorizedArgs.language = resolvePresentationLanguage(
+            authorizedArgs.language,
+          );
           delete authorizedArgs.instructions;
           if (presentationAuthorization.settings.userInstructions) {
             authorizedArgs.instructions =
               presentationAuthorization.settings.userInstructions;
           }
+          const checkpoint =
+            presentationAuthorization.checkpoint ||
+            (await PresentationCheckpoint.create(
+              sourceContext,
+              presentationAuthorization.settings,
+              authorizedArgs,
+            ));
+          if (
+            checkpoint.source.itemKey !== sourceItemKey ||
+            checkpoint.source.libraryID !== sourceContext.libraryID
+          ) {
+            throw new Error(
+              "PPT checkpoint source does not match the authorized paper.",
+            );
+          }
+          await executionContext?.presentationProgress?.({
+            phase: "analyzing",
+            message: "",
+            isDraft: true,
+            checkpointId: checkpoint.id,
+          });
+          const paper =
+            sourceItemKey && !checkpoint.result
+              ? await checkpoint.run(
+                  "paper",
+                  sourceContext,
+                  () =>
+                    this.extractAndParsePaper(
+                      sourceItemKey,
+                      true,
+                      sourceContext?.libraryID,
+                      abortSignal,
+                    ),
+                  abortSignal,
+                )
+              : fallbackStructure
+                ? this.ensureExtendedStructure(fallbackStructure)
+                : null;
           const result = await executePresentationCapability(
             authorizedArgs,
             executionContext?.presentationVisualReviewer,
@@ -1995,7 +2028,10 @@ export class PdfToolManager {
             undefined,
             sourceContext,
             abortSignal,
+            checkpoint,
           );
+          if (classifyPresentationAttemptResult(result) === "completed")
+            await checkpoint.complete(result);
           finishPresentationAuthorizationAttempt(
             presentationAuthorization,
             classifyPresentationAttemptResult(result),

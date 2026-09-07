@@ -22,6 +22,7 @@ const DEFAULT_SETTINGS: PresentationLaunchSettings = {
 };
 
 interface GuardHarnessOptions {
+  resumeSettings?: PresentationLaunchSettings;
   providerId?: string;
   loggedIn?: boolean;
   quota?: number;
@@ -121,11 +122,36 @@ function createGuardHarness(options: GuardHarnessOptions = {}) {
           return loggedIn;
         },
         paperChatTier: options.paperChatTier,
+        resumeSettings: options.resumeSettings,
       }),
   };
 }
 
 describe("presentation launch guard", function () {
+  it("resumes with saved settings without reopening configuration, while retaining login and balance gates", async function () {
+    const saved = {
+      ...DEFAULT_SETTINGS,
+      slideCount: 15,
+      userInstructions: "Keep original settings",
+    };
+    const ready = createGuardHarness({ resumeSettings: saved });
+    const result = await ready.run();
+    assert.isTrue(result.allowed);
+    if (result.allowed) assert.deepEqual(result.settings, saved);
+    assert.notInclude(ready.calls, "settings-dialog");
+    const signedOut = createGuardHarness({
+      resumeSettings: saved,
+      loggedIn: false,
+      loginAccepted: false,
+    });
+    assert.deepEqual(await signedOut.run(), {
+      allowed: false,
+      reason: "login",
+    });
+    const empty = createGuardHarness({ resumeSettings: saved, quota: 0 });
+    assert.deepEqual(await empty.run(), { allowed: false, reason: "balance" });
+  });
+
   it("uses the deliberately short dedicated launch prompt", function () {
     assert.equal(
       PRESENTATION_LAUNCH_PROMPT,

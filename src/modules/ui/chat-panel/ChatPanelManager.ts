@@ -2,6 +2,7 @@
  * ChatPanelManager - Main panel lifecycle and coordination
  */
 
+import { PresentationCheckpoint } from "../../presentation/PresentationCheckpoint";
 import { config } from "../../../../package.json";
 import { getString } from "../../../utils/locale";
 import { ChatManager, type ChatMessage, type ChatSession } from "../../chat";
@@ -31,6 +32,7 @@ import { isPathInsidePresentationRoot } from "../../presentation";
 import {
   getCurrentPresentationPaper,
   launchPresentationForItem,
+  resumePresentationForItem,
   resolvePresentationPaperFromCandidates,
 } from "../../presentation/PresentationEntry";
 import {
@@ -94,6 +96,7 @@ import {
 import { navigateToPdfQuote } from "./PdfQuoteNavigator";
 import { normalizeNoteSourceKey } from "./NoteSourceNavigator";
 import { sessionTurnQueue } from "./SessionTurnQueue";
+import { getResumableTurn } from "../../chat/resumable-turn";
 import { openSourceTarget, type SourceTarget } from "./SourceNavigator";
 import {
   setupEventHandlers,
@@ -658,6 +661,9 @@ function getPresentationItemForMessage(
 }
 
 interface ChatMessageRenderCallbacks {
+  resumeMessageId?: string;
+  onResume?: () => void | Promise<void>;
+  onResumeError?: (error: Error) => void;
   retryableErrorMessageId?: string;
   onRetry?: () => void | Promise<void>;
   onRetryError?: (error: Error) => void;
@@ -671,6 +677,7 @@ interface ChatMessageRenderCallbacks {
   onSummarizeReplyError?: (error: Error) => void;
   onResumePresentation?: (
     assistantMessageId: string,
+    checkpointId?: string,
   ) => void | boolean | Promise<void | boolean>;
   onResumePresentationError?: (error: Error) => void;
   onCancelPresentation?: (
@@ -723,6 +730,9 @@ function renderMessageElementsWithMarkdownActions(
       onCancelPresentation: callbacks.onCancelPresentation,
       onCancelPresentationError: callbacks.onCancelPresentationError,
       onRetry: callbacks.onRetry,
+      resumeMessageId: callbacks.resumeMessageId,
+      onResume: callbacks.onResume,
+      onResumeError: callbacks.onResumeError,
       onRetryError: callbacks.onRetryError,
       onFork: callbacks.onFork,
       onForkError: callbacks.onForkError,
@@ -3497,7 +3507,10 @@ function createContext(container: HTMLElement): ChatPanelContext {
       }
     },
     summarizeConversationToNote: () => summarizeConversationToNote(context),
-    launchPresentation: async (assistantMessageId?: string) => {
+    launchPresentation: async (
+      assistantMessageId?: string,
+      requestedCheckpointId?: string,
+    ) => {
       const session = manager.getActiveSession();
       const taskMessage = assistantMessageId
         ? session?.messages.find(
@@ -3505,8 +3518,24 @@ function createContext(container: HTMLElement): ChatPanelContext {
               message.id === assistantMessageId && message.role === "assistant",
           )
         : undefined;
+      const checkpointArtifact = taskMessage?.presentationArtifacts
+        ?.slice()
+        .reverse()
+        .find(
+          (artifact) =>
+            artifact.isDraft !== false &&
+            artifact.checkpointId &&
+            (!requestedCheckpointId ||
+              artifact.checkpointId === requestedCheckpointId),
+        );
+      if (requestedCheckpointId && !checkpointArtifact) return false;
       const item = assistantMessageId
-        ? getPresentationItemForMessage(taskMessage, session)
+        ? getPresentationItemForMessage(
+            checkpointArtifact && taskMessage
+              ? { ...taskMessage, presentationArtifacts: [checkpointArtifact] }
+              : taskMessage,
+            session,
+          )
         : getCurrentPresentationPaper();
       if (!item) {
         Services.prompt.alert(
@@ -3515,6 +3544,30 @@ function createContext(container: HTMLElement): ChatPanelContext {
           getString("presentation-source-unavailable-message"),
         );
         return false;
+      }
+      const checkpointId = checkpointArtifact?.checkpointId;
+      if (checkpointId && taskMessage && session) {
+        const checkpoint = await PresentationCheckpoint.load(checkpointId);
+        return resumePresentationForItem(
+          item,
+          checkpoint,
+          (authorization) =>
+            manager.resumePresentationTurn(
+              session.id,
+              taskMessage.id,
+              item,
+              authorization,
+            ),
+          () => {
+            void focusRunningPresentationTask(
+              item,
+              "presentation_button",
+              session.id,
+              taskMessage.id,
+            );
+          },
+          container.ownerDocument.defaultView || undefined,
+        );
       }
       return launchPresentationForItem(
         item,
@@ -3554,6 +3607,12 @@ function createContext(container: HTMLElement): ChatPanelContext {
         const queueFailureErrorId = session
           ? sessionTurnQueue.snapshot(session.id).failureErrorId
           : undefined;
+        const resumableTurn =
+          session &&
+          !manager.isSessionRunning(session.id) &&
+          sessionTurnQueue.snapshot(session.id).status !== "running"
+            ? getResumableTurn(messages)
+            : null;
         const retryableErrorMessageId =
           queueFailureErrorId ||
           (getProviderManager().getActiveProviderId() === "paperchat"
@@ -3569,6 +3628,50 @@ function createContext(container: HTMLElement): ChatPanelContext {
             () => getQuoteNavigationItem(session, moduleCurrentItem),
             {
               retryableErrorMessageId,
+              resumeMessageId: resumableTurn?.targetMessageId,
+              onResume:
+                resumableTurn && session
+                  ? async () => {
+                      if (
+                        manager.getActiveSession()?.id !== session.id ||
+                        manager.isSessionRunning(session.id)
+                      )
+                        return;
+                      if (
+                        getResumableTurn(session.messages)?.targetMessageId !==
+                        resumableTurn.targetMessageId
+                      )
+                        return;
+                      if (
+                        resumableTurn.assistantMessage?.presentationArtifacts?.some(
+                          (artifact) =>
+                            artifact.checkpointId && artifact.isDraft !== false,
+                        )
+                      ) {
+                        await context.launchPresentation(
+                          resumableTurn.assistantMessage.id,
+                        );
+                        return;
+                      }
+                      if (
+                        resumableTurn.errorMessage &&
+                        (await sessionTurnQueue.retry(
+                          session.id,
+                          resumableTurn.errorMessage.id,
+                        ))
+                      )
+                        return;
+                      if (
+                        !(await manager.resumeLastTurn(
+                          session.id,
+                          resumableTurn.targetMessageId,
+                        ))
+                      ) {
+                        throw new Error(getString("chat-retry-unavailable"));
+                      }
+                    }
+                  : undefined,
+              onResumeError: (error) => context.appendError(error.message),
               onRetry: async () => {
                 if (
                   session &&
@@ -3607,8 +3710,8 @@ function createContext(container: HTMLElement): ChatPanelContext {
               onSummarizeReplyError: (error) => {
                 context.appendError(error.message);
               },
-              onResumePresentation: (assistantMessageId) =>
-                context.launchPresentation(assistantMessageId),
+              onResumePresentation: (assistantMessageId, checkpointId) =>
+                context.launchPresentation(assistantMessageId, checkpointId),
               onResumePresentationError: (error) => {
                 ztoolkit.log(
                   "[ChatPanel] Failed to resume presentation:",

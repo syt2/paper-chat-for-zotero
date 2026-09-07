@@ -1,3 +1,4 @@
+import { isPresentationCheckpointId } from "../presentation/PresentationCheckpoint";
 import type { PresentationToolCardArtifact } from "../../types/chat";
 
 export const MAX_PRESENTATION_ARTIFACTS_PER_MESSAGE = 8;
@@ -123,6 +124,14 @@ export function normalizePresentationArtifacts(
     seenArtifactIds.add(artifactId);
     normalized.push({
       toolCallId,
+      ...(isPresentationCheckpointId(raw.checkpointId)
+        ? { checkpointId: raw.checkpointId }
+        : {}),
+      ...(typeof raw.interruptedAt === "number" &&
+      Number.isSafeInteger(raw.interruptedAt) &&
+      raw.interruptedAt > 0
+        ? { interruptedAt: raw.interruptedAt }
+        : {}),
       ...(localId ? { localId } : {}),
       ...(sourceItemKey ? { sourceItemKey } : {}),
       ...(sourceLibraryID !== undefined ? { sourceLibraryID } : {}),

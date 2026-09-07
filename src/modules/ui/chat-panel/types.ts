@@ -86,7 +86,10 @@ export interface ChatPanelContext {
   updateUserBar: () => void;
   updatePdfCheckboxVisibility: (item: Zotero.Item | null) => Promise<void>;
   summarizeConversationToNote: () => Promise<void>;
-  launchPresentation: (assistantMessageId?: string) => Promise<boolean>;
+  launchPresentation: (
+    assistantMessageId?: string,
+    checkpointId?: string,
+  ) => Promise<boolean>;
   renderMessages: (
     messages: ChatMessage[],
     onRenderComplete?: () => void,

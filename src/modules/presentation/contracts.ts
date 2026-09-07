@@ -15,6 +15,7 @@ export type PresentationProgressPhase =
   | "completed";
 
 export interface PresentationProgressUpdate {
+  checkpointId?: string;
   phase: PresentationProgressPhase;
   message: string;
   pptxPath?: string;

@@ -16,7 +16,7 @@ export type PresentationProgressCardStatus =
 export interface PresentationProgressResumeAction {
   label: string;
   busyLabel: string;
-  onResume: () => void | boolean | Promise<void | boolean>;
+  onResume: (checkpointId?: string) => void | boolean | Promise<void | boolean>;
   onError?: (error: Error) => void;
 }
 
@@ -284,6 +284,7 @@ export function buildPresentationProgressCardElement(
     errorText?: string;
     interruptedAt?: number;
     resumeAction?: PresentationProgressResumeAction;
+    hasCheckpoint?: boolean;
     cancelAction?: PresentationProgressCancelAction;
   },
   artifactElement?: HTMLElement,
@@ -390,10 +391,15 @@ export function buildPresentationProgressCardElement(
     status === "error" ? summarizeError(input.errorText || "") : "";
   currentMessage.textContent =
     status === "interrupted"
-      ? getPresentationCardString(
-          "chat-presentation-progress-interrupted",
-          "PPT generation was interrupted. You can start again from this paper.",
-        )
+      ? input.hasCheckpoint === false
+        ? getPresentationCardString(
+            "chat-presentation-progress-interrupted-legacy",
+            "This older task has no saved checkpoint. Generate it again to continue.",
+          )
+        : getPresentationCardString(
+            "chat-presentation-progress-interrupted",
+            "PPT generation is paused. Resume to continue from saved progress.",
+          )
       : errorSummary ||
         progress.message ||
         getPresentationCardString(
@@ -579,7 +585,16 @@ export function buildPresentationProgressCardElement(
   }
 
   if (status === "interrupted" && input.resumeAction) {
-    const action = input.resumeAction;
+    const action =
+      input.hasCheckpoint === false
+        ? {
+            ...input.resumeAction,
+            label: getPresentationCardString(
+              "chat-presentation-progress-restart",
+              "Regenerate presentation",
+            ),
+          }
+        : input.resumeAction;
     const button = doc.createElementNS(HTML_NS, "button") as HTMLElement;
     button.setAttribute("type", "button");
     button.setAttribute("data-presentation-resume", "true");

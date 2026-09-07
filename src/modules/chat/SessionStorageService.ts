@@ -11,6 +11,10 @@
  * Push → INSERT, splice → DELETE, content update → UPDATE.
  */
 
+import {
+  collectPresentationCheckpointIds,
+  removeUnreferencedPresentationCheckpoints,
+} from "../presentation/PresentationCheckpoint";
 import type {
   ChatMessage,
   ChatMessageStreamingState,
@@ -1791,12 +1795,24 @@ export class SessionStorageService {
 
   private async deleteSessionData(sessionId: string): Promise<void> {
     let attachmentRows: AttachmentFileRow[] = [];
+    let checkpointIds: string[] = [];
     await this.runTransaction(async (db) => {
       attachmentRows =
         (await db.queryAsync(
           "SELECT files FROM messages WHERE session_id = ? AND files IS NOT NULL",
           [sessionId],
         )) || [];
+      const checkpointRows =
+        (await db.queryAsync(
+          "SELECT presentation_artifacts FROM messages WHERE session_id = ? AND presentation_artifacts IS NOT NULL",
+          [sessionId],
+        )) || [];
+      checkpointIds = collectPresentationCheckpointIds(
+        checkpointRows.map(
+          (row: { presentation_artifacts?: string }) =>
+            row.presentation_artifacts,
+        ),
+      );
       const sessionRows =
         (await db.queryAsync("SELECT id FROM sessions WHERE id = ?", [
           sessionId,
@@ -1821,6 +1837,28 @@ export class SessionStorageService {
         await incrementSearchRevision(db);
       }
     });
+    try {
+      if (checkpointIds.length) {
+        const db = await getStorageDatabase().ensureInit();
+        await removeUnreferencedPresentationCheckpoints(
+          checkpointIds,
+          async (id) =>
+            Boolean(
+              (
+                await db.queryAsync(
+                  "SELECT 1 FROM messages WHERE presentation_artifacts LIKE ? LIMIT 1",
+                  [`%${id}%`],
+                )
+              )?.length,
+            ),
+        );
+      }
+    } catch (error) {
+      ztoolkit.log(
+        "[SessionStorageService] PPT checkpoint cleanup failed:",
+        error,
+      );
+    }
     try {
       await cleanupDeletedSessionAttachmentCopies(
         attachmentRows,

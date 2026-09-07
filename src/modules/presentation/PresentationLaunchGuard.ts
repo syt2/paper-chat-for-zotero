@@ -67,6 +67,8 @@ export interface PresentationLaunchGuardOptions {
    * the settings returned by the native dialog remain the source of truth.
    */
   suggestedSettings?: Partial<PresentationLaunchSettings>;
+  /** App-owned saved settings, supplied only by an explicit checkpoint resume. */
+  resumeSettings?: PresentationLaunchSettings;
   /** Tier bound to the chat turn that will execute the presentation. */
   paperChatTier?: PaperChatTier;
 }
@@ -164,9 +166,9 @@ export async function guardPresentationLaunch(
   let balance = await getCachedPresentationBalance(options);
   if (!balance) return { allowed: false, reason: "balance" };
 
-  const settings = await options.dialogs.configurePresentation(
-    options.suggestedSettings,
-  );
+  const settings =
+    options.resumeSettings ||
+    (await options.dialogs.configurePresentation(options.suggestedSettings));
   if (!settings) {
     return { allowed: false, reason: "cancelled" };
   }

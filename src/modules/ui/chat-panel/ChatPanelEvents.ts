@@ -827,12 +827,23 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
     "#chat-turn-queue",
   ) as HTMLElement | null;
 
+  let displayedRunningSessionId: string | null = null;
   disposers.push(
     sessionTurnQueue.subscribe((sessionId) => {
       const session = chatManager.getActiveSession();
       if (session?.id !== sessionId) return;
       syncSendButtonState(sendButton, chatManager);
       context.renderMessages(session.messages);
+    }),
+    chatManager.subscribeRunActivity(() => {
+      syncSendButtonState(sendButton, chatManager);
+      const session = chatManager.getActiveSession();
+      const runningSessionId =
+        session && chatManager.isSessionRunning(session.id) ? session.id : null;
+      if (runningSessionId !== displayedRunningSessionId) {
+        displayedRunningSessionId = runningSessionId;
+        if (session) context.renderMessages(session.messages);
+      }
     }),
   );
   syncSendButtonState(sendButton, chatManager);
@@ -1231,10 +1242,10 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
     const activeSession = chatManager.getActiveSession();
     if (
       activeSession &&
-      sessionTurnQueue.snapshot(activeSession.id).status === "running" &&
+      isSessionTurnRunning(chatManager, activeSession.id) &&
       !messageInput.value.trim()
     ) {
-      await sessionTurnQueue.stop(activeSession.id);
+      await stopSessionTurn(chatManager, activeSession.id);
       syncSendButtonState(sendButton, chatManager);
       focusTextarea(messageInput);
       return;
@@ -2208,6 +2219,26 @@ function updateSendButtonPresentation(
   icon.style.fontWeight = "700";
 }
 
+function isSessionTurnRunning(
+  chatManager: ChatPanelContext["chatManager"],
+  sessionId: string,
+): boolean {
+  return (
+    sessionTurnQueue.snapshot(sessionId).status === "running" ||
+    chatManager.isSessionRunning(sessionId)
+  );
+}
+
+export async function stopSessionTurn(
+  chatManager: ChatPanelContext["chatManager"],
+  sessionId: string,
+): Promise<boolean> {
+  // Queue-owned turns must also advance the queue after cancellation.
+  return sessionTurnQueue.snapshot(sessionId).status === "running"
+    ? sessionTurnQueue.stop(sessionId)
+    : chatManager.cancelSessionTurn(sessionId);
+}
+
 export function syncSendButtonState(
   sendButton: HTMLButtonElement | null,
   chatManager: ChatPanelContext["chatManager"],
@@ -2219,7 +2250,7 @@ export function syncSendButtonState(
     "#chat-message-input",
   ) as HTMLTextAreaElement | null;
   const isRunning = activeSession
-    ? sessionTurnQueue.snapshot(activeSession.id).status === "running"
+    ? isSessionTurnRunning(chatManager, activeSession.id)
     : false;
   updateSendButtonPresentation(sendButton, isRunning && !input?.value.trim());
   if (root) renderTurnQueue(root, activeSession?.id);

@@ -5559,6 +5559,7 @@ describe("paperchat storage and chat manager", function () {
     assert.deepEqual(assistantMessage.presentationArtifacts, [
       {
         ...artifact,
+        interruptedAt: assistantMessage.presentationArtifacts![0].interruptedAt,
         path: undefined,
         previewPaths: undefined,
       },
@@ -5570,6 +5571,8 @@ describe("paperchat storage and chat manager", function () {
         presentationArtifacts: [
           {
             ...artifact,
+            interruptedAt:
+              assistantMessage.presentationArtifacts![0].interruptedAt,
             path: undefined,
             previewPaths: undefined,
           },
@@ -5581,6 +5584,8 @@ describe("paperchat storage and chat manager", function () {
       [
         {
           ...artifact,
+          interruptedAt:
+            assistantMessage.presentationArtifacts![0].interruptedAt,
           path: undefined,
           previewPaths: undefined,
           attachmentItemID: undefined,
@@ -7860,6 +7865,66 @@ describe("paperchat storage and chat manager", function () {
       );
       assert.notInclude(insertedMessageIds, "replay-source-assistant");
       assert.include(deletedMessageIds, "replay-source-error");
+
+      session.messages = [
+        {
+          id: "resume-user",
+          role: "user",
+          content: "continue original",
+          timestamp: 15,
+        },
+        {
+          id: "resume-assistant",
+          role: "assistant",
+          content: "kept partial ",
+          timestamp: 16,
+          streamingState: "interrupted",
+          evidence: [
+            {
+              version: 1,
+              id: "resume-evidence",
+              kind: "pdf_passage",
+              itemKey: "PAPER",
+              quote: "source",
+              contentHash: "hash",
+              toolCallId: "read-1",
+              resultIndex: 0,
+            },
+          ],
+          presentationArtifacts: [
+            { toolCallId: "deck-1", attachmentItemID: 42, isDraft: false },
+          ],
+        },
+      ];
+      const retainedEvidence = session.messages[1].evidence;
+      const retainedArtifacts = session.messages[1].presentationArtifacts;
+      capturedRequests.length = 0;
+      assert.isTrue(
+        await manager.resumeLastTurn(session.id, "resume-assistant"),
+      );
+      assert.equal(
+        session.messages.filter((message) => message.role === "user").length,
+        1,
+      );
+      assert.equal(
+        session.messages.filter((message) => message.role === "assistant")
+          .length,
+        1,
+      );
+      assert.include(session.messages[1].content, "kept partial ");
+      assert.include(session.messages[1].content, "completed answer");
+      assert.isUndefined(session.messages[1].streamingState);
+      assert.deepEqual(session.messages[1].evidence, retainedEvidence);
+      assert.deepEqual(
+        session.messages[1].presentationArtifacts,
+        retainedArtifacts,
+      );
+      assert.notInclude(insertedMessageIds, "resume-assistant");
+      assert.equal(
+        capturedRequests[0].find((message) => message.id === "resume-assistant")
+          ?.content,
+        "kept partial",
+      );
 
       const targetUser: ChatMessage = {
         id: "target-user",

@@ -1,3 +1,4 @@
+import type { PresentationCheckpoint } from "./PresentationCheckpoint";
 import type { TSchema } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import type { ToolDefinition } from "../../types/tool";
@@ -521,10 +522,62 @@ export async function executePresentationCapability(
   testOptions?: PresentationCapabilityTestOptions,
   sourceContext?: PresentationSourceContext,
   abortSignal?: AbortSignal,
+  checkpoint?: PresentationCheckpoint,
 ): Promise<string> {
   throwIfAborted(abortSignal);
+  if (checkpoint?.result) return checkpoint.result;
+  checkpoint?.assertCanResume();
+  const originalPlanner = planner;
+  const originalReviewer = visualReviewer;
+  if (checkpoint && originalPlanner)
+    planner = (input) =>
+      checkpoint.run(
+        "planning",
+        input,
+        () => originalPlanner(input),
+        abortSignal,
+      );
+  if (checkpoint && originalReviewer)
+    visualReviewer = (input) =>
+      checkpoint.run(
+        "reviewing",
+        input,
+        () => originalReviewer(input),
+        abortSignal,
+      );
+  const attachDeck = async (
+    options: Parameters<typeof attachPresentationToZotero>[0],
+  ) => {
+    const attachment = checkpoint
+      ? await checkpoint.attach(() => attachPresentationToZotero(options))
+      : await attachPresentationToZotero(options);
+    // Replaying an already committed import can reconstruct a draft from the
+    // checkpoint. Remove that generated duplicate just like a fresh import.
+    if (
+      checkpoint &&
+      attachment.status === "attached" &&
+      attachment.path !== options.outputPath
+    ) {
+      try {
+        await IOUtils.remove(options.outputPath, { ignoreAbsent: true });
+      } catch {
+        /* The imported attachment is already safe. */
+      }
+    }
+    return attachment;
+  };
   const strictQuality = shouldUseStrictPresentationQualityGate(testOptions);
-  const mediaResolver = testOptions?.mediaResolver || resolvePresentationMedia;
+  const originalMediaResolver =
+    testOptions?.mediaResolver || resolvePresentationMedia;
+  const mediaResolver: typeof originalMediaResolver = checkpoint
+    ? (request, libraryID, signal) =>
+        checkpoint.run(
+          "media",
+          { request, libraryID },
+          () => originalMediaResolver(request, libraryID, signal),
+          signal,
+        )
+    : originalMediaResolver;
   const progressLanguage = resolvePresentationLanguage(args.language);
   const requestedSlideCount = resolvePresentationSlideCount(args.slideCount);
   const progressMessages = getPresentationProgressMessages(
@@ -696,6 +749,7 @@ export async function executePresentationCapability(
         }
       }
       if (!validation.request) {
+        await checkpoint?.discardPlanningResults();
         const detail = validation.issues.join("; ");
         if (typeof ztoolkit !== "undefined") {
           ztoolkit.log(
@@ -715,6 +769,7 @@ export async function executePresentationCapability(
       requestInput = validation.request;
     } catch (error) {
       throwIfAborted(abortSignal);
+      await checkpoint?.discardPlanningResults();
       return formatPresentationError({
         summary: "Presentation internal planning failed.",
         retryable: true,
@@ -878,7 +933,26 @@ export async function executePresentationCapability(
     attachment?.status === "attached" ||
     attachment?.attachmentCommitted === true;
   try {
-    const renderer = getPresentationRenderer();
+    const originalRenderer = getPresentationRenderer();
+    const renderer: typeof originalRenderer = checkpoint
+      ? {
+          renderPresentation: (request, signal) =>
+            checkpoint.run(
+              "render",
+              request,
+              () => originalRenderer.renderPresentation(request, signal),
+              signal,
+            ),
+          renderPresentationWithPreview: (request, signal) =>
+            checkpoint.run(
+              "preview",
+              request,
+              () =>
+                originalRenderer.renderPresentationWithPreview(request, signal),
+              signal,
+            ),
+        }
+      : originalRenderer;
     let presentationsRoot: string | undefined;
     let outputPath: string | undefined;
     let previewFolder: string | undefined;
@@ -1578,7 +1652,7 @@ export async function executePresentationCapability(
       previewPaths: [...previewPaths],
       isDraft: true,
     });
-    const attachment = await attachPresentationToZotero({
+    const attachment = await attachDeck({
       outputPath,
       presentationTitle: request.title,
       sourceItemKey: request.sourceItemKey,
@@ -1688,7 +1762,7 @@ export async function executePresentationCapability(
           previewPaths: persistedPresentationPreviewPaths,
           isDraft: true,
         });
-        recoveredAttachment = await attachPresentationToZotero({
+        recoveredAttachment = await attachDeck({
           outputPath: persistedPresentationPath,
           presentationTitle: request.title,
           sourceItemKey: request.sourceItemKey,

@@ -341,6 +341,7 @@ describe("chat message exact navigation", function () {
     };
     const manager = {
       getActiveSession: () => ({ id: "presentation-target-session" }),
+      isSessionRunning: () => false,
     };
 
     syncSessionNavigationState(
@@ -638,7 +639,7 @@ describe("chat message exact navigation", function () {
         "interrupted",
       );
       assert.equal(elapsed?.textContent, "Elapsed 00:45");
-      assert.equal(resume?.textContent, "重新制作");
+      assert.equal(resume?.textContent, "Regenerate presentation");
       assert.isNull(
         history.querySelector(
           '[data-presentation-indeterminate-progress="true"]',
@@ -1140,6 +1141,76 @@ describe("chat message exact navigation", function () {
       stopPropagation: () => undefined,
     });
     assert.deepEqual(removedFiles, [0]);
+  });
+
+  it("shows one play action on the selected interrupted reply with an attached error", async function () {
+    const doc = new FakeDocument();
+    let resumed = 0;
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const error: ChatMessage = {
+      id: "resume-error",
+      role: "error",
+      content: "failed",
+      timestamp: 3,
+    };
+    const options = {
+      resumeMessageId: error.id,
+      onResume: () => {
+        resumed++;
+        return pending;
+      },
+    };
+    const message = createMessageElement(
+      doc as unknown as Document,
+      {
+        id: "resume-assistant",
+        role: "assistant",
+        content: "partial",
+        timestamp: 2,
+        streamingState: "interrupted",
+      },
+      darkTheme,
+      true,
+      true,
+      undefined,
+      undefined,
+      options,
+      error,
+    ) as unknown as FakeElement;
+    const buttons = message.querySelectorAll(".resume-reply-btn");
+    assert.lengthOf(buttons, 1);
+    assert.include(
+      buttons[0].querySelector("img")?.getAttribute("src"),
+      "play.svg",
+    );
+    const click = buttons[0].listeners.get("click")![0];
+    const event = { preventDefault: () => {}, stopPropagation: () => {} };
+    click(event);
+    click(event);
+    await Promise.resolve();
+    assert.equal(resumed, 1);
+    assert.equal(buttons[0].getAttribute("aria-busy"), "true");
+    finish();
+    const older = createMessageElement(
+      doc as unknown as Document,
+      {
+        id: "older",
+        role: "assistant",
+        content: "old partial",
+        timestamp: 0,
+        streamingState: "interrupted",
+      },
+      darkTheme,
+      false,
+      false,
+      undefined,
+      undefined,
+      options,
+    ) as unknown as FakeElement;
+    assert.isEmpty(older.querySelectorAll(".resume-reply-btn"));
   });
 
   it("renders sent text attachments alongside compact clickable images", function () {

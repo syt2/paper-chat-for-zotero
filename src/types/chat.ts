@@ -244,6 +244,10 @@ export type AgentRuntimeEventType =
 
 /** Trusted, app-authored presentation files rendered inside a tool card. */
 export interface PresentationToolCardArtifact {
+  /** A stopped tool remains stopped even when its assistant message resumes. */
+  interruptedAt?: number;
+  /** Identifier of the durable app-owned PPT checkpoint. */
+  checkpointId?: string;
   /** Tool call that produced this artifact; used to bind it to its card. */
   toolCallId: string;
   /** App-local identity; provider protocol still uses the original toolCallId. */

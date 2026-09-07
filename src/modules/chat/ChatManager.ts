@@ -98,6 +98,7 @@ import {
   stripPendingAndIncompleteToolCallContent,
 } from "./interrupted-message";
 import { isTerminalPresentationArtifact } from "./presentation-artifacts";
+import { getResumableTurn } from "./resumable-turn";
 import { saveDebugContextSnapshot } from "./DebugContextExporter";
 import { MemoryManager } from "./memory/MemoryManager";
 import { SessionTitleService } from "./SessionTitleService";
@@ -851,6 +852,10 @@ export class ChatManager {
       }
       this.notifyRunActivity();
     }
+  }
+
+  isSessionRunning(sessionId: string): boolean {
+    return this.activeSessionRunIds.has(sessionId);
   }
 
   getRunActivity(): ChatRunActivity {
@@ -1665,6 +1670,89 @@ export class ChatManager {
     return this.paperChatTier.retryCurrentPaperChatFailure();
   }
 
+  async resumeLastTurn(
+    sessionId: string,
+    targetMessageId: string,
+  ): Promise<boolean> {
+    await this.init();
+    const session = this.currentSession;
+    if (session?.id !== sessionId || this.isSessionRunning(sessionId))
+      return false;
+    const turn = getResumableTurn(session.messages);
+    if (!turn || turn.targetMessageId !== targetMessageId) return false;
+    if (turn.errorMessage) {
+      return this.retryFailedTurn(sessionId, turn.errorMessage.id);
+    }
+    return this.sendMessage(turn.userMessage.content, {
+      item: this.getSessionItem(session),
+      images: turn.userMessage.images,
+      resumeFailedTurn: true,
+      reuseUserMessageId: turn.userMessage.id,
+      reuseAssistantMessageId: turn.assistantMessage?.id,
+      targetSession: session,
+      requireTargetSessionActive: true,
+    });
+  }
+
+  async resumePresentationTurn(
+    sessionId: string,
+    assistantMessageId: string,
+    item: Zotero.Item,
+    authorization: PresentationLaunchAuthorization,
+  ): Promise<boolean> {
+    const session = this.currentSession;
+    if (
+      !session ||
+      session.id !== sessionId ||
+      this.isSessionRunning(sessionId) ||
+      !authorization.checkpoint
+    )
+      return false;
+    const index = session.messages.findIndex(
+      (message) =>
+        message.id === assistantMessageId && message.role === "assistant",
+    );
+    const assistant = session.messages[index];
+    if (
+      !assistant?.presentationArtifacts?.some(
+        (artifact) =>
+          artifact.checkpointId === authorization.checkpoint!.id &&
+          !isTerminalPresentationArtifact(artifact),
+      )
+    )
+      return false;
+    const user = session.messages
+      .slice(0, index)
+      .reverse()
+      .find((message) => message.role === "user" && !message.apiOnly);
+    if (!user) return false;
+    const errors: ChatMessage[] = [];
+    for (const message of session.messages.slice(index + 1)) {
+      if (message.role === "user" && !message.apiOnly) break;
+      if (message.role === "error") errors.push(message);
+    }
+    const accepted = await this.sendMessage(user.content, {
+      item,
+      targetSession: session,
+      requireTargetSessionActive: true,
+      resumeFailedTurn: true,
+      reuseUserMessageId: user.id,
+      reuseAssistantMessageId: assistant.id,
+      allowedToolNames: ["presentation"],
+      requiredProviderId: "paperchat",
+      presentationAuthorization: authorization,
+    });
+    if (!accepted) return false;
+    for (const error of errors) {
+      await this.sessionStorage.deleteMessage(session.id, error.id);
+      const errorIndex = session.messages.indexOf(error);
+      if (errorIndex >= 0) session.messages.splice(errorIndex, 1);
+    }
+    if (errors.length && this.isSessionActive(session))
+      this.onMessageUpdate?.(session.messages);
+    return true;
+  }
+
   async retryFailedTurn(
     sessionId: string,
     errorMessageId: string,
@@ -1947,7 +2035,8 @@ export class ChatManager {
           (message) =>
             message.id === options.reuseAssistantMessageId &&
             message.role === "assistant" &&
-            message.streamingState === "interrupted",
+            (message.streamingState === "interrupted" ||
+              !!options.presentationAuthorization?.checkpoint),
         )
       : undefined;
     if (options.reuseAssistantMessageId && !reusedAssistantMessage) {
@@ -1956,8 +2045,35 @@ export class ChatManager {
     const reusedAssistantContext = reusedAssistantMessage
       ? createInterruptedAssistantContextMessage(reusedAssistantMessage)
       : null;
-    const initialAssistantContent = reusedAssistantMessage?.content || "";
+    const resumedArtifact = reusedAssistantMessage?.presentationArtifacts?.find(
+      (artifact) =>
+        artifact.checkpointId ===
+          options.presentationAuthorization?.checkpoint?.id &&
+        !!artifact.checkpointId &&
+        !isTerminalPresentationArtifact(artifact),
+    );
+    const initialAssistantContent = (
+      reusedAssistantMessage?.content || ""
+    ).replace(/<tool-call\b[^>]*>[\s\S]*?<\/tool-call>/g, (card) =>
+      resumedArtifact?.localId &&
+      card
+        .split(">")[0]
+        .includes(` expand-key="${this.escapeXml(resumedArtifact.localId)}"`)
+        ? ""
+        : card,
+    );
     const initialAssistantReasoning = reusedAssistantMessage?.reasoning;
+    const initialAssistantEvidence = reusedAssistantMessage?.evidence;
+    const initialAssistantArtifacts =
+      reusedAssistantMessage?.presentationArtifacts?.map((artifact) =>
+        isTerminalPresentationArtifact(artifact)
+          ? artifact
+          : {
+              ...artifact,
+              interruptedAt:
+                artifact.interruptedAt || reusedAssistantMessage.timestamp,
+            },
+      );
     const { runId: sessionRunId, abortSignal } =
       this.beginSessionRun(sendingSession);
     const ensureSendingSessionTracked = () => {
@@ -2323,6 +2439,10 @@ export class ChatManager {
         this.resetAssistantForRetry(assistantMessage);
         assistantMessage.content = initialAssistantContent;
         assistantMessage.reasoning = initialAssistantReasoning;
+        if (options.resumeFailedTurn) {
+          assistantMessage.evidence = initialAssistantEvidence;
+          assistantMessage.presentationArtifacts = initialAssistantArtifacts;
+        }
         await this.sessionStorage.updateMessageContent(
           sendingSession.id,
           assistantMessage.id,
@@ -2330,7 +2450,8 @@ export class ChatManager {
           assistantMessage.reasoning,
           {
             streamingState: "in_progress",
-            presentationArtifacts: [],
+            evidence: assistantMessage.evidence || [],
+            presentationArtifacts: assistantMessage.presentationArtifacts || [],
           },
         );
       } else {
@@ -2468,6 +2589,10 @@ export class ChatManager {
         if (reusedAssistantMessage) {
           assistantMessage.content = initialAssistantContent;
           assistantMessage.reasoning = initialAssistantReasoning;
+          if (options.resumeFailedTurn) {
+            assistantMessage.evidence = initialAssistantEvidence;
+            assistantMessage.presentationArtifacts = initialAssistantArtifacts;
+          }
         }
       };
 
@@ -3459,6 +3584,7 @@ export class ChatManager {
       }
       return {
         ...artifact,
+        interruptedAt: artifact.interruptedAt || Date.now(),
         path: undefined,
         previewPaths: undefined,
       };

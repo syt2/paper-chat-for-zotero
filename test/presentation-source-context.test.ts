@@ -1,3 +1,4 @@
+import { PresentationCheckpoint } from "../src/modules/presentation/PresentationCheckpoint.ts";
 import { assert } from "chai";
 import { PdfToolManager } from "../src/modules/chat/pdf-tools/PdfToolManager.ts";
 import { resetPresentationRendererForTests } from "../src/modules/presentation/PresentationRendererLoader.ts";
@@ -14,12 +15,32 @@ import {
 
 describe("presentation source context", function () {
   let originalZotero: unknown;
+  let originalCreateCheckpoint: typeof PresentationCheckpoint.create;
 
   beforeEach(function () {
+    originalCreateCheckpoint = PresentationCheckpoint.create;
+    // This suite exercises tool authorization; durable IO has its own integration suite.
+    PresentationCheckpoint.create = async (source, settings, args) =>
+      ({
+        id: "test-checkpoint",
+        source,
+        settings,
+        args,
+        run: (
+          _stage: string,
+          _input: unknown,
+          operation: () => Promise<unknown>,
+        ) => operation(),
+        assertCanResume: () => undefined,
+        attach: (operation: () => Promise<unknown>) => operation(),
+        complete: async () => undefined,
+        discardPlanningResults: async () => undefined,
+      }) as unknown as PresentationCheckpoint;
     originalZotero = (globalThis as { Zotero?: unknown }).Zotero;
   });
 
   afterEach(function () {
+    PresentationCheckpoint.create = originalCreateCheckpoint;
     (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
   });
 

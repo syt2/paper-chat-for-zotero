@@ -314,6 +314,7 @@ describe("markdown renderer source groups", function () {
     const startedAt = 1_000_000;
     const interruptedAt = startedAt + 32_000;
     let resumeAttempts = 0;
+    let resumedCheckpointId: string | undefined;
     const resumeErrors: string[] = [];
     const findByAttribute = (
       node: FakeElement,
@@ -340,12 +341,13 @@ describe("markdown renderer source groups", function () {
 </tool-call>`,
         "message-presentation-interrupted",
         {
-          presentationInterruption: { endedAt: interruptedAt },
           presentationArtifacts: new Map([
             [
               "presentation-interrupted",
               {
                 toolCallId: "presentation-interrupted-tool-call",
+                interruptedAt,
+                checkpointId: "ppt-specific-card",
                 localId: "presentation-interrupted",
                 isDraft: true,
               },
@@ -354,7 +356,8 @@ describe("markdown renderer source groups", function () {
           presentationResumeAction: {
             label: "Resume presentation",
             busyLabel: "Resuming...",
-            onResume: async () => {
+            onResume: async (checkpointId) => {
+              resumedCheckpointId = checkpointId;
               resumeAttempts += 1;
               throw new Error("resume failed");
             },
@@ -417,7 +420,7 @@ describe("markdown renderer source groups", function () {
         findByAttribute(root, "data-presentation-long-running-hint", "true"),
       );
       assert.notProperty(activeStage?.children[0]?.style || {}, "animation");
-      assert.include(activity?.children[1]?.textContent || "", "interrupted");
+      assert.include(activity?.children[1]?.textContent || "", "paused");
       assert.equal(resume?.textContent, "Resume presentation");
       assert.isUndefined(open);
       assert.isUndefined(preview);
@@ -429,6 +432,7 @@ describe("markdown renderer source groups", function () {
       assert.equal(resume?.textContent, "Resuming...");
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
       assert.equal(resumeAttempts, 1);
+      assert.equal(resumedCheckpointId, "ppt-specific-card");
       assert.deepEqual(resumeErrors, ["resume failed"]);
       assert.isNull(resume?.getAttribute("data-busy") || null);
       assert.isNull(resume?.getAttribute("disabled") || null);
@@ -497,7 +501,7 @@ describe("markdown renderer source groups", function () {
       );
       assert.equal(
         findByAttribute(root, "data-presentation-resume", "true")?.textContent,
-        "Resume presentation",
+        "Regenerate presentation",
       );
       assert.isUndefined(
         findByAttribute(root, "data-presentation-open", "true"),
@@ -992,16 +996,57 @@ describe("markdown renderer source groups", function () {
       },
     };
 
-    assert.strictEqual(
-      getMessageMarkdownRenderOptions(markdown, undefined),
+    const completedOptions = getMessageMarkdownRenderOptions(
       markdown,
+      undefined,
     );
+    assert.strictEqual(
+      completedOptions?.blockquoteAction,
+      markdown.blockquoteAction,
+    );
+    assert.strictEqual(
+      completedOptions?.sourceGroupAction,
+      markdown.sourceGroupAction,
+    );
+    assert.strictEqual(
+      completedOptions?.evidenceAction,
+      markdown.evidenceAction,
+    );
+    assert.isDefined(completedOptions?.presentationInterruption);
     for (const streamingState of ["in_progress", "interrupted"] as const) {
       const options = getMessageMarkdownRenderOptions(markdown, streamingState);
       assert.isUndefined(options?.blockquoteAction);
       assert.isUndefined(options?.sourceGroupAction);
       assert.isUndefined(options?.evidenceAction);
     }
+  });
+
+  it("keeps stopped PPT cards frozen when their assistant is resumed or completes", function () {
+    const artifacts = [
+      { toolCallId: "old", localId: "old", interruptedAt: 5000, isDraft: true },
+      { toolCallId: "new", localId: "new", isDraft: true },
+    ];
+    const running = getMessageMarkdownRenderOptions(
+      {},
+      "in_progress",
+      undefined,
+      artifacts,
+      9000,
+    );
+    assert.deepEqual([...running!.presentationActiveToolCallIds!], ["new"]);
+    assert.equal(
+      running!.presentationArtifacts!.get("old")!.interruptedAt,
+      5000,
+    );
+    const finished = getMessageMarkdownRenderOptions(
+      {},
+      undefined,
+      undefined,
+      artifacts,
+      9000,
+    );
+    assert.isEmpty([...finished!.presentationActiveToolCallIds!]);
+    assert.equal(finished!.presentationInterruption!.endedAt, 9000);
   });
 
   it("extracts source-group fragments while preserving surrounding markdown", function () {

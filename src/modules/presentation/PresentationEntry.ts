@@ -1,3 +1,8 @@
+import {
+  createPresentationLaunchAuthorization,
+  type PresentationLaunchAuthorization,
+} from "./PresentationLaunchAuthorization";
+import type { PresentationCheckpoint } from "./PresentationCheckpoint";
 import { getString } from "../../utils/locale";
 import { getPref } from "../../utils/prefs";
 import {
@@ -509,6 +514,7 @@ async function runSharedPresentationGuard(options: {
   onSettingsFocusReady?: (focus: () => void) => void;
   abortSignal?: AbortSignal;
   suggestedSettings?: Partial<PresentationLaunchSettings>;
+  resumeSettings?: PresentationLaunchSettings;
   paperChatTier?: PaperChatTier;
 }) {
   return guardPresentationLaunch({
@@ -521,6 +527,7 @@ async function runSharedPresentationGuard(options: {
     }),
     ensureLoggedIn: () => showAuthDialog("login"),
     suggestedSettings: options.suggestedSettings,
+    resumeSettings: options.resumeSettings,
     paperChatTier: options.paperChatTier,
   });
 }
@@ -753,4 +760,48 @@ export function registerPresentationEntryMenu(
 
 export function unregisterPresentationEntryMenu(): void {
   ztoolkit.Menu.unregister(PRESENTATION_ITEM_MENU_ID);
+}
+
+/** Explicit resume keeps the original settings while rechecking account and capacity. */
+export function resumePresentationForItem(
+  item: Zotero.Item,
+  checkpoint: PresentationCheckpoint,
+  run: (authorization: PresentationLaunchAuthorization) => Promise<boolean>,
+  focusTask: () => void,
+  parentWindow?: Window,
+): Promise<boolean> {
+  const paper = resolveLaunchablePresentationPaper(item);
+  if (
+    !paper ||
+    paper.key !== checkpoint.source.itemKey ||
+    paper.libraryID !== checkpoint.source.libraryID
+  ) {
+    showMissingPdfDialog();
+    return Promise.resolve(false);
+  }
+  return launchCoordinator.enqueue(
+    createPresentationLaunchKey({
+      itemKey: paper.key,
+      libraryID: paper.libraryID,
+    }),
+    async (lifecycle) => {
+      const guard = await runSharedPresentationGuard({
+        resumeSettings: checkpoint.settings,
+        paperChatTier: getConfiguredPaperChatTier(),
+      });
+      if (!guard.allowed || !lifecycle.beginRunning(focusTask)) return false;
+      return run(
+        createPresentationLaunchAuthorization(
+          checkpoint.source,
+          guard.settings,
+          checkpoint,
+        ),
+      );
+    },
+    {
+      focusConfiguration: focusTask,
+      onCapacityExceeded: () =>
+        showPresentationConcurrencyLimitDialog(parentWindow),
+    },
+  );
 }
