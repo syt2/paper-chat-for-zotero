@@ -2641,7 +2641,10 @@ export function updateUserBarDisplay(
         );
         userSubscriptionProgressFillEl.style.width = `${subscriptionUsage.percentUsed}%`;
         userSubscriptionEl.setAttribute("aria-label", subscriptionLabel);
-        if (subscriptionUsage.percentUsed >= 99) {
+        if (
+          subscriptionUsage.percentUsed >= 99 ||
+          subscriptionUsage.amountRemaining < LOW_BALANCE_WARNING_THRESHOLD
+        ) {
           applySubscriptionLimitStyles(userSubscriptionEl);
         } else {
           resetSubscriptionLimitStyles(userSubscriptionEl);

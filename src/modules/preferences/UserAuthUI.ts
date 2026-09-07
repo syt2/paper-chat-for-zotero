@@ -396,7 +396,8 @@ export function updateUserDisplay(
         );
         userSubscriptionProgressFillEl.style.width = `${subscriptionUsage.percentUsed}%`;
         userSubscriptionProgressFillEl.style.background =
-          subscriptionUsage.percentUsed >= 99
+          subscriptionUsage.percentUsed >= 99 ||
+          subscriptionUsage.amountRemaining < LOW_BALANCE_WARNING_THRESHOLD
             ? prefColors.testError
             : "#2563eb";
         userSubscriptionEl.title = `${getString("user-panel-used")}: ${subscriptionUsage.amountUsedLabel} / ${subscriptionUsage.amountTotalLabel}`;

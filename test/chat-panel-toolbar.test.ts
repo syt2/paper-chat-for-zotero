@@ -371,8 +371,28 @@ describe("chat panel presentation toolbar entry", function () {
         ).style.width,
         "99%",
       );
-      usage = { ...usage, amountRemaining: 9_999 };
+      usage = {
+        ...usage,
+        amountTotal: 100_000,
+        amountUsed: 90_000,
+        amountRemaining: 10_000,
+        percentUsed: 90,
+      };
       updateUserBarDisplay(container, auth);
+      assert.isNull(
+        subscription.getAttribute("data-subscription-limit-clickable"),
+      );
+      usage = {
+        ...usage,
+        amountUsed: 90_001,
+        amountRemaining: 9_999,
+        percentUsed: 90.001,
+      };
+      updateUserBarDisplay(container, auth);
+      assert.equal(
+        subscription.getAttribute("data-subscription-limit-clickable"),
+        "true",
+      );
       assert.equal(warning.style.display, "block");
       assert.equal(wallet.getAttribute("data-low-balance"), "true");
       provider = "deepseek";
