@@ -676,7 +676,12 @@ export function createChatContainer(
     },
     { id: "chat-input-area" },
   );
-  const composer = createElement(doc, "div", {}, { id: "chat-composer" });
+  const composer = createElement(
+    doc,
+    "div",
+    { position: "relative" },
+    { id: "chat-composer" },
+  );
 
   const turnQueue = createElement(
     doc,
@@ -1045,7 +1050,7 @@ export function createChatContainer(
       position: "absolute",
       bottom: "56px",
       boxSizing: "border-box",
-      right: "10px",
+      left: "10px",
       width: "300px",
       maxWidth: "calc(100% - 20px)",
       maxHeight: "350px",
@@ -1177,9 +1182,10 @@ export function createChatContainer(
     {
       display: "none",
       position: "absolute",
-      bottom: "180px",
-      left: "14px",
-      right: "14px",
+      bottom: "100%",
+      marginBottom: "4px",
+      left: "0",
+      right: "0",
       maxHeight: "250px",
       overflowY: "auto",
       background: theme.dropdownBg,
@@ -1203,7 +1209,7 @@ export function createChatContainer(
   root.appendChild(chatViewport);
   root.appendChild(inputArea);
   root.appendChild(historyDropdown);
-  root.appendChild(mentionPopup);
+  composer.appendChild(mentionPopup);
   container.appendChild(root);
 
   doc.documentElement?.appendChild(container);

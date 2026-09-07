@@ -56,6 +56,7 @@ import {
 } from "./ChatPanelManager";
 import { startReaderFigureScreenshot } from "../ReaderFigureScreenshot";
 import { updateAnimatedBalance } from "./AnimatedBalance";
+import { ConversationNavigator } from "./ConversationNavigator";
 import {
   getImageAttachmentLimitMessage,
   refreshImageInputAvailability,
@@ -751,6 +752,7 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
   // document or window outlive the panel and must be removed on teardown to
   // avoid leaking them (and the DOM they close over) on every panel rebuild.
   const disposers: Array<() => void> = [];
+  disposers.push(ConversationNavigator.attach(container));
 
   const openPluginPreferencesSafely = (): void => {
     void import("../../preferences/UserAuthUI")
@@ -1540,6 +1542,26 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
     }
   });
 
+  // Keep open history anchored when the sidebar, composer or footer resizes.
+  const positionOpenHistory = () => {
+    if (
+      historyBtn &&
+      historyDropdown &&
+      historyDropdown.style.display !== "none"
+    )
+      positionHistoryDropdown(container, historyBtn, historyDropdown);
+  };
+  const panelWindow = container.ownerDocument.defaultView;
+  if (panelWindow?.ResizeObserver && historyBtn && historyDropdown) {
+    const observer = new panelWindow.ResizeObserver(positionOpenHistory);
+    observer.observe(container);
+    for (const id of ["#chat-input-area", "#chat-footer"]) {
+      const element = container.querySelector(id);
+      if (element) observer.observe(element);
+    }
+    disposers.push(() => observer.disconnect());
+  }
+
   // History button - toggle dropdown with pagination
   historyBtn?.addEventListener("click", async () => {
     ztoolkit.log("History button clicked");
@@ -1656,6 +1678,29 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
     // Initialize model selector text
     updateModelSelectorDisplay(container);
 
+    const positionOpenModelDropdown = () => {
+      if (modelDropdown.style.display !== "block") return;
+      const selectorRect = modelSelectorBtn.getBoundingClientRect();
+      const panelRect = container.getBoundingClientRect();
+      const menuWidth = Math.max(
+        0,
+        Math.min(340, selectorRect.right - panelRect.left - 12),
+      );
+      modelDropdown.style.width = `${menuWidth}px`;
+      modelDropdown.style.minWidth = "0";
+      modelDropdown.style.maxWidth = `${menuWidth}px`;
+      modelDropdown.style.maxHeight = `${Math.max(0, Math.min(300, selectorRect.top - panelRect.top - 12))}px`;
+    };
+    if (panelWindow?.ResizeObserver) {
+      const observer = new panelWindow.ResizeObserver(
+        positionOpenModelDropdown,
+      );
+      observer.observe(container);
+      const inputArea = container.querySelector("#chat-input-area");
+      if (inputArea) observer.observe(inputArea);
+      disposers.push(() => observer.disconnect());
+    }
+
     // Toggle model dropdown
     modelSelectorBtn.addEventListener("click", () => {
       const isVisible = modelDropdown.style.display === "block";
@@ -1663,16 +1708,8 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
         modelDropdown.style.display = "none";
       } else {
         populateModelDropdown(container, modelDropdown, context);
-        const selectorRect = modelSelectorBtn.getBoundingClientRect();
-        const panelRect = container.getBoundingClientRect();
-        const menuWidth = Math.max(
-          0,
-          Math.min(340, selectorRect.right - panelRect.left - 12),
-        );
-        modelDropdown.style.width = `${menuWidth}px`;
-        modelDropdown.style.minWidth = "0";
-        modelDropdown.style.maxWidth = `${menuWidth}px`;
         modelDropdown.style.display = "block";
+        positionOpenModelDropdown();
       }
     });
 

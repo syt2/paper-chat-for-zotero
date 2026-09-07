@@ -1503,6 +1503,14 @@ export function positionHistoryDropdown(
   const panelRect = container.getBoundingClientRect();
   const buttonRect = trigger.getBoundingClientRect();
   const bottom = Math.max(8, panelRect.bottom - buttonRect.top + 6);
+  const width = Math.max(0, Math.min(300, panelRect.width - 20));
+  const left = Math.max(
+    10,
+    Math.min(buttonRect.left - panelRect.left, panelRect.width - width - 10),
+  );
+  dropdown.style.width = `${width}px`;
+  dropdown.style.left = `${left}px`;
+  dropdown.style.right = "auto";
   dropdown.style.top = "auto";
   dropdown.style.bottom = `${bottom}px`;
   dropdown.style.maxHeight = `${Math.max(0, Math.min(350, panelRect.height - bottom - 12))}px`;

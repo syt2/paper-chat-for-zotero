@@ -867,16 +867,50 @@ describe("history dropdown grouped search UI", function () {
   });
 
   describe("history dropdown footer placement", function () {
-    for (const [name, top, height] of [
-      ["sidebar", 0, 800],
-      ["floating panel", 120, 240],
-    ] as const) {
-      it(`opens above the trigger within a ${name}`, function () {
+    it("clamps to the panel edges and follows a changed trigger position", function () {
+      let width = 900;
+      let triggerLeft = 1040;
+      const container = {
+        getBoundingClientRect: () => ({
+          left: 200,
+          width,
+          bottom: 800,
+          height: 800,
+        }),
+      } as HTMLElement;
+      const trigger = {
+        getBoundingClientRect: () => ({ left: triggerLeft, top: 758 }),
+      } as HTMLElement;
+      const dropdown = { style: {} } as HTMLElement;
+      positionHistoryDropdown(container, trigger, dropdown);
+      assert.equal(dropdown.style.left, "590px");
+      width = 260;
+      triggerLeft = 246;
+      positionHistoryDropdown(container, trigger, dropdown);
+      assert.equal(dropdown.style.left, "10px");
+      assert.equal(dropdown.style.width, "240px");
+      width = 900;
+      positionHistoryDropdown(container, trigger, dropdown);
+      assert.equal(dropdown.style.left, "46px");
+      assert.equal(dropdown.style.width, "300px");
+    });
+
+    it("opens above the trigger within sidebar and floating panels", function () {
+      for (const [top, height] of [
+        [0, 800],
+        [120, 240],
+      ]) {
         const container = {
-          getBoundingClientRect: () => ({ top, bottom: top + height, height }),
+          getBoundingClientRect: () => ({
+            top,
+            bottom: top + height,
+            height,
+            left: 200,
+            width: 900,
+          }),
         } as HTMLElement;
         const trigger = {
-          getBoundingClientRect: () => ({ top: top + height - 42 }),
+          getBoundingClientRect: () => ({ top: top + height - 42, left: 246 }),
         } as HTMLElement;
         const dropdown = {
           style: { top: "790px", bottom: "auto", maxHeight: "0px" },
@@ -884,11 +918,14 @@ describe("history dropdown grouped search UI", function () {
         positionHistoryDropdown(container, trigger, dropdown);
         assert.equal(dropdown.style.top, "auto");
         assert.equal(dropdown.style.bottom, "48px");
+        assert.equal(dropdown.style.left, "46px");
+        assert.equal(dropdown.style.right, "auto");
+        assert.equal(dropdown.style.width, "300px");
         const menuHeight = parseFloat(dropdown.style.maxHeight);
         assert.isAbove(menuHeight, 0);
         assert.isAtMost(menuHeight, 350);
         assert.isAtLeast(height - 48 - menuHeight, 12);
-      });
-    }
+      }
+    });
   });
 });

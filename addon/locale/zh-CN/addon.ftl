@@ -67,6 +67,10 @@ paperchat-user-panel-redeem-success = 兑换成功
 paperchat-user-panel-redeem-error = 兑换失败
 paperchat-user-checkin-btn = 签到
 paperchat-user-checked-in = ✓ 签到
+paperchat-chat-turn-navigation = 对话轮次导航
+paperchat-chat-turn-jump = 跳转到第 { $index } 轮：{ $question }
+paperchat-chat-turn-attachment = 附件提问
+paperchat-chat-turn-no-answer = 暂无完整回复
 
 # Balance display in sidebar
 paperchat-sidebar-balance = Token余额: { $balance }

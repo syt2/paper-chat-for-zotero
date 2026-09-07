@@ -293,6 +293,43 @@ export function getChatChromeStyles(theme: ThemeColors): string {
       outline: 2px solid ${theme.inputFocusBorderColor}; outline-offset: 2px;
     }
     .chat-panel-root .chat-message { margin: 16px 0 !important; }
+    .chat-panel-root #chat-viewport[data-turn-navigation] #chat-history { padding-left: 32px !important; }
+    .chat-panel-root .chat-turn-rail {
+      position: absolute; left: 2px; width: 24px; z-index: 3;
+      flex-direction: column; align-items: stretch; gap: var(--turn-marker-gap);
+      overflow: hidden;
+    }
+    .chat-panel-root .chat-turn-tick {
+      display: flex; align-items: center; justify-content: center;
+      flex: 0 0 var(--turn-marker-size); width: 24px; min-height: 0; height: var(--turn-marker-size); padding: 0 4px;
+      border: 0; border-radius: 3px; background: transparent; cursor: pointer;
+    }
+    .chat-panel-root .chat-turn-tick::before {
+      content: ""; height: 2px; width: var(--turn-marker-size); border-radius: 1px; flex-shrink: 0;
+      background: ${theme.textMuted}; opacity: .4;
+    }
+    .chat-panel-root .chat-turn-tick[aria-current]::before {
+      height: var(--turn-marker-size); border-radius: 50%; background: ${theme.textPrimary}; opacity: .95;
+    }
+    .chat-panel-root .chat-turn-tick:not([aria-current]):hover::before,
+    .chat-panel-root .chat-turn-tick:not([aria-current]):focus-visible::before {
+      height: var(--turn-marker-size); border-radius: 50%; opacity: .75;
+    }
+    .chat-panel-root .chat-turn-tick:focus-visible { outline-offset: -2px; }
+    .chat-panel-root .chat-turn-preview {
+      position: absolute; left: 30px; z-index: 4; pointer-events: none;
+      width: 290px; max-width: calc(100% - 42px); box-sizing: border-box;
+      padding: 10px 12px; border: 1px solid ${theme.borderColor}; border-radius: 10px;
+      background: ${theme.dropdownBg}; color: ${theme.textPrimary};
+      box-shadow: 0 3px 12px rgba(0, 0, 0, .1); font-size: .85em; line-height: 1.5;
+    }
+    .chat-panel-root .chat-turn-preview-question,
+    .chat-panel-root .chat-turn-preview-answer {
+      display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+      overflow: hidden; overflow-wrap: anywhere;
+    }
+    .chat-panel-root .chat-turn-preview-question { font-weight: 600; }
+    .chat-panel-root .chat-turn-preview-answer { color: ${theme.textMuted}; margin-top: 4px; }
     .chat-panel-root .assistant-message > .chat-bubble {
       display: block !important; width: 100%; max-width: 100% !important;
       padding: 4px 0 !important; box-sizing: border-box;

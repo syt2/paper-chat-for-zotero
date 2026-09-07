@@ -67,6 +67,10 @@ paperchat-user-panel-redeem-success = Redeemed successfully
 paperchat-user-panel-redeem-error = Redemption failed
 paperchat-user-checkin-btn = Check In
 paperchat-user-checked-in = ✓ Checked In
+paperchat-chat-turn-navigation = Conversation turns
+paperchat-chat-turn-jump = Jump to turn { $index }: { $question }
+paperchat-chat-turn-attachment = Question with attachments
+paperchat-chat-turn-no-answer = No complete reply yet
 
 # Balance display in sidebar
 paperchat-sidebar-balance = Token Balance: { $balance }

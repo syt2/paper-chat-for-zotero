@@ -18,6 +18,7 @@ import type {
   ToolApprovalResolution,
 } from "../../../types/tool";
 import { getAuthManager } from "../../auth";
+import { ConversationNavigator } from "./ConversationNavigator";
 import { getProviderManager } from "../../providers";
 import { providerSupportsToolCalling } from "../../providers/provider-capabilities";
 import { getPref, setPref } from "../../../utils/prefs";
@@ -3597,6 +3598,7 @@ function createContext(container: HTMLElement): ChatPanelContext {
             },
           );
         }
+        ConversationNavigator.update(container, messages);
         updateConversationNoteSummaryButton(
           container,
           messages,
