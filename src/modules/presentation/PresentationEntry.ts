@@ -620,6 +620,7 @@ export function createChatPresentationToolLaunchSession(
       return resolution;
     },
     abortSignal: options.abortSignal,
+    saveCheckpoint: options.saveCheckpoint,
     runGuard: (onSettingsFocusReady, suggestedSettings) =>
       runSharedPresentationGuard({
         sourceTitle: getPresentationSourceTitle(

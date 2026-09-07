@@ -17,6 +17,8 @@ import { createPresentationLaunchAuthorization } from "../src/modules/presentati
 import { createPresentationResumeRound } from "../src/modules/presentation/PresentationResumeRound.ts";
 import { SessionStorageService } from "../src/modules/chat/SessionStorageService.ts";
 import { getStorageDatabase } from "../src/modules/chat/db/StorageDatabase.ts";
+import { createPresentationToolLaunchSession } from "../src/modules/presentation/PresentationToolLaunchSession.ts";
+import { PresentationLaunchCoordinator } from "../src/modules/presentation/PresentationLaunchCoordinator.ts";
 
 const source = { itemKey: "PAPER001", libraryID: 1 };
 const settings = DEFAULT_PRESENTATION_LAUNCH_SETTINGS;
@@ -165,6 +167,61 @@ describe("durable presentation checkpoints", function () {
       createPresentationResumeRound(
         createPresentationLaunchAuthorization(source, settings),
       ),
+    );
+  });
+
+  it("saves confirmed settings before request_presentation completes, so cancellation before generation survives restart", async function () {
+    const confirmedSettings = {
+      ...settings,
+      slideCount: 10,
+      userInstructions: "Audience: graduate students",
+    };
+    let checkpointId = "";
+    const launch = createPresentationToolLaunchSession({
+      coordinator: new PresentationLaunchCoordinator(1),
+      source,
+      runGuard: async () => ({
+        allowed: true,
+        balance: { quota: 500000, subscriptionRemaining: 0, available: 500000 },
+        settings: confirmedSettings,
+      }),
+      saveCheckpoint: async (paperSource, launchSettings) => {
+        const saved = await PresentationCheckpoint.create(
+          paperSource,
+          launchSettings,
+          { sourceItemKey: paperSource.itemKey },
+        );
+        checkpointId = saved.id;
+        return saved;
+      },
+    });
+    const result = await launch.requestAuthorization();
+    assert.isTrue(result.allowed);
+    assert.equal(launch.getAuthorization()?.checkpoint?.id, checkpointId);
+    launch.finish();
+    const reopened = await PresentationCheckpoint.load(checkpointId);
+    assert.deepEqual(reopened.settings, confirmedSettings);
+    const resumed = createPresentationLaunchAuthorization(
+      reopened.source,
+      reopened.settings,
+      reopened,
+    );
+    assert.equal(
+      createPresentationResumeRound(resumed)?.toolCalls?.[0].function.name,
+      "presentation",
+    );
+    await reopened.initializeArguments({
+      sourceItemKey: source.itemKey,
+      language: "en",
+      title: "Confirmed task",
+    });
+    await reopened.run("paper", source, async () => paper);
+    const restarted = await PresentationCheckpoint.load(checkpointId);
+    await restarted.initializeArguments({ language: "zh" });
+    assert.equal(
+      restarted.args.language,
+      "en",
+      "completed steps must retain their original arguments",
     );
   });
 

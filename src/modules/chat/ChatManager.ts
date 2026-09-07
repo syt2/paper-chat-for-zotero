@@ -99,6 +99,7 @@ import {
 } from "./interrupted-message";
 import { isTerminalPresentationArtifact } from "./presentation-artifacts";
 import { getResumableTurn } from "./resumable-turn";
+import { PresentationCheckpoint } from "../presentation/PresentationCheckpoint";
 import { saveDebugContextSnapshot } from "./DebugContextExporter";
 import { MemoryManager } from "./memory/MemoryManager";
 import { SessionTitleService } from "./SessionTitleService";
@@ -2481,6 +2482,40 @@ export class ChatManager {
               abortSignal,
               mentionSources: presentationMentionSources,
               paperChatTier: sendingSession.selectedTier,
+              saveCheckpoint: async (source, settings) => {
+                const checkpoint = await PresentationCheckpoint.create(
+                  source,
+                  settings,
+                  {
+                    sourceItemKey: source.itemKey,
+                  },
+                );
+                const localId = `presentation-launch-${checkpoint.id}`;
+                assistantMessage.presentationArtifacts = [
+                  ...(assistantMessage.presentationArtifacts || []),
+                  {
+                    toolCallId: localId,
+                    localId,
+                    checkpointId: checkpoint.id,
+                    sourceItemKey: source.itemKey,
+                    sourceLibraryID: source.libraryID,
+                    isDraft: true,
+                  },
+                ];
+                // The launcher is not complete until the chat owns its checkpoint.
+                // This also covers cancellation before the first generation call.
+                await this.sessionStorage.updateMessageContent(
+                  sendingSession.id,
+                  assistantMessage.id,
+                  assistantMessage.content,
+                  assistantMessage.reasoning,
+                  {
+                    presentationArtifacts:
+                      assistantMessage.presentationArtifacts,
+                  },
+                );
+                return checkpoint;
+              },
             },
           ) || undefined;
       }

@@ -26,6 +26,7 @@ describe("presentation source context", function () {
         source,
         settings,
         args,
+        initializeArguments: async () => undefined,
         run: (
           _stage: string,
           _input: unknown,

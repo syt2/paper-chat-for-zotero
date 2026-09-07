@@ -9,8 +9,10 @@ import {
   createPresentationChatLaunchSession,
   registerPresentationChatLaunchBridge,
   unregisterPresentationChatLaunchBridge,
+  type PresentationChatLaunchOptions,
 } from "../src/modules/presentation/PresentationChatLaunchBridge.ts";
 import { PresentationLaunchCoordinator } from "../src/modules/presentation/PresentationLaunchCoordinator.ts";
+import { PresentationCheckpoint } from "../src/modules/presentation/PresentationCheckpoint.ts";
 import { DEFAULT_PRESENTATION_LAUNCH_SETTINGS } from "../src/modules/presentation/PresentationLaunchSettings.ts";
 import {
   createPresentationLaunchToolDefinition,
@@ -41,6 +43,7 @@ async function runChatManagerBridgeLifecycle(
   scenario: {
     currentItem?: boolean;
     selectedPaper?: boolean;
+    saveConfirmedSettings?: boolean;
     content?: string;
     previousMessages?: ChatMessage[];
     expectedMentionSources?: Array<{
@@ -56,6 +59,18 @@ async function runChatManagerBridgeLifecycle(
   };
   const originalZotero = runtime.Zotero;
   const originalZtoolkit = runtime.ztoolkit;
+  const originalCreateCheckpoint = PresentationCheckpoint.create;
+  let saveCheckpoint: PresentationChatLaunchOptions["saveCheckpoint"];
+  const savedArtifacts: unknown[] = [];
+  if (scenario.saveConfirmedSettings) {
+    PresentationCheckpoint.create = async (source, settings, args) =>
+      ({
+        id: "ppt-confirmed-launch",
+        source,
+        settings,
+        args,
+      }) as PresentationCheckpoint;
+  }
   runtime.Zotero = {
     Prefs: {
       get: () => undefined,
@@ -126,6 +141,7 @@ async function runChatManagerBridgeLifecycle(
       );
       capturedLocation = location;
       bridgeAbortSignal = options?.abortSignal;
+      saveCheckpoint = options?.saveCheckpoint;
       const finish = () => {
         if (finished) return;
         finished = true;
@@ -168,9 +184,26 @@ async function runChatManagerBridgeLifecycle(
         insertedMessages.push(message);
       },
       updateSessionMeta: async () => undefined,
+      updateMessageContent: async (
+        _sessionId: string,
+        _messageId: string,
+        _content: string,
+        _reasoning: unknown,
+        update: any,
+      ) => {
+        if (update?.presentationArtifacts)
+          savedArtifacts.push(structuredClone(update.presentationArtifacts));
+      },
     };
     manager.sendMessageWithToolCalling = async (...args: unknown[]) => {
       runtimeAbortSignal = args[11] as AbortSignal | undefined;
+      if (scenario.saveConfirmedSettings) {
+        assert.isFunction(saveCheckpoint);
+        await saveCheckpoint!(
+          { itemKey: item.key, libraryID: item.libraryID },
+          DEFAULT_PRESENTATION_LAUNCH_SETTINGS,
+        );
+      }
       resolveProviderStarted();
       if (outcome === "provider_error") {
         throw new Error("provider failed");
@@ -216,6 +249,20 @@ async function runChatManagerBridgeLifecycle(
     }
 
     assert.equal(finishEffects, 1);
+    if (scenario.saveConfirmedSettings) {
+      assert.isTrue(
+        savedArtifacts.some((artifacts) =>
+          JSON.stringify(artifacts).includes("ppt-confirmed-launch"),
+        ),
+      );
+      const assistant = session.messages.find(
+        (message) => message.id === capturedLocation?.assistantMessageId,
+      );
+      assert.equal(
+        assistant?.presentationArtifacts?.[0].checkpointId,
+        "ppt-confirmed-launch",
+      );
+    }
     assert.isEmpty(manager.activeSessionRunIds);
     assert.isEmpty(manager.activeSessionAbortControllers);
     assert.isEmpty(manager.streamingSessions);
@@ -227,10 +274,17 @@ async function runChatManagerBridgeLifecycle(
     contextManager.filterMessages = originalFilterMessages;
     runtime.Zotero = originalZotero;
     runtime.ztoolkit = originalZtoolkit;
+    PresentationCheckpoint.create = originalCreateCheckpoint;
   }
 }
 
 describe("presentation model launch session", function () {
+  it("retains the confirmed launcher checkpoint when the user cancels before presentation executes", async function () {
+    await runChatManagerBridgeLifecycle("abort", {
+      saveConfirmedSettings: true,
+    });
+  });
+
   afterEach(function () {
     unregisterPresentationChatLaunchBridge();
   });

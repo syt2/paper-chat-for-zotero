@@ -1961,7 +1961,8 @@ export class PdfToolManager {
         }
         try {
           const authorizedArgs: Record<string, unknown> = {
-            ...(presentationAuthorization.checkpoint?.args || args),
+            ...args,
+            ...presentationAuthorization.checkpoint?.args,
             // The app-owned capability is the source of truth. Never let a
             // later model round redirect planning metadata to another library
             // after the user has confirmed the native settings.
@@ -1996,6 +1997,7 @@ export class PdfToolManager {
               "PPT checkpoint source does not match the authorized paper.",
             );
           }
+          await checkpoint.initializeArguments(authorizedArgs);
           await executionContext?.presentationProgress?.({
             phase: "analyzing",
             message: "",

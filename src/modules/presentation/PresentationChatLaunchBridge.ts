@@ -1,4 +1,7 @@
-import type { PresentationToolLaunchSession } from "./PresentationToolLaunchSession";
+import type {
+  PresentationToolLaunchSession,
+  PresentationToolLaunchSessionOptions,
+} from "./PresentationToolLaunchSession";
 import type { PresentationMentionSource } from "./PresentationSourceContext";
 import type { PaperChatTier } from "../providers/paperchat-tier-routing";
 
@@ -13,6 +16,7 @@ export interface PresentationChatLaunchOptions {
   mentionSources?: readonly PresentationMentionSource[];
   /** Tier selected by the chat session that will execute the PPT turn. */
   paperChatTier?: PaperChatTier;
+  saveCheckpoint?: PresentationToolLaunchSessionOptions["saveCheckpoint"];
 }
 
 export interface PresentationChatLaunchBridge {

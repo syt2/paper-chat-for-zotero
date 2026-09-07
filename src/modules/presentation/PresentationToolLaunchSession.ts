@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import type { PresentationCheckpoint } from "./PresentationCheckpoint";
 import type { ToolDefinition } from "../../types/tool";
 import {
   createPresentationLaunchAuthorization,
@@ -124,6 +125,11 @@ export interface PresentationToolLaunchSessionOptions {
   source?: PresentationSourceContext;
   resolveSource?: PresentationLaunchSourceResolver;
   abortSignal?: AbortSignal;
+  /** Persist confirmed settings before reporting the launcher as completed. */
+  saveCheckpoint?: (
+    source: PresentationSourceContext,
+    settings: PresentationLaunchSettings,
+  ) => Promise<PresentationCheckpoint>;
   runGuard(
     onSettingsFocusReady: (focus: () => void) => void,
     suggestedSettings?: Partial<PresentationLaunchSettings>,
@@ -337,14 +343,23 @@ export function createPresentationToolLaunchSession(
             return false;
           }
 
-          authorization = createPresentationLaunchAuthorization(
-            sourceResolution.source,
-            guardResult.settings,
-          );
           // Abort owns only the configuring phase. Once generation starts, the
           // coordinator slot and same-paper lock must remain held until the
           // actual tool execution settles and the outer chat turn calls finish.
           options.abortSignal?.removeEventListener("abort", finish);
+          const checkpoint = await options.saveCheckpoint?.(
+            sourceResolution.source,
+            guardResult.settings,
+          );
+          if (finished || options.abortSignal?.aborted) {
+            settleReady({ allowed: false, reason: "turn_finished" });
+            return false;
+          }
+          authorization = createPresentationLaunchAuthorization(
+            sourceResolution.source,
+            guardResult.settings,
+            checkpoint,
+          );
           settleReady({ allowed: true, authorization });
           await completion.promise;
           return true;

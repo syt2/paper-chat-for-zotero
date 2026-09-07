@@ -112,6 +112,20 @@ export class PresentationCheckpoint {
     await IOUtils.writeJSON(path, this.manifest, { tmpPath: `${path}.tmp` });
   }
 
+  /** A launcher checkpoint initially contains only the confirmed paper. Freeze
+   * the first execution's normalized arguments before saving expensive steps. */
+  async initializeArguments(args: Record<string, unknown>): Promise<void> {
+    if (
+      this.manifest.steps.length ||
+      this.manifest.result ||
+      this.manifest.attachmentPending ||
+      this.manifest.attachment
+    )
+      return;
+    this.manifest.args = { ...args };
+    await this.saveManifest();
+  }
+
   /** Keep intermediate invalid plans for deterministic replay of a successful
    * repair chain. If planning as a whole fails, let the next attempt plan anew. */
   async discardPlanningResults(): Promise<void> {
