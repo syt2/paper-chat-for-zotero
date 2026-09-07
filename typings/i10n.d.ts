@@ -257,6 +257,8 @@ export type FluentMessageId =
   | 'paperchat-chat-toggle-panel-mode'
   | 'paperchat-chat-tool-group-earlier'
   | 'paperchat-chat-toolbar-button-tooltip'
+  | 'paperchat-chat-toolbar-completed'
+  | 'paperchat-chat-toolbar-running'
   | 'paperchat-chat-tools-add'
   | 'paperchat-chat-tools-create'
   | 'paperchat-chat-turn-attachment'
@@ -455,7 +457,6 @@ export type FluentMessageId =
   | 'pref-paperchat-tier-ultra'
   | 'pref-paperchat-title'
   | 'pref-paperchat-ultra-model'
-  | 'pref-pdf-settings'
   | 'pref-provider-enabled'
   | 'pref-provider-not-ready'
   | 'pref-providers'
@@ -484,6 +485,4 @@ export type FluentMessageId =
   | 'pref-tool-permission-mode-auto-allow'
   | 'pref-tool-permission-mode-deny'
   | 'pref-tool-permission-network'
-  | 'pref-tool-permission-write'
-  | 'pref-upload-raw-pdf'
-  | 'pref-upload-raw-pdf-desc';
+  | 'pref-tool-permission-write';

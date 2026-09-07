@@ -27,9 +27,6 @@ pref("paperchatPresentationDesignSystem", "teal-green-academic-defense");
 pref("reasoningEffort", "default");
 pref("paperchatBaseUrlOverride", "");
 
-// PDF Settings
-pref("uploadRawPdfOnFailure", false);
-
 // UI Settings
 pref("panelMode", "sidebar");
 pref("debugContextExportEnabled", false);

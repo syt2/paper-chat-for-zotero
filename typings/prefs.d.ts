@@ -28,7 +28,6 @@ declare namespace _ZoteroTypes {
       "paperchatPresentationDesignSystem": string;
       "reasoningEffort": string;
       "paperchatBaseUrlOverride": string;
-      "uploadRawPdfOnFailure": boolean;
       "panelMode": string;
       "debugContextExportEnabled": boolean;
       "readingLoopEnabled": boolean;

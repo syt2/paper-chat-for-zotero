@@ -198,10 +198,6 @@ export class PaperChatProvider implements ToolCallingProvider {
     this.refreshDelegates();
   }
 
-  supportsPdfUpload(): boolean {
-    return true;
-  }
-
   supportsHostedWebSearch(): boolean {
     const delegateConfig = this.createDelegateConfig();
     return getPaperChatApiCapabilities(

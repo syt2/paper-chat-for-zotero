@@ -149,6 +149,91 @@ describe("paperchat storage and chat manager", function () {
     (globalThis as any).addon = originalAddon;
   });
 
+  function createRunActivityManager() {
+    const manager = Object.create(ChatManager.prototype) as any;
+    Object.assign(manager, {
+      activeSessionRunIds: new Map(),
+      sessionRunCounters: new Map(),
+      activeSessionAbortControllers: new Map(),
+      streamingSessions: new Map(),
+    });
+    return manager;
+  }
+
+  it("keeps background runs active when the toolbar is acknowledged", function () {
+    const manager = createRunActivityManager();
+    const first = { id: "background-first" };
+    const second = { id: "background-second" };
+    const updates: unknown[] = [];
+    const unsubscribe = manager.subscribeRunActivity((state: unknown) => {
+      updates.push(state);
+    });
+    const firstRun = manager.beginSessionRun(first);
+    const secondRun = manager.beginSessionRun(second);
+    manager.completeSessionRun(first, firstRun.runId);
+    assert.deepEqual(manager.getRunActivity(), {
+      runningCount: 1,
+      hasUnseenCompletion: true,
+    });
+    manager.acknowledgeRunCompletion();
+    assert.deepEqual(manager.getRunActivity(), {
+      runningCount: 1,
+      hasUnseenCompletion: false,
+    });
+    manager.completeSessionRun(second, secondRun.runId);
+    assert.deepEqual(manager.getRunActivity(), {
+      runningCount: 0,
+      hasUnseenCompletion: true,
+    });
+    manager.acknowledgeRunCompletion();
+    assert.deepEqual(manager.getRunActivity(), {
+      runningCount: 0,
+      hasUnseenCompletion: false,
+    });
+    const count = updates.length;
+    unsubscribe();
+    manager.beginSessionRun(first);
+    assert.lengthOf(updates, count);
+  });
+
+  it("does not let an invalidated run clear a newer run or restore its badge", function () {
+    const manager = createRunActivityManager();
+    const session = { id: "restarted" };
+    const oldRun = manager.beginSessionRun(session);
+    manager.invalidateSessionRun(session.id, { abort: true });
+    assert.deepEqual(manager.getRunActivity(), {
+      runningCount: 0,
+      hasUnseenCompletion: false,
+    });
+    const newRun = manager.beginSessionRun(session);
+    manager.completeSessionRun(session, oldRun.runId);
+    assert.deepEqual(manager.getRunActivity(), {
+      runningCount: 1,
+      hasUnseenCompletion: false,
+    });
+    manager.invalidateSessionRun(session.id, { notifyCompletion: true });
+    assert.deepEqual(manager.getRunActivity(), {
+      runningCount: 0,
+      hasUnseenCompletion: true,
+    });
+    manager.acknowledgeRunCompletion();
+    manager.completeSessionRun(session, newRun.runId);
+    assert.isFalse(manager.getRunActivity().hasUnseenCompletion);
+  });
+
+  it("isolates toolbar listener failures from the conversation lifecycle", function () {
+    const manager = createRunActivityManager();
+    let observations = 0;
+    manager.subscribeRunActivity((state: { runningCount: number }) => {
+      if (state.runningCount) throw new Error("Detached toolbar");
+    });
+    manager.subscribeRunActivity(() => observations++);
+    assert.doesNotThrow(() =>
+      manager.beginSessionRun({ id: "listener-error" }),
+    );
+    assert.equal(observations, 2);
+  });
+
   function setRoutingDefaults(defaults: Record<string, string>): void {
     prefStore.set(
       `${PREFS_PREFIX}.paperchatRoutingDefaultsCache`,
@@ -3955,7 +4040,6 @@ describe("paperchat storage and chat manager", function () {
       config: { id: "openai" },
       getName: () => "OpenAI",
       isReady: () => true,
-      supportsPdfUpload: () => false,
       chatCompletionWithTools: async () => ({ content: "unused" }),
     };
     const capturedRequests: ChatMessage[][] = [];
@@ -6079,7 +6163,6 @@ describe("paperchat storage and chat manager", function () {
         config: { id: activeProviderId },
         getName: () => "test",
         isReady: () => true,
-        supportsPdfUpload: () => false,
         streamChatCompletion: (_messages: ChatMessage[], callbacks: any) => {
           activeProviderId = "deepseek";
           if (outcome === "error") {
@@ -6140,6 +6223,10 @@ describe("paperchat storage and chat manager", function () {
           outcome === "other-provider" || outcome === "logged-out" ? 0 : 1,
         );
         assert.isFalse(manager.activeSessionRunIds.has(session.id));
+        assert.deepEqual(manager.getRunActivity(), {
+          runningCount: 0,
+          hasUnseenCompletion: true,
+        });
       } finally {
         providerManager.getActiveProviderId = originals.providerId;
         providerManager.executeWithRetry = originals.retry;
@@ -6172,7 +6259,6 @@ describe("paperchat storage and chat manager", function () {
       config: { id: "provider-multi-selection" },
       getName: () => "provider-multi-selection",
       isReady: () => true,
-      supportsPdfUpload: () => false,
       streamChatCompletion: (
         messages: ChatMessage[],
         callbacks: { onComplete: (content: string) => void },
@@ -6283,7 +6369,6 @@ describe("paperchat storage and chat manager", function () {
       config: { id: "provider-one" },
       getName: () => "provider-one",
       isReady: () => true,
-      supportsPdfUpload: () => false,
       streamChatCompletion: (
         _messages: ChatMessage[],
         callbacks: {
@@ -6406,7 +6491,6 @@ describe("paperchat storage and chat manager", function () {
       config: { id: "paperchat" },
       getName: () => "PaperChat",
       isReady: () => true,
-      supportsPdfUpload: () => false,
       updateConfig: (config: Record<string, unknown>) => {
         Object.assign(provider.config, config);
       },
@@ -6842,7 +6926,6 @@ describe("paperchat storage and chat manager", function () {
       config: { id: "legacy", type: "custom", defaultModel: "legacy-model" },
       getName: () => "Legacy Provider",
       isReady: () => true,
-      supportsPdfUpload: () => false,
       chatCompletion: async () => ({ content: "legacy answer" }),
     };
     const insertedMessages: ChatMessage[] = [];
@@ -6907,7 +6990,6 @@ describe("paperchat storage and chat manager", function () {
       },
       getName: () => "PaperChat",
       isReady: () => true,
-      supportsPdfUpload: () => false,
     };
     providerManager.getActiveProviderId = () => "paperchat";
 
@@ -7016,7 +7098,6 @@ describe("paperchat storage and chat manager", function () {
       config: { id: "openai", type: "openai", defaultModel: "gpt-test" },
       getName: () => "OpenAI",
       isReady: () => true,
-      supportsPdfUpload: () => false,
       chatCompletionWithTools: async () => ({ content: "done" }),
     };
     try {
@@ -7460,7 +7541,6 @@ describe("paperchat storage and chat manager", function () {
       config: { id: "openai" },
       getName: () => "OpenAI",
       isReady: () => providerReady,
-      supportsPdfUpload: () => false,
       chatCompletionWithTools: async () => ({ content: "answer" }),
     };
 
@@ -7993,7 +8073,6 @@ describe("paperchat storage and chat manager", function () {
       getName: () => "PaperChat",
       isReady: () => true,
       supportsToolCalling: () => true,
-      supportsPdfUpload: () => false,
       chatCompletionWithTools: async () => ({ content: "unused" }),
     };
     const insertedMessages = new Map<string, ChatMessage[]>();
@@ -8186,7 +8265,6 @@ describe("paperchat storage and chat manager", function () {
     const provider = {
       getName: () => "OpenAI",
       isReady: () => true,
-      supportsPdfUpload: () => false,
     };
 
     providerManager.getActiveProviderId = () => "openai";
@@ -8309,7 +8387,6 @@ describe("paperchat storage and chat manager", function () {
       config: { id: "openai" },
       getName: () => "OpenAI",
       isReady: () => true,
-      supportsPdfUpload: () => false,
       streamChatCompletion: async (
         _messages: ChatMessage[],
         callbacks: {

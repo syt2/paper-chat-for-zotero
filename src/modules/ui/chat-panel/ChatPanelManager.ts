@@ -1144,6 +1144,8 @@ const authListenerDisposers = new WeakMap<HTMLElement, () => void>();
 const readyPanelContainers = new WeakSet<HTMLElement>();
 let readingLoopExecutorOwner: HTMLElement | null = null;
 let readingLoopToolbarUnsubscribe: (() => void) | null = null;
+let chatRunToolbarUnsubscribe: (() => void) | null = null;
+let acknowledgedReadingLoopCompletion: string | undefined;
 let readingLoopLatestSnapshot: ReadingLoopSnapshot | null = null;
 let readingLoopPopoverHideTimer: number | null = null;
 const readingLoopToolbarBoundButtons = new WeakSet<HTMLElement>();
@@ -2762,6 +2764,33 @@ function updateToolbarButtonState(pressed: boolean): void {
 
 function updateReadingLoopEntryIndicator(snapshot: ReadingLoopSnapshot): void {
   readingLoopLatestSnapshot = snapshot;
+  updateToolbarEntryIndicator();
+}
+
+function updateToolbarEntryIndicator(): void {
+  const snapshot = readingLoopLatestSnapshot;
+  const activity = getChatManager().getRunActivity();
+  const readingState =
+    snapshot?.enabled && snapshot.activeSuggestion
+      ? snapshot.state === "completed" &&
+        snapshot.activeSuggestion.id === acknowledgedReadingLoopCompletion
+        ? "idle"
+        : snapshot.state
+      : "idle";
+  const chatState =
+    activity.runningCount > 0
+      ? "running"
+      : activity.hasUnseenCompletion
+        ? "completed"
+        : "idle";
+  // A running task always wins, including when another session finishes.
+  const state =
+    chatState === "running" || readingState === "running"
+      ? "running"
+      : chatState !== "idle"
+        ? chatState
+        : readingState;
+  const isChatActivity = chatState !== "idle" && readingState !== "running";
   const doc = Zotero.getMainWindow().document;
   const button = doc.getElementById(
     `${config.addonRef}-toolbar-button`,
@@ -2773,11 +2802,7 @@ function updateReadingLoopEntryIndicator(snapshot: ReadingLoopSnapshot): void {
   let indicator = button.querySelector(
     "#paperchat-reading-loop-indicator",
   ) as HTMLElement | null;
-  if (
-    !snapshot.enabled ||
-    snapshot.state === "idle" ||
-    !snapshot.activeSuggestion
-  ) {
+  if (state === "idle") {
     indicator?.remove();
     hideReadingLoopPopover(doc, 0);
     button.setAttribute(
@@ -2803,13 +2828,19 @@ function updateReadingLoopEntryIndicator(snapshot: ReadingLoopSnapshot): void {
     indicator.id = "paperchat-reading-loop-indicator";
     button.appendChild(indicator);
   }
-  indicator.setAttribute("data-reading-loop-state", snapshot.state);
+  indicator.setAttribute("data-reading-loop-state", state);
 
   button.setAttribute(
     "title",
-    getString("reading-loop-tooltip", {
-      args: { title: snapshot.activeSuggestion.title },
-    }),
+    isChatActivity
+      ? getString(
+          chatState === "running"
+            ? "chat-toolbar-running"
+            : "chat-toolbar-completed",
+        )
+      : getString("reading-loop-tooltip", {
+          args: { title: snapshot?.activeSuggestion?.title || "" },
+        }),
   );
 
   Object.assign(indicator.style, {
@@ -2818,7 +2849,7 @@ function updateReadingLoopEntryIndicator(snapshot: ReadingLoopSnapshot): void {
     boxSizing: "border-box",
   } satisfies Partial<CSSStyleDeclaration>);
 
-  if (snapshot.state === "running") {
+  if (state === "running") {
     Object.assign(indicator.style, {
       top: "2px",
       right: "2px",
@@ -2846,11 +2877,11 @@ function updateReadingLoopEntryIndicator(snapshot: ReadingLoopSnapshot): void {
     left: "auto",
     bottom: "auto",
     minWidth: "0",
-    width: snapshot.state === "completed" ? "12px" : "7px",
-    height: snapshot.state === "completed" ? "12px" : "7px",
+    width: state === "completed" && !isChatActivity ? "12px" : "7px",
+    height: state === "completed" && !isChatActivity ? "12px" : "7px",
     borderRadius: "999px",
     border: "1px solid var(--material-background, #fff)",
-    background: getReadingLoopAccent(snapshot.state),
+    background: getReadingLoopAccent(state),
     color: "#fff",
     display: "flex",
     alignItems: "center",
@@ -2859,7 +2890,7 @@ function updateReadingLoopEntryIndicator(snapshot: ReadingLoopSnapshot): void {
     lineHeight: "12px",
     fontWeight: "700",
   } satisfies Partial<CSSStyleDeclaration>);
-  indicator.textContent = snapshot.state === "completed" ? "✓" : "";
+  indicator.textContent = state === "completed" && !isChatActivity ? "✓" : "";
 }
 
 function ensureReadingLoopIndicatorStyles(doc: Document): void {
@@ -2899,6 +2930,10 @@ function ensureReadingLoopIndicatorStyles(doc: Document): void {
 }
 
 function ensureReadingLoopToolbarSubscription(): void {
+  chatRunToolbarUnsubscribe?.();
+  chatRunToolbarUnsubscribe = getChatManager().subscribeRunActivity(
+    updateToolbarEntryIndicator,
+  );
   readingLoopToolbarUnsubscribe?.();
   readingLoopToolbarUnsubscribe = getReadingLoopService().subscribe(
     updateReadingLoopEntryIndicator,
@@ -2912,7 +2947,14 @@ function bindReadingLoopToolbarEvents(button: HTMLElement): void {
 
   readingLoopToolbarBoundButtons.add(button);
   bindReadingLoopToolbarButtonEvents(button, {
-    togglePanel: () => togglePanel("toolbar"),
+    togglePanel: () => {
+      if (readingLoopLatestSnapshot?.state === "completed") {
+        acknowledgedReadingLoopCompletion =
+          readingLoopLatestSnapshot.activeSuggestion?.id;
+      }
+      getChatManager().acknowledgeRunCompletion();
+      togglePanel("toolbar");
+    },
     isPanelShown,
     showPopover: showReadingLoopPopover,
     hidePopover: hideReadingLoopPopover,
@@ -2958,6 +3000,14 @@ function showReadingLoopPopover(anchor: HTMLElement): void {
 
   const snapshot = readingLoopLatestSnapshot;
   const suggestion = snapshot?.activeSuggestion;
+  const activity = getChatManager().getRunActivity();
+  if (
+    snapshot?.state !== "running" &&
+    (activity.runningCount > 0 || activity.hasUnseenCompletion)
+  ) {
+    hideReadingLoopPopover(anchor.ownerDocument, 0);
+    return;
+  }
   if (!snapshot?.enabled || !suggestion || snapshot.state === "idle") {
     hideReadingLoopPopover(anchor.ownerDocument, 0);
     return;
@@ -3163,6 +3213,8 @@ export function registerToolbarButton(): void {
  * Unregister toolbar button
  */
 export function unregisterToolbarButton(): void {
+  chatRunToolbarUnsubscribe?.();
+  chatRunToolbarUnsubscribe = null;
   readingLoopToolbarUnsubscribe?.();
   readingLoopToolbarUnsubscribe = null;
 

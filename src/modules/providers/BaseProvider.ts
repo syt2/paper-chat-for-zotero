@@ -56,10 +56,6 @@ export abstract class BaseProvider implements AIProvider {
     this._config = { ...this._config, ...config };
   }
 
-  supportsPdfUpload(): boolean {
-    return false; // Override in providers that support PDF upload
-  }
-
   abstract streamChatCompletion(
     messages: ChatMessage[],
     callbacks: StreamCallbacks,

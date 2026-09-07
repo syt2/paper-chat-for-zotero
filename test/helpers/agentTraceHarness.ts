@@ -541,10 +541,6 @@ class ScriptedToolProvider implements ToolCallingProvider {
     return true;
   }
 
-  supportsPdfUpload(): boolean {
-    return false;
-  }
-
   updateConfig(_config: Partial<ProviderConfig>): void {}
 
   async streamChatCompletion(

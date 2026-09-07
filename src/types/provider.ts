@@ -247,9 +247,6 @@ export interface AIProvider {
   /** Check if provider is configured and ready */
   isReady(): boolean;
 
-  /** Check if provider supports PDF file upload */
-  supportsPdfUpload(): boolean;
-
   /** Whether the currently selected model exposes provider-hosted Web Search. */
   supportsHostedWebSearch?(): boolean;
 

@@ -93,7 +93,6 @@ async function runChatManagerBridgeLifecycle(
     getName: () => "PaperChat",
     isReady: () => true,
     supportsToolCalling: () => true,
-    supportsPdfUpload: () => false,
     chatCompletionWithTools: async () => ({ content: "unused" }),
   };
   let capturedLocation:

@@ -39,10 +39,6 @@ export class AnthropicProvider extends BaseProvider {
     return sections.length > 0 ? sections.join("\n\n") : undefined;
   }
 
-  supportsPdfUpload(): boolean {
-    return true;
-  }
-
   async streamChatCompletion(
     messages: ChatMessage[],
     callbacks: StreamCallbacks,

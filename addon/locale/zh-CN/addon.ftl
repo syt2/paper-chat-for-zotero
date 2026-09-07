@@ -98,6 +98,8 @@ paperchat-sidebar-login-required = 请先登录
 
 # Chat Panel
 paperchat-chat-toolbar-button-tooltip = 打开AI聊天面板
+paperchat-chat-toolbar-running = 对话进行中
+paperchat-chat-toolbar-completed = 对话已结束，点击查看
 paperchat-chat-menu-open = AI 聊天
 paperchat-chat-error-no-provider = ⚠️ 没有可用的 AI 服务商，请在设置中配置。
 paperchat-chat-error-session-expired = ⚠️ 登录已过期，请重新登录。

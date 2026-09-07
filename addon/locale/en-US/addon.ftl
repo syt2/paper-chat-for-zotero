@@ -98,6 +98,8 @@ paperchat-sidebar-login-required = Please login first
 
 # Chat Panel
 paperchat-chat-toolbar-button-tooltip = Open AI Chat Panel
+paperchat-chat-toolbar-running = Conversation in progress
+paperchat-chat-toolbar-completed = Conversation ended — click to view
 paperchat-chat-menu-open = AI Chat
 paperchat-chat-error-no-provider = ⚠️ No AI provider available. Please configure a provider in Settings.
 paperchat-chat-error-session-expired = ⚠️ Session expired. Please log in again.

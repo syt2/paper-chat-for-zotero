@@ -159,45 +159,6 @@ export class PdfExtractor {
     }
   }
 
-  /**
-   * Get PDF file as base64 for upload
-   */
-  async getPdfBase64(
-    item: Zotero.Item,
-  ): Promise<{ data: string; mimeType: string; name: string } | null> {
-    try {
-      const pdfAttachment = await this.findPdfAttachment(item);
-      if (!pdfAttachment) return null;
-
-      const path = await pdfAttachment.getFilePathAsync();
-      if (!path) return null;
-
-      const data = await IOUtils.read(path);
-      const base64 = this.arrayBufferToBase64(data);
-      return {
-        data: base64,
-        mimeType: "application/pdf",
-        name: pdfAttachment.attachmentFilename || "document.pdf",
-      };
-    } catch (error) {
-      ztoolkit.log("Error getting PDF base64:", error);
-      return null;
-    }
-  }
-
-  /**
-   * ArrayBuffer转Base64
-   */
-  private arrayBufferToBase64(buffer: Uint8Array): string {
-    let binary = "";
-    const bytes = new Uint8Array(buffer);
-    const len = bytes.byteLength;
-    for (let i = 0; i < len; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    return btoa(binary);
-  }
-
   private async compressImageToJpegBase64(
     data: Uint8Array,
     sourceMimeType: string,

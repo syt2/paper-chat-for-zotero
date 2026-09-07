@@ -183,9 +183,6 @@ export async function refreshPrefsUI(
   // Populate PaperChat model dropdown
   populatePaperchatModels(doc);
 
-  // Initialize PDF settings checkbox
-  initPdfSettingsCheckbox(doc);
-
   // Initialize AI tools settings checkbox
   initAIToolsSettingsCheckbox(doc);
 
@@ -196,18 +193,6 @@ export async function refreshPrefsUI(
 
   // Initialize AISummary settings
   initAISummarySettings(doc);
-}
-
-/**
- * Initialize PDF settings checkboxes
- */
-function initPdfSettingsCheckbox(doc: Document): void {
-  const uploadRawPdfCheckbox = doc.getElementById(
-    "pref-upload-raw-pdf-checkbox",
-  ) as XUL.Checkbox | null;
-  if (uploadRawPdfCheckbox) {
-    uploadRawPdfCheckbox.checked = getPref("uploadRawPdfOnFailure") as boolean;
-  }
 }
 
 /**
@@ -319,9 +304,6 @@ export function bindPrefEvents(): void {
   bindActiveProviderEvent(doc);
   bindEmbeddingProviderCacheInvalidationEvent(doc);
 
-  // Bind PDF settings checkbox event
-  bindPdfSettingsEvent(doc);
-
   // Bind AI tools settings checkbox event
   bindAIToolsSettingsEvent(doc);
 
@@ -332,20 +314,6 @@ export function bindPrefEvents(): void {
 
   // Bind AISummary settings events
   bindAISummarySettingsEvents(doc);
-}
-
-/**
- * Bind PDF settings checkbox events
- */
-function bindPdfSettingsEvent(doc: Document): void {
-  const uploadRawPdfCheckbox = doc.getElementById(
-    "pref-upload-raw-pdf-checkbox",
-  ) as XUL.Checkbox | null;
-  if (uploadRawPdfCheckbox) {
-    uploadRawPdfCheckbox.addEventListener("command", () => {
-      setPref("uploadRawPdfOnFailure", uploadRawPdfCheckbox.checked);
-    });
-  }
 }
 
 /**

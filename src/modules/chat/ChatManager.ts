@@ -282,6 +282,11 @@ function messagesRequireVision(messages: readonly ChatMessage[]): boolean {
 
 // 使用 common.ts 中的 getItemTitleSmart 获取 item 标题
 
+export interface ChatRunActivity {
+  runningCount: number;
+  hasUnseenCompletion: boolean;
+}
+
 export class ChatManager {
   private sessionStorage: SessionStorageService;
   private paperChatRetry: PaperChatRetryOrchestrator;
@@ -299,6 +304,8 @@ export class ChatManager {
   private streamingSessions = new Map<string, ChatSession>();
   private sessionRunCounters = new Map<string, number>();
   private activeSessionRunIds = new Map<string, number>();
+  private runActivityListeners?: Set<(activity: ChatRunActivity) => void>;
+  private hasUnseenRunCompletion = false;
   private activeSessionAbortControllers = new Map<
     string,
     ManagedAbortController
@@ -804,6 +811,7 @@ export class ChatManager {
     this.activeSessionRunIds.set(session.id, nextRunId);
     this.activeSessionAbortControllers.set(session.id, abortController);
     this.streamingSessions.set(session.id, session);
+    this.notifyRunActivity();
     return {
       runId: nextRunId,
       abortSignal: abortController.signal,
@@ -817,19 +825,59 @@ export class ChatManager {
     this.activeSessionRunIds.delete(session.id);
     this.activeSessionAbortControllers.delete(session.id);
     this.streamingSessions.delete(session.id);
+    this.hasUnseenRunCompletion = true;
+    this.notifyRunActivity();
   }
 
   private invalidateSessionRun(
     sessionId: string,
-    options?: { abort?: boolean },
+    options?: { abort?: boolean; notifyCompletion?: boolean },
   ): void {
     const abortController = this.activeSessionAbortControllers.get(sessionId);
-    this.activeSessionRunIds.delete(sessionId);
+    const wasRunning = this.activeSessionRunIds.delete(sessionId);
     this.activeSessionAbortControllers.delete(sessionId);
     this.streamingSessions.delete(sessionId);
 
     if (options?.abort) {
       abortController?.abort();
+    }
+    if (wasRunning) {
+      if (options?.notifyCompletion) {
+        this.hasUnseenRunCompletion = true;
+      }
+      this.notifyRunActivity();
+    }
+  }
+
+  getRunActivity(): ChatRunActivity {
+    return {
+      runningCount: this.activeSessionRunIds.size,
+      hasUnseenCompletion: this.hasUnseenRunCompletion === true,
+    };
+  }
+
+  // Independent of panel callbacks: hidden and background sessions still count.
+  subscribeRunActivity(
+    listener: (activity: ChatRunActivity) => void,
+  ): () => void {
+    this.runActivityListeners ??= new Set();
+    this.runActivityListeners.add(listener);
+    listener(this.getRunActivity());
+    return () => this.runActivityListeners?.delete(listener);
+  }
+
+  acknowledgeRunCompletion(): void {
+    this.hasUnseenRunCompletion = false;
+    this.notifyRunActivity();
+  }
+
+  private notifyRunActivity(): void {
+    for (const listener of this.runActivityListeners || []) {
+      try {
+        listener(this.getRunActivity());
+      } catch (error) {
+        ztoolkit.log("[ChatManager] Run activity listener failed:", error);
+      }
     }
   }
 
@@ -2046,9 +2094,6 @@ export class ChatManager {
       let finalContent = content;
 
       // PDF 附件相关
-      let pdfAttachment:
-        | { data: string; mimeType: string; name: string }
-        | undefined;
       let pdfWasAttached = false;
 
       ztoolkit.log(
@@ -2080,20 +2125,6 @@ export class ChatManager {
               ztoolkit.log("[PDF Auto-detect] PDF extracted for tool calling");
             } else {
               ztoolkit.log("[PDF Auto-detect] PDF text extraction failed");
-              // 尝试原始 PDF 上传
-              if (
-                provider.supportsPdfUpload() &&
-                getPref("uploadRawPdfOnFailure")
-              ) {
-                const pdfBase64 = await this.pdfExtractor.getPdfBase64(item);
-                if (pdfBase64) {
-                  pdfAttachment = pdfBase64;
-                  pdfWasAttached = true;
-                  ztoolkit.log(
-                    "[PDF Auto-detect] Using raw PDF upload as fallback",
-                  );
-                }
-              }
             }
           }
         }
@@ -2597,7 +2628,7 @@ export class ChatManager {
                 currentProvider.streamChatCompletion(
                   messagesForApi,
                   callbacks,
-                  pdfAttachment,
+                  undefined,
                   abortSignal,
                 );
               });
@@ -3616,7 +3647,7 @@ export class ChatManager {
       return true;
     }
     if (activeRunId === undefined || currentRunId === activeRunId) {
-      this.invalidateSessionRun(session.id);
+      this.invalidateSessionRun(session.id, { notifyCompletion: true });
     }
 
     const now = Date.now();
@@ -3880,6 +3911,9 @@ export class ChatManager {
     }
     this.sessionRunCounters.clear();
     this.activeSessionRunIds.clear();
+    this.hasUnseenRunCompletion = false;
+    this.notifyRunActivity();
+    this.runActivityListeners?.clear();
     this.activeSessionAbortControllers.clear();
     this.streamingSessions.clear();
     getPdfToolManager().setCurrentItemKey(null);
