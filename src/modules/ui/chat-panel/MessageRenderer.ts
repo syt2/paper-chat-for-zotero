@@ -1277,23 +1277,23 @@ function createRetryActionButton(
   btn.addEventListener("blur", () => {
     btn.style.boxShadow = "none";
   });
-  btn.addEventListener("click", (e) => {
+  btn.addEventListener("click", async (e) => {
     e.stopPropagation();
     e.preventDefault();
     if (btn.getAttribute("data-busy") === "true") {
       return;
     }
-    onBusyChange?.(true);
-    Promise.resolve(onClick())
-      .catch((error: unknown) => {
-        const retryError =
-          error instanceof Error ? error : new Error(String(error));
-        ztoolkit.log("[MessageRenderer] Retry action failed:", retryError);
-        onError?.(retryError);
-      })
-      .finally(() => {
-        onBusyChange?.(false);
-      });
+    try {
+      onBusyChange?.(true);
+      await onClick();
+    } catch (error) {
+      const retryError =
+        error instanceof Error ? error : new Error(String(error));
+      ztoolkit.log("[MessageRenderer] Retry action failed:", retryError);
+      onError?.(retryError);
+    } finally {
+      onBusyChange?.(false);
+    }
   });
   return btn;
 }
@@ -1310,7 +1310,7 @@ function createForkButton(
   btn.setAttribute("class", "message-action-btn fork-message-btn");
   setIconButtonImage(btn, "fork", "");
 
-  btn.addEventListener("click", (event) => {
+  btn.addEventListener("click", async (event) => {
     event.stopPropagation();
     event.preventDefault();
     if (btn.getAttribute("data-busy") === "true") {
@@ -1323,20 +1323,20 @@ function createForkButton(
     btn.style.cursor = "wait";
     btn.style.opacity = "0.6";
 
-    Promise.resolve(onFork(assistantMessageId))
-      .catch((error: unknown) => {
-        const forkError =
-          error instanceof Error ? error : new Error(String(error));
-        ztoolkit.log("[MessageRenderer] Fork conversation failed:", forkError);
-        onError?.(forkError);
-      })
-      .finally(() => {
-        btn.removeAttribute("data-busy");
-        btn.removeAttribute("aria-busy");
-        (btn as HTMLButtonElement).disabled = false;
-        btn.style.cursor = "pointer";
-        btn.style.opacity = "1";
-      });
+    try {
+      await onFork(assistantMessageId);
+    } catch (error) {
+      const forkError =
+        error instanceof Error ? error : new Error(String(error));
+      ztoolkit.log("[MessageRenderer] Fork conversation failed:", forkError);
+      onError?.(forkError);
+    } finally {
+      btn.removeAttribute("data-busy");
+      btn.removeAttribute("aria-busy");
+      (btn as HTMLButtonElement).disabled = false;
+      btn.style.cursor = "pointer";
+      btn.style.opacity = "1";
+    }
   });
 
   return btn;
@@ -1372,7 +1372,7 @@ function createSummarizeReplyButton(
   btn.setAttribute("class", "message-action-btn summarize-reply-note-btn");
   setIconButtonImage(btn, "write", "");
 
-  btn.addEventListener("click", (event) => {
+  btn.addEventListener("click", async (event) => {
     event.stopPropagation();
     event.preventDefault();
     if (btn.getAttribute("data-busy") === "true") {
@@ -1385,23 +1385,23 @@ function createSummarizeReplyButton(
     btn.style.cursor = "wait";
     btn.style.opacity = "0.6";
 
-    Promise.resolve(onSummarizeReply(assistantMessageId))
-      .catch((error: unknown) => {
-        const summaryError =
-          error instanceof Error ? error : new Error(String(error));
-        ztoolkit.log(
-          "[MessageRenderer] Summarize reply to note failed:",
-          summaryError,
-        );
-        onError?.(summaryError);
-      })
-      .finally(() => {
-        btn.removeAttribute("data-busy");
-        btn.removeAttribute("aria-busy");
-        (btn as HTMLButtonElement).disabled = false;
-        btn.style.cursor = "pointer";
-        btn.style.opacity = "1";
-      });
+    try {
+      await onSummarizeReply(assistantMessageId);
+    } catch (error) {
+      const summaryError =
+        error instanceof Error ? error : new Error(String(error));
+      ztoolkit.log(
+        "[MessageRenderer] Summarize reply to note failed:",
+        summaryError,
+      );
+      onError?.(summaryError);
+    } finally {
+      btn.removeAttribute("data-busy");
+      btn.removeAttribute("aria-busy");
+      (btn as HTMLButtonElement).disabled = false;
+      btn.style.cursor = "pointer";
+      btn.style.opacity = "1";
+    }
   });
 
   return btn;

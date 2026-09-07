@@ -278,6 +278,78 @@ describe("chat message exact navigation", function () {
     (globalThis as { addon?: unknown }).addon = originalAddon;
   });
 
+  for (const kind of ["retry", "fork", "summary"] as const) {
+    for (const failure of ["throw", "reject"] as const) {
+      const title = `restores ${kind} actions after a callback ${failure} and permits retry`;
+
+      it(title, async function () {
+        const runtime = globalThis as any;
+        const previousToolkit = runtime.ztoolkit;
+        runtime.ztoolkit = { log: () => undefined };
+        try {
+          const doc = new FakeDocument();
+          const history = new FakeElement(doc, "div");
+          let calls = 0;
+          const errors: Error[] = [];
+          const callback = () => {
+            calls++;
+            if (calls > 1) return;
+            const error = new Error("Action failed");
+            if (failure === "throw") throw error;
+            return Promise.reject(error);
+          };
+          const onError = (error: Error) => errors.push(error);
+          const rendered = createMessageElement(
+            doc as unknown as Document,
+            message("assistant-action", {
+              role: "assistant",
+              content: "Answer",
+            }),
+            darkTheme,
+            true,
+            true,
+            undefined,
+            undefined,
+            {
+              onRetry: callback,
+              onRetryError: onError,
+              onFork: callback,
+              onForkError: onError,
+              onSummarizeReply: callback,
+              onSummarizeReplyError: onError,
+            },
+          );
+          history.appendChild(rendered as unknown as FakeElement);
+          const suffix = {
+            retry: "retry-btn",
+            fork: "fork-message-btn",
+            summary: "summarize-reply-note-btn",
+          }[kind];
+          const button = history.querySelector(
+            `[class="message-action-btn ${suffix}"]`,
+          )!;
+          assert.exists(button);
+          const click = () =>
+            button.listeners.get("click")![0]({
+              preventDefault: () => undefined,
+              stopPropagation: () => undefined,
+            });
+          await click();
+          assert.equal(calls, 1);
+          assert.equal(errors[0]?.message, "Action failed");
+          assert.isNull(button.getAttribute("data-busy"));
+          assert.isNull(button.getAttribute("aria-busy"));
+          assert.isFalse(button.disabled);
+          await click();
+          assert.equal(calls, 2);
+          assert.lengthOf(errors, 1);
+        } finally {
+          runtime.ztoolkit = previousToolkit;
+        }
+      });
+    }
+  }
+
   it("clears only session-bound quotes and refreshes the target send state", function () {
     let attachmentState = {
       pendingImages: [

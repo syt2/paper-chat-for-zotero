@@ -1108,8 +1108,6 @@ export async function showAuthDialog(
 
             // 禁用提交按钮
             submitting = true;
-            submitController = new AbortController();
-            const controller = submitController;
             const buttons = doc.querySelectorAll("button");
             buttons.forEach((btn: HTMLButtonElement) => (btn.disabled = true));
             cancelBtn.disabled = currentMode !== "login";
@@ -1117,6 +1115,11 @@ export async function showAuthDialog(
             passwordInput.disabled = true;
 
             try {
+              // Zotero's plugin sandbox has no global AbortController.
+              const controller = new (
+                dialogWinRef as Window & typeof globalThis
+              ).AbortController();
+              submitController = controller;
               const authManager = getAuthManager();
               let result;
 
@@ -1172,7 +1175,8 @@ export async function showAuthDialog(
                 );
               }
             } catch (error) {
-              if (controller.signal.aborted || dialogWinRef.closed) return;
+              if (submitController?.signal.aborted || dialogWinRef.closed)
+                return;
               trackAuthCompleted(currentMode, false, error);
               showMessage(
                 error instanceof Error
@@ -1184,6 +1188,7 @@ export async function showAuthDialog(
                 (btn: HTMLButtonElement) => (btn.disabled = false),
               );
             } finally {
+              const aborted = submitController?.signal.aborted;
               submitting = false;
               submitController = null;
               resolveTwoFactorCode = null;
@@ -1196,7 +1201,7 @@ export async function showAuthDialog(
                 usernameInput.disabled = false;
                 passwordInput.disabled = false;
                 updateUI();
-                if (controller.signal.aborted) hideMessage();
+                if (aborted) hideMessage();
               }
             }
           };

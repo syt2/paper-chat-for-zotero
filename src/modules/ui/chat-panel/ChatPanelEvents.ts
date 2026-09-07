@@ -57,6 +57,7 @@ import {
 import { startReaderFigureScreenshot } from "../ReaderFigureScreenshot";
 import { updateAnimatedBalance } from "./AnimatedBalance";
 import { ConversationNavigator } from "./ConversationNavigator";
+import { dispatchInputEvent } from "./InputEvents";
 import { setupLocalFileAttachments } from "./LocalFileAttachments";
 import {
   bindAttachmentImagePreview,
@@ -3671,7 +3672,7 @@ function setupMentionSelector(context: ChatPanelContext): () => void {
         messageInput.value = before + after;
         messageInput.setSelectionRange(mention.start, mention.start);
         // Trigger input event for auto-resize
-        messageInput.dispatchEvent(new Event("input", { bubbles: true }));
+        dispatchInputEvent(messageInput);
         return;
       }
     }
@@ -3837,7 +3838,7 @@ function insertMentionIntoInput(
   focusTextarea(input);
 
   // Trigger input event for auto-resize
-  input.dispatchEvent(new Event("input", { bubbles: true }));
+  dispatchInputEvent(input);
 }
 
 /**
@@ -3864,5 +3865,5 @@ function replaceMentionInInput(
   focusTextarea(input);
 
   // Trigger input event for auto-resize
-  input.dispatchEvent(new Event("input", { bubbles: true }));
+  dispatchInputEvent(input);
 }

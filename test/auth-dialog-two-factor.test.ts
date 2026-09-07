@@ -41,19 +41,20 @@ describe("auth dialog second-factor interaction", function () {
   let nodes: AuthElement[];
   let win: any;
   let originalLogin: typeof AuthManager.prototype.login;
+  let originalRegister: typeof AuthManager.prototype.register;
   const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
   beforeEach(function () {
     previous = Object.fromEntries(
-      ["Zotero", "ztoolkit", "addon", "Services"].map((key) => [
-        key,
-        runtime[key],
-      ]),
+      ["Zotero", "ztoolkit", "addon", "Services", "AbortController"].map(
+        (key) => [key, runtime[key]],
+      ),
     );
     elements = new Map();
     nodes = [];
     const unload: Array<() => void> = [];
     win = {
+      AbortController: runtime.AbortController,
       closed: false,
       outerWidth: 400,
       resizeTo: () => undefined,
@@ -122,13 +123,87 @@ describe("auth dialog second-factor interaction", function () {
       },
     };
     originalLogin = AuthManager.prototype.login;
+    originalRegister = AuthManager.prototype.register;
+    // Match Zotero: DOM constructors live on the window, not the sandbox.
+    runtime.AbortController = undefined;
+  });
+
+  it("shows initialization errors and allows a second submission", async function () {
+    const Constructor = win.AbortController;
+    win.AbortController = class {
+      constructor() {
+        throw new Error("Controller unavailable");
+      }
+    };
+    let calls = 0;
+    AuthManager.prototype.login = async () => {
+      calls++;
+      return { success: false, message: "Wrong credentials" };
+    };
+    const dialog = showAuthDialog();
+    elements.get("auth-username")!.value = "user";
+    elements.get("auth-password")!.value = "password";
+    await elements.get("auth-submit-btn")!.fire("click");
+    assert.equal(calls, 0);
+    assert.equal(
+      elements.get("auth-message")!.textContent,
+      "Controller unavailable",
+    );
+    assert.isFalse(elements.get("auth-submit-btn")!.disabled);
+    assert.isFalse(elements.get("auth-password")!.disabled);
+    win.AbortController = Constructor;
+    await elements.get("auth-submit-btn")!.fire("click");
+    assert.equal(calls, 1);
+    assert.equal(
+      elements.get("auth-message")!.textContent,
+      "Wrong credentials",
+    );
+    await elements.get("auth-submit-btn")!.fire("click");
+    assert.equal(calls, 2);
+    win.close();
+    assert.isFalse(await dialog);
   });
 
   afterEach(function () {
     win.close();
     AuthManager.prototype.login = originalLogin;
+    AuthManager.prototype.register = originalRegister;
     destroyAuthManager();
     Object.assign(runtime, previous);
+  });
+
+  it("submits registration without a sandbox AbortController and allows retry", async function () {
+    let calls = 0;
+    AuthManager.prototype.register = async (
+      username,
+      password,
+      email,
+      code,
+    ) => {
+      calls++;
+      assert.deepEqual(
+        [username, password, email, code],
+        ["user", "password", "user@example.com", "123456"],
+      );
+      return { success: false, message: "Invalid verification code" };
+    };
+    const dialog = showAuthDialog("register");
+    elements.get("auth-username")!.value = "user";
+    elements.get("auth-password")!.value = "password";
+    elements.get("auth-confirm-password")!.value = "password";
+    elements.get("auth-email")!.value = "user@example.com";
+    elements.get("auth-verification-code")!.value = "123456";
+    await elements.get("auth-submit-btn")!.fire("click");
+    assert.equal(calls, 1);
+    assert.equal(
+      elements.get("auth-message")!.textContent,
+      "Invalid verification code",
+    );
+    assert.isFalse(elements.get("auth-submit-btn")!.disabled);
+    await elements.get("auth-submit-btn")!.fire("click");
+    assert.equal(calls, 2);
+    win.close();
+    assert.isFalse(await dialog);
   });
 
   it("keeps one login attempt through wrong-code retry and Enter submission", async function () {

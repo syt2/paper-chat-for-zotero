@@ -12,6 +12,7 @@ import type {
 } from "../../chat/next-question-hint";
 import type { ChatPanelContext } from "./types";
 import { chatFontSize } from "./ChatPanelTypography";
+import { dispatchInputEvent } from "./InputEvents";
 
 const CONTROLLER_KEY = "__paperchatNextQuestionHintController";
 const RECENT_COMPLETION_WINDOW_MS = 2 * 60 * 1000;
@@ -296,7 +297,7 @@ export class NextQuestionHintController {
     this.clearHint();
     this.input.value = accepted.text;
     this.input.setSelectionRange(accepted.text.length, accepted.text.length);
-    this.input.dispatchEvent(new Event("input", { bubbles: true }));
+    dispatchInputEvent(this.input);
   }
 
   private dismissHint(options: { markDismissed?: boolean } = {}): void {
