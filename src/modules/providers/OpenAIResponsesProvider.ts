@@ -445,6 +445,21 @@ function convertMessagesToResponsesInput(
   return input;
 }
 
+/** Project image results onto the input schema without changing cached output.
+ * Some upstreams return generation settings (action, size, quality, ...) that
+ * they reject when the same image_generation_call is replayed in input.
+ * Other items, especially web search actions and encrypted reasoning, pass through.
+ */
+function toReplayInputItem(item: ResponsesInputItem): ResponsesInputItem {
+  if (item.type !== "image_generation_call") return item;
+  return {
+    id: item.id,
+    type: item.type,
+    status: item.status,
+    result: item.result,
+  };
+}
+
 function omitResponseBackedContinuationOutput(
   messages: ChatMessage[],
 ): ChatMessage[] {
@@ -1258,7 +1273,7 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     );
     const body: Record<string, unknown> = {
       model: this._config.defaultModel,
-      input: plan.requestInput,
+      input: plan.requestInput.map(toReplayInputItem),
       stream,
     };
     if (plan.previousResponseId) {

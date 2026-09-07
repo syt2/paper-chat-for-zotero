@@ -1957,6 +1957,123 @@ describe("OpenAIResponsesProvider", function () {
     ]);
   });
 
+  it("normalizes image replay across streaming and non-streaming follow-ups without stripping search or reasoning", async function () {
+    for (const stream of [false, true]) {
+      resetOpenAIResponsesStateForTests();
+      const requestBodies: Array<Record<string, any>> = [];
+      const image = {
+        type: "image_generation_call",
+        id: "ig_1",
+        status: "completed",
+        result: "base64-image-result",
+        action: "generate",
+        size: "1254x1254",
+        quality: "high",
+        background: "opaque",
+        output_format: "png",
+        revised_prompt: "A red circle",
+      };
+      const search = {
+        type: "web_search_call",
+        id: "ws_1",
+        status: "completed",
+        action: { type: "search", query: "circle", sources: [] },
+      };
+      const reasoning = {
+        type: "reasoning",
+        id: "rs_1",
+        encrypted_content: "encrypted-reasoning",
+        summary: [],
+      };
+      const responses = [
+        completedResponse("resp_image", "done", {
+          store: false,
+          output: [
+            image,
+            search,
+            reasoning,
+            ...(completedResponse("r", "done").output as object[]),
+          ],
+        }),
+        completedResponse("resp_followup", "second answer", { store: false }),
+        completedResponse("resp_third", "third answer", { store: false }),
+      ];
+      globalThis.fetch = (async (_input, init) => {
+        const body = JSON.parse(String(init?.body));
+        requestBodies.push(body);
+        for (const item of body.input) {
+          if (item.type === "image_generation_call") {
+            assert.hasAllKeys(item, ["id", "type", "status", "result"]);
+          }
+        }
+        const response = responses.shift()!;
+        return stream
+          ? new Response(
+              `data: ${JSON.stringify({ type: "response.completed", response })}\n\n`,
+              {
+                status: 200,
+                headers: { "Content-Type": "text/event-stream" },
+              },
+            )
+          : jsonResponse(response);
+      }) as typeof fetch;
+      const provider = createProvider({
+        sessionId: "image-replay",
+        hostedWebSearch: true,
+      });
+      const complete = async (messages: ChatMessage[]) => {
+        if (!stream)
+          return provider.chatCompletionWithTools(messages, [
+            localWebSearchTool,
+          ]);
+        let failure: Error | undefined;
+        await provider.streamChatCompletionWithTools(
+          messages,
+          [localWebSearchTool],
+          {
+            onTextDelta: () => {},
+            onComplete: () => {},
+            onError: (error) => {
+              failure = error;
+            },
+          },
+        );
+        if (failure) throw failure;
+      };
+      const history = [message("u1", "user", "draw a circle")];
+      await complete(history);
+      history.push(
+        message("a1", "assistant", "done"),
+        message("u2", "user", "follow up"),
+      );
+      await complete(history);
+      history.push(
+        message("a2", "assistant", "second answer"),
+        message("u3", "user", "continue"),
+      );
+      await complete(history);
+      assert.lengthOf(requestBodies, 3);
+      for (const body of requestBodies.slice(1)) {
+        assert.notProperty(body, "previous_response_id");
+        assert.deepEqual(
+          body.input.filter(
+            (item: any) => item.type === "image_generation_call",
+          ),
+          [
+            {
+              id: "ig_1",
+              type: "image_generation_call",
+              status: "completed",
+              result: image.result,
+            },
+          ],
+        );
+        assert.deepInclude(body.input, search);
+        assert.deepInclude(body.input, reasoning);
+      }
+    }
+  });
+
   it("parses streaming text, function calls, and final citations", async function () {
     const starts: unknown[] = [];
     const argumentDeltas: string[] = [];
