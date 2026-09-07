@@ -8,6 +8,10 @@
  * 4. 动态调整工具列表和 system prompt
  */
 
+import {
+  checkpointAssistantPhase,
+  getAssistantResumeCheckpoint,
+} from "./assistant-resume";
 import type {
   AgentRuntimeEvent,
   ChatMessage,
@@ -2043,8 +2047,14 @@ export class ChatManager {
     if (options.reuseAssistantMessageId && !reusedAssistantMessage) {
       return false;
     }
+    const resumeCheckpoint = reusedAssistantMessage
+      ? getAssistantResumeCheckpoint(reusedAssistantMessage)
+      : undefined;
     const reusedAssistantContext = reusedAssistantMessage
-      ? createInterruptedAssistantContextMessage(reusedAssistantMessage)
+      ? createInterruptedAssistantContextMessage({
+          ...reusedAssistantMessage,
+          content: resumeCheckpoint!.content,
+        })
       : null;
     const resumedArtifact = reusedAssistantMessage?.presentationArtifacts?.find(
       (artifact) =>
@@ -2053,17 +2063,17 @@ export class ChatManager {
         !!artifact.checkpointId &&
         !isTerminalPresentationArtifact(artifact),
     );
-    const initialAssistantContent = (
-      reusedAssistantMessage?.content || ""
-    ).replace(/<tool-call\b[^>]*>[\s\S]*?<\/tool-call>/g, (card) =>
-      resumedArtifact?.localId &&
-      card
-        .split(">")[0]
-        .includes(` expand-key="${this.escapeXml(resumedArtifact.localId)}"`)
-        ? ""
-        : card,
+    const initialAssistantContent = (resumeCheckpoint?.content || "").replace(
+      /<tool-call\b[^>]*>[\s\S]*?<\/tool-call>/g,
+      (card) =>
+        resumedArtifact?.localId &&
+        card
+          .split(">")[0]
+          .includes(` expand-key="${this.escapeXml(resumedArtifact.localId)}"`)
+          ? ""
+          : card,
     );
-    const initialAssistantReasoning = reusedAssistantMessage?.reasoning;
+    const initialAssistantReasoning = resumeCheckpoint?.reasoning;
     const initialAssistantEvidence = reusedAssistantMessage?.evidence;
     const initialAssistantArtifacts =
       reusedAssistantMessage?.presentationArtifacts?.map((artifact) =>
@@ -2420,6 +2430,7 @@ export class ChatManager {
         id: this.generateId(),
         role: "assistant",
         content: "",
+        resumeCheckpoint: { content: "" },
         streamingState: "in_progress",
         timestamp: Date.now(),
         sourceItemKeys: (() => {
@@ -2440,6 +2451,7 @@ export class ChatManager {
         this.resetAssistantForRetry(assistantMessage);
         assistantMessage.content = initialAssistantContent;
         assistantMessage.reasoning = initialAssistantReasoning;
+        checkpointAssistantPhase(assistantMessage);
         if (options.resumeFailedTurn) {
           assistantMessage.evidence = initialAssistantEvidence;
           assistantMessage.presentationArtifacts = initialAssistantArtifacts;
@@ -2453,6 +2465,7 @@ export class ChatManager {
             streamingState: "in_progress",
             evidence: assistantMessage.evidence || [],
             presentationArtifacts: assistantMessage.presentationArtifacts || [],
+            resumeCheckpoint: assistantMessage.resumeCheckpoint,
           },
         );
       } else {
@@ -2510,6 +2523,8 @@ export class ChatManager {
                   assistantMessage.content,
                   assistantMessage.reasoning,
                   {
+                    streamingState: assistantMessage.streamingState,
+                    resumeCheckpoint: assistantMessage.resumeCheckpoint,
                     presentationArtifacts:
                       assistantMessage.presentationArtifacts,
                   },
@@ -2624,6 +2639,7 @@ export class ChatManager {
         if (reusedAssistantMessage) {
           assistantMessage.content = initialAssistantContent;
           assistantMessage.reasoning = initialAssistantReasoning;
+          checkpointAssistantPhase(assistantMessage);
           if (options.resumeFailedTurn) {
             assistantMessage.evidence = initialAssistantEvidence;
             assistantMessage.presentationArtifacts = initialAssistantArtifacts;
@@ -2674,6 +2690,7 @@ export class ChatManager {
                       streamingState,
                       evidence: [],
                       sourceItemKeys: assistantMessage.sourceItemKeys || [],
+                      resumeCheckpoint: assistantMessage.resumeCheckpoint,
                     },
                   );
                 });
@@ -2757,6 +2774,7 @@ export class ChatManager {
                     ).content;
                     assistantMessage.evidence = undefined;
                     assistantMessage.streamingState = undefined;
+                    delete assistantMessage.resumeCheckpoint;
                     assistantMessage.timestamp = Date.now();
                     sendingSession.updatedAt = Date.now();
                     clearPaperChatRetryableState(sendingSession);
@@ -3902,6 +3920,7 @@ export class ChatManager {
           evidence: message.evidence || [],
           sourceItemKeys,
           presentationArtifacts: message.presentationArtifacts || [],
+          resumeCheckpoint: message.resumeCheckpoint,
         },
       );
     }

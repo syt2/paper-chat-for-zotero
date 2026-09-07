@@ -57,5 +57,6 @@ export function createInterruptedAssistantContextMessage(
   delete projected.streamingState;
   delete projected.reasoning;
   delete projected.tool_calls;
+  delete projected.resumeCheckpoint;
   return projected;
 }

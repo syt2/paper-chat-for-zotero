@@ -7823,7 +7823,7 @@ describe("paperchat storage and chat manager", function () {
       const replayContext = capturedRequests[0].find(
         (message) => message.id === "replay-source-assistant",
       );
-      assert.equal(replayContext?.content, "replay partial");
+      assert.isUndefined(replayContext);
       assert.isUndefined(replayContext?.streamingState);
       assert.notInclude(
         capturedRequests[0].map((message) => message.id),
@@ -7851,7 +7851,7 @@ describe("paperchat storage and chat manager", function () {
       const rerolledAssistant = futureMessages.find(
         (message: ChatMessage) => message.id === "replay-source-assistant",
       );
-      assert.include(rerolledAssistant?.content || "", "replay partial");
+      assert.notInclude(rerolledAssistant?.content || "", "replay partial");
       assert.include(rerolledAssistant?.content || "", "completed answer");
       assert.equal(
         session.messages.filter((message) => message.role === "user").length,
@@ -7876,7 +7876,8 @@ describe("paperchat storage and chat manager", function () {
         {
           id: "resume-assistant",
           role: "assistant",
-          content: "kept partial ",
+          content: "A complete. B complete. C interrupted",
+          resumeCheckpoint: { content: "A complete. B complete. " },
           timestamp: 16,
           streamingState: "interrupted",
           evidence: [
@@ -7911,7 +7912,8 @@ describe("paperchat storage and chat manager", function () {
           .length,
         1,
       );
-      assert.include(session.messages[1].content, "kept partial ");
+      assert.include(session.messages[1].content, "A complete. B complete. ");
+      assert.notInclude(session.messages[1].content, "C interrupted");
       assert.include(session.messages[1].content, "completed answer");
       assert.isUndefined(session.messages[1].streamingState);
       assert.deepEqual(session.messages[1].evidence, retainedEvidence);
@@ -7923,7 +7925,7 @@ describe("paperchat storage and chat manager", function () {
       assert.equal(
         capturedRequests[0].find((message) => message.id === "resume-assistant")
           ?.content,
-        "kept partial",
+        "A complete. B complete.",
       );
 
       const targetUser: ChatMessage = {

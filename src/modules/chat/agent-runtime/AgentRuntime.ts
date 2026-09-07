@@ -1,3 +1,4 @@
+import { checkpointAssistantPhase } from "../assistant-resume";
 import { createPresentationResumeRound } from "../../presentation/PresentationResumeRound";
 import type {
   AgentRuntimeEvent,
@@ -428,6 +429,15 @@ export class AgentRuntime {
       );
       const sourceItemKeys = mergedSourceItemKeys || [];
       message.sourceItemKeys = mergedSourceItemKeys;
+      if (message.resumeCheckpoint) {
+        message.resumeCheckpoint = {
+          ...message.resumeCheckpoint,
+          content: this.sanitizeGroundedDisplay(
+            session,
+            message.resumeCheckpoint.content,
+          ).content,
+        };
+      }
       await this.sessionStorage.updateMessageContent(
         session.id,
         message.id,
@@ -438,6 +448,7 @@ export class AgentRuntime {
           evidence: groundedDisplay.evidence || [],
           sourceItemKeys,
           presentationArtifacts: message.presentationArtifacts || [],
+          resumeCheckpoint: message.resumeCheckpoint,
         },
       );
     },
@@ -533,6 +544,7 @@ export class AgentRuntime {
     let budgetLimits = getToolBudgetLimits(configuredMaxIterations);
     let iteration = 0;
     let accumulatedDisplay = assistantMessage.content;
+    checkpointAssistantPhase(assistantMessage);
     let stableRequestTools = (requestTools || tools).slice();
     await this.startTurn(
       sendingSession,
@@ -938,6 +950,7 @@ export class AgentRuntime {
     let budgetLimits = getToolBudgetLimits(configuredMaxIterations);
     let iteration = 0;
     let accumulatedDisplay = assistantMessage.content;
+    checkpointAssistantPhase(assistantMessage);
     let stableRequestTools = (requestTools || tools).slice();
     await this.startTurn(
       sendingSession,
@@ -1983,6 +1996,10 @@ export class AgentRuntime {
       accumulatedDisplay += roundContent;
     }
 
+    // The model response is complete once its tool calls are accepted. Keep
+    // its prose even if a tool is subsequently paused; tool results advance
+    // this boundary independently as each execution finishes.
+    checkpointAssistantPhase(assistantMessage, accumulatedDisplay);
     let activeCallingDisplay = "";
     let activePendingDisplayToolCalls = new Map<string, ToolCall>();
     let activeProgressByToolCall = new Map<
@@ -2374,6 +2391,7 @@ export class AgentRuntime {
           const displayWithPendingTools =
             accumulatedDisplay +
             formatCallingToolCards([...pendingDisplayToolCalls.values()]);
+          checkpointAssistantPhase(assistantMessage, accumulatedDisplay);
           assistantMessage.content = displayWithPendingTools;
           assistantMessage.streamingState = "in_progress";
           await this.messageCheckpointer.flush(
@@ -3115,6 +3133,7 @@ export class AgentRuntime {
       delete assistantMessage.reasoning;
     }
     assistantMessage.streamingState = undefined;
+    delete assistantMessage.resumeCheckpoint;
 
     this.executionPlanManager.completeRespondStep(
       sendingSession,
@@ -3198,6 +3217,7 @@ export class AgentRuntime {
       delete assistantMessage.reasoning;
     }
     assistantMessage.streamingState = undefined;
+    delete assistantMessage.resumeCheckpoint;
     const toolContextChanged =
       retainCompletedApiOnlyModelContextMessagesForTurn(
         sendingSession,

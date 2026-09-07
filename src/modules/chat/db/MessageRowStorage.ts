@@ -6,6 +6,7 @@
  * contract and the defensive column parsing in one place.
  */
 
+import { parseAssistantResumeCheckpoint } from "../assistant-resume";
 import type {
   ChatMessage,
   ChatMessageStreamingState,
@@ -36,6 +37,7 @@ export interface MessageStorageRow {
   evidence?: string | null;
   source_item_keys?: string | null;
   presentation_artifacts?: string | null;
+  resume_checkpoint?: string | null;
   streaming_state?: ChatMessageStreamingState | null;
   api_only?: number | null;
   is_system_notice?: number | null;
@@ -179,6 +181,10 @@ export function mapMessageRowToChatMessage(
   if (presentationArtifacts) {
     message.presentationArtifacts = presentationArtifacts;
   }
+  const resumeCheckpoint = parseAssistantResumeCheckpoint(
+    readOptionalMessageColumn(row, "resume_checkpoint"),
+  );
+  if (resumeCheckpoint) message.resumeCheckpoint = resumeCheckpoint;
   const streamingState = readOptionalMessageColumn(row, "streaming_state");
   if (streamingState) message.streamingState = streamingState;
   if (readOptionalMessageColumn(row, "api_only")) message.apiOnly = true;

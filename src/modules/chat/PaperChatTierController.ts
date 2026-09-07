@@ -46,6 +46,7 @@ export type FailedAssistantSnapshot = Pick<
   | "evidence"
   | "sourceItemKeys"
   | "presentationArtifacts"
+  | "resumeCheckpoint"
 >;
 
 export function selectMoreSubstantialSnapshot(
@@ -535,12 +536,14 @@ export class PaperChatTierController {
           evidence,
           sourceItemKeys,
           presentationArtifacts,
+          resumeCheckpoint: assistantMessage.resumeCheckpoint,
         }
       : null;
   }
 
   resetAssistantForRetry(assistantMessage: ChatMessage): void {
     assistantMessage.content = "";
+    assistantMessage.resumeCheckpoint = { content: "" };
     delete assistantMessage.reasoning;
     delete assistantMessage.evidence;
     delete assistantMessage.tool_calls;
@@ -584,6 +587,7 @@ export class PaperChatTierController {
     }
 
     assistantMessage.content = snapshot.content;
+    assistantMessage.resumeCheckpoint = snapshot.resumeCheckpoint;
     assistantMessage.reasoning = snapshot.reasoning;
     assistantMessage.evidence = snapshot.evidence;
     assistantMessage.sourceItemKeys = snapshot.sourceItemKeys;
@@ -603,6 +607,7 @@ export class PaperChatTierController {
           evidence: snapshot.evidence || [],
           sourceItemKeys: snapshot.sourceItemKeys || [],
           presentationArtifacts: snapshot.presentationArtifacts || [],
+          resumeCheckpoint: snapshot.resumeCheckpoint,
         },
       );
     if (toolContextChanged) {

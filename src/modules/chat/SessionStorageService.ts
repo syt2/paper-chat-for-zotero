@@ -488,8 +488,8 @@ export class SessionStorageService {
 
         await db.queryAsync(
           `INSERT INTO messages
-           (id, session_id, seq, role, content, reasoning, images, files, quoted_messages, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, source_item_keys, streaming_state, api_only, is_system_notice, search_text, search_index_version, presentation_artifacts)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, session_id, seq, role, content, reasoning, images, files, quoted_messages, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, source_item_keys, streaming_state, api_only, is_system_notice, search_text, search_index_version, presentation_artifacts, resume_checkpoint)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             message.id,
             sessionId,
@@ -513,6 +513,9 @@ export class SessionStorageService {
             searchProjection.searchText,
             searchProjection.searchIndexVersion,
             serializePresentationArtifacts(message.presentationArtifacts),
+            message.resumeCheckpoint
+              ? JSON.stringify(message.resumeCheckpoint)
+              : null,
           ],
         );
 
@@ -635,6 +638,7 @@ export class SessionStorageService {
     reasoning?: string,
     options?: {
       streamingState?: ChatMessageStreamingState | null;
+      resumeCheckpoint?: ChatMessage["resumeCheckpoint"];
       evidence?: EvidenceRecord[];
       sourceItemKeys?: string[];
       presentationArtifacts?: PresentationToolCardArtifact[];
@@ -677,6 +681,12 @@ export class SessionStorageService {
         const nextPresentationArtifacts = updatesPresentationArtifacts
           ? normalizePresentationArtifacts(options?.presentationArtifacts)
           : previousMessage.presentationArtifacts;
+        const nextResumeCheckpoint = Object.prototype.hasOwnProperty.call(
+          options || {},
+          "resumeCheckpoint",
+        )
+          ? options?.resumeCheckpoint
+          : previousMessage.resumeCheckpoint;
         const nextMessage: ChatMessage = {
           ...previousMessage,
           content,
@@ -706,7 +716,7 @@ export class SessionStorageService {
         await db.queryAsync(
           `UPDATE messages SET
             content = ?, reasoning = ?, timestamp = ?, streaming_state = ?, evidence = ?, source_item_keys = ?,
-            search_text = ?, search_index_version = ?, presentation_artifacts = ?
+            search_text = ?, search_index_version = ?, presentation_artifacts = ?, resume_checkpoint = ?
           WHERE id = ? AND session_id = ?`,
           [
             content,
@@ -718,6 +728,9 @@ export class SessionStorageService {
             nextProjection.searchText,
             nextProjection.searchIndexVersion,
             serializePresentationArtifacts(nextPresentationArtifacts),
+            options?.streamingState && nextResumeCheckpoint
+              ? JSON.stringify(nextResumeCheckpoint)
+              : null,
             messageId,
             sessionId,
           ],
@@ -1153,8 +1166,8 @@ export class SessionStorageService {
             } = messagesForStorage[seq];
             await db.queryAsync(
               `INSERT INTO messages
-               (id, session_id, seq, role, content, reasoning, images, files, quoted_messages, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, source_item_keys, streaming_state, api_only, is_system_notice, search_text, search_index_version, presentation_artifacts)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               (id, session_id, seq, role, content, reasoning, images, files, quoted_messages, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, source_item_keys, streaming_state, api_only, is_system_notice, search_text, search_index_version, presentation_artifacts, resume_checkpoint)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               [
                 msg.id,
                 session.id,
@@ -1178,6 +1191,9 @@ export class SessionStorageService {
                 searchProjection.searchText,
                 searchProjection.searchIndexVersion,
                 serializePresentationArtifacts(msg.presentationArtifacts),
+                msg.resumeCheckpoint
+                  ? JSON.stringify(msg.resumeCheckpoint)
+                  : null,
               ],
             );
           }

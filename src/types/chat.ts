@@ -62,6 +62,8 @@ export interface ChatMessage {
   tool_calls?: ToolCall[]; // AI 请求调用的工具
   tool_call_id?: string; // tool 角色消息的工具调用ID
   streamingState?: ChatMessageStreamingState;
+  /** Last accepted model/tool boundary; partial output after it is replaced on resume. */
+  resumeCheckpoint?: { content: string; reasoning?: string };
   apiOnly?: boolean; // Hidden from chat UI; retained only for model context.
   /** Transient context used to continue a truncated provider response. */
   outputContinuation?: boolean;

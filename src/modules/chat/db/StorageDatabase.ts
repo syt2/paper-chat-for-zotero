@@ -11,7 +11,7 @@ import { getErrorMessage } from "../../../utils/common";
 
 const DB_DIR = "paper-chat";
 const DB_FILE = "storage";
-export const SCHEMA_VERSION = 15;
+export const SCHEMA_VERSION = 16;
 
 /** Build absolute DB path so Zotero.DBConnection doesn't parse subdirectory names */
 function getDBPath(): string {
@@ -252,6 +252,7 @@ export class StorageDatabase {
         evidence TEXT,
         source_item_keys TEXT,
         presentation_artifacts TEXT,
+        resume_checkpoint TEXT,
         streaming_state TEXT,
         api_only INTEGER,
         is_system_notice INTEGER,
@@ -452,6 +453,7 @@ export class StorageDatabase {
       messageColumns.has("quoted_messages") &&
       messageColumns.has("source_item_keys") &&
       messageColumns.has("presentation_artifacts") &&
+      messageColumns.has("resume_checkpoint") &&
       sessionColumns.has("last_active_item_library_id")
     );
   }
@@ -543,6 +545,10 @@ export class StorageDatabase {
         await this.upgradeToV15(db);
         currentVersion = 15;
       }
+      if (currentVersion < 16) {
+        await this.upgradeToV16(db);
+        currentVersion = 16;
+      }
       if (
         currentVersion === SCHEMA_VERSION &&
         !(await this.hasCurrentSchemaColumns(db))
@@ -555,6 +561,7 @@ export class StorageDatabase {
         await this.upgradeToV13(db);
         await this.upgradeToV14(db);
         await this.upgradeToV15(db);
+        await this.upgradeToV16(db);
       }
     }
   }
@@ -1430,6 +1437,32 @@ export class StorageDatabase {
         "[StorageDatabase] Failed to upgrade to v15:",
         getErrorMessage(error),
       );
+      throw error;
+    }
+  }
+
+  /** Persist one accepted assistant phase for interruption/restart recovery. */
+  private async upgradeToV16(db: ZoteroDBConnection): Promise<void> {
+    await db.queryAsync("BEGIN TRANSACTION");
+    try {
+      const columns =
+        (await db.queryAsync("PRAGMA table_info(messages)")) || [];
+      if (!columns.some((column: any) => column.name === "resume_checkpoint")) {
+        await db.queryAsync(
+          "ALTER TABLE messages ADD COLUMN resume_checkpoint TEXT",
+        );
+      }
+      await db.queryAsync(
+        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
+        [16, Date.now()],
+      );
+      await db.queryAsync("COMMIT");
+    } catch (error) {
+      try {
+        await db.queryAsync("ROLLBACK");
+      } catch {
+        /* ignore */
+      }
       throw error;
     }
   }

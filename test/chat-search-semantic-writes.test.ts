@@ -171,6 +171,7 @@ class SemanticWriteFakeDatabase {
         search_text: String(params[19] || ""),
         search_index_version: Number(params[20]),
         presentation_artifacts: (params[21] as string | null) || null,
+        resume_checkpoint: (params[22] as string | null) || null,
       };
       this.messages.set(message.id, message);
       return [];
@@ -212,8 +213,8 @@ class SemanticWriteFakeDatabase {
       return [];
     }
     if (statement.startsWith("UPDATE messages SET content = ?")) {
-      const message = this.messages.get(String(params[9]));
-      if (message && message.session_id === params[10]) {
+      const message = this.messages.get(String(params[10]));
+      if (message && message.session_id === params[11]) {
         message.content = String(params[0] || "");
         message.reasoning = (params[1] as string | null) || null;
         message.timestamp = Number(params[2]);
@@ -224,6 +225,7 @@ class SemanticWriteFakeDatabase {
         message.search_text = String(params[6] || "");
         message.search_index_version = Number(params[7]);
         message.presentation_artifacts = (params[8] as string | null) || null;
+        message.resume_checkpoint = (params[9] as string | null) || null;
       }
       return [];
     }
@@ -592,6 +594,49 @@ describe("chat search semantic writes", function () {
     );
     assert.lengthOf(messageWriteGuards, 2);
     assert.isTrue(messageWriteGuards.every((query) => query.inTransaction));
+  });
+
+  it("persists phase boundaries through insert, partial updates, full save and completion", async function () {
+    const fake = new SemanticWriteFakeDatabase(null);
+    await installFakeDatabase(fake);
+    const service = new SessionStorageService();
+    const message = {
+      id: "phase-reply",
+      role: "assistant" as const,
+      content: "partial C",
+      timestamp: 1,
+      streamingState: "in_progress" as const,
+      resumeCheckpoint: { content: "A/B complete", reasoning: "A/B reasoning" },
+    };
+    await service.insertMessage("session-1", message);
+    assert.deepEqual(
+      JSON.parse(fake.messages.get(message.id)!.resume_checkpoint!),
+      message.resumeCheckpoint,
+    );
+    await service.updateMessageContent(
+      "session-1",
+      message.id,
+      "longer C",
+      undefined,
+      { streamingState: "interrupted" },
+    );
+    assert.deepEqual(
+      JSON.parse(fake.messages.get(message.id)!.resume_checkpoint!),
+      message.resumeCheckpoint,
+    );
+    await service.saveSession({
+      id: "session-1",
+      createdAt: 1,
+      updatedAt: 2,
+      lastActiveItemKey: null,
+      messages: [message],
+    });
+    assert.deepEqual(
+      JSON.parse(fake.messages.get(message.id)!.resume_checkpoint!),
+      message.resumeCheckpoint,
+    );
+    await service.updateMessageContent("session-1", message.id, "complete");
+    assert.isNull(fake.messages.get(message.id)!.resume_checkpoint);
   });
 
   it("persists presentation artifacts across streaming checkpoints", async function () {

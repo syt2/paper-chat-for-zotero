@@ -62,6 +62,10 @@ async function runChatManagerBridgeLifecycle(
   const originalCreateCheckpoint = PresentationCheckpoint.create;
   let saveCheckpoint: PresentationChatLaunchOptions["saveCheckpoint"];
   const savedArtifacts: unknown[] = [];
+  const savedMessageUpdates: Array<{
+    streamingState?: ChatMessage["streamingState"];
+    resumeCheckpoint?: ChatMessage["resumeCheckpoint"];
+  }> = [];
   if (scenario.saveConfirmedSettings) {
     PresentationCheckpoint.create = async (source, settings, args) =>
       ({
@@ -191,6 +195,7 @@ async function runChatManagerBridgeLifecycle(
         _reasoning: unknown,
         update: any,
       ) => {
+        savedMessageUpdates.push(structuredClone(update));
         if (update?.presentationArtifacts)
           savedArtifacts.push(structuredClone(update.presentationArtifacts));
       },
@@ -198,6 +203,9 @@ async function runChatManagerBridgeLifecycle(
     manager.sendMessageWithToolCalling = async (...args: unknown[]) => {
       runtimeAbortSignal = args[11] as AbortSignal | undefined;
       if (scenario.saveConfirmedSettings) {
+        const assistant = args[2] as ChatMessage;
+        assistant.content = "Completed analysis before PPT confirmation.";
+        assistant.resumeCheckpoint = { content: assistant.content };
         assert.isFunction(saveCheckpoint);
         await saveCheckpoint!(
           { itemKey: item.key, libraryID: item.libraryID },
@@ -250,6 +258,15 @@ async function runChatManagerBridgeLifecycle(
 
     assert.equal(finishEffects, 1);
     if (scenario.saveConfirmedSettings) {
+      assert.isTrue(
+        savedMessageUpdates.some(
+          (update) =>
+            update.streamingState === "in_progress" &&
+            update.resumeCheckpoint?.content ===
+              "Completed analysis before PPT confirmation.",
+        ),
+        "Saving the launch checkpoint must retain the active assistant phase",
+      );
       assert.isTrue(
         savedArtifacts.some((artifacts) =>
           JSON.stringify(artifacts).includes("ppt-confirmed-launch"),

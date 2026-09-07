@@ -224,6 +224,7 @@ describe("StorageDatabase foundation", function () {
             { name: "quoted_messages" },
             { name: "source_item_keys" },
             { name: "presentation_artifacts" },
+            { name: "resume_checkpoint" },
             { name: "search_text" },
             { name: "search_index_version" },
           ];
@@ -416,6 +417,7 @@ describe("StorageDatabase foundation", function () {
             { name: "quoted_messages" },
             { name: "source_item_keys" },
             { name: "presentation_artifacts" },
+            { name: "resume_checkpoint" },
             { name: "search_text" },
             { name: "search_index_version" },
           ];
@@ -705,6 +707,7 @@ describe("StorageDatabase foundation", function () {
             { name: "source_item_keys" },
             { name: "search_text" },
             { name: "search_index_version" },
+            { name: "resume_checkpoint" },
             ...(presentationArtifactsAdded
               ? [{ name: "presentation_artifacts" }]
               : []),
@@ -756,6 +759,50 @@ describe("StorageDatabase foundation", function () {
     );
   });
 
+  it("adds the assistant phase column once and rolls back migration failures", async function () {
+    let added = false;
+    const statements: string[] = [];
+    const fakeDb = {
+      queryAsync: async (sql: string, params?: unknown[]) => {
+        const normalized = normalizeSql(sql);
+        statements.push(normalized);
+        if (normalized === "PRAGMA table_info(messages)")
+          return added ? [{ name: "resume_checkpoint" }] : [];
+        if (
+          normalized ===
+          "ALTER TABLE messages ADD COLUMN resume_checkpoint TEXT"
+        )
+          added = true;
+        if (normalized.startsWith("UPDATE schema_version"))
+          assert.equal(params?.[0], 16);
+        return [];
+      },
+    };
+    const storage = new StorageDatabase() as any;
+    await storage.upgradeToV16(fakeDb);
+    await storage.upgradeToV16(fakeDb);
+    assert.equal(
+      statements.filter((sql) => sql.startsWith("ALTER TABLE")).length,
+      1,
+    );
+    assert.equal(statements.filter((sql) => sql === "COMMIT").length, 2);
+    const failed: string[] = [];
+    try {
+      await storage.upgradeToV16({
+        queryAsync: async (sql: string) => {
+          failed.push(normalizeSql(sql));
+          if (sql.startsWith("ALTER TABLE")) throw new Error("disk full");
+          return [];
+        },
+      });
+      assert.fail("migration should fail");
+    } catch (error) {
+      assert.include(String(error), "disk full");
+    }
+    assert.include(failed, "ROLLBACK");
+    assert.notInclude(failed, "COMMIT");
+  });
+
   it("adds the owning Zotero library when upgrading schema v14 to v15", async function () {
     const recorded: Array<{ sql: string; params?: unknown[] }> = [];
     let itemLibraryIDAdded = false;
@@ -779,6 +826,7 @@ describe("StorageDatabase foundation", function () {
             { name: "quoted_messages" },
             { name: "source_item_keys" },
             { name: "presentation_artifacts" },
+            { name: "resume_checkpoint" },
             { name: "search_text" },
             { name: "search_index_version" },
           ];
@@ -902,6 +950,7 @@ describe("StorageDatabase foundation", function () {
             { name: "evidence" },
             { name: "quoted_messages" },
             { name: "source_item_keys" },
+            { name: "resume_checkpoint" },
             ...(presentationArtifactsAdded
               ? [{ name: "presentation_artifacts" }]
               : []),
@@ -971,6 +1020,7 @@ describe("StorageDatabase foundation", function () {
             { name: "quoted_messages" },
             { name: "source_item_keys" },
             { name: "presentation_artifacts" },
+            { name: "resume_checkpoint" },
             { name: "search_text" },
             { name: "search_index_version" },
           ];
