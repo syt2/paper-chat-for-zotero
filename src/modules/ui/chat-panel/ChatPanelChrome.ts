@@ -348,6 +348,10 @@ export function getChatChromeStyles(theme: ThemeColors): string {
       border-bottom-right-radius: 4px !important; box-shadow: none !important;
     }
     .chat-panel-root #chat-input-area { flex-shrink: 0; padding: 8px 12px 12px; }
+    .chat-panel-root[data-file-drag] #chat-composer {
+      outline: 2px dashed ${theme.textMuted}; outline-offset: 2px;
+      background: ${theme.hoverBg};
+    }
     .chat-panel-root #chat-composer {
       border: 1px solid ${theme.inputBorderColor}; border-radius: 12px;
       background: ${theme.inputBg};

@@ -1046,6 +1046,7 @@ describe("chat message exact navigation", function () {
     const container = new AttachmentPreviewContainer(doc, preview);
     const removedQuotes: number[] = [];
     const removedImages: number[] = [];
+    const removedFiles: number[] = [];
     const navigated: string[] = [];
 
     updateAttachmentsPreviewDisplay(
@@ -1069,19 +1070,27 @@ describe("chat message exact navigation", function () {
             name: "figure.png",
           },
         ],
-        pendingFiles: [],
+        pendingFiles: [
+          {
+            name: "notes.txt",
+            type: "text",
+            content: "notes",
+            sourcePath: "/tmp/notes.txt",
+          },
+        ],
         pinnedSelectedTexts: [],
         pendingSelectedText: null,
       },
       {
         onRemoveQuote: (index) => removedQuotes.push(index),
         onRemoveImage: (index) => removedImages.push(index),
+        onRemoveFile: (index) => removedFiles.push(index),
         onNavigateQuote: (quote) => navigated.push(quote.messageId),
       },
     );
 
     assert.equal(preview.style.display, "flex");
-    assert.lengthOf(preview.children, 2);
+    assert.lengthOf(preview.children, 3);
     const quoteTag = preview.children[0];
     assert.equal(quoteTag.getAttribute("class"), "pending-quoted-message");
     assert.equal(
@@ -1105,7 +1114,8 @@ describe("chat message exact navigation", function () {
     const imageTag = preview.children[1];
     assert.equal(imageTag.getAttribute("class"), "pending-image-attachment");
     assert.equal(imageTag.children[0].tagName, "img");
-    assert.equal(imageTag.children[0].style.width, "32px");
+    assert.equal(imageTag.children[0].style.width, "28px");
+    assert.equal(imageTag.children[0].getAttribute("role"), "button");
     assert.equal(
       imageTag.children[0].getAttribute("src"),
       "data:image/png;base64,YWJj",
@@ -1121,6 +1131,51 @@ describe("chat message exact navigation", function () {
       stopPropagation: () => undefined,
     });
     assert.deepEqual(removedImages, [0]);
+    const fileTag = preview.children[2];
+    assert.equal(fileTag.children[0].textContent, "notes.txt");
+    assert.equal(fileTag.children[0].tagName, "button");
+    assert.equal(fileTag.children[1].textContent, "×");
+    fileTag.children[1].listeners.get("click")?.[0]?.({
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+    });
+    assert.deepEqual(removedFiles, [0]);
+  });
+
+  it("renders sent text attachments alongside compact clickable images", function () {
+    const doc = new FakeDocument();
+    const message = createMessageElement(
+      doc as unknown as Document,
+      {
+        id: "with-files",
+        role: "user",
+        content: "question",
+        timestamp: 1,
+        files: [
+          {
+            name: "notes.txt",
+            content: "notes",
+            type: "text",
+            sourcePath: "/tmp/notes.txt",
+          },
+          { name: "old.json", content: "{}", type: "text" },
+        ],
+        images: [{ type: "base64", data: "YQ==", mimeType: "image/png" }],
+      },
+      darkTheme,
+    ) as unknown as FakeElement;
+    const files = message
+      .querySelectorAll("button")
+      .filter((button) =>
+        ["notes.txt", "old.json"].includes(button.textContent),
+      );
+    assert.lengthOf(files, 2);
+    const image = message
+      .querySelectorAll("img")
+      .find((img) => img.getAttribute("src")?.startsWith("data:"))!;
+    assert.equal(image.style.maxWidth, "160px");
+    assert.equal(image.getAttribute("role"), "button");
+    assert.isTrue(image.listeners.has("click"));
   });
 
   it("renders one removable selected-text preview with both ends of long text", function () {

@@ -6383,6 +6383,7 @@ describe("paperchat storage and chat manager", function () {
               name: "notes.txt",
               content: "File context",
               mimeType: "text/plain",
+              sourcePath: "/local/notes.txt",
             },
           ],
         }),
@@ -6400,10 +6401,15 @@ describe("paperchat storage and chat manager", function () {
         '[Selection 2]:\n"Current evidence\n\n---\n\nwith divider"',
       );
       assert.include(providerUserMessage?.content, "[File: notes.txt]");
+      assert.notInclude(providerUserMessage?.content, "/local/notes.txt");
       assert.include(providerUserMessage?.content, "[Question]:\nCompare them");
 
       const persistedUserMessage = session.messages.find(
         (message) => message.role === "user",
+      );
+      assert.equal(
+        persistedUserMessage?.files?.[0].sourcePath,
+        "/local/notes.txt",
       );
       assert.deepEqual(
         splitSelectedTexts(persistedUserMessage?.selectedText || ""),

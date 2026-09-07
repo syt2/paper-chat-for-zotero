@@ -35,6 +35,10 @@ import { selectChatMessagePresentations } from "../../chat/message-presentation"
 import { canSummarizeAssistantReply } from "./NoteSummaryActions";
 import { canQuoteAssistantReply } from "../../chat/quoted-messages";
 import { chatFontSize } from "./ChatPanelTypography";
+import {
+  bindAttachmentImagePreview,
+  createFileAttachmentButton,
+} from "./AttachmentActions";
 
 export function getStreamingContentSelector(messageId: string): string {
   return `[data-streaming-content-for="${messageId}"]`;
@@ -342,8 +346,8 @@ function createMessageImagesElement(
       "img",
       {
         display: "block",
-        maxWidth: renderableImages.length === 1 ? "260px" : "128px",
-        maxHeight: renderableImages.length === 1 ? "220px" : "128px",
+        maxWidth: renderableImages.length === 1 ? "160px" : "112px",
+        maxHeight: renderableImages.length === 1 ? "140px" : "96px",
         borderRadius: "10px",
         objectFit: "cover",
         background: "rgba(255, 255, 255, 0.18)",
@@ -354,6 +358,7 @@ function createMessageImagesElement(
         title: image.name || "Attached image",
       },
     );
+    bindAttachmentImagePreview(img, image);
     container.appendChild(img);
   }
 
@@ -1066,6 +1071,26 @@ export function createMessageElement(
 
   if (msg.role === "user" && msg.images?.some(isRenderableImageAttachment)) {
     bubble.appendChild(createMessageImagesElement(doc, msg.images));
+  }
+  if (msg.role === "user" && msg.files?.length) {
+    const files = createElement(doc, "div", {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: "6px",
+      marginTop: "8px",
+    });
+    files.className = "chat-message-file-attachments";
+    for (const file of msg.files) {
+      const button = createFileAttachmentButton(doc, file);
+      Object.assign(button.style, {
+        border: `1px solid ${theme.borderColor}`,
+        borderRadius: "6px",
+        padding: "5px 8px",
+        fontSize: chatFontSize(11),
+      });
+      files.appendChild(button);
+    }
+    bubble.appendChild(files);
   }
 
   if (msg.role === "assistant" && msg.streamingState === "interrupted") {

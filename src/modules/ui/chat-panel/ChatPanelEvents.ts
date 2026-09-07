@@ -49,7 +49,6 @@ import {
   type ReasoningEffortPreference,
 } from "../../providers/reasoning-request";
 import {
-  canAddImageAttachmentToDraft,
   getChatManager,
   isImageAttachmentDraftWithinLimits,
   showPanelWithImageAttachment,
@@ -58,6 +57,11 @@ import {
 import { startReaderFigureScreenshot } from "../ReaderFigureScreenshot";
 import { updateAnimatedBalance } from "./AnimatedBalance";
 import { ConversationNavigator } from "./ConversationNavigator";
+import { setupLocalFileAttachments } from "./LocalFileAttachments";
+import {
+  bindAttachmentImagePreview,
+  createFileAttachmentButton,
+} from "./AttachmentActions";
 import {
   getImageAttachmentLimitMessage,
   refreshImageInputAvailability,
@@ -189,6 +193,7 @@ export function updateConversationNoteSummaryButton(
 
 interface AttachmentPreviewActions {
   onRemoveImage?: (index: number) => void;
+  onRemoveFile?: (index: number) => void;
   onRemoveQuote?: (index: number) => void;
   onRemoveSelectedText?: () => void;
   onPinSelectedText?: () => void;
@@ -1434,97 +1439,14 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
     }
   });
 
-  // Upload file button - supports both images and text files
-  uploadFileBtn?.addEventListener("click", async () => {
-    ztoolkit.log("Upload file button clicked");
-    const imageInputAvailability = await refreshImageInputAvailability(
-      container,
-      chatManager,
-    );
-    const imageInputUnsupported = imageInputAvailability === "unsupported";
-    const textFilePattern = "*.txt;*.md;*.json;*.xml;*.csv;*.log";
-    const filters: Array<[string, string]> = [];
-    if (!imageInputUnsupported) {
-      filters.push(
-        [
-          "All supported",
-          `*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp;${textFilePattern}`,
-        ],
-        ["Images", "*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp"],
+  const localFileAttachments = setupLocalFileAttachments(context);
+  disposers.push(localFileAttachments.dispose);
+  uploadFileBtn?.addEventListener("click", () => {
+    void localFileAttachments.pickFile().catch((error) => {
+      context.appendError(
+        error instanceof Error ? error.message : String(error),
       );
-    }
-    filters.push(["Text files", textFilePattern]);
-    const fp = new ztoolkit.FilePicker("Select File", "open", filters);
-    const filePath = await fp.open();
-    if (filePath) {
-      const ext = filePath.toLowerCase().split(".").pop() || "";
-      const imageExts = ["png", "jpg", "jpeg", "gif", "webp", "bmp"];
-
-      const extractor = chatManager.getPdfExtractor();
-
-      if (imageExts.includes(ext)) {
-        if (imageInputUnsupported) {
-          context.appendError(getString("chat-image-input-unsupported"));
-          return;
-        }
-        // Handle as image
-        const result = await extractor.imageFileToBase64(filePath);
-        if (result) {
-          const fileName = filePath.split(/[/\\]/).pop() || "image";
-          ztoolkit.log(
-            "[User Upload] Image uploaded:",
-            fileName,
-            "mimeType:",
-            result.mimeType,
-            "data length:",
-            result.data.length,
-          );
-          const image: ImageAttachment = {
-            type: "base64",
-            data: result.data,
-            mimeType: result.mimeType,
-            name: fileName,
-          };
-          const attachmentState = context.getAttachmentState();
-          if (
-            !canAddImageAttachmentToDraft(attachmentState.pendingImages, image)
-          ) {
-            context.appendError(getImageAttachmentLimitMessage());
-            return;
-          }
-          attachmentState.pendingImages = [
-            ...attachmentState.pendingImages,
-            image,
-          ];
-          context.setAttachmentState(attachmentState);
-          context.updateAttachmentsPreview();
-        } else {
-          ztoolkit.log("[User Upload] Failed to read image file:", filePath);
-        }
-      } else {
-        // Handle as text file
-        const fileContent = await extractor.readTextFile(filePath);
-        if (fileContent) {
-          const attachmentState = context.getAttachmentState();
-          const fileName = filePath.split(/[/\\]/).pop() || "file.txt";
-          ztoolkit.log(
-            "[User Upload] Text file uploaded:",
-            fileName,
-            "content length:",
-            fileContent.length,
-          );
-          attachmentState.pendingFiles.push({
-            name: fileName,
-            content: fileContent.substring(0, 50000),
-            type: "text",
-          });
-          context.setAttachmentState(attachmentState);
-          context.updateAttachmentsPreview();
-        } else {
-          ztoolkit.log("[User Upload] Failed to read text file:", filePath);
-        }
-      }
-    }
+    });
   });
 
   figureScreenshotBtn?.addEventListener("click", async () => {
@@ -1963,7 +1885,7 @@ export function updateAttachmentsPreviewDisplay(
       },
       { type: "button", "aria-label": label },
     );
-    removeBtn.textContent = "x";
+    removeBtn.textContent = "×";
     removeBtn.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -2121,25 +2043,25 @@ export function updateAttachmentsPreviewDisplay(
   attachmentState.pendingImages.forEach((image, index) => {
     const tag = createTag();
     tag.setAttribute("class", "pending-image-attachment");
-    tag.appendChild(
-      createElement(
-        doc,
-        "img",
-        {
-          flex: "0 0 auto",
-          width: "32px",
-          height: "32px",
-          borderRadius: "4px",
-          objectFit: "cover",
-          background: theme.buttonBg,
-        },
-        {
-          src: getImageSrc(image),
-          alt: image.name || "Attached image",
-          title: image.name || "Attached image",
-        },
-      ),
+    const thumbnail = createElement(
+      doc,
+      "img",
+      {
+        flex: "0 0 auto",
+        width: "28px",
+        height: "28px",
+        borderRadius: "4px",
+        objectFit: "cover",
+        background: theme.buttonBg,
+      },
+      {
+        src: getImageSrc(image),
+        alt: image.name || "Attached image",
+        title: image.name || "Attached image",
+      },
     );
+    bindAttachmentImagePreview(thumbnail, image);
+    tag.appendChild(thumbnail);
     if (actions.onRemoveImage) {
       tag.appendChild(
         createRemoveButton(`Remove ${image.name || "image"}`, () =>
@@ -2150,11 +2072,19 @@ export function updateAttachmentsPreviewDisplay(
     attachmentsPreview.appendChild(tag);
   });
 
-  for (const file of attachmentState.pendingFiles) {
+  attachmentState.pendingFiles.forEach((file, index) => {
     const tag = createTag();
-    tag.appendChild(createLabel(file.name));
+    tag.setAttribute("class", "pending-file-attachment");
+    tag.appendChild(createFileAttachmentButton(doc, file));
+    if (actions.onRemoveFile) {
+      tag.appendChild(
+        createRemoveButton(`Remove ${file.name}`, () =>
+          actions.onRemoveFile?.(index),
+        ),
+      );
+    }
     attachmentsPreview.appendChild(tag);
-  }
+  });
 
   const attachmentCount =
     attachmentState.pendingQuotedMessages.length +

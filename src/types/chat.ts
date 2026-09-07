@@ -15,6 +15,8 @@ export interface FileAttachment {
   name: string;
   content: string; // 文件文本内容
   type: string;
+  /** Original local file location; only used by the attachment UI. */
+  sourcePath?: string;
 }
 
 /** A stable reference and bounded fallback snapshot for a quoted AI reply. */

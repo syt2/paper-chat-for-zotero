@@ -92,7 +92,10 @@ export interface ChatPanelContext {
     onRenderComplete?: () => void,
   ) => void;
   renderExecutionPlan: (plan?: ExecutionPlan) => void;
-  appendError: (errorMessage: string) => void;
+  appendError: (
+    errorMessage: string,
+    errorKey?: "unsupported-attachment",
+  ) => void;
   rerollPaperChatTierForCurrentSession: () => Promise<{
     previousModel: string;
     nextModel: string;

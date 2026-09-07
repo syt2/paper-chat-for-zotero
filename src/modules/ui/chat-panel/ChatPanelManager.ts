@@ -1680,6 +1680,9 @@ function cleanupPanelIntegrations(
   if (!container) {
     return;
   }
+  container.ownerDocument
+    .querySelector(".chat-attachment-image-preview")
+    ?.remove();
   if (disposeEventHandlers) {
     readyPanelContainers.delete(container);
     eventHandlerDisposers.get(container)?.();
@@ -3348,6 +3351,12 @@ function renderPendingAttachmentsPreview(container: HTMLElement): void {
         );
         syncPendingAttachmentsPreviews(container);
       },
+      onRemoveFile: (index) => {
+        pendingFiles = pendingFiles.filter(
+          (_file, fileIndex) => fileIndex !== index,
+        );
+        syncPendingAttachmentsPreviews(container);
+      },
       onRemoveQuote: (index) => {
         if (index < 0 || index >= pendingQuotedMessages.length) return;
         pendingQuotedMessages = pendingQuotedMessages.filter(
@@ -3647,7 +3656,10 @@ function createContext(container: HTMLElement): ChatPanelContext {
       if (!container) return;
       updateExecutionInsetsForContainer(container, manager, plan);
     },
-    appendError: (errorMessage: string) => {
+    appendError: (
+      errorMessage: string,
+      errorKey?: "unsupported-attachment",
+    ) => {
       ztoolkit.log(
         "[ChatPanel] appendError called:",
         errorMessage.substring(0, 100),
@@ -3666,8 +3678,18 @@ function createContext(container: HTMLElement): ChatPanelContext {
         ztoolkit.log("[ChatPanel] doc:", doc ? "exists" : "null");
 
         if (chatHistory && doc) {
+          if (errorKey) {
+            const existing = chatHistory.querySelector(
+              `[data-chat-error="${errorKey}"] .message-content`,
+            );
+            if (existing) {
+              existing.textContent = `⚠️ ${errorMessage}`;
+              return;
+            }
+          }
           const wrapper = doc.createElement("div");
           wrapper.className = "message-wrapper error-message-wrapper";
+          if (errorKey) wrapper.setAttribute("data-chat-error", errorKey);
 
           const bubble = doc.createElement("div");
           bubble.className = "message-bubble error-bubble";
