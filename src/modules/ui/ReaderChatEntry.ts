@@ -1,3 +1,7 @@
+import {
+  captureTranslationContext,
+  type SelectionTranslationContext,
+} from "./SelectionTranslationContext";
 /**
  * ReaderChatEntry - PaperChat entry points inside the PDF reader.
  *
@@ -83,6 +87,7 @@ function getSelectionIconURL(name: string): Promise<string> {
 type FloatingSelectionEntry = {
   button: HTMLElement;
   expanded: boolean;
+  translationContext: SelectionTranslationContext;
   dispose?: () => void;
   anchor: SelectionRect;
   doc: Document;
@@ -400,10 +405,35 @@ function showFloatingSelectionEntry(
   attach.hidden = translate.hidden = true;
   // Inline display is explicit so the PDF reader's styles cannot override hidden.
   attach.style.display = translate.style.display = "none";
+  let paperTitle: string | undefined;
+  try {
+    const tabs = (
+      Zotero.getMainWindow() as Window & {
+        Zotero_Tabs?: { selectedID?: string };
+      }
+    ).Zotero_Tabs;
+    const reader = tabs?.selectedID
+      ? Zotero.Reader.getByTabID(tabs.selectedID)
+      : null;
+    if (reader?.itemID && getPdfSelectionDocument(reader) === doc) {
+      const attachment = Zotero.Items.get(reader.itemID);
+      const paper = attachment?.parentID
+        ? Zotero.Items.get(attachment.parentID)
+        : attachment;
+      paperTitle = String(paper?.getField("title") || "");
+    }
+  } catch {
+    /* Translation still works without bibliographic context. */
+  }
   const entry: FloatingSelectionEntry = {
     button,
     doc,
     expanded: false,
+    translationContext: captureTranslationContext(
+      doc,
+      selection.text,
+      paperTitle,
+    ),
     anchor: selection.rect,
     text: selection.text,
     signature: getSelectionSignature(selection),
@@ -466,6 +496,7 @@ function showFloatingSelectionEntry(
       doc,
       entry.text,
       entry.anchor,
+      entry.translationContext,
     );
   });
   button.addEventListener("keydown", (event) => {

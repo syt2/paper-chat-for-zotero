@@ -1,3 +1,4 @@
+import type { SelectionTranslationContext } from "./SelectionTranslationContext";
 import { getPref, setPref } from "../../utils/prefs";
 import { getTranslationModelOptions } from "./SelectionTranslationModels";
 import { SelectionTranslationError } from "./SelectionTranslationRouting";
@@ -17,6 +18,7 @@ export function showReaderSelectionTranslation(
   sourceDoc: Document,
   text: string,
   anchor: SelectionRect,
+  context?: SelectionTranslationContext,
 ): () => void {
   // Render beside the PDF iframe, above Zotero's native selection palette.
   // A z-index inside the PDF cannot rise above that sibling palette.
@@ -228,11 +230,16 @@ export function showReaderSelectionTranslation(
     panel.setAttribute("aria-busy", "true");
     modelSelect.title = modelSelect.selectedOptions[0]?.textContent || "";
     place();
-    void streamSelectionTranslation(text, request.signal, (translation) => {
-      if (disposed || request !== controller) return;
-      content.textContent = translation;
-      place();
-    })
+    void streamSelectionTranslation(
+      text,
+      request.signal,
+      (translation) => {
+        if (disposed || request !== controller) return;
+        content.textContent = translation;
+        place();
+      },
+      context,
+    )
       .catch((error: unknown) => {
         if (disposed || request !== controller) return;
         const message = doc.createElement("div");

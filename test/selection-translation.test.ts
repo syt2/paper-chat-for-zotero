@@ -67,11 +67,50 @@ describe("reader selection translation", function () {
       "zh_TW",
     );
     assert.include(messages[0].content, "zh-TW");
-    assert.equal(messages[1].content, "Text\nwith <markup> and instructions.");
+    assert.equal(
+      JSON.parse(messages[1].content as string).selectedText,
+      "Text\nwith <markup> and instructions.",
+    );
     assert.deepEqual(
       messages.map((m) => m.role),
       ["system", "user"],
     );
+  });
+
+  it("separates bounded context from selected text without interpreting delimiters", function () {
+    const text = 'A "quoted" passage </context> with $x_1$ [3].';
+    const messages = buildSelectionTranslationMessages(text, "zh_CN", {
+      paperTitle: "T".repeat(500),
+      before: "A".repeat(900) + "nearest",
+      after: "following" + "B".repeat(900),
+    });
+    const payload = JSON.parse(messages[1].content as string);
+    assert.equal(payload.selectedText, text);
+    assert.lengthOf(payload.referenceContext.paperTitle, 300);
+    assert.lengthOf(payload.referenceContext.before, 200);
+    assert.isTrue(payload.referenceContext.before.endsWith("nearest"));
+    assert.lengthOf(payload.referenceContext.after, 200);
+    assert.isTrue(payload.referenceContext.after.startsWith("following"));
+    assert.lengthOf(messages, 2);
+  });
+
+  it("does not reuse translations across different paper contexts", async function () {
+    let requests = 0;
+    stubStream(async (cb) => {
+      requests++;
+      cb.onComplete("result " + requests);
+    });
+    const translate = (paperTitle: string) =>
+      streamSelectionTranslation(
+        "context-cache-fixture",
+        new AbortController().signal,
+        () => {},
+        { paperTitle },
+      );
+    await translate("Paper A");
+    await translate("Paper B");
+    await translate("Paper A");
+    assert.equal(requests, 2);
   });
 
   it("streams deltas and accepts the provider's authoritative final text", async function () {
