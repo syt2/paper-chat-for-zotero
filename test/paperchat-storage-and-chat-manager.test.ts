@@ -6316,6 +6316,158 @@ describe("paperchat storage and chat manager", function () {
     }
   });
 
+  it("edits and persists the final user turn before sending, and preserves history on storage failure", async function () {
+    const providerManager = getProviderManager() as any;
+    const contextManager = getContextManager() as any;
+    const originals = {
+      id: providerManager.getActiveProviderId,
+      retry: providerManager.executeWithRetry,
+      compact: contextManager.compactBeforeSendIfNeeded,
+      filter: contextManager.filterMessages,
+    };
+    try {
+      for (const outcome of [
+        "success",
+        "storage-failure",
+        "not-ready",
+        "cancel-during-save",
+      ] as const) {
+        const user: ChatMessage = {
+          id: "editable",
+          role: "user",
+          content: "old",
+          timestamp: 1,
+        };
+        const session: ChatSession = {
+          id: "edit-session",
+          createdAt: 1,
+          updatedAt: 1,
+          lastActiveItemKey: null,
+          messages: [
+            user,
+            {
+              id: "old-answer",
+              role: "assistant",
+              content: "obsolete",
+              timestamp: 2,
+            },
+          ],
+        };
+        let persisted: ChatSession | undefined;
+        let request: ChatMessage[] | undefined;
+        const provider = {
+          config: { id: "edit-test" },
+          getName: () => "edit-test",
+          isReady: () => outcome !== "not-ready",
+          streamChatCompletion: (messages: ChatMessage[], callbacks: any) => {
+            assert.isDefined(persisted);
+            request = messages;
+            callbacks.onComplete("new answer");
+          },
+        };
+        providerManager.getActiveProviderId = () => "edit-test";
+        providerManager.executeWithRetry = async (
+          _provider: unknown,
+          operation: () => Promise<unknown>,
+        ) => operation();
+        contextManager.compactBeforeSendIfNeeded = async () => false;
+        contextManager.filterMessages = (target: ChatSession) => ({
+          messages: [...target.messages],
+          summaryTriggered: false,
+        });
+        const manager = Object.create(ChatManager.prototype) as any;
+        Object.assign(manager, {
+          currentSession: session,
+          activeSessionRunIds: new Map(),
+          sessionRunCounters: new Map(),
+          activeSessionAbortControllers: new Map(),
+          streamingSessions: new Map(),
+          currentItemKey: null,
+          init: async () => undefined,
+          getActiveProvider: () => provider,
+          isSessionActive: () => false,
+          sessionStorage: {
+            saveSession: async (next: ChatSession) => {
+              if (outcome === "storage-failure")
+                throw new Error("disk failure");
+              persisted = JSON.parse(JSON.stringify(next));
+              if (outcome === "cancel-during-save") {
+                manager.activeSessionRunIds.delete(session.id);
+              }
+            },
+            insertMessage: async () => undefined,
+            updateMessageContent: async () => undefined,
+            updateSessionMeta: async () => undefined,
+            deleteMessage: async () => undefined,
+          },
+        });
+        if (outcome === "cancel-during-save") {
+          assert.isTrue(
+            await manager.editLastUserMessage(
+              session.id,
+              user.id,
+              "new prompt",
+            ),
+          );
+          assert.isUndefined(request);
+          assert.deepEqual(
+            session.messages.map((m) => m.content),
+            ["new prompt"],
+          );
+          assert.deepEqual(
+            persisted!.messages.map((m) => m.content),
+            ["new prompt"],
+          );
+        } else if (outcome === "success") {
+          assert.isTrue(
+            await manager.editLastUserMessage(
+              session.id,
+              user.id,
+              "new prompt",
+            ),
+          );
+          assert.equal(persisted!.messages[0].id, user.id);
+          assert.equal(persisted!.messages[0].content, "new prompt");
+          assert.lengthOf(persisted!.messages, 1);
+          assert.notInclude(
+            request!.map((m) => m.content),
+            "obsolete",
+          );
+          assert.deepEqual(
+            session.messages.map((m) => m.content),
+            ["new prompt", "new answer"],
+          );
+        } else {
+          let failed = false;
+          try {
+            await manager.editLastUserMessage(
+              session.id,
+              user.id,
+              "new prompt",
+            );
+          } catch {
+            failed = true;
+          }
+          assert.isTrue(failed);
+          assert.deepEqual(
+            session.messages.map((m) => m.content),
+            ["old", "obsolete"],
+          );
+          assert.isUndefined(request);
+        }
+        assert.isFalse(manager.activeSessionRunIds.has(session.id));
+        assert.isFalse(
+          await manager.editLastUserMessage("another-session", user.id, "new"),
+        );
+      }
+    } finally {
+      providerManager.getActiveProviderId = originals.id;
+      providerManager.executeWithRetry = originals.retry;
+      contextManager.compactBeforeSendIfNeeded = originals.compact;
+      contextManager.filterMessages = originals.filter;
+    }
+  });
+
   it("sends and persists every selected passage with file context", async function () {
     const providerManager = getProviderManager() as any;
     const originalGetActiveProviderId = providerManager.getActiveProviderId;

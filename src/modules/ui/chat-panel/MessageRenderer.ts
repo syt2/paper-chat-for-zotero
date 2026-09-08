@@ -1,4 +1,6 @@
 import { createTopupButton } from "./PaperChatTopupButton";
+import { getEditableUserPrompt } from "../../chat/edit-last-user-message";
+import { openUserMessageEditor } from "./UserMessageEditor";
 import { createTypingIndicator } from "./TypingIndicator";
 /**
  * MessageRenderer - Create and manage message bubble elements
@@ -453,6 +455,8 @@ interface ExecutionBannerState {
 }
 
 export interface MessageRenderOptions {
+  editableUserMessageId?: string;
+  onEditUserMessage?: (messageId: string, prompt: string) => Promise<boolean>;
   resumeMessageId?: string;
   onResume?: () => void | Promise<void>;
   onResumeError?: (error: Error) => void;
@@ -1032,6 +1036,29 @@ export function createMessageElement(
     renderOptions.onResumeError,
   );
   if (actions) {
+    if (
+      msg.role === "user" &&
+      msg.id === renderOptions.editableUserMessageId &&
+      renderOptions.onEditUserMessage
+    ) {
+      const edit = createMessageActionButton(
+        doc,
+        theme,
+        getString("chat-edit-message"),
+      );
+      edit.className = "message-action-btn edit-message-btn";
+      setIconButtonImage(edit, "write", "");
+      edit.addEventListener("click", () =>
+        openUserMessageEditor(
+          content,
+          actions,
+          getEditableUserPrompt(msg),
+          theme,
+          (prompt) => renderOptions.onEditUserMessage!(msg.id, prompt),
+        ),
+      );
+      actions.appendChild(edit);
+    }
     wrapper.appendChild(actions);
   }
 

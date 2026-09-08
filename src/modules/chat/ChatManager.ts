@@ -138,6 +138,7 @@ import {
   getToolBudgetLimits,
 } from "./tool-budget/ToolBudgetPolicy";
 import { isAbortError, SessionRunInvalidatedError } from "./errors";
+import { buildEditedLastTurn } from "./edit-last-user-message";
 import { ANALYTICS_EVENTS, getAnalyticsService } from "../analytics";
 import { providerSupportsToolCalling } from "../providers/provider-capabilities";
 import {
@@ -183,6 +184,7 @@ type InternalSendMessageOptions = SendMessageOptions & {
   fromPaperChatReroll?: boolean;
   resumeFailedTurn?: boolean;
   reuseUserMessageId?: string;
+  editLastUserMessage?: boolean;
   reuseAssistantMessageId?: string;
   targetSession?: ChatSession;
   requireTargetSessionActive?: boolean;
@@ -1675,6 +1677,22 @@ export class ChatManager {
     return this.paperChatTier.retryCurrentPaperChatFailure();
   }
 
+  async editLastUserMessage(
+    sessionId: string,
+    messageId: string,
+    content: string,
+  ): Promise<boolean> {
+    const session = this.currentSession;
+    if (session?.id !== sessionId) return false;
+    return this.sendMessage(content, {
+      item: this.getSessionItem(session),
+      targetSession: session,
+      requireTargetSessionActive: true,
+      reuseUserMessageId: messageId,
+      editLastUserMessage: true,
+    });
+  }
+
   async resumeLastTurn(
     sessionId: string,
     targetMessageId: string,
@@ -2023,9 +2041,16 @@ export class ChatManager {
     }
     const presentationMentionSources = extractPresentationRetrySources(
       content,
-      sendingSession.messages,
+      options.editLastUserMessage
+        ? sendingSession.messages.slice(
+            0,
+            sendingSession.messages.findIndex(
+              (message) => message.id === options.reuseUserMessageId,
+            ),
+          )
+        : sendingSession.messages,
     );
-    const reusedUserMessage = options.reuseUserMessageId
+    let reusedUserMessage = options.reuseUserMessageId
       ? sendingSession.messages.find(
           (message) =>
             message.id === options.reuseUserMessageId &&
@@ -2035,6 +2060,12 @@ export class ChatManager {
     if (options.reuseUserMessageId && !reusedUserMessage) {
       return false;
     }
+    if (
+      options.editLastUserMessage &&
+      (!reusedUserMessage ||
+        !buildEditedLastTurn(sendingSession, reusedUserMessage.id, content))
+    )
+      return false;
     const reusedAssistantMessage = options.reuseAssistantMessageId
       ? sendingSession.messages.find(
           (message) =>
@@ -2131,7 +2162,7 @@ export class ChatManager {
 
       // 检查是否需要插入 item 切换通知。Zotero item key 只在单个
       // library 内唯一，因此同 key 跨个人库/群组库也必须视为切换。
-      if (itemContextChanged) {
+      if (itemContextChanged && !options.editLastUserMessage) {
         if (hasCurrentItem) {
           // 切换到新 item
           await this.insertItemSwitchNotice(
@@ -2219,6 +2250,9 @@ export class ChatManager {
       }
 
       if (!provider || !provider.isReady()) {
+        if (options.editLastUserMessage) {
+          throw new Error(getString("chat-error-no-provider"));
+        }
         ztoolkit.log("[ChatManager] Provider not ready, showing error in chat");
         if (options.fromPaperChatReroll) {
           trackChatCompleted(false);
@@ -2266,7 +2300,11 @@ export class ChatManager {
         throw new Error(getString("chat-note-summary-tools-unavailable"));
       }
 
-      if (useToolCalling) {
+      if (options.editLastUserMessage) {
+        // Keep the original attachment payload; editing must not switch papers
+        // or re-read changed files from the current reader.
+        pdfWasAttached = !!reusedUserMessage?.pdfContext;
+      } else if (useToolCalling) {
         // 如果有当前 item，尝试提取 PDF（用于 PDF 相关工具）
         if (hasCurrentItem && item && !options.noteSummaryContext) {
           const hasPdf = await this.pdfExtractor.hasPdfAttachment(item);
@@ -2316,6 +2354,22 @@ export class ChatManager {
       }
 
       // 创建用户消息
+      if (options.editLastUserMessage) {
+        ensureSendingSessionTracked();
+        const edited = buildEditedLastTurn(
+          sendingSession,
+          reusedUserMessage!.id,
+          content,
+        );
+        if (!edited) return false;
+        await this.sessionStorage.saveSession(edited);
+        Object.assign(sendingSession, edited);
+        reusedUserMessage =
+          sendingSession.messages[sendingSession.messages.length - 1];
+        // Saving can yield to cancellation. The edit is committed, but a
+        // stopped turn must not create a new assistant or issue a request.
+        if (!this.isSessionTracked(sendingSession, sessionRunId)) return true;
+      }
       const wasDraftSession = !reusedUserMessage
         ? this.isDraftSession(sendingSession)
         : false;
@@ -2342,7 +2396,7 @@ export class ChatManager {
       clearPaperChatRetryableState(sendingSession);
       const reusedUserIndex = reusedUserMessage
         ? sendingSession.messages.findIndex(
-            (message) => message.id === reusedUserMessage.id,
+            (message) => message.id === userMessage.id,
           )
         : -1;
       const requestContextSession =

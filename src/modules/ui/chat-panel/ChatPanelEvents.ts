@@ -2293,7 +2293,7 @@ export function syncSendButtonState(
   if (root) renderTurnQueue(root, activeSession?.id);
 }
 
-function createTurnRunner(options: {
+export function createTurnRunner(options: {
   manager: ChatPanelContext["chatManager"];
   resolveSession: () => ChatSession;
   send: (session: ChatSession) => Promise<boolean>;

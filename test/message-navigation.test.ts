@@ -76,6 +76,23 @@ class FakeElement {
     return this.children.length;
   }
 
+  get className(): string {
+    return this.getAttribute("class") || "";
+  }
+  set className(value: string) {
+    this.setAttribute("class", value);
+  }
+  focus(): void {}
+  setSelectionRange(_start: number, _end: number): void {}
+  append(...children: FakeElement[]): void {
+    children.forEach((child) => this.appendChild(child));
+  }
+  after(child: FakeElement): void {
+    const parent = this.parentElement!;
+    parent.children.splice(parent.children.indexOf(this) + 1, 0, child);
+    child.parentElement = parent;
+  }
+
   get textContent(): string {
     return this.textValue;
   }
@@ -276,6 +293,54 @@ describe("chat message exact navigation", function () {
 
   afterEach(function () {
     (globalThis as { addon?: unknown }).addon = originalAddon;
+  });
+
+  it("edits only the eligible user message and keeps unchanged drafts unsendable", async function () {
+    const doc = new FakeDocument();
+    let sends = 0;
+    let received = "";
+    const options = {
+      editableUserMessageId: "last-user",
+      onEditUserMessage: async (_id: string, prompt: string) => {
+        sends++;
+        received = prompt;
+        return true;
+      },
+    };
+    const render = (id: string) =>
+      createMessageElement(
+        doc as unknown as Document,
+        { id, role: "user", content: "original", timestamp: 1 },
+        darkTheme,
+        false,
+        false,
+        undefined,
+        undefined,
+        options,
+      ) as unknown as FakeElement;
+    assert.isNull(render("older-user").querySelector(".edit-message-btn"));
+    const message = render("last-user");
+    const edit = message.querySelector(".edit-message-btn")!;
+    edit.listeners.get("click")![0]({});
+    const editor = message.querySelector(".user-message-editor")!;
+    const input = editor.querySelector("textarea")!;
+    const [cancel, send] = editor.querySelectorAll("button");
+    assert.equal(input.value, "original");
+    assert.isTrue(send.disabled);
+    input.value = "new prompt";
+    input.listeners.get("input")![0]({});
+    assert.isFalse(send.disabled);
+    await send.listeners.get("click")![0]({});
+    assert.equal(sends, 1);
+    assert.equal(received, "new prompt");
+    assert.isNull(message.querySelector(".user-message-editor"));
+    edit.listeners.get("click")![0]({});
+    message
+      .querySelector(".user-message-editor")!
+      .querySelectorAll("button")[0]
+      .listeners.get("click")![0]({});
+    assert.equal(sends, 1);
+    assert.isFalse(cancel.disabled);
   });
 
   for (const kind of ["retry", "fork", "summary"] as const) {

@@ -98,9 +98,11 @@ import { navigateToPdfQuote } from "./PdfQuoteNavigator";
 import { normalizeNoteSourceKey } from "./NoteSourceNavigator";
 import { sessionTurnQueue } from "./SessionTurnQueue";
 import { getResumableTurn } from "../../chat/resumable-turn";
+import { getLastEditableUserMessage } from "../../chat/edit-last-user-message";
 import { openSourceTarget, type SourceTarget } from "./SourceNavigator";
 import {
   setupEventHandlers,
+  createTurnRunner,
   updateAttachmentsPreviewDisplay,
   updateUserBarDisplay,
   updatePdfCheckboxVisibilityForItem,
@@ -662,6 +664,8 @@ function getPresentationItemForMessage(
 }
 
 interface ChatMessageRenderCallbacks {
+  editableUserMessageId?: string;
+  onEditUserMessage?: (messageId: string, prompt: string) => Promise<boolean>;
   resumeMessageId?: string;
   onResume?: () => void | Promise<void>;
   onResumeError?: (error: Error) => void;
@@ -726,6 +730,8 @@ function renderMessageElementsWithMarkdownActions(
     callbacks.onRerollError,
     {
       markdown,
+      editableUserMessageId: callbacks.editableUserMessageId,
+      onEditUserMessage: callbacks.onEditUserMessage,
       onResumePresentation: callbacks.onResumePresentation,
       onResumePresentationError: callbacks.onResumePresentationError,
       onCancelPresentation: callbacks.onCancelPresentation,
@@ -3646,6 +3652,59 @@ function createContext(container: HTMLElement): ChatPanelContext {
             () => getQuoteNavigationItem(session, moduleCurrentItem),
             {
               retryableErrorMessageId,
+              editableUserMessageId:
+                session &&
+                !manager.isSessionRunning(session.id) &&
+                sessionTurnQueue.snapshot(session.id).status !== "running" &&
+                !sessionTurnQueue.snapshot(session.id).queued.length &&
+                !session.userInputRequestState?.pendingRequests.length
+                  ? getLastEditableUserMessage(messages)?.id
+                  : undefined,
+              onEditUserMessage: async (messageId, prompt) => {
+                if (
+                  !session ||
+                  manager.getActiveSession()?.id !== session.id ||
+                  manager.isSessionRunning(session.id) ||
+                  sessionTurnQueue.snapshot(session.id).status === "running" ||
+                  sessionTurnQueue.snapshot(session.id).queued.length
+                )
+                  return false;
+                const user = getLastEditableUserMessage(session.messages);
+                if (user?.id !== messageId) return false;
+                if (!getProviderManager().getActiveProvider()?.isReady()) {
+                  throw new Error(getString("chat-error-no-provider"));
+                }
+                scrollChatHistoryToBottom(chatHistory);
+                return sessionTurnQueue.enqueue(session.id, {
+                  id: `edit-${messageId}-${Date.now()}`,
+                  content: prompt,
+                  draft: {
+                    content: prompt,
+                    attachmentState: {
+                      pendingImages: user.images || [],
+                      pendingFiles: user.files || [],
+                      pendingSelectedText: user.selectedText || null,
+                      pinnedSelectedTexts: [],
+                      pendingQuotedMessages: user.quotedMessages || [],
+                    },
+                  },
+                  run: createTurnRunner({
+                    manager,
+                    resolveSession: () => session,
+                    send: () =>
+                      manager.editLastUserMessage(
+                        session.id,
+                        messageId,
+                        prompt,
+                      ),
+                  }),
+                  cancel: () => manager.cancelSessionTurn(session.id),
+                  onError: (error) =>
+                    context.appendError(
+                      error instanceof Error ? error.message : String(error),
+                    ),
+                });
+              },
               resumeMessageId: resumableTurn?.targetMessageId,
               onResume:
                 resumableTurn && session
