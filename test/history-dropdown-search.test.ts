@@ -68,6 +68,8 @@ class FakeElement extends FakeNode {
   value = "";
   disabled = false;
   scrollTop = 0;
+  clientHeight = 0;
+  scrollHeight = 0;
   private ownText = "";
 
   constructor(
@@ -632,6 +634,86 @@ describe("history dropdown grouped search UI", function () {
       ".history-search-next-sessions",
     ) as FakeElement | null;
     assert.isTrue(next?.disabled);
+  });
+
+  it("loads ordinary history near the bottom and removes the scroll listener on disposal", () => {
+    const doc = new FakeDocument();
+    const { dropdown, body } = createShell(doc);
+    const state = createHistoryDropdownState();
+    const dispose = setupHistoryDropdownSearch(
+      asElement(dropdown),
+      asDocument(doc),
+      state,
+      darkTheme,
+      callbacks(async () => {
+        throw new Error("ordinary scrolling must not search");
+      }),
+    );
+    populateHistoryDropdown(
+      asElement(dropdown),
+      asDocument(doc),
+      Array.from({ length: 45 }, (_, index) => session(index)),
+      state,
+      darkTheme,
+      () => {},
+    );
+    dropdown.style.display = "flex";
+    body.clientHeight = 300;
+    body.scrollHeight = 1500;
+    body.scrollTop = 500;
+    body.dispatch("scroll");
+    assert.equal(state.displayedCount, 20);
+    body.scrollTop = 1190;
+    body.dispatch("scroll");
+    assert.equal(state.displayedCount, 40);
+    assert.equal(body.scrollTop, 1190);
+    body.dispatch("scroll");
+    assert.equal(state.displayedCount, 40);
+    body.scrollHeight = 3000;
+    body.scrollTop = 2690;
+    body.dispatch("scroll");
+    assert.equal(state.displayedCount, 45);
+    assert.isNull(body.querySelector(".load-more-btn"));
+    dispose();
+    assert.lengthOf(body.listeners.get("scroll") || [], 0);
+  });
+
+  it("loads the next search page once while scrolling and waits for it to finish", async () => {
+    const doc = new FakeDocument();
+    const { dropdown, body, input } = createShell(doc);
+    const state = createHistoryDropdownState();
+    const next = deferred<ChatHistorySearchPage>();
+    let calls = 0;
+    const dispose = setupHistoryDropdownSearch(
+      asElement(dropdown),
+      asDocument(doc),
+      state,
+      darkTheme,
+      callbacks(async () => {
+        calls++;
+        return calls === 1
+          ? page("q", "first", { nextSessionCursor: "next" })
+          : next.promise;
+      }),
+    );
+    dropdown.style.display = "flex";
+    input.value = "query";
+    input.dispatch("input");
+    await wait(230);
+    body.clientHeight = 300;
+    body.scrollHeight = 1500;
+    body.scrollTop = 1190;
+    body.dispatch("scroll");
+    body.scrollTop = 1195;
+    body.dispatch("scroll");
+    assert.equal(calls, 2);
+    next.resolve(page("q", "second"));
+    await wait();
+    assert.equal(state.groups.length, 2);
+    body.scrollTop = 1200;
+    body.dispatch("scroll");
+    assert.equal(calls, 2);
+    dispose();
   });
 
   it("keeps one-code-point queries on ordinary 20-session pagination", async function () {

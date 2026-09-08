@@ -1326,7 +1326,36 @@ export function setupHistoryDropdownSearch(
     onInput();
   };
   const onScroll = () => {
+    const previousScrollTop = state.scrollTop;
     state.scrollTop = body.scrollTop;
+    if (
+      dropdown.style.display === "none" ||
+      body.clientHeight <= 0 ||
+      body.scrollTop <= previousScrollTop ||
+      body.scrollHeight - body.scrollTop - body.clientHeight > 32
+    )
+      return;
+    if (isHistorySearchActive(state)) {
+      if (
+        state.sessionCursor &&
+        !state.searchPending &&
+        state.cache?.normalizedQuery === normalizeSearchValue(state.query)
+      )
+        void runPrimarySearch(controller, true);
+      return;
+    }
+    const ordinary = controller.ordinaryCallbacks;
+    if (ordinary && state.displayedCount < state.allSessions.length) {
+      renderMoreSessions(
+        body,
+        doc,
+        state,
+        theme,
+        ordinary.onSelect,
+        ordinary.onDelete,
+        ordinary.onEditTitle,
+      );
+    }
   };
   const onClear = () => {
     state.isComposing = false;
