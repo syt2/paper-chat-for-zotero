@@ -41,6 +41,7 @@ declare namespace _ZoteroTypes {
       "toolPermissionDefaultModes": string;
       "webSearchProvider": string;
       "agentMaxPlanningIterations": number;
+      "translationModel": string;
     };
   }
 }

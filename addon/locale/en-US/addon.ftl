@@ -407,3 +407,16 @@ paperchat-presentation-source-title = Source paper: { $title }
 
 paperchat-chat-presentation-progress-interrupted-legacy = This older task has no saved checkpoint. Generate it again to continue.
 paperchat-chat-presentation-progress-restart = Regenerate presentation
+
+paperchat-chat-reader-selection-menu = Selection actions
+paperchat-chat-reader-translate = Translate
+paperchat-chat-reader-translation-close = Close translation
+paperchat-chat-reader-translation-unavailable = Sign in or configure an available model in PaperChat settings first.
+paperchat-chat-reader-translation-empty = The model returned no translation. Please try again.
+
+paperchat-chat-unpin-selected-text = Unpin selected text
+
+paperchat-pref-translation-follow-chat = Follow chat model
+paperchat-pref-translation-model-unavailable = Selected model unavailable — choose another
+
+paperchat-pref-translation-auto = Automatic (API default)

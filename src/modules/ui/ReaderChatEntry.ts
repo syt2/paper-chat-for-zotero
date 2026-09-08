@@ -7,13 +7,15 @@
  * - createAnnotationContextMenu: a menu entry on saved annotations that sends
  *   the annotation text (and its comment) to the chat panel.
  *
- * Both seed the pending selected-text attachment and open the panel, so the
- * user lands in chat with the passage already attached.
+ * The selection entry expands into attachment and streaming translation actions.
+ * Annotation menu entries attach their passage directly to the chat panel.
  *
  * Reader listeners are registered globally per addonRef (not per window), so
  * registration is idempotent and torn down at shutdown.
  */
 
+import { config } from "../../../package.json";
+import { showReaderSelectionTranslation } from "./ReaderSelectionTranslation";
 import { getString } from "../../utils/locale";
 import { showPanelWithSelectedText } from "./chat-panel";
 import type { ChatPanelOpenSource } from "./chat-panel/ChatPanelManager";
@@ -64,9 +66,25 @@ let lastSelectionPointer:
   | undefined;
 
 const READER_DOCUMENT_POLL_INTERVAL_MS = 500;
+const selectionIconURLs = new Map<string, Promise<string>>();
+
+function getSelectionIconURL(name: string): Promise<string> {
+  let pending = selectionIconURLs.get(name);
+  if (!pending) {
+    pending = Zotero.File.getContentsFromURLAsync(
+      `chrome://${config.addonRef}/content/icons/${name}.svg`,
+    ).then((svg) => `data:image/svg+xml,${encodeURIComponent(svg)}`);
+    selectionIconURLs.set(name, pending);
+    void pending.catch(() => selectionIconURLs.delete(name));
+  }
+  return pending;
+}
 
 type FloatingSelectionEntry = {
-  button: HTMLButtonElement;
+  button: HTMLElement;
+  expanded: boolean;
+  dispose?: () => void;
+  anchor: SelectionRect;
   doc: Document;
   text: string;
   signature: string;
@@ -74,6 +92,7 @@ type FloatingSelectionEntry = {
 };
 
 let floatingSelectionEntry: FloatingSelectionEntry | undefined;
+let closeSelectionTranslation: (() => void) | undefined;
 
 type ReaderWithPdfWindow = ReaderLike & {
   _iframeWindow?: Window;
@@ -102,6 +121,7 @@ function removeFloatingSelectionEntry(): void {
   floatingSelectionEntry = undefined;
   if (!entry) return;
 
+  entry.dispose?.();
   entry.button.remove();
 }
 
@@ -120,6 +140,12 @@ function getSelectionRect(doc: Document): {
   const selection = doc.getSelection();
   if (!selection || selection.rangeCount === 0) return null;
 
+  if (
+    selection.anchorNode?.parentElement?.closest(
+      ".paperchat-selection-translation",
+    )
+  )
+    return null;
   const text = selection.toString().trim();
   if (!text) return null;
   const range = selection.getRangeAt(selection.rangeCount - 1);
@@ -258,6 +284,7 @@ function positionFloatingSelectionEntry(
     return;
   }
 
+  entry.anchor = selection.rect;
   entry.text = selection.text;
   entry.signature = getSelectionSignature(selection);
   const position = getSelectionEntryPosition(
@@ -269,7 +296,7 @@ function positionFloatingSelectionEntry(
     removeFloatingSelectionEntry();
     return;
   }
-  entry.button.style.left = `${position.left}px`;
+  entry.button.style.left = `${Math.max(0, Math.min(position.left, win.innerWidth - (entry.expanded ? 74 : FLOATING_SELECTION_ENTRY_SIZE)))}px`;
   entry.button.style.top = `${position.top}px`;
 }
 
@@ -287,76 +314,167 @@ function showFloatingSelectionEntry(
     return;
   }
 
+  if (
+    floatingSelectionEntry?.doc === doc &&
+    floatingSelectionEntry.expanded &&
+    floatingSelectionEntry.text === selection.text
+  )
+    return;
   removeFloatingSelectionEntry();
-  const button = doc.createElement("button");
+  const button = doc.createElement("div");
   button.className = "paperchat-selection-entry";
-  button.title = getString("chat-reader-open-selection-tooltip");
-  button.setAttribute(
-    "aria-label",
-    getString("chat-reader-open-selection-tooltip"),
-  );
+  const dark = doc.defaultView?.matchMedia(
+    "(prefers-color-scheme: dark)",
+  )?.matches;
+  const reducedMotion = doc.defaultView?.matchMedia(
+    "(prefers-reduced-motion: reduce)",
+  )?.matches;
   Object.assign(button.style, {
-    display: "inline-flex",
+    display: "flex",
     alignItems: "center",
-    justifyContent: "center",
     position: "fixed",
-    zIndex: "1000",
+    zIndex: "1001",
     width: `${FLOATING_SELECTION_ENTRY_SIZE}px`,
-    height: `${FLOATING_SELECTION_ENTRY_SIZE}px`,
-    minWidth: `${FLOATING_SELECTION_ENTRY_SIZE}px`,
-    padding: "0",
-    borderRadius: "50%",
-    background: "#2563eb",
-    border: "1px solid rgba(30, 64, 175, 0.8)",
-    boxShadow: "0 1px 2px rgba(15, 23, 42, 0.24)",
-    color: "#ffffff",
-    cursor: "pointer",
-    appearance: "none",
-    MozAppearance: "none",
+    height: "24px",
+    borderRadius: "12px",
+    background: dark ? "#303035" : "#fff",
+    border: "1px solid rgba(128,128,140,.3)",
+    boxShadow: "0 1px 4px rgba(0,0,0,.12)",
+    color: dark ? "#eee" : "#333",
     boxSizing: "border-box",
+    overflow: "hidden",
     pointerEvents: "auto",
-    fontSize: "12px",
-    fontWeight: "700",
-    lineHeight: "16px",
-    transition: "filter 100ms ease, box-shadow 100ms ease",
+    transition: reducedMotion ? "none" : "width 180ms ease, left 180ms ease",
   });
-  button.textContent = "?";
+  const makeButton = (label: string, width: number) => {
+    const control = doc.createElement("button");
+    control.type = "button";
+    control.title = label;
+    control.setAttribute("aria-label", label);
+    Object.assign(control.style, {
+      flex: `0 0 ${width}px`,
+      width: `${width}px`,
+      height: "22px",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      border: "0",
+      padding: "0",
+      background: "transparent",
+      color: "inherit",
+      cursor: "pointer",
+      font: "12px system-ui, sans-serif",
+      borderRadius: "6px",
+    });
+    return control;
+  };
+  const toggle = makeButton(getString("chat-reader-selection-menu"), 16);
+  toggle.textContent = "?";
+  toggle.setAttribute("aria-expanded", "false");
+  const setIcon = (control: HTMLButtonElement, name: string) => {
+    const icon = doc.createElement("img");
+    // The PDF content principal cannot load privileged chrome images directly.
+    void getSelectionIconURL(name)
+      .then((url) => {
+        icon.src = url;
+      })
+      .catch((error) =>
+        ztoolkit.log("[ReaderChatEntry] Icon load failed:", error),
+      );
+    icon.alt = "";
+    icon.draggable = false;
+    Object.assign(icon.style, {
+      width: "16px",
+      height: "16px",
+      pointerEvents: "none",
+    });
+    control.append(icon);
+  };
+  const attach = makeButton(
+    getString("chat-reader-open-selection-tooltip"),
+    28,
+  );
+  setIcon(attach, "send");
+  const translate = makeButton(getString("chat-reader-translate"), 28);
+  setIcon(translate, "translate");
+  attach.hidden = translate.hidden = true;
+  // Inline display is explicit so the PDF reader's styles cannot override hidden.
+  attach.style.display = translate.style.display = "none";
   const entry: FloatingSelectionEntry = {
     button,
     doc,
+    expanded: false,
+    anchor: selection.rect,
     text: selection.text,
     signature: getSelectionSignature(selection),
     source,
   };
-  let didActivate = false;
-  const activateSelection = (event: Event) => {
-    if (didActivate) return;
-    didActivate = true;
+  button.addEventListener("pointerdown", (event) => {
     event.preventDefault();
     event.stopPropagation();
-    const text = entry.text;
+  });
+  button.addEventListener("click", (event) => event.stopPropagation());
+  const activate = (control: HTMLButtonElement, action: () => void) => {
+    control.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      action();
+    });
+    control.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      // Pointer clicks already ran before PDF.js could clear its range.
+      // Keyboard and accessibility activation use detail === 0.
+      if (event.detail > 0) return;
+      action();
+    });
+  };
+  activate(toggle, () => {
+    entry.expanded = !entry.expanded;
+    toggle.setAttribute("aria-expanded", String(entry.expanded));
+    attach.hidden = translate.hidden = !entry.expanded;
+    attach.style.display = translate.style.display = entry.expanded
+      ? "flex"
+      : "none";
+    button.style.width = entry.expanded
+      ? "74px"
+      : `${FLOATING_SELECTION_ENTRY_SIZE}px`;
+    positionFloatingSelectionEntry(entry, {
+      text: entry.text,
+      rect: entry.anchor,
+    });
+  });
+  const dismiss = () => {
     dismissedSelectionSignature = entry.signature;
     removeFloatingSelectionEntry();
-    openChatWithSelection(text, "reader_selection");
   };
-  // PDF.js can clear its range before a click bubbles. Activate on pointerdown
-  // while the range is intact, with click as an accessibility fallback.
-  button.addEventListener("pointerdown", activateSelection, true);
-  button.addEventListener("click", activateSelection, true);
-  button.addEventListener("mouseenter", () => {
-    button.style.filter = "brightness(1.12)";
+  activate(attach, () => {
+    dismiss();
+    openChatWithSelection(entry.text, "reader_selection");
   });
-  button.addEventListener("mouseleave", () => {
-    button.style.filter = "none";
+  activate(translate, () => {
+    dismiss();
+    closeSelectionTranslation?.();
+    closeSelectionTranslation = showReaderSelectionTranslation(
+      doc,
+      entry.text,
+      entry.anchor,
+    );
   });
-  button.addEventListener("focus", () => {
-    button.style.outline = "2px solid rgba(37, 99, 235, 0.45)";
-    button.style.outlineOffset = "1px";
+  button.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      dismiss();
+    }
   });
-  button.addEventListener("blur", () => {
-    button.style.outline = "";
-    button.style.outlineOffset = "";
-  });
+  const outside = (event: Event) => {
+    if (entry.expanded && !button.contains(event.target as Node)) dismiss();
+  };
+  doc.addEventListener("pointerdown", outside, true);
+  entry.dispose = () => doc.removeEventListener("pointerdown", outside, true);
+  button.append(toggle, attach, translate);
   doc.body.appendChild(button);
   floatingSelectionEntry = entry;
   positionFloatingSelectionEntry(entry, selection);
@@ -364,6 +482,12 @@ function showFloatingSelectionEntry(
 
 function refreshFloatingSelectionEntry(doc: Document): void {
   const selection = getSelectionRect(doc);
+  if (
+    !selection &&
+    floatingSelectionEntry?.doc === doc &&
+    floatingSelectionEntry.expanded
+  )
+    return;
   if (!selection || !isSelectionEntryTextEligible(selection.text)) {
     dismissedSelectionSignature = "";
     removeFloatingSelectionEntry();
@@ -406,6 +530,8 @@ export function watchActivePdfSelection(): void {
   }
 
   cancelReaderFigureScreenshot();
+  closeSelectionTranslation?.();
+  closeSelectionTranslation = undefined;
   cancelScheduledSelectionRefresh();
   if (watchedPdfDocument) {
     watchedPdfDocument.removeEventListener(
@@ -526,6 +652,8 @@ export function registerReaderChatEntries(): void {
 }
 
 export function unregisterReaderChatEntries(): void {
+  closeSelectionTranslation?.();
+  closeSelectionTranslation = undefined;
   cancelReaderFigureScreenshot();
   removeFloatingSelectionEntry();
   cancelScheduledSelectionRefresh();

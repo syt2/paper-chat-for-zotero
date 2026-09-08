@@ -3384,6 +3384,21 @@ function renderPendingAttachmentsPreview(container: HTMLElement): void {
         pendingSelectedText = null;
         syncPendingAttachmentsPreviews(container);
       },
+      onUnpinSelectedText: (index) => {
+        if (index < 0 || index >= pinnedSelectedTexts.length) return;
+        const selectedText = pinnedSelectedTexts[index];
+        // There is one replaceable selection slot. Swap its existing passage
+        // into the vacated pin slot so toggling never silently discards text.
+        pinnedSelectedTexts = pinnedSelectedTexts.flatMap((text, textIndex) =>
+          textIndex !== index
+            ? [text]
+            : pendingSelectedText
+              ? [pendingSelectedText]
+              : [],
+        );
+        pendingSelectedText = selectedText;
+        syncPendingAttachmentsPreviews(container);
+      },
       onRemovePinnedSelectedText: (index) => {
         if (index < 0 || index >= pinnedSelectedTexts.length) return;
         pinnedSelectedTexts = pinnedSelectedTexts.filter(

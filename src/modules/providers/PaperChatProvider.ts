@@ -123,6 +123,11 @@ export class PaperChatProvider implements ToolCallingProvider {
     );
   }
 
+  /** Snapshot the effective model for an independent utility request. */
+  getResolvedModel(): string {
+    return this.createDelegateConfig().defaultModel;
+  }
+
   private createDelegateConfig(): ApiKeyProviderConfig {
     const authManager = getAuthManager();
     const availableModels = this.getConfiguredModels();

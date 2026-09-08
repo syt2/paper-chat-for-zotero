@@ -198,6 +198,7 @@ interface AttachmentPreviewActions {
   onRemoveQuote?: (index: number) => void;
   onRemoveSelectedText?: () => void;
   onPinSelectedText?: () => void;
+  onUnpinSelectedText?: (index: number) => void;
   onRemovePinnedSelectedText?: (index: number) => void;
   onNavigateQuote?: (quote: QuotedMessageRef) => void | Promise<void>;
 }
@@ -1913,7 +1914,24 @@ export function updateAttachmentsPreviewDisplay(
     return removeBtn;
   };
 
-  const createPinButton = (onPin: () => void): HTMLElement => {
+  const createSelectionPinIcon = (name: "pin" | "pushpin"): HTMLElement => {
+    const icon = createElement(
+      doc,
+      "span",
+      {
+        display: "inline-block",
+        width: "14px",
+        height: "14px",
+        backgroundColor: "currentColor",
+        mask: `url("chrome://${config.addonRef}/content/icons/${name}.svg") center / contain no-repeat`,
+        pointerEvents: "none",
+      },
+      { "aria-hidden": "true" },
+    );
+    return icon;
+  };
+
+  const createPinButton = (onPin: () => void, pinned = false): HTMLElement => {
     const pinBtn = createElement(
       doc,
       "button",
@@ -1932,9 +1950,17 @@ export function updateAttachmentsPreviewDisplay(
         color: theme.textSecondary,
         lineHeight: "1",
       },
-      { type: "button", "aria-label": getString("chat-pin-selected-text") },
+      {
+        type: "button",
+        "aria-label": getString(
+          pinned ? "chat-unpin-selected-text" : "chat-pin-selected-text",
+        ),
+        title: getString(
+          pinned ? "chat-unpin-selected-text" : "chat-pin-selected-text",
+        ),
+      },
     );
-    pinBtn.textContent = "📌";
+    pinBtn.appendChild(createSelectionPinIcon(pinned ? "pushpin" : "pin"));
     pinBtn.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -1989,29 +2015,21 @@ export function updateAttachmentsPreviewDisplay(
     tag.setAttribute("title", selectedText);
     // A pinned passage is durable context, while the regular selection is
     // still replaceable. Give it a warm, persistent treatment so the two
-    // states remain distinguishable even after the pin action disappears.
+    // states remain distinguishable alongside the toggle icon.
     tag.style.background =
       theme === darkTheme ? "rgba(245, 158, 11, 0.16)" : "#fff7ed";
     tag.style.borderColor =
       theme === darkTheme ? "rgba(245, 158, 11, 0.5)" : "#fed7aa";
-    const pinIndicator = createElement(
-      doc,
-      "span",
-      {
-        flex: "0 0 auto",
-        color: theme === darkTheme ? "#fbbf24" : "#c2410c",
-        fontSize: "11px",
-        lineHeight: "1",
-      },
-      { "aria-hidden": "true" },
-    );
-    pinIndicator.textContent = "📌";
-    tag.appendChild(pinIndicator);
     tag.appendChild(
       createLabel(
         formatSelectedTextAttachmentLabel(selectedText, selectionLabel),
       ),
     );
+    if (actions.onUnpinSelectedText) {
+      tag.appendChild(
+        createPinButton(() => actions.onUnpinSelectedText?.(index), true),
+      );
+    }
     if (actions.onRemovePinnedSelectedText) {
       tag.appendChild(
         createRemoveButton(getString("chat-remove-selected-text"), () =>

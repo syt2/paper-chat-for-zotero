@@ -456,6 +456,26 @@ export class ProviderManager {
     return this.providers.get(this.activeProviderId) || null;
   }
 
+  /** A separate request context for reader utilities, without chat state. */
+  createIsolatedActiveProvider(selection?: {
+    providerId: string;
+    model: string;
+  }): AIProvider | null {
+    const active = selection
+      ? this.getProvider(selection.providerId)
+      : this.getActiveProvider();
+    if (!active) return null;
+    const config = { ...active.config, systemPrompt: "" };
+    if (selection) config.defaultModel = selection.model;
+    if (config.type === "paperchat") {
+      config.requestSessionId = undefined;
+      if (selection) config.resolvedModelOverride = selection.model;
+      else if (active instanceof PaperChatProvider)
+        config.resolvedModelOverride = active.getResolvedModel();
+    }
+    return this.createProvider(config);
+  }
+
   /**
    * Get active provider ID
    */

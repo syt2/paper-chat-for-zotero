@@ -156,3 +156,5 @@ pref-embedding-status-ollama = 使用 Ollama 本地 Embedding
 pref-embedding-status-openai = 使用 OpenAI Embedding
 pref-embedding-unavailable-ollama = Ollama 已运行但未安装 Embedding 模型，请运行: ollama pull nomic-embed-text
 pref-embedding-unavailable-none = 无可用 Embedding 服务，请使用 PaperChat provider 或配置 Gemini/OpenAI API Key
+
+pref-translation-model = 翻译模型

@@ -1,3 +1,5 @@
+import { createTopupButton } from "./PaperChatTopupButton";
+import { createTypingIndicator } from "./TypingIndicator";
 /**
  * MessageRenderer - Create and manage message bubble elements
  */
@@ -303,10 +305,6 @@ import {
   parsePaperChatQuotaError,
 } from "../../providers/paperchat-errors";
 import { darkTheme, getUserMessageBubbleColors } from "./ChatPanelTheme";
-import {
-  getAnalyticsService,
-  trackPaperChatPurchaseEntryClicked,
-} from "../../analytics";
 
 const RECOVERY_STEP_PREFIX = "replan:";
 
@@ -558,55 +556,6 @@ export interface ApprovalViewTransitionState {
   nextPendingCount: number;
 }
 
-function createTopupButton(doc: Document): HTMLElement {
-  const btn = createElement(
-    doc,
-    "button",
-    {
-      display: "inline-flex",
-      alignItems: "center",
-      justifyContent: "center",
-      marginTop: "12px",
-      marginLeft: "auto",
-      marginRight: "auto",
-      padding: "7px 12px",
-      borderRadius: "8px",
-      border: "1px solid #f59e0b",
-      background:
-        "linear-gradient(135deg, rgba(255, 244, 214, 0.98), rgba(255, 223, 128, 0.98))",
-      color: "#7c3e00",
-      fontSize: chatFontSize(12),
-      fontWeight: "700",
-      lineHeight: "1.2",
-      textAlign: "center",
-      cursor: "pointer",
-      boxShadow: "0 2px 8px rgba(245, 158, 11, 0.2)",
-    },
-    { class: "paperchat-topup-btn" },
-  );
-
-  btn.setAttribute("type", "button");
-  btn.textContent = getString("chat-error-paperchat-topup-action");
-  btn.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    trackPaperChatPurchaseEntryClicked(
-      getAnalyticsService(),
-      "quota_error_card",
-    );
-    void import("../../preferences/UserAuthUI")
-      .then((module) => module.openPaperChatSettingsForTopup())
-      .catch((error) => {
-        ztoolkit.log(
-          "[Chat] Failed to open PaperChat settings for topup:",
-          error,
-        );
-        Zotero.Utilities.Internal.openPreferences("paperchat-prefpane");
-      });
-  });
-  return btn;
-}
-
 function getErrorDisplayDetails(msg: ChatMessage): {
   display: string;
   raw: string;
@@ -705,66 +654,6 @@ function createSystemNoticeElement(
   notice.textContent = msg.content;
   wrapper.appendChild(notice);
   return wrapper;
-}
-
-/**
- * Inject typing animation CSS keyframes into the document (once)
- */
-function injectTypingAnimation(doc: Document): void {
-  if (doc.querySelector("#typing-indicator-style")) return;
-  const style = doc.createElementNS(HTML_NS, "style") as HTMLStyleElement;
-  style.id = "typing-indicator-style";
-  style.textContent = `
-    .typing-indicator span {
-      display: block;
-      animation: typing-bounce 1.4s ease-in-out infinite;
-    }
-    .typing-indicator span:nth-child(2) {
-      animation-delay: 0.2s;
-    }
-    .typing-indicator span:nth-child(3) {
-      animation-delay: 0.4s;
-    }
-    @keyframes typing-bounce {
-      0%, 60%, 100% { opacity: 0.4; transform: translateY(0); }
-      30% { opacity: 1; transform: translateY(-4px); }
-    }
-  `;
-  doc.head?.appendChild(style);
-}
-
-function createTypingIndicator(doc: Document, theme: ThemeColors): HTMLElement {
-  injectTypingAnimation(doc);
-
-  const loader = createElement(
-    doc,
-    "div",
-    {
-      display: "flex",
-      alignItems: "center",
-      gap: "4px",
-      marginTop: "6px",
-      padding: "4px 0",
-    },
-    {
-      class: "typing-indicator",
-      [STREAMING_TYPING_INDICATOR_ATTR]: "true",
-      "aria-hidden": "true",
-    },
-  );
-
-  for (let i = 0; i < 3; i++) {
-    const dot = createElement(doc, "span", {
-      width: "6px",
-      height: "6px",
-      borderRadius: "50%",
-      background: theme.textMuted,
-      opacity: "0.4",
-    });
-    loader.appendChild(dot);
-  }
-
-  return loader;
 }
 
 function createQuotedMessagesElement(

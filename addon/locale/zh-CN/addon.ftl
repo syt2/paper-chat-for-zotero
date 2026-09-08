@@ -407,3 +407,16 @@ paperchat-presentation-source-title = 来源论文：{ $title }
 
 paperchat-chat-presentation-progress-interrupted-legacy = 旧任务没有保存检查点，需要重新制作。
 paperchat-chat-presentation-progress-restart = 重新制作
+
+paperchat-chat-reader-selection-menu = 选区操作
+paperchat-chat-reader-translate = 翻译
+paperchat-chat-reader-translation-close = 关闭翻译
+paperchat-chat-reader-translation-unavailable = 请先在 PaperChat 设置中登录或配置可用的模型。
+paperchat-chat-reader-translation-empty = 模型未返回译文，请重新尝试。
+
+paperchat-chat-unpin-selected-text = 取消固定选中文本
+
+paperchat-pref-translation-follow-chat = 跟随聊天模型
+paperchat-pref-translation-model-unavailable = 所选模型不可用，请重新选择
+
+paperchat-pref-translation-auto = 自动（API 默认模型）

@@ -26,6 +26,7 @@ export interface PaperChatModelRoutingMeta {
 export interface PaperChatModelRoutingDefaults {
   contextSummaryModel?: string;
   sessionTitleModel?: string;
+  translationModel?: string;
 }
 
 export type PaperChatModelRoutingMetaMap = Record<
@@ -49,7 +50,11 @@ export function parseModelRoutingDefaults(
   }
   const defaults = rawDefaults as Record<string, unknown>;
   const result: PaperChatModelRoutingDefaults = {};
-  for (const key of ["contextSummaryModel", "sessionTitleModel"] as const) {
+  for (const key of [
+    "contextSummaryModel",
+    "sessionTitleModel",
+    "translationModel",
+  ] as const) {
     if (typeof defaults[key] === "string" && defaults[key].trim()) {
       result[key] = defaults[key].trim();
     }
