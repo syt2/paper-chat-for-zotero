@@ -60,10 +60,11 @@ const CHAT_HISTORY_BOTTOM_STICKY_THRESHOLD = 24;
 const CHAT_HISTORY_AUTO_SCROLL_ATTR = "data-auto-scroll";
 const CHAT_SCROLL_BOTTOM_BUTTON_ID = "chat-scroll-bottom-btn";
 const STREAMING_TYPING_INDICATOR_ATTR = "data-streaming-typing-indicator";
-const MESSAGE_ACTION_ICON_SIZE = "15px";
+const MESSAGE_ACTION_ICON_SIZE = "14px";
 const MESSAGE_HIGHLIGHT_DURATION_MS = 1050;
 const MESSAGE_HIGHLIGHT_OVERLAY_CLASS = "paperchat-message-highlight-overlay";
 type MessageActionIconName =
+  | "more"
   | "play"
   | "change"
   | "copy"
@@ -405,9 +406,10 @@ function createMessageActionButton(
     doc,
     "button",
     {
-      width: "28px",
-      height: "28px",
+      width: "22px",
+      height: "22px",
       display: "inline-flex",
+      flexShrink: "0",
       alignItems: "center",
       justifyContent: "center",
       background: "transparent",
@@ -1132,9 +1134,10 @@ function createRetryActionButton(
     doc,
     "button",
     {
-      width: "28px",
-      height: "28px",
+      width: "22px",
+      height: "22px",
       display: "inline-flex",
+      flexShrink: "0",
       alignItems: "center",
       justifyContent: "center",
       background: "transparent",
@@ -1318,6 +1321,72 @@ export function createCopyButton(
   return copyBtn;
 }
 
+/** A local expanding group; no document listeners or detached popover lifecycle. */
+function createMoreMessageActions(
+  doc: Document,
+  theme: ThemeColors,
+  buttons: HTMLElement[],
+): HTMLElement {
+  const group = createElement(
+    doc,
+    "div",
+    {
+      display: "inline-flex",
+      alignItems: "center",
+      width: "22px",
+      height: "22px",
+      gap: "6px",
+      flexShrink: "0",
+      overflow: "hidden",
+      borderRadius: "5px",
+      transition: doc.defaultView?.matchMedia(
+        "(prefers-reduced-motion: reduce)",
+      )?.matches
+        ? "none"
+        : "width 160ms ease",
+    },
+    { class: "message-more-actions" },
+  );
+  const trigger = createMessageActionButton(
+    doc,
+    theme,
+    getString("chat-more-actions"),
+  );
+  trigger.className = "message-action-btn message-more-actions-trigger";
+  setIconButtonImage(trigger, "more", "");
+  trigger.setAttribute("aria-expanded", "false");
+  const setExpanded = (expanded: boolean) => {
+    trigger.setAttribute("aria-expanded", String(expanded));
+    group.style.width = `${expanded ? 22 + buttons.length * 28 : 22}px`;
+    for (const button of buttons) {
+      button.style.visibility = expanded ? "visible" : "hidden";
+      button.setAttribute("tabindex", expanded ? "0" : "-1");
+    }
+  };
+  group.appendChild(trigger);
+  for (const button of buttons) group.appendChild(button);
+  setExpanded(false);
+  group.addEventListener("mouseenter", () => setExpanded(true));
+  group.addEventListener("mouseleave", () => setExpanded(false));
+  group.addEventListener("focusin", () => setExpanded(true));
+  group.addEventListener("focusout", (event: FocusEvent) => {
+    if (!group.contains(event.relatedTarget as Node | null)) setExpanded(false);
+  });
+  trigger.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setExpanded(true);
+  });
+  group.addEventListener("keydown", (event: KeyboardEvent) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    trigger.focus();
+    setExpanded(false);
+  });
+  return group;
+}
+
 function createMessageActions(
   doc: Document,
   theme: ThemeColors,
@@ -1346,7 +1415,7 @@ function createMessageActions(
       gap: "6px",
       width: "fit-content",
       maxWidth: "85%",
-      marginTop: "4px",
+      marginTop: "0",
       marginLeft: msg.role === "user" ? "auto" : "0",
       marginRight: msg.role === "user" ? "0" : "auto",
       opacity: "0.72",
@@ -1371,14 +1440,15 @@ function createMessageActions(
 
   actions.appendChild(createCopyButton(doc, theme, copyContent));
 
+  const secondaryActions: HTMLElement[] = [];
   if (canQuoteAssistantReply(msg, quotedContent) && onQuoteReply) {
-    actions.appendChild(
+    secondaryActions.push(
       createQuoteReplyButton(doc, theme, msg.id, onQuoteReply),
     );
   }
 
   if (canSummarizeAssistantReply(msg) && onSummarizeReply) {
-    actions.appendChild(
+    secondaryActions.push(
       createSummarizeReplyButton(
         doc,
         theme,
@@ -1462,6 +1532,10 @@ function createMessageActions(
     );
     retryActionButtons.push(rerollButton);
     actions.appendChild(rerollButton);
+  }
+
+  if (secondaryActions.length) {
+    actions.appendChild(createMoreMessageActions(doc, theme, secondaryActions));
   }
 
   actions.addEventListener("mouseenter", () => {

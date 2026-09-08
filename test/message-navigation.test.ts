@@ -983,7 +983,13 @@ describe("chat message exact navigation", function () {
 
     const actions = history.children[0].children[1];
     assert.lengthOf(actions.children, 2);
-    const summaryButton = actions.children[1];
+    const more = actions.children[1];
+    const summaryButton = more.children[1];
+    assert.equal(summaryButton.style.visibility, "hidden");
+    more.listeners.get("mouseenter")?.[0]?.({});
+    assert.equal(summaryButton.style.visibility, "visible");
+    assert.equal(more.style.width, "50px");
+    assert.equal(more.style.gap, "6px");
     assert.equal(
       summaryButton.getAttribute("class"),
       "message-action-btn summarize-reply-note-btn",
@@ -1038,7 +1044,14 @@ describe("chat message exact navigation", function () {
 
     const actions = history.children[0].children[1];
     assert.lengthOf(actions.children, 2);
-    const quoteButton = actions.children[1];
+    const more = actions.children[1];
+    const quoteButton = more.children[1];
+    more.listeners.get("mouseenter")?.[0]?.({});
+    assert.equal(quoteButton.getAttribute("tabindex"), "0");
+    more.listeners.get("mouseleave")?.[0]?.({});
+    assert.equal(quoteButton.style.visibility, "hidden");
+    assert.equal(quoteButton.getAttribute("tabindex"), "-1");
+    more.listeners.get("focusin")?.[0]?.({});
     assert.equal(
       quoteButton.getAttribute("class"),
       "message-action-btn quote-reply-btn",
@@ -1385,6 +1398,7 @@ describe("chat message exact navigation", function () {
     const container = new AttachmentPreviewContainer(doc, preview);
     const removedPinnedSelections: number[] = [];
     let pinCurrentSelection = 0;
+    const unpinned: number[] = [];
 
     updateAttachmentsPreviewDisplay(
       asElement(container),
@@ -1399,6 +1413,7 @@ describe("chat message exact navigation", function () {
         onPinSelectedText: () => {
           pinCurrentSelection += 1;
         },
+        onUnpinSelectedText: (index) => unpinned.push(index),
         onRemovePinnedSelectedText: (index) => {
           removedPinnedSelections.push(index);
         },
@@ -1415,7 +1430,15 @@ describe("chat message exact navigation", function () {
       "pending-selected-text",
     );
     assert.equal(preview.children[0].style.background, "#fff7ed");
-    assert.equal(preview.children[0].children[0].textContent, "📌");
+    assert.include(
+      preview.children[0].children[1].children[0].style.mask,
+      "pushpin.svg",
+    );
+    preview.children[0].children[1].listeners.get("click")?.[0]?.({
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+    });
+    assert.deepEqual(unpinned, [0]);
     preview.children[0].children[2].listeners.get("click")?.[0]?.({
       preventDefault: () => undefined,
       stopPropagation: () => undefined,

@@ -430,8 +430,9 @@ function showFloatingSelectionEntry(
       action();
     });
   };
-  activate(toggle, () => {
-    entry.expanded = !entry.expanded;
+  const setExpanded = (expanded: boolean) => {
+    if (entry.expanded === expanded) return;
+    entry.expanded = expanded;
     toggle.setAttribute("aria-expanded", String(entry.expanded));
     attach.hidden = translate.hidden = !entry.expanded;
     attach.style.display = translate.style.display = entry.expanded
@@ -444,7 +445,12 @@ function showFloatingSelectionEntry(
       text: entry.text,
       rect: entry.anchor,
     });
-  });
+  };
+  // Watch the whole menu so moving between its controls does not collapse it.
+  button.addEventListener("mouseenter", () => setExpanded(true));
+  button.addEventListener("mouseleave", () => setExpanded(false));
+  // Preserve keyboard/touch activation without toggling a hovered menu closed.
+  activate(toggle, () => setExpanded(true));
   const dismiss = () => {
     dismissedSelectionSignature = entry.signature;
     removeFloatingSelectionEntry();

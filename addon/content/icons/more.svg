@@ -1,0 +1,21 @@
+<svg
+  width="24"
+  height="24"
+  viewBox="0 0 48 48"
+  fill="none"
+  xmlns="http://www.w3.org/2000/svg"
+>
+  <style>
+    svg {
+      color: #334155;
+    }
+    @media (prefers-color-scheme: dark) {
+      svg {
+        color: #e5e7eb;
+      }
+    }
+  </style>
+  <circle cx="12" cy="24" r="3" fill="currentColor" />
+  <circle cx="24" cy="24" r="3" fill="currentColor" />
+  <circle cx="36" cy="24" r="3" fill="currentColor" />
+</svg>
