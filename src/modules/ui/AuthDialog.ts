@@ -883,22 +883,23 @@ export async function showAuthDialog(
             verificationField.style.display = isRegister ? "flex" : "none";
             confirmPasswordField.style.display = isRegister ? "flex" : "none";
 
-            // 调整窗口高度
-            setTimeout(() => {
-              if (!dialogWinRef.closed) {
-                try {
-                  const loginHeight = 360;
-                  const registerHeight = 570;
-                  const targetHeight = isRegister
-                    ? registerHeight
-                    : loginHeight;
-                  dialogWinRef.resizeTo(dialogWinRef.outerWidth, targetHeight);
-                } catch (error) {
-                  ztoolkit.log(
-                    "[AuthDialog] Failed to resize auth dialog:",
-                    error,
-                  );
-                }
+            resizeToContent();
+          }
+
+          let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+          function resizeToContent() {
+            clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(() => {
+              if (dialogWinRef.closed) return;
+              try {
+                // Error messages and second-factor instructions can wrap. Let
+                // Gecko measure the full form instead of clipping it to a fixed height.
+                dialogWinRef.sizeToContent();
+              } catch (error) {
+                ztoolkit.log(
+                  "[AuthDialog] Failed to resize auth dialog:",
+                  error,
+                );
               }
             }, 50);
           }
@@ -914,11 +915,13 @@ export async function showAuthDialog(
               ? authColors.errorText
               : authColors.successText;
             messageDiv.style.border = `1px solid ${isError ? authColors.errorBorder : authColors.successBorder}`;
+            resizeToContent();
           }
 
           // 隐藏消息
           function hideMessage() {
             messageDiv.style.display = "none";
+            resizeToContent();
           }
 
           // 切换到登录

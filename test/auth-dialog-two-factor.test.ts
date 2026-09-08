@@ -57,7 +57,7 @@ describe("auth dialog second-factor interaction", function () {
       AbortController: runtime.AbortController,
       closed: false,
       outerWidth: 400,
-      resizeTo: () => undefined,
+      sizeToContent: () => undefined,
       focus: () => undefined,
       openDialog: () => undefined,
       addEventListener: (name: string, handler: () => void) => {
