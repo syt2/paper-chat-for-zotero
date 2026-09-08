@@ -294,7 +294,22 @@ export function createChatContainer(
       disabled: "true",
     },
   );
-  editTitleButton.textContent = "✎";
+  editTitleButton.appendChild(
+    createElement(
+      doc,
+      "img",
+      {
+        width: "14px",
+        height: "14px",
+        display: "block",
+        pointerEvents: "none",
+      },
+      {
+        src: `chrome://${config.addonRef}/content/icons/write.svg`,
+        alt: "",
+      },
+    ),
+  );
   header.appendChild(editTitleButton);
   header.appendChild(headerTitle);
   const headerLogin = createElement(
@@ -617,7 +632,7 @@ export function createChatContainer(
     getString("chat-summarize-conversation-note"),
   );
   const summarizeConversationIcon = createElement(doc, "img", iconStyle, {
-    src: `chrome://${config.addonRef}/content/icons/write.svg`,
+    src: `chrome://${config.addonRef}/content/icons/notes.svg`,
     alt: "",
   });
   summarizeConversationBtn.appendChild(summarizeConversationIcon);

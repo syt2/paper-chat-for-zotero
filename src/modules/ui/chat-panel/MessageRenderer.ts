@@ -73,7 +73,8 @@ type MessageActionIconName =
   | "fork"
   | "quote"
   | "refresh"
-  | "write";
+  | "write"
+  | "notes";
 const userInputCountdownTimers = new WeakMap<
   HTMLElement,
   ReturnType<typeof setInterval>
@@ -1289,7 +1290,7 @@ function createSummarizeReplyButton(
   const label = getString("chat-summarize-reply-note");
   const btn = createMessageActionButton(doc, theme, label);
   btn.setAttribute("class", "message-action-btn summarize-reply-note-btn");
-  setIconButtonImage(btn, "write", "");
+  setIconButtonImage(btn, "notes", "");
 
   btn.addEventListener("click", async (event) => {
     event.stopPropagation();

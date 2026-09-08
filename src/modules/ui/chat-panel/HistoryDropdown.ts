@@ -1,4 +1,5 @@
 import { editSessionTitle } from "./SessionTitleEditor";
+import { config } from "../../../../package.json";
 /**
  * HistoryDropdown - Chat history dropdown component with pagination
  */
@@ -285,8 +286,24 @@ export function createSessionItem(
     color: theme.textMuted,
     padding: "0",
   });
-  editBtn.textContent = "✎";
+  editBtn.appendChild(
+    createElement(
+      doc,
+      "img",
+      {
+        width: "14px",
+        height: "14px",
+        display: "block",
+        pointerEvents: "none",
+      },
+      {
+        src: `chrome://${config.addonRef}/content/icons/write.svg`,
+        alt: "",
+      },
+    ),
+  );
   editBtn.title = getString("chat-edit-title");
+  editBtn.setAttribute("aria-label", getString("chat-edit-title"));
 
   // Delete button (hidden by default, shown on hover)
   const deleteBtn = createElement(doc, "button", {

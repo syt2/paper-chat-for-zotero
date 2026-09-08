@@ -1065,7 +1065,7 @@ describe("chat message exact navigation", function () {
     );
     assert.equal(
       summaryButton.children[0].getAttribute("src"),
-      "chrome://paperchat/content/icons/write.svg",
+      "chrome://paperchat/content/icons/notes.svg",
     );
 
     summaryButton.listeners.get("click")?.[0]?.({
