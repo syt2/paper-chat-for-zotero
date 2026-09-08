@@ -124,4 +124,42 @@ describe("embedding provider factory", function () {
       "http://localhost:9002/v1/embeddings",
     ]);
   });
+  it("switches cached providers with configured defaults and reuses model identity on switchback", async function () {
+    const { getEmbeddingProviderFactory } =
+      await import("../src/modules/embedding/EmbeddingProviderFactory");
+    const prefix = "extensions.zotero.paperchat.";
+    prefStore.set(
+      prefix + "paperchatModelsCache",
+      JSON.stringify(["text-embedding-v4", "gemini-embedding-2"]),
+    );
+    const factory = getEmbeddingProviderFactory();
+    assert.equal(
+      (await factory.getProvider())?.modelId,
+      "paperchat:text-embedding-v4",
+    );
+    prefStore.set(
+      prefix + "paperchatEmbeddingConfigCache",
+      JSON.stringify({
+        models: ["text-embedding-v4", "gemini-embedding-2"],
+        defaultModel: "gemini-embedding-2",
+      }),
+    );
+    assert.equal(
+      (await factory.getProvider())?.modelId,
+      "paperchat:gemini-embedding-2",
+    );
+    prefStore.set(
+      prefix + "paperchatModelsCache",
+      JSON.stringify(["text-embedding-v4"]),
+    );
+    assert.equal(
+      (await factory.getProvider())?.modelId,
+      "paperchat:text-embedding-v4",
+    );
+    prefStore.set(
+      prefix + "paperchatEmbeddingConfigCache",
+      JSON.stringify({ models: [] }),
+    );
+    assert.isNull(await factory.getProvider());
+  });
 });

@@ -15,6 +15,7 @@ import { getPref } from "../../../utils/prefs";
 import { getErrorMessage } from "../../../utils/common";
 import { getPaperChatApiBaseUrl } from "../../providers/PaperChatUrls";
 import { normalizeEmbeddingBatch } from "../EmbeddingInput";
+import { getPaperChatEmbeddingConfig } from "../PaperChatEmbeddingConfig";
 
 // Preferred embedding models in priority order
 const PREFERRED_MODELS = [
@@ -51,7 +52,14 @@ export function getAvailableEmbeddingModels(): string[] {
 
   try {
     const allModels = JSON.parse(cachedModels) as string[];
-    return allModels.filter(isEmbeddingModel);
+    if (!Array.isArray(allModels)) return [];
+    const config = getPaperChatEmbeddingConfig();
+    const available = allModels.filter(
+      (model): model is string => typeof model === "string",
+    );
+    return config
+      ? config.models.filter((model) => available.includes(model))
+      : available.filter(isEmbeddingModel);
   } catch {
     return [];
   }
@@ -60,7 +68,11 @@ export function getAvailableEmbeddingModels(): string[] {
 /**
  * Select the best embedding model from available models
  */
-function selectBestModel(availableModels: string[]): string | null {
+export function getSelectedPaperChatEmbeddingModel(): string | null {
+  const availableModels = getAvailableEmbeddingModels();
+  const defaultModel = getPaperChatEmbeddingConfig()?.defaultModel;
+  if (defaultModel && availableModels.includes(defaultModel))
+    return defaultModel;
   if (availableModels.length === 0) {
     return null;
   }
@@ -91,8 +103,7 @@ export class PaperChatEmbedding implements EmbeddingProvider {
     if (model) {
       this.selectedModel = model;
     } else {
-      const availableModels = getAvailableEmbeddingModels();
-      const bestModel = selectBestModel(availableModels);
+      const bestModel = getSelectedPaperChatEmbeddingModel();
       if (!bestModel) {
         throw new Error("No embedding model available in PaperChat");
       }

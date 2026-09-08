@@ -43,13 +43,21 @@ export class MemorySearchService {
     }
   }
 
-  async isDuplicate(text: string, embedding?: number[]): Promise<boolean> {
-    if (embedding) {
-      const rows = await this.repository.listEmbeddedRows(DEDUP_WINDOW);
+  async isDuplicate(
+    text: string,
+    embedding?: number[],
+    modelId?: string | null,
+  ): Promise<boolean> {
+    if (embedding && modelId) {
+      const rows = await this.repository.listEmbeddedRows(
+        DEDUP_WINDOW,
+        modelId,
+      );
       for (const row of rows) {
         try {
           const vector = JSON.parse(row.embedding) as number[];
           if (
+            vector.length === embedding.length &&
             embeddingSimilarity(embedding, vector) >= EMBEDDING_DEDUP_THRESHOLD
           ) {
             return true;
@@ -58,7 +66,6 @@ export class MemorySearchService {
           // Ignore malformed rows and keep checking.
         }
       }
-      return false;
     }
 
     const rows = await this.repository.listTextRows(DEDUP_WINDOW);
@@ -73,11 +80,15 @@ export class MemorySearchService {
 
   async search(query: string): Promise<Memory[]> {
     if (!query.trim()) return [];
+    if ((await this.repository.count()) === 0) return [];
 
-    const memories = await this.repository.listRecent(SEARCH_FETCH_LIMIT);
+    const { embedding: queryEmbedding, embeddingModel } =
+      await this.createEmbedding(query);
+    const memories = await this.repository.listRecent(
+      SEARCH_FETCH_LIMIT,
+      embeddingModel,
+    );
     if (memories.length === 0) return [];
-
-    const { embedding: queryEmbedding } = await this.createEmbedding(query);
     const now = Date.now();
     const queryTokens = tokenise(query);
 
@@ -86,6 +97,8 @@ export class MemorySearchService {
       if (
         queryEmbedding &&
         memory.embedding &&
+        embeddingModel &&
+        memory.embeddingModel === embeddingModel &&
         memory.embedding.length === queryEmbedding.length
       ) {
         try {

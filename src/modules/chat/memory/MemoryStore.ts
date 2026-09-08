@@ -1,11 +1,12 @@
 /**
  * MemoryStore - Per-library persistent memory for user preferences and facts
  *
- * Stores memories in the existing paper-chat/storage SQLite database (schema v4).
+ * Stores memories in the existing paper-chat/storage SQLite database (schema v17).
  * Facade over repository + search service for per-library user memories.
  */
 
 import { getErrorMessage } from "../../../utils/common";
+import { getMemoryIndexer } from "./MemoryIndexer";
 import { MemoryRepository } from "./MemoryRepository";
 import { MemorySearchService } from "./MemorySearchService";
 import type { Memory, MemoryCategory } from "./MemoryTypes";
@@ -25,7 +26,7 @@ export class MemoryStore {
   private repository: MemoryRepository;
   private searchService: MemorySearchService;
 
-  constructor(libraryId: number) {
+  constructor(private libraryId: number) {
     this.repository = new MemoryRepository(libraryId);
     this.searchService = new MemorySearchService(this.repository);
   }
@@ -53,7 +54,9 @@ export class MemoryStore {
       const { embedding, embeddingModel } =
         await this.searchService.createEmbedding(trimmed);
 
-      if (await this.searchService.isDuplicate(trimmed, embedding)) {
+      if (
+        await this.searchService.isDuplicate(trimmed, embedding, embeddingModel)
+      ) {
         return { saved: false, reason: "duplicate" };
       }
 
@@ -102,6 +105,16 @@ export class MemoryStore {
    * Returns up to MAX_INJECT results sorted by relevance score.
    */
   async search(query: string): Promise<Memory[]> {
+    if (query.trim()) {
+      void getMemoryIndexer(this.libraryId)
+        .checkAndReindex()
+        .catch((error) => {
+          ztoolkit.log(
+            "[MemoryStore] Failed to schedule embedding index:",
+            getErrorMessage(error),
+          );
+        });
+    }
     return this.searchService.search(query);
   }
 

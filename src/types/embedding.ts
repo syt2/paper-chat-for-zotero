@@ -193,10 +193,10 @@ export const EMBEDDING_MODELS: Record<
     maxInputTokens: 8191,
   },
   gemini: {
-    modelId: "text-embedding-004",
+    modelId: "gemini-embedding-2",
     name: "Gemini Embedding",
     dimension: 768,
-    maxInputTokens: 2048,
+    maxInputTokens: 8192,
   },
   openai: {
     modelId: "text-embedding-3-small",

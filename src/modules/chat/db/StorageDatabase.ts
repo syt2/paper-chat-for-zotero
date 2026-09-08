@@ -11,7 +11,7 @@ import { getErrorMessage } from "../../../utils/common";
 
 const DB_DIR = "paper-chat";
 const DB_FILE = "storage";
-export const SCHEMA_VERSION = 16;
+export const SCHEMA_VERSION = 17;
 
 /** Build absolute DB path so Zotero.DBConnection doesn't parse subdirectory names */
 function getDBPath(): string {
@@ -408,6 +408,27 @@ export class StorageDatabase {
     `);
 
     await db.queryAsync(`
+      CREATE TABLE IF NOT EXISTS memory_embeddings (
+        memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+        model_id TEXT NOT NULL,
+        embedding TEXT NOT NULL,
+        PRIMARY KEY (memory_id, model_id)
+      )
+    `);
+    await db.queryAsync(`
+      CREATE TRIGGER IF NOT EXISTS memory_embeddings_delete
+      AFTER DELETE ON memories BEGIN
+        DELETE FROM memory_embeddings WHERE memory_id = OLD.id;
+      END
+    `);
+    await db.queryAsync(`
+      CREATE TRIGGER IF NOT EXISTS memory_embeddings_text_change
+      AFTER UPDATE OF text ON memories WHEN OLD.text != NEW.text BEGIN
+        DELETE FROM memory_embeddings WHERE memory_id = OLD.id;
+      END
+    `);
+
+    await db.queryAsync(`
       CREATE INDEX IF NOT EXISTS idx_memories_library_created
       ON memories (library_id, created_at DESC)
     `);
@@ -549,6 +570,10 @@ export class StorageDatabase {
         await this.upgradeToV16(db);
         currentVersion = 16;
       }
+      if (currentVersion < 17) {
+        await this.upgradeToV17(db);
+        currentVersion = 17;
+      }
       if (
         currentVersion === SCHEMA_VERSION &&
         !(await this.hasCurrentSchemaColumns(db))
@@ -562,6 +587,7 @@ export class StorageDatabase {
         await this.upgradeToV14(db);
         await this.upgradeToV15(db);
         await this.upgradeToV16(db);
+        await this.upgradeToV17(db);
       }
     }
   }
@@ -1437,6 +1463,36 @@ export class StorageDatabase {
         "[StorageDatabase] Failed to upgrade to v15:",
         getErrorMessage(error),
       );
+      throw error;
+    }
+  }
+
+  /** Preserve legacy memory vectors under their original model identifier. */
+  private async upgradeToV17(db: ZoteroDBConnection): Promise<void> {
+    await db.queryAsync("BEGIN TRANSACTION");
+    try {
+      await db.queryAsync(`
+        INSERT OR IGNORE INTO memory_embeddings (memory_id, model_id, embedding)
+        SELECT id, embedding_model, embedding FROM memories
+        WHERE embedding IS NOT NULL AND embedding_model IS NOT NULL
+          AND TRIM(embedding_model) != ''
+      `);
+      // The side table now owns vectors. Clearing the legacy copy prevents a
+      // later schema repair from restoring stale vectors after a text edit.
+      await db.queryAsync(
+        "UPDATE memories SET embedding = NULL, embedding_model = NULL",
+      );
+      await db.queryAsync(
+        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
+        [17, Date.now()],
+      );
+      await db.queryAsync("COMMIT");
+    } catch (error) {
+      try {
+        await db.queryAsync("ROLLBACK");
+      } catch {
+        /* preserve error */
+      }
       throw error;
     }
   }

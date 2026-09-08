@@ -1,7 +1,7 @@
 /**
  * GeminiEmbedding - Google Gemini Embedding API implementation
  *
- * Uses text-embedding-004 model (free tier available)
+ * Uses gemini-embedding-2 with synchronous batchEmbedContents.
  * Docs: https://ai.google.dev/gemini-api/docs/embeddings
  */
 
@@ -61,6 +61,7 @@ export class GeminiEmbedding implements EmbeddingProvider {
 
     const requests = texts.map((text) => ({
       model: `models/${MODEL_INFO.modelId}`,
+      outputDimensionality: this.dimension,
       content: {
         parts: [{ text }],
       },
@@ -89,6 +90,18 @@ export class GeminiEmbedding implements EmbeddingProvider {
       throw new Error("Invalid response from Gemini Embedding API");
     }
 
+    if (
+      data.embeddings.some(
+        (e) =>
+          !Array.isArray(e.values) ||
+          e.values.length !== this.dimension ||
+          e.values.some((v) => !Number.isFinite(v)),
+      )
+    ) {
+      throw new Error(
+        "Invalid embedding dimensions or values from Gemini Embedding API",
+      );
+    }
     return data.embeddings.map((e) => e.values);
   }
 

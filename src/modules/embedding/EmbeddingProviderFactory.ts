@@ -5,6 +5,8 @@
  * PaperChat embedding is used only when PaperChat is the active chat provider.
  */
 
+import { getPref } from "../../utils/prefs";
+
 import type {
   EmbeddingProvider,
   EmbeddingStatus,
@@ -20,7 +22,7 @@ import { getErrorMessage } from "../../utils/common";
 import { getString } from "../../utils/locale";
 import {
   PaperChatEmbedding,
-  getAvailableEmbeddingModels,
+  getSelectedPaperChatEmbeddingModel,
 } from "./providers/PaperChatEmbedding";
 
 export class EmbeddingProviderFactory {
@@ -28,12 +30,21 @@ export class EmbeddingProviderFactory {
   private cachedStatus: EmbeddingStatus | null = null;
   private cacheTimestamp: number = 0;
   private cachedActiveProviderId: string | null = null;
+  private embeddingConfigKey = "";
   private readonly CACHE_TTL = 30000; // 30 seconds cache
 
   /**
    * Get current embedding status for UI display
    */
   async getStatus(): Promise<EmbeddingStatus> {
+    const configKey = JSON.stringify([
+      getPref("paperchatModelsCache"),
+      getPref("paperchatEmbeddingConfigCache"),
+    ]);
+    if (configKey !== this.embeddingConfigKey) {
+      this.invalidateCache();
+      this.embeddingConfigKey = configKey;
+    }
     const activeProviderId = getProviderManager().getActiveProviderId();
 
     // Return cached status if fresh
@@ -115,12 +126,12 @@ export class EmbeddingProviderFactory {
   private detectPaperChatStatus(): EmbeddingStatus | null {
     const authManager = getAuthManager();
     if (authManager.isLoggedIn() && authManager.getApiKey()) {
-      const embeddingModels = getAvailableEmbeddingModels();
-      if (embeddingModels.length > 0) {
+      const model = getSelectedPaperChatEmbeddingModel();
+      if (model) {
         return {
           available: true,
           provider: "paperchat",
-          message: `✅ ${getString("pref-embedding-status-paperchat", { args: { model: embeddingModels[0] } })}`,
+          message: `✅ ${getString("pref-embedding-status-paperchat", { args: { model } })}`,
         };
       }
     }

@@ -1,115 +1,79 @@
-import { getStorageDatabase } from "../db/StorageDatabase";
+import { MemoryRepository } from "./MemoryRepository";
+import type { EmbeddingProvider } from "../../../types/embedding";
 import { getErrorMessage } from "../../../utils/common";
 import { getMemoryEmbeddingProvider } from "./MemoryEmbedding";
 import { tryNormalizeEmbeddingInput } from "../../embedding/EmbeddingInput";
 
 const REINDEX_BATCH_SIZE = 20;
-const SETTING_EMBEDDING_MODEL_PREFIX = "memory_embedding_model_";
 
 export class MemoryIndexer {
-  constructor(private libraryId: number) {}
+  private running = new Map<string, Promise<void>>();
+  private repository: MemoryRepository;
 
-  private async getDb() {
-    return getStorageDatabase().ensureInit();
-  }
-
-  private get embeddingModelKey(): string {
-    return `${SETTING_EMBEDDING_MODEL_PREFIX}${this.libraryId}`;
+  constructor(libraryId: number) {
+    this.repository = new MemoryRepository(libraryId);
   }
 
   async checkAndReindex(): Promise<void> {
     const provider = await getMemoryEmbeddingProvider();
-    if (!provider) return;
-
-    const db = await this.getDb();
-    const rows =
-      (await db.queryAsync("SELECT value FROM settings WHERE key = ?", [
-        this.embeddingModelKey,
-      ])) || [];
-    const storedModel: string | null =
-      rows.length > 0 ? (rows[0].value as string) : null;
-    const currentModel = provider.modelId;
-
-    if (storedModel !== currentModel) {
-      ztoolkit.log(
-        `[MemoryIndexer] Embedding model changed (${storedModel} -> ${currentModel}), reindexing...`,
-      );
-      await db.queryAsync(
-        "UPDATE memories SET embedding = NULL, embedding_model = NULL WHERE library_id = ?",
-        [this.libraryId],
-      );
-      await db.queryAsync(
-        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-        [this.embeddingModelKey, currentModel],
-      );
-    }
-
-    this.reindexMissingEmbeddings().catch((err) => {
-      ztoolkit.log(
-        "[MemoryIndexer] Background reindex failed:",
-        getErrorMessage(err),
-      );
-    });
+    if (!provider || this.running.has(provider.modelId)) return;
+    const run = this.reindexMissingEmbeddings(provider);
+    this.running.set(provider.modelId, run);
+    void run
+      .catch((error) => {
+        ztoolkit.log(
+          "[MemoryIndexer] Background reindex failed:",
+          getErrorMessage(error),
+        );
+      })
+      .finally(() => {
+        this.running.delete(provider.modelId);
+      });
   }
 
-  private async reindexMissingEmbeddings(): Promise<void> {
-    const provider = await getMemoryEmbeddingProvider();
-    if (!provider) return;
-
-    const db = await this.getDb();
-    const rows =
-      (await db.queryAsync(
-        "SELECT id, text FROM memories WHERE library_id = ? AND embedding IS NULL ORDER BY created_at DESC",
-        [this.libraryId],
-      )) || [];
-
-    if (rows.length === 0) return;
-    ztoolkit.log(`[MemoryIndexer] Reindexing ${rows.length} memories...`);
-
-    const items = rows as Array<{ id: string; text: string }>;
-    let indexed = 0;
-
-    for (let i = 0; i < items.length; i += REINDEX_BATCH_SIZE) {
-      const batch = items.slice(i, i + REINDEX_BATCH_SIZE);
-      const normalizedBatch = batch
+  private async reindexMissingEmbeddings(
+    provider: EmbeddingProvider,
+  ): Promise<void> {
+    const rows = await this.repository.listMissingEmbeddings(provider.modelId);
+    for (let i = 0; i < rows.length; i += REINDEX_BATCH_SIZE) {
+      const batch = rows
+        .slice(i, i + REINDEX_BATCH_SIZE)
         .map((row) => ({
           ...row,
-          text: tryNormalizeEmbeddingInput(row.text),
+          input: tryNormalizeEmbeddingInput(row.text),
         }))
         .filter(
-          (row): row is { id: string; text: string } => row.text !== null,
+          (row): row is { id: string; text: string; input: string } =>
+            row.input !== null,
         );
-      if (normalizedBatch.length === 0) {
-        continue;
-      }
-
+      if (!batch.length) continue;
       try {
         const vectors = await provider.embedBatch(
-          normalizedBatch.map((row) => row.text),
+          batch.map((row) => row.input),
         );
-        for (let j = 0; j < normalizedBatch.length; j++) {
-          if (!vectors[j]) continue;
-          await db.queryAsync(
-            "UPDATE memories SET embedding = ?, embedding_model = ? WHERE id = ?",
-            [
-              JSON.stringify(vectors[j]),
-              provider.modelId,
-              normalizedBatch[j].id,
-            ],
+        if (vectors.length !== batch.length)
+          throw new Error("Memory embedding count mismatch");
+        for (let j = 0; j < batch.length; j++) {
+          if (
+            !vectors[j]?.length ||
+            vectors[j].some((value) => !Number.isFinite(value))
+          ) {
+            throw new Error("Invalid memory embedding vector");
+          }
+          await this.repository.saveEmbedding(
+            batch[j].id,
+            provider.modelId,
+            batch[j].text,
+            vectors[j],
           );
-          indexed++;
         }
-      } catch (err) {
+      } catch (error) {
         ztoolkit.log(
           "[MemoryIndexer] Batch embed failed:",
-          getErrorMessage(err),
+          getErrorMessage(error),
         );
       }
     }
-
-    ztoolkit.log(
-      `[MemoryIndexer] Reindex complete: ${indexed}/${rows.length} memories embedded`,
-    );
   }
 }
 

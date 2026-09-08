@@ -2,6 +2,8 @@
  * ModelsFetcher - Fetch models and ratios from PaperChat API
  */
 
+import { parsePaperChatEmbeddingConfig } from "../embedding/PaperChatEmbeddingConfig";
+
 import { getString } from "../../utils/locale";
 import { getPref, setPref } from "../../utils/prefs";
 import { getAuthManager } from "../auth";
@@ -62,6 +64,7 @@ export function clearPaperchatModelCaches(): void {
   setPref("paperchatRatiosCache", "");
   setPref("paperchatRoutingConfigCache", "");
   setPref("paperchatRoutingDefaultsCache", "");
+  setPref("paperchatEmbeddingConfigCache", "");
 }
 
 /**
@@ -261,6 +264,10 @@ export async function fetchPaperchatRoutingMeta(): Promise<void> {
     }
     const parsed = parseModelRoutingConfig(result);
     const defaults = parseModelRoutingDefaults(result);
+    const embedding = parsePaperChatEmbeddingConfig(
+      (result as unknown as Record<string, unknown>)?.embedding,
+    );
+    setPref("paperchatEmbeddingConfigCache", JSON.stringify(embedding));
     paperchatModelRoutingMeta = parsed;
     paperchatModelRoutingDefaults = defaults;
     setPref("paperchatRoutingConfigCache", JSON.stringify(parsed));

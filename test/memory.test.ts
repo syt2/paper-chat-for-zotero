@@ -33,7 +33,7 @@ describe("memory module", function () {
     };
 
     const service = new MemorySearchService(repository as any);
-    const duplicated = await service.isDuplicate("ignored", [1, 0, 0]);
+    const duplicated = await service.isDuplicate("ignored", [1, 0, 0], "test-model");
 
     assert.isTrue(duplicated);
   });
@@ -94,6 +94,7 @@ describe("memory module", function () {
 
     const touchedIds: string[] = [];
     const repository = {
+      count: async () => memories.length,
       listEmbeddedRows: async () => [],
       listTextRows: async () => [],
       listRecent: async () => memories,
@@ -110,6 +111,26 @@ describe("memory module", function () {
     assert.isAtLeast(results.length, 1);
     assert.equal(results[0].id, "m1");
     assert.deepEqual(touchedIds, results.map((memory) => memory.id));
+  });
+
+  it("does not call embedding for an empty memory library", async function () {
+    const service = new MemorySearchService({count: async () => 0} as any);
+    (service as any).createEmbedding = async () => {throw new Error("must not call");};
+    assert.isEmpty(await service.search("a meaningful query"));
+  });
+
+  it("never compares vectors from a different model with the same dimension", async function () {
+    const service = new MemorySearchService({
+      count: async () => 1,
+      listRecent: async (_limit: number, modelId: string) => {
+        assert.equal(modelId, "model-b");
+        return [{id: "m1", libraryId: 1, text: "unrelated words", category: "fact", importance: 0,
+          createdAt: 0, accessCount: 0, lastAccessedAt: 0, embedding: [1, 0], embeddingModel: "model-a"}];
+      },
+      updateAccessStats: async () => undefined,
+    } as any);
+    (service as any).createEmbedding = async () => ({embedding: [1, 0], embeddingModel: "model-b"});
+    assert.isEmpty(await service.search("quantum physics"));
   });
 
   it("builds prompt context from searched memories", async function () {

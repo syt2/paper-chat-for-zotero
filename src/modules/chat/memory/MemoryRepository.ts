@@ -20,16 +20,50 @@ export class MemoryRepository {
     return getStorageDatabase().ensureInit();
   }
 
-  async listEmbeddedRows(limit: number): Promise<Array<{ embedding: string }>> {
+  async listEmbeddedRows(
+    limit: number,
+    modelId: string,
+  ): Promise<Array<{ embedding: string }>> {
     const db = await this.getDb();
-    const rows =
-      (await db.queryAsync(
-        `SELECT embedding FROM memories
-       WHERE library_id = ? AND embedding IS NOT NULL
-       ORDER BY created_at DESC LIMIT ?`,
-        [this.libraryId, limit],
-      )) || [];
-    return rows as Array<{ embedding: string }>;
+    return ((await db.queryAsync(
+      `
+      SELECT e.embedding FROM memories m
+      JOIN memory_embeddings e ON e.memory_id = m.id AND e.model_id = ?
+      WHERE m.library_id = ? ORDER BY m.created_at DESC LIMIT ?
+    `,
+      [modelId, this.libraryId, limit],
+    )) || []) as Array<{ embedding: string }>;
+  }
+
+  async listMissingEmbeddings(
+    modelId: string,
+  ): Promise<Array<{ id: string; text: string }>> {
+    const db = await this.getDb();
+    return ((await db.queryAsync(
+      `
+      SELECT m.id, m.text FROM memories m
+      LEFT JOIN memory_embeddings e ON e.memory_id = m.id AND e.model_id = ?
+      WHERE m.library_id = ? AND e.memory_id IS NULL ORDER BY m.created_at DESC
+    `,
+      [modelId, this.libraryId],
+    )) || []) as Array<{ id: string; text: string }>;
+  }
+
+  async saveEmbedding(
+    id: string,
+    modelId: string,
+    text: string,
+    vector: number[],
+  ): Promise<void> {
+    const db = await this.getDb();
+    // Do not resurrect a deleted/edited memory after an in-flight API request.
+    await db.queryAsync(
+      `
+      INSERT OR REPLACE INTO memory_embeddings (memory_id, model_id, embedding)
+      SELECT id, ?, ? FROM memories WHERE id = ? AND library_id = ? AND text = ?
+    `,
+      [modelId, JSON.stringify(vector), id, this.libraryId, text],
+    );
   }
 
   async listTextRows(limit: number): Promise<Array<{ text: string }>> {
@@ -43,38 +77,46 @@ export class MemoryRepository {
     return rows as Array<{ text: string }>;
   }
 
-  async listRecent(limit: number): Promise<Memory[]> {
+  async listRecent(limit: number, modelId?: string | null): Promise<Memory[]> {
     const db = await this.getDb();
     const rows =
       (await db.queryAsync(
-        `SELECT id, library_id, text, category, importance, created_at,
-              access_count, last_accessed_at, embedding, embedding_model
-       FROM memories WHERE library_id = ?
-       ORDER BY created_at DESC LIMIT ?`,
-        [this.libraryId, limit],
+        `
+      SELECT m.id, m.library_id, m.text, m.category, m.importance, m.created_at,
+        m.access_count, m.last_accessed_at, e.embedding, e.model_id AS embedding_model
+      FROM memories m LEFT JOIN memory_embeddings e ON e.memory_id = m.id AND e.model_id = ?
+      WHERE m.library_id = ? ORDER BY m.created_at DESC LIMIT ?
+    `,
+        [modelId ?? "", this.libraryId, limit],
       )) || [];
     return (rows as Array<Record<string, unknown>>).map(rowToMemory);
   }
 
   async insert(record: MemoryInsertRecord): Promise<void> {
-    const db = await this.getDb();
-    await db.queryAsync(
-      `INSERT INTO memories (
-         id, library_id, text, category, importance,
-         created_at, access_count, last_accessed_at, embedding, embedding_model
-       ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
-      [
-        record.id,
-        this.libraryId,
-        record.text,
-        record.category,
-        record.importance,
-        record.createdAt,
-        record.lastAccessedAt,
-        record.embedding ? JSON.stringify(record.embedding) : null,
-        record.embeddingModel ?? null,
-      ],
-    );
+    await getStorageDatabase().executeTransaction(async (db) => {
+      await db.queryAsync(
+        `
+        INSERT INTO memories (id, library_id, text, category, importance,
+          created_at, access_count, last_accessed_at)
+        VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+      `,
+        [
+          record.id,
+          this.libraryId,
+          record.text,
+          record.category,
+          record.importance,
+          record.createdAt,
+          record.lastAccessedAt,
+        ],
+      );
+      if (record.embedding && record.embeddingModel) {
+        await db.queryAsync(
+          `INSERT INTO memory_embeddings (memory_id, model_id, embedding) VALUES (?, ?, ?)`,
+          [record.id, record.embeddingModel, JSON.stringify(record.embedding)],
+        );
+      }
+    });
   }
 
   async count(): Promise<number> {
@@ -125,7 +167,7 @@ export class MemoryRepository {
     const rows =
       (await db.queryAsync(
         `SELECT id, library_id, text, category, importance, created_at,
-              access_count, last_accessed_at, embedding, embedding_model
+              access_count, last_accessed_at
        FROM memories WHERE library_id = ? ORDER BY created_at DESC`,
         [this.libraryId],
       )) || [];
