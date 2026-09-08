@@ -282,6 +282,20 @@ export function createChatContainer(
   );
 
   accountArea.appendChild(checkinBtn);
+  const editTitleButton = createElement(
+    doc,
+    "button",
+    {},
+    {
+      id: "chat-edit-title",
+      type: "button",
+      title: getString("chat-edit-title"),
+      "aria-label": getString("chat-edit-title"),
+      disabled: "true",
+    },
+  );
+  editTitleButton.textContent = "✎";
+  header.appendChild(editTitleButton);
   header.appendChild(headerTitle);
   const headerLogin = createElement(
     doc,

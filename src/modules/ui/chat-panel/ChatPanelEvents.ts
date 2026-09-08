@@ -1,3 +1,4 @@
+import { editSessionTitle } from "./SessionTitleEditor";
 /**
  * ChatPanelEvents - Event handlers for the chat panel
  */
@@ -1605,6 +1606,23 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
       await refreshHistoryDropdownSearch(historyDropdown);
     }
   };
+
+  container.querySelector("#chat-edit-title")?.addEventListener("click", () => {
+    const session = chatManager.getActiveSession();
+    const title = container.querySelector(
+      "#chat-header-title",
+    ) as HTMLElement | null;
+    if (!session || !title) return;
+    editSessionTitle(
+      title,
+      session.title || "",
+      getCurrentTheme(),
+      async (nextTitle) => {
+        await chatManager.updateSessionTitle(session.id, nextTitle, "user");
+        await refreshHistoryDropdown();
+      },
+    );
+  });
 
   chatManager.setSessionListUpdateCallback(refreshHistoryDropdown);
 

@@ -105,12 +105,16 @@ export function bindAccountQuotaPopover(
 
 export function updateChatHeaderTitle(
   container: HTMLElement,
-  session: { title?: string } | null | undefined,
+  session: { id?: string; title?: string } | null | undefined,
 ): void {
   const element = container.querySelector(
     "#chat-header-title",
   ) as HTMLElement | null;
   if (!element) return;
+  const editButton = container.querySelector(
+    "#chat-edit-title",
+  ) as HTMLButtonElement | null;
+  if (editButton) editButton.disabled = !session?.id;
   const title = session?.title?.trim() || getString("chat-new-chat");
   element.textContent = title;
   element.title = title;
@@ -174,6 +178,13 @@ export function getChatChromeStyles(theme: ThemeColors): string {
       column-gap: 8px; row-gap: 6px; flex-shrink: 0; min-height: 48px; padding: 8px 14px; box-sizing: border-box;
       border-bottom: 1px solid ${theme.borderColor}; background: ${theme.toolbarBg};
     }
+    .chat-panel-root #chat-edit-title {
+      display: flex; align-items: center; justify-content: center; flex: 0 0 24px;
+      width: 24px; height: 24px; padding: 0; border: none; border-radius: 4px;
+      background: transparent; color: ${theme.textMuted}; font-size: 13px; cursor: pointer;
+    }
+    .chat-panel-root #chat-edit-title:hover { background: ${theme.hoverBg}; }
+    .chat-panel-root #chat-edit-title:disabled { opacity: .4; cursor: default; }
     .chat-panel-root #chat-header-title {
       font-weight: 600; white-space: normal; margin-right: auto; flex: 1;
       display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;

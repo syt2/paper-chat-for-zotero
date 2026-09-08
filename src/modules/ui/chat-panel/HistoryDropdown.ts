@@ -1,3 +1,4 @@
+import { editSessionTitle } from "./SessionTitleEditor";
 /**
  * HistoryDropdown - Chat history dropdown component with pagination
  */
@@ -362,58 +363,12 @@ export function createSessionItem(
     e.stopPropagation();
     if (!onEditTitle) return;
 
-    const input = createElement(doc, "input", {
-      width: "100%",
-      boxSizing: "border-box",
-      fontSize: chatFontSize(13),
-      fontWeight: "600",
-      color: theme.textPrimary,
-      background: theme.inputBg,
-      border: `1px solid ${theme.inputBorderColor}`,
-      borderRadius: "4px",
-      padding: "2px 4px",
-      outline: "none",
-    }) as HTMLInputElement;
-    input.value = session.title || "";
-    titleEl.replaceWith(input);
     editBtn.style.display = "none";
     deleteBtn.style.display = "none";
-    input.focus();
-    input.select();
-
-    let cancelled = false;
-    let saved = false;
-    const finish = async () => {
-      if (saved || cancelled) return;
-      saved = true;
-      const nextTitle = input.value.trim() || null;
-      try {
-        await onEditTitle(session, nextTitle);
-        session.title = nextTitle || undefined;
-        titleEl.textContent = session.title || fallbackTitle;
-      } catch (error) {
-        ztoolkit.log(
-          "[HistoryDropdown] Failed to update session title:",
-          error,
-        );
-      } finally {
-        input.replaceWith(titleEl);
-      }
-    };
-
-    input.addEventListener("click", (event) => event.stopPropagation());
-    input.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        void finish();
-      } else if (event.key === "Escape") {
-        event.preventDefault();
-        cancelled = true;
-        input.replaceWith(titleEl);
-      }
-    });
-    input.addEventListener("blur", () => {
-      void finish();
+    editSessionTitle(titleEl, session.title || "", theme, async (nextTitle) => {
+      await onEditTitle(session, nextTitle);
+      session.title = nextTitle || undefined;
+      titleEl.textContent = session.title || fallbackTitle;
     });
   });
 
