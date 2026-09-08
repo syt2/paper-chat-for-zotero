@@ -1,3 +1,4 @@
+import { updateEmptyChatPrompt } from "./EmptyChatPrompt";
 /**
  * ChatPanelManager - Main panel lifecycle and coordination
  */
@@ -1604,6 +1605,7 @@ async function initializeChatContentCommon(
     context.renderExecutionPlan(session.executionPlan);
   }
   updateModelSelectorDisplay(container);
+  updateEmptyChatPrompt(container, session?.id, getActiveReaderItem());
   context.updateAttachmentsPreview();
 
   focusInput(container);
@@ -1922,6 +1924,7 @@ async function refreshChatForContainer(container: HTMLElement): Promise<void> {
     // navigation anchors and message actions remain in sync with those nodes.
     createContext(container).renderMessages(session.messages);
   }
+  updateEmptyChatPrompt(container, session?.id, getActiveReaderItem());
 
   focusInput(container);
 }
@@ -3750,6 +3753,8 @@ function createContext(container: HTMLElement): ChatPanelContext {
             },
           );
         }
+        if (messages.length === 0)
+          updateEmptyChatPrompt(container, session?.id, getActiveReaderItem());
         ConversationNavigator.update(container, messages);
         updateConversationNoteSummaryButton(
           container,

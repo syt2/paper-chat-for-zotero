@@ -195,7 +195,7 @@ export function createChatContainer(
       doc,
       "section",
       {},
-      { class: "chat-quota-section" },
+      { class: "chat-quota-section", id: `chat-quota-${id}-section` },
     );
     const heading = createElement(
       doc,

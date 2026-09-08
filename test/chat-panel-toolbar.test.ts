@@ -341,6 +341,10 @@ describe("chat panel presentation toolbar entry", function () {
         "#chat-quota-wallet-details",
       ) as HTMLElement;
       assert.equal(quota.getAttribute("data-available"), "true");
+      const planSection = container.querySelector(
+        "#chat-quota-subscription-section",
+      ) as HTMLElement;
+      assert.isFalse(planSection.hidden);
       assert.isNotEmpty(plans.textContent || "");
       assert.isNotEmpty(permanent.textContent || "");
       assert.equal(
@@ -413,7 +417,9 @@ describe("chat panel presentation toolbar entry", function () {
         subscription.getAttribute("data-subscription-limit-clickable"),
       );
       assert.notEqual(wallet.style.display, "none");
-      assert.equal(plans.textContent, "paperchat-chat-quota-no-subscriptions");
+      assert.equal(plans.textContent, "");
+      assert.isTrue(planSection.hidden);
+      assert.isNotEmpty(permanent.textContent || "");
       loggedIn = false;
       updateUserBarDisplay(container, auth);
       assert.equal(quota.getAttribute("data-available"), "false");

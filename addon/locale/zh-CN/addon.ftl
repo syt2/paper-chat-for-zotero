@@ -421,3 +421,10 @@ paperchat-pref-translation-model-unavailable = 所选模型不可用，请重新
 paperchat-pref-translation-auto = 自动
 
 paperchat-chat-translation-model = 翻译模型
+
+paperchat-chat-empty-home-1 = 你想了解什么？
+paperchat-chat-empty-home-2 = 今天想聊些什么？
+paperchat-chat-empty-home-3 = 有什么问题想一起看看？
+paperchat-chat-empty-paper-1 = 你想了解《{ $title }》的哪些内容？
+paperchat-chat-empty-paper-2 = 关于《{ $title }》，你有什么想问的？
+paperchat-chat-empty-paper-3 = 一起读读《{ $title }》，想从哪里开始？

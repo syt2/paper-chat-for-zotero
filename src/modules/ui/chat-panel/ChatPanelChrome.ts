@@ -56,13 +56,14 @@ export function updateAccountQuotaDetails(
   area?.setAttribute("data-available", balance === null ? "false" : "true");
   const plans = container.querySelector("#chat-quota-subscription-details");
   const wallet = container.querySelector("#chat-quota-wallet-details");
+  const subscriptionSection = container.querySelector(
+    "#chat-quota-subscription-section",
+  ) as HTMLElement | null;
+  if (subscriptionSection)
+    subscriptionSection.hidden = !usage || balance === null;
   if (plans)
     plans.textContent =
-      balance === null
-        ? ""
-        : usage
-          ? getSubscriptionUsageTooltip(usage)
-          : getString("chat-quota-no-subscriptions");
+      balance !== null && usage ? getSubscriptionUsageTooltip(usage) : "";
   if (wallet)
     wallet.textContent =
       balance === null
@@ -228,7 +229,7 @@ export function getChatChromeStyles(theme: ThemeColors): string {
     .chat-panel-root #chat-account-quota[data-available="true"]:not([data-dismissed]):focus-within #chat-quota-popover {
       visibility: visible; transition: none;
     }
-    .chat-panel-root .chat-quota-section + .chat-quota-section {
+    .chat-panel-root .chat-quota-section:not([hidden]) + .chat-quota-section {
       margin-top: 10px; padding-top: 10px; border-top: 1px solid ${theme.borderColor};
     }
     .chat-panel-root .chat-quota-heading { font-weight: 600; margin-bottom: 4px; }

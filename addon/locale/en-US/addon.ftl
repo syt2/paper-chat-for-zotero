@@ -421,3 +421,10 @@ paperchat-pref-translation-model-unavailable = Selected model unavailable — ch
 paperchat-pref-translation-auto = Automatic
 
 paperchat-chat-translation-model = Translation model
+
+paperchat-chat-empty-home-1 = What would you like to explore?
+paperchat-chat-empty-home-2 = What would you like to discuss today?
+paperchat-chat-empty-home-3 = What question is on your mind?
+paperchat-chat-empty-paper-1 = What would you like to know about “{ $title }”?
+paperchat-chat-empty-paper-2 = What questions do you have about “{ $title }”?
+paperchat-chat-empty-paper-3 = Let’s read “{ $title }”. Where would you like to start?
