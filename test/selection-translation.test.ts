@@ -1,4 +1,4 @@
-import { populateTranslationModels } from "../src/modules/preferences/TranslationModelUI.ts";
+import { getTranslationModelOptions } from "../src/modules/ui/SelectionTranslationModels.ts";
 import { getModelRoutingDefaults } from "../src/modules/preferences/ModelsFetcher.ts";
 import { assert } from "chai";
 import {
@@ -253,28 +253,14 @@ describe("reader selection translation", function () {
     runtime.Zotero.Prefs.get = (key: string) =>
       key.endsWith("translationModel") ? "auto" : undefined;
     getProviderManager().getAllConfigs = () => [];
-    const items: Array<Record<string, string>> = [];
-    const popup = {
-      get firstChild() {
-        return null;
-      },
-      appendChild: (item: any) => items.push(item.attributes),
-    };
-    const select = { value: "" };
-    const doc = {
-      getElementById: (id: string) => (id.endsWith("-popup") ? popup : select),
-      createXULElement: () => ({
-        attributes: {} as Record<string, string>,
-        setAttribute(name: string, value: string) {
-          this.attributes[name] = value;
-        },
-      }),
-    };
-    populateTranslationModels(doc as any);
-    assert.equal(select.value, "auto");
     assert.deepEqual(
-      items.map((item) => item.value),
-      ["auto", ""],
+      getTranslationModelOptions().map((item) => item.value),
+      ["auto"],
+    );
+    runtime.Zotero.Prefs.get = () => "";
+    assert.deepEqual(
+      getTranslationModelOptions().map((item) => item.value),
+      ["auto"],
     );
   });
 });

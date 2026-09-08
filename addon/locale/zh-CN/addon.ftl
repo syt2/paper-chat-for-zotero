@@ -416,7 +416,8 @@ paperchat-chat-reader-translation-empty = 模型未返回译文，请重新尝�
 
 paperchat-chat-unpin-selected-text = 取消固定选中文本
 
-paperchat-pref-translation-follow-chat = 跟随聊天模型
 paperchat-pref-translation-model-unavailable = 所选模型不可用，请重新选择
 
-paperchat-pref-translation-auto = 自动（API 默认模型）
+paperchat-pref-translation-auto = 自动
+
+paperchat-chat-translation-model = 翻译模型

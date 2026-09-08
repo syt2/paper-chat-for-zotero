@@ -1,3 +1,5 @@
+import { getPref, setPref } from "../../utils/prefs";
+import { getTranslationModelOptions } from "./SelectionTranslationModels";
 import { SelectionTranslationError } from "./SelectionTranslationRouting";
 import {
   parsePaperChatQuotaError,
@@ -22,7 +24,7 @@ export function showReaderSelectionTranslation(
   const doc = frame?.ownerDocument || sourceDoc;
   const win = doc.defaultView;
   if (!win || !doc.body) return () => {};
-  const controller = new (win as Window & typeof globalThis).AbortController();
+  let controller = new (win as Window & typeof globalThis).AbortController();
   const panel = doc.createElement("section");
   panel.className = "paperchat-selection-translation";
   panel.setAttribute("role", "dialog");
@@ -60,8 +62,32 @@ export function showReaderSelectionTranslation(
   });
   const title = doc.createElement("span");
   title.textContent = getString("chat-reader-translate");
-  title.style.flex = "1";
+  title.style.flexShrink = "0";
   title.style.opacity = ".65";
+  const modelSelect = doc.createElement("select");
+  modelSelect.setAttribute("aria-label", getString("chat-translation-model"));
+  Object.assign(modelSelect.style, {
+    flex: "1",
+    minWidth: "0",
+    maxWidth: "230px",
+    height: "24px",
+    marginRight: "auto",
+    border: "none",
+    borderRadius: "5px",
+    background: dark ? "#36363c" : "#f2f2f5",
+    color: "inherit",
+    font: "11px system-ui, sans-serif",
+    cursor: "pointer",
+    padding: "0 5px",
+    textOverflow: "ellipsis",
+  });
+  for (const item of getTranslationModelOptions()) {
+    const option = doc.createElement("option");
+    option.value = item.value;
+    option.textContent = item.label;
+    modelSelect.appendChild(option);
+  }
+  modelSelect.value = getPref("translationModel") || "auto";
   const close = doc.createElement("button");
   close.type = "button";
   close.textContent = "×";
@@ -77,7 +103,7 @@ export function showReaderSelectionTranslation(
     borderRadius: "6px",
     fontSize: "18px",
   });
-  header.append(title, close);
+  header.append(title, modelSelect, close);
   const body = doc.createElement("div");
   Object.assign(body.style, {
     padding: "0 12px 12px",
@@ -135,7 +161,12 @@ export function showReaderSelectionTranslation(
     | { id: number; x: number; y: number; left: number; top: number }
     | undefined;
   header.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0 || close.contains(event.target as Node)) return;
+    if (
+      event.button !== 0 ||
+      close.contains(event.target as Node) ||
+      modelSelect.contains(event.target as Node)
+    )
+      return;
     event.preventDefault();
     const rect = panel.getBoundingClientRect();
     drag = {
@@ -188,28 +219,44 @@ export function showReaderSelectionTranslation(
       panel.style.transform = "translateY(0)";
     });
   }
-  void streamSelectionTranslation(text, controller.signal, (translation) => {
-    if (disposed) return;
-    content.textContent = translation;
+  const translate = () => {
+    controller.abort();
+    controller = new (win as Window & typeof globalThis).AbortController();
+    const request = controller;
+    content.textContent = "";
+    body.replaceChildren(content, loading);
+    panel.setAttribute("aria-busy", "true");
+    modelSelect.title = modelSelect.selectedOptions[0]?.textContent || "";
     place();
-  })
-    .catch((error: unknown) => {
-      if (disposed) return;
-      const message = doc.createElement("div");
-      const raw = error instanceof Error ? error.message : String(error);
-      const paperchat =
-        error instanceof SelectionTranslationError && error.paperchat;
-      const quota = paperchat ? parsePaperChatQuotaError(raw) : null;
-      message.textContent = `⚠️ ${quota?.displayMessage || (paperchat ? getPaperChatErrorDisplayMessage(raw) : raw)}`;
-      message.setAttribute("role", "alert");
-      message.style.color = dark ? "#fda4af" : "#b42335";
-      body.append(message);
-      if (quota) body.append(createTopupButton(doc));
+    void streamSelectionTranslation(text, request.signal, (translation) => {
+      if (disposed || request !== controller) return;
+      content.textContent = translation;
       place();
     })
-    .finally(() => {
-      loading.remove();
-      if (!disposed) panel.setAttribute("aria-busy", "false");
-    });
+      .catch((error: unknown) => {
+        if (disposed || request !== controller) return;
+        const message = doc.createElement("div");
+        const raw = error instanceof Error ? error.message : String(error);
+        const paperchat =
+          error instanceof SelectionTranslationError && error.paperchat;
+        const quota = paperchat ? parsePaperChatQuotaError(raw) : null;
+        message.textContent = `⚠️ ${quota?.displayMessage || (paperchat ? getPaperChatErrorDisplayMessage(raw) : raw)}`;
+        message.setAttribute("role", "alert");
+        message.style.color = dark ? "#fda4af" : "#b42335";
+        body.append(message);
+        if (quota) body.append(createTopupButton(doc));
+        place();
+      })
+      .finally(() => {
+        if (request !== controller) return;
+        loading.remove();
+        if (!disposed) panel.setAttribute("aria-busy", "false");
+      });
+  };
+  modelSelect.addEventListener("change", () => {
+    setPref("translationModel", modelSelect.value);
+    translate();
+  });
+  translate();
   return dispose;
 }

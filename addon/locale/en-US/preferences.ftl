@@ -156,5 +156,3 @@ pref-embedding-status-ollama = Using Ollama Local Embedding
 pref-embedding-status-openai = Using OpenAI Embedding
 pref-embedding-unavailable-ollama = Ollama is running but no embedding model installed. Run: ollama pull nomic-embed-text
 pref-embedding-unavailable-none = No embedding service available. Use the PaperChat provider or configure Gemini/OpenAI API Key.
-
-pref-translation-model = Translation model

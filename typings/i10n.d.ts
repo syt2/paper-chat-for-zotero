@@ -284,6 +284,7 @@ export type FluentMessageId =
   | 'paperchat-chat-toolbar-running'
   | 'paperchat-chat-tools-add'
   | 'paperchat-chat-tools-create'
+  | 'paperchat-chat-translation-model'
   | 'paperchat-chat-turn-attachment'
   | 'paperchat-chat-turn-in-progress'
   | 'paperchat-chat-turn-jump'
@@ -310,7 +311,6 @@ export type FluentMessageId =
   | 'paperchat-mention-loading'
   | 'paperchat-mention-no-match'
   | 'paperchat-pref-translation-auto'
-  | 'paperchat-pref-translation-follow-chat'
   | 'paperchat-pref-translation-model-unavailable'
   | 'paperchat-prefs-title'
   | 'paperchat-presentation-chat-context-mismatch-message'
@@ -512,5 +512,4 @@ export type FluentMessageId =
   | 'pref-tool-permission-mode-auto-allow'
   | 'pref-tool-permission-mode-deny'
   | 'pref-tool-permission-network'
-  | 'pref-tool-permission-write'
-  | 'pref-translation-model';
+  | 'pref-tool-permission-write';

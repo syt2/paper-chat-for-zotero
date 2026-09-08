@@ -416,7 +416,8 @@ paperchat-chat-reader-translation-empty = The model returned no translation. Ple
 
 paperchat-chat-unpin-selected-text = Unpin selected text
 
-paperchat-pref-translation-follow-chat = Follow chat model
 paperchat-pref-translation-model-unavailable = Selected model unavailable — choose another
 
-paperchat-pref-translation-auto = Automatic (API default)
+paperchat-pref-translation-auto = Automatic
+
+paperchat-chat-translation-model = Translation model

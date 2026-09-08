@@ -48,5 +48,5 @@ pref("toolPermissionDefaultModes", ""); // 各工具默认权限模式映射（J
 pref("webSearchProvider", "auto"); // Web 搜索后端
 pref("agentMaxPlanningIterations", 30); // 单个 agent turn 的最大 planning 轮次
 
-// Empty means follow the active chat model.
-pref("translationModel", "");
+// Automatic uses the API translation default for PaperChat, otherwise the chat model.
+pref("translationModel", "auto");

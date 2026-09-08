@@ -19,8 +19,7 @@ export function getTranslationCandidates(
     return [parsed];
   }
   if (active.type !== "paperchat" || !apiDefault) return [undefined];
-  const fallback = { providerId: active.id, model: apiDefault };
-  return stored === "auto" ? [fallback, undefined] : [undefined, fallback];
+  return [{ providerId: active.id, model: apiDefault }, undefined];
 }
 
 export class SelectionTranslationError extends Error {

@@ -1,7 +1,3 @@
-import {
-  populateTranslationModels,
-  bindTranslationModelEvents,
-} from "./TranslationModelUI";
 /**
  * PreferencesManager - Main preferences coordination
  */
@@ -186,7 +182,6 @@ export async function refreshPrefsUI(
 
   // Populate PaperChat model dropdown
   populatePaperchatModels(doc);
-  populateTranslationModels(doc);
 
   // Initialize AI tools settings checkbox
   initAIToolsSettingsCheckbox(doc);
@@ -273,8 +268,6 @@ export function bindPrefEvents(): void {
     refreshProviderList,
   );
   prefsWin.__paperchatPrefsCleanup.push(cleanupUserAuthEvents);
-
-  bindTranslationModelEvents(doc);
 
   // Bind PaperChat events
   bindPaperchatEvents(doc, async () => {

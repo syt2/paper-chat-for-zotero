@@ -48,7 +48,7 @@ export async function streamSelectionTranslation(
       false,
     );
   const candidates = getTranslationCandidates(
-    getPref("translationModel") || "",
+    getPref("translationModel") || "auto",
     active.config,
     getModelRoutingDefaults().translationModel,
   );

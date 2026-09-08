@@ -5,15 +5,15 @@ import { parseModelRoutingDefaults } from "../src/modules/providers/paperchat-ro
 const paperchat = { id: "paperchat", type: "paperchat" };
 
 describe("translation routing", function () {
-  it("tries default then chat in automatic mode and reverses in follow mode", function () {
+  it("tries default then chat for automatic and legacy empty selections", function () {
     const model = { providerId: "paperchat", model: "translate" };
     assert.deepEqual(getTranslationCandidates("auto", paperchat, "translate"), [
       model,
       undefined,
     ]);
     assert.deepEqual(getTranslationCandidates("", paperchat, "translate"), [
-      undefined,
       model,
+      undefined,
     ]);
   });
 
