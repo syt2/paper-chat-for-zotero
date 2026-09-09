@@ -1,3 +1,4 @@
+import { addTokenUsage } from "../message-token-usage";
 import { checkpointAssistantPhase } from "../assistant-resume";
 import { createPresentationResumeRound } from "../../presentation/PresentationResumeRound";
 import type {
@@ -449,6 +450,7 @@ export class AgentRuntime {
           sourceItemKeys,
           presentationArtifacts: message.presentationArtifacts || [],
           resumeCheckpoint: message.resumeCheckpoint,
+          tokenUsage: message.tokenUsage,
         },
       );
     },
@@ -1045,6 +1047,10 @@ export class AgentRuntime {
           ));
 
         this.ensureSessionTracked(sendingSession, sessionRunId);
+        assistantMessage.tokenUsage = addTokenUsage(
+          assistantMessage.tokenUsage,
+          result.tokenUsage,
+        );
 
         ztoolkit.log(
           `[${logPrefix}] Response:`,
@@ -1244,6 +1250,10 @@ export class AgentRuntime {
               { toolChoice: "none" },
             );
             this.ensureSessionTracked(sendingSession, sessionRunId);
+            assistantMessage.tokenUsage = addTokenUsage(
+              assistantMessage.tokenUsage,
+              round.tokenUsage,
+            );
             return round;
           },
         });
@@ -1450,7 +1460,10 @@ export class AgentRuntime {
           return uiContent;
         };
 
+        let attemptSettled = false;
         const rejectAttempt = (error: Error) => {
+          if (attemptSettled) return;
+          attemptSettled = true;
           if (!this.callbacks.isSessionTracked(sendingSession, sessionRunId)) {
             reject(error);
             return;
@@ -1583,6 +1596,14 @@ export class AgentRuntime {
             updateAssistantStreamingContent();
           },
           onComplete: (result) => {
+            if (attemptSettled) return;
+            attemptSettled = true;
+            if (this.callbacks.isSessionTracked(sendingSession, sessionRunId)) {
+              assistantMessage.tokenUsage = addTokenUsage(
+                assistantMessage.tokenUsage,
+                result.tokenUsage,
+              );
+            }
             stopReason = result.stopReason;
             for (const search of result.hostedWebSearches || []) {
               const current = hostedWebSearches.get(search.id);
@@ -1859,6 +1880,22 @@ export class AgentRuntime {
           },
         );
       };
+    const recordPresentationUsage = (usage: ChatMessage["tokenUsage"]) => {
+      if (
+        !usage ||
+        !this.callbacks.isSessionTracked(sendingSession, sessionRunId)
+      )
+        return;
+      assistantMessage.tokenUsage = addTokenUsage(
+        assistantMessage.tokenUsage,
+        usage,
+      );
+      this.messageCheckpointer.schedule(
+        sendingSession,
+        sessionRunId,
+        assistantMessage,
+      );
+    };
     const executionContext: ToolSchedulerExecutionContext | undefined =
       currentItemKey ||
       presentationLaunchSession ||
@@ -1884,12 +1921,14 @@ export class AgentRuntime {
                     provider,
                     executeProviderRequest,
                     abortSignal,
+                    recordPresentationUsage,
                   ),
                   presentationVisualReviewer:
                     this.createPresentationVisualReviewer(
                       provider,
                       executeProviderRequest,
                       abortSignal,
+                      recordPresentationUsage,
                     ),
                 }
               : {}),
@@ -2802,6 +2841,7 @@ export class AgentRuntime {
     provider: ToolCallingProvider,
     executeProviderRequest: ProviderRequestExecutor,
     abortSignal?: AbortSignal,
+    onUsage?: (usage: ChatMessage["tokenUsage"]) => void,
   ): PresentationVisualReviewer {
     return async (request) => {
       const images = request.previewSlides.map((dataUrl, index) => {
@@ -2874,6 +2914,7 @@ export class AgentRuntime {
             stateless: true,
           }),
         );
+        onUsage?.(result.tokenUsage);
         if (result.suppressedToolCall || result.toolCalls?.length) {
           throw new PresentationProtocolError(
             "Presentation visual reviewer returned a tool call instead of JSON.",
@@ -2906,6 +2947,7 @@ export class AgentRuntime {
     provider: ToolCallingProvider,
     executeProviderRequest: ProviderRequestExecutor,
     abortSignal?: AbortSignal,
+    onUsage?: (usage: ChatMessage["tokenUsage"]) => void,
   ): PresentationPlanner {
     return async (request) => {
       const runPlanner = async (
@@ -2933,6 +2975,7 @@ export class AgentRuntime {
             stateless: true,
           }),
         );
+        onUsage?.(result.tokenUsage);
         if (result.suppressedToolCall || result.toolCalls?.length) {
           throw new PresentationProtocolError(
             "Presentation planner returned a tool call instead of JSON.",

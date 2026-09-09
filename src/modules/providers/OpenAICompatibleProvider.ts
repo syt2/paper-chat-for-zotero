@@ -1,3 +1,7 @@
+import {
+  normalizeTokenUsage,
+  type MessageTokenUsage,
+} from "../chat/message-token-usage";
 /**
  * OpenAICompatibleProvider - For OpenAI, DeepSeek, Mistral, Groq, OpenRouter, Custom
  */
@@ -597,6 +601,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
         model: this._config.defaultModel,
         messages: apiMessages,
         stream: true,
+        stream_options: { include_usage: true },
       };
       this.applyGenerationOptions(requestBody);
       applyExtraRequestBody(requestBody, this._config);
@@ -828,6 +833,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
         "tool calls from DSML fallback",
       );
       return {
+        tokenUsage: normalizeTokenUsage(data.usage),
         content: dsmlFallback.cleanContent,
         reasoning: message?.reasoning_content || undefined,
         toolCalls:
@@ -846,6 +852,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
     const fallbackToolCalls =
       xmlFallback.toolCalls.length > 0 ? xmlFallback.toolCalls : undefined;
     return {
+      tokenUsage: normalizeTokenUsage(data.usage),
       content: dsmlFallback.cleanContent,
       reasoning: message?.reasoning_content || undefined,
       toolCalls: allowFallbackToolCalls
@@ -903,6 +910,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
         model: this._config.defaultModel,
         messages: apiMessages,
         stream: true,
+        stream_options: { include_usage: true },
       };
 
       if (tools.length > 0) {
@@ -1023,7 +1031,11 @@ export class OpenAICompatibleProvider extends BaseProvider {
         }
       };
 
+      let tokenUsage: MessageTokenUsage | undefined;
       await parseSSEStreamWithToolCalling(reader, "openai", {
+        onUsage: (usage) => {
+          tokenUsage = usage;
+        },
         onEvent: (event) => {
           switch (event.type) {
             case "text_delta":
@@ -1108,6 +1120,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
           : dsmlFallback.toolCalls;
 
       onComplete({
+        tokenUsage,
         content: dsmlFallback.cleanContent,
         reasoning: fullReasoning || undefined,
         toolCalls:

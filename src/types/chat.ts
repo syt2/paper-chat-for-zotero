@@ -1,3 +1,4 @@
+import type { MessageTokenUsage } from "../modules/chat/message-token-usage";
 /**
  * Chat Types - 聊天相关类型定义
  */
@@ -48,6 +49,7 @@ export type ChatMessageStreamingState = "in_progress" | "interrupted";
 
 // 聊天消息
 export interface ChatMessage {
+  tokenUsage?: MessageTokenUsage;
   id: string;
   role: "user" | "assistant" | "system" | "error" | "tool";
   content: string;
@@ -497,6 +499,7 @@ export type OpenAIMessageContent =
 
 // 流式响应回调
 export interface StreamCallbacks {
+  onUsage?: (usage: MessageTokenUsage) => void;
   onChunk: (chunk: string) => void;
   onReasoningChunk?: (chunk: string) => void;
   onComplete: (fullContent: string, toolCalls?: ToolCall[]) => void;
@@ -523,6 +526,7 @@ export type ToolCallingStopReason =
   | "stop";
 
 export interface StreamToolCallingResult {
+  tokenUsage?: MessageTokenUsage;
   content: string;
   reasoning?: string;
   toolCalls?: ToolCall[];

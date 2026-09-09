@@ -230,12 +230,18 @@ describe("agent runtime phase resume", function () {
             }
           : null;
       };
+      const requestUsage = {
+        inputTokens: 100,
+        outputTokens: 20,
+        totalTokens: 120,
+        cachedInputTokens: 80,
+      };
       const provider = {
         config: { id: "test", type: "openai", defaultModel: "test" },
         chatCompletionWithTools: async () => {
           const result = response();
           if (!result) throw new Error("interrupted C");
-          return result;
+          return { ...result, tokenUsage: requestUsage };
         },
         streamChatCompletionWithTools: async (
           _messages: any,
@@ -245,7 +251,7 @@ describe("agent runtime phase resume", function () {
           const result = response();
           if (result) {
             callbacks.onTextDelta(result.content);
-            callbacks.onComplete(result);
+            callbacks.onComplete({ ...result, tokenUsage: requestUsage });
           } else {
             callbacks.onTextDelta("C interrupted");
             callbacks.onReasoningDelta("C unfinished thinking");
@@ -294,6 +300,17 @@ describe("agent runtime phase resume", function () {
         ),
       );
 
+      const beforeResume = {
+        inputTokens: 200,
+        outputTokens: 40,
+        totalTokens: 240,
+        cachedInputTokens: 160,
+      };
+      assert.deepEqual(assistant.tokenUsage, beforeResume);
+      assert.isTrue(
+        persisted.some((entry) => entry.tokenUsage?.totalTokens === 240),
+      );
+
       // Reconstruct after restart: no in-memory tool/phase object survives.
       session = JSON.parse(JSON.stringify(session));
       assistant = session.messages.find((message) => message.id === "answer")!;
@@ -304,6 +321,13 @@ describe("agent runtime phase resume", function () {
       resumed = true;
       round = 0;
       await run();
+      assert.deepEqual(assistant.tokenUsage, {
+        inputTokens: 400,
+        outputTokens: 80,
+        totalTokens: 480,
+        cachedInputTokens: 320,
+      });
+      assert.deepEqual(persisted.at(-1).tokenUsage, assistant.tokenUsage);
       assert.deepEqual(executed, ["get_item_notes", "create_note"]);
       assert.notInclude(assistant.content, "C interrupted");
       assert.equal(assistant.content.split("A complete.").length - 1, 1);

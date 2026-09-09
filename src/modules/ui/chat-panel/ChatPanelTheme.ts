@@ -115,6 +115,13 @@ export function applyThemeToContainer(container: HTMLElement): void {
 
   // Main container
   container.style.backgroundColor = theme.containerBg;
+  container.style.colorScheme = theme === darkTheme ? "dark" : "light";
+  const doc = container.ownerDocument;
+  if (doc.getElementById("chat-window-root")) {
+    doc.documentElement.style.backgroundColor = theme.containerBg;
+    doc.documentElement.style.colorScheme = container.style.colorScheme;
+    if (doc.body) doc.body.style.backgroundColor = theme.containerBg;
+  }
   container.style.borderLeftColor = theme.borderColor;
 
   // Chat history

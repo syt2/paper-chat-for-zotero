@@ -136,6 +136,7 @@ export abstract class BaseProvider implements AIProvider {
       onReasoning: onReasoningChunk
         ? (text) => onReasoningChunk(text)
         : undefined,
+      onUsage: callbacks.onUsage,
       onDone: () => onComplete(fullContent),
       onError,
     });

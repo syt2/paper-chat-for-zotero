@@ -11,7 +11,7 @@ import { getErrorMessage } from "../../../utils/common";
 
 const DB_DIR = "paper-chat";
 const DB_FILE = "storage";
-export const SCHEMA_VERSION = 17;
+export const SCHEMA_VERSION = 18;
 
 /** Build absolute DB path so Zotero.DBConnection doesn't parse subdirectory names */
 function getDBPath(): string {
@@ -253,6 +253,7 @@ export class StorageDatabase {
         source_item_keys TEXT,
         presentation_artifacts TEXT,
         resume_checkpoint TEXT,
+        token_usage TEXT,
         streaming_state TEXT,
         api_only INTEGER,
         is_system_notice INTEGER,
@@ -475,6 +476,7 @@ export class StorageDatabase {
       messageColumns.has("source_item_keys") &&
       messageColumns.has("presentation_artifacts") &&
       messageColumns.has("resume_checkpoint") &&
+      messageColumns.has("token_usage") &&
       sessionColumns.has("last_active_item_library_id")
     );
   }
@@ -574,6 +576,10 @@ export class StorageDatabase {
         await this.upgradeToV17(db);
         currentVersion = 17;
       }
+      if (currentVersion < 18) {
+        await this.upgradeToV18(db);
+        currentVersion = 18;
+      }
       if (
         currentVersion === SCHEMA_VERSION &&
         !(await this.hasCurrentSchemaColumns(db))
@@ -588,6 +594,7 @@ export class StorageDatabase {
         await this.upgradeToV15(db);
         await this.upgradeToV16(db);
         await this.upgradeToV17(db);
+        await this.upgradeToV18(db);
       }
     }
   }
@@ -1485,6 +1492,28 @@ export class StorageDatabase {
       await db.queryAsync(
         "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
         [17, Date.now()],
+      );
+      await db.queryAsync("COMMIT");
+    } catch (error) {
+      try {
+        await db.queryAsync("ROLLBACK");
+      } catch {
+        /* preserve error */
+      }
+      throw error;
+    }
+  }
+
+  private async upgradeToV18(db: ZoteroDBConnection): Promise<void> {
+    await db.queryAsync("BEGIN TRANSACTION");
+    try {
+      const columns =
+        (await db.queryAsync("PRAGMA table_info(messages)")) || [];
+      if (!columns.some((column: any) => column.name === "token_usage"))
+        await db.queryAsync("ALTER TABLE messages ADD COLUMN token_usage TEXT");
+      await db.queryAsync(
+        "UPDATE schema_version SET version = ?, updated_at = ? WHERE id = 1",
+        [18, Date.now()],
       );
       await db.queryAsync("COMMIT");
     } catch (error) {

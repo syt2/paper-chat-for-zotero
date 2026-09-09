@@ -1,3 +1,7 @@
+import {
+  normalizeTokenUsage,
+  type MessageTokenUsage,
+} from "../chat/message-token-usage";
 /**
  * AnthropicProvider - Claude API implementation
  * Uses Anthropic Messages API format (different from OpenAI)
@@ -342,6 +346,7 @@ export class AnthropicProvider extends BaseProvider {
         name?: string;
         input?: Record<string, unknown>;
       }>;
+      usage?: unknown;
       stop_reason?: string;
     };
 
@@ -375,6 +380,7 @@ export class AnthropicProvider extends BaseProvider {
     );
 
     return {
+      tokenUsage: normalizeTokenUsage(data.usage, "anthropic"),
       content: textContent,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
       stopReason: normalizeToolCallingStopReason(data.stop_reason),
@@ -449,7 +455,11 @@ export class AnthropicProvider extends BaseProvider {
       >();
       let stopReason: ToolCallingStopReason = "end_turn";
 
+      let tokenUsage: MessageTokenUsage | undefined;
       await parseSSEStreamWithToolCalling(reader, "anthropic", {
+        onUsage: (usage) => {
+          tokenUsage = usage;
+        },
         onEvent: (event) => {
           switch (event.type) {
             case "text_delta":
@@ -504,6 +514,7 @@ export class AnthropicProvider extends BaseProvider {
       }
 
       onComplete({
+        tokenUsage,
         content: fullContent,
         toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
         stopReason,

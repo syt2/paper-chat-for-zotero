@@ -154,6 +154,13 @@ describe("AgentRuntime output truncation continuation", function () {
           callbacks.onComplete({
             content,
             stopReason: calls.length === 1 ? "max_tokens" : "end_turn",
+            tokenUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+          });
+          // A duplicated completion must not add the same request usage again.
+          callbacks.onComplete({
+            content,
+            stopReason: calls.length === 1 ? "max_tokens" : "end_turn",
+            tokenUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
           });
         },
       } as any,
@@ -166,6 +173,11 @@ describe("AgentRuntime output truncation continuation", function () {
     });
 
     assert.equal(harness.assistantMessage.content, "Alpha Beta");
+    assert.deepEqual(harness.assistantMessage.tokenUsage, {
+      inputTokens: 20,
+      outputTokens: 10,
+      totalTokens: 30,
+    });
     assert.lengthOf(calls, 2);
     assert.deepEqual(calls[0].tools, [searchTool]);
     assert.deepEqual(calls[1].tools, []);
@@ -202,6 +214,7 @@ describe("AgentRuntime output truncation continuation", function () {
           return {
             content: `part-${calls.length}`,
             stopReason: "max_tokens",
+            tokenUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
           };
         },
       } as any,
@@ -214,6 +227,11 @@ describe("AgentRuntime output truncation continuation", function () {
     });
 
     assert.lengthOf(calls, 4);
+    assert.deepEqual(harness.assistantMessage.tokenUsage, {
+      inputTokens: 40,
+      outputTokens: 20,
+      totalTokens: 60,
+    });
     assert.equal(
       harness.assistantMessage.content,
       `part-1part-2part-3part-4${OUTPUT_TRUNCATION_NOTICE}`,

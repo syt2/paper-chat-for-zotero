@@ -1,3 +1,4 @@
+import { refreshChatThemeContent } from "./ChatThemeRefresh";
 import { updateEmptyChatPrompt } from "./EmptyChatPrompt";
 /**
  * ChatPanelManager - Main panel lifecycle and coordination
@@ -2021,50 +2022,26 @@ function showSidebarPanel(): boolean {
 
   // Add theme change listener
   if (!themeCleanup) {
-    themeCleanup = setupThemeListener(() => {
-      if (chatContainer) {
-        applyThemeToContainer(chatContainer);
+    const refreshTheme = () => {
+      for (const container of [chatContainer, floatingContainer]) {
+        if (!container) continue;
+        applyThemeToContainer(container);
         const session = manager.getActiveSession();
         if (session) {
-          createContext(chatContainer).renderExecutionPlan(
-            session.executionPlan,
-          );
+          const context = createContext(container);
+          refreshChatThemeContent(container, () => {
+            context.renderMessages(session.messages);
+            context.renderExecutionPlan(session.executionPlan);
+          });
         }
       }
-      if (floatingContainer) {
-        applyThemeToContainer(floatingContainer);
-        const session = manager.getActiveSession();
-        if (session) {
-          createContext(floatingContainer).renderExecutionPlan(
-            session.executionPlan,
-          );
-        }
-      }
-    });
+    };
+    themeCleanup = setupThemeListener(refreshTheme);
 
-    // 启动时延迟检测主题，因为窗口可能还没完全应用暗黑模式
-    // 使用 requestAnimationFrame + setTimeout 确保在 DOM 完全渲染后检测
-    // MutationObserver 会处理后续的动态变化
+    // Startup theme detection can settle after the first render.
     const reapplyTheme = () => {
-      updateCurrentTheme();
-      if (chatContainer) {
-        applyThemeToContainer(chatContainer);
-        const session = manager.getActiveSession();
-        if (session) {
-          createContext(chatContainer).renderExecutionPlan(
-            session.executionPlan,
-          );
-        }
-      }
-      if (floatingContainer) {
-        applyThemeToContainer(floatingContainer);
-        const session = manager.getActiveSession();
-        if (session) {
-          createContext(floatingContainer).renderExecutionPlan(
-            session.executionPlan,
-          );
-        }
-      }
+      const previous = getCurrentTheme();
+      if (updateCurrentTheme() !== previous) refreshTheme();
     };
     // 立即检测一次
     win.requestAnimationFrame(reapplyTheme);

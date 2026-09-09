@@ -488,8 +488,8 @@ export class SessionStorageService {
 
         await db.queryAsync(
           `INSERT INTO messages
-           (id, session_id, seq, role, content, reasoning, images, files, quoted_messages, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, source_item_keys, streaming_state, api_only, is_system_notice, search_text, search_index_version, presentation_artifacts, resume_checkpoint)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, session_id, seq, role, content, reasoning, images, files, quoted_messages, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, source_item_keys, streaming_state, api_only, is_system_notice, search_text, search_index_version, presentation_artifacts, resume_checkpoint, token_usage)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             message.id,
             sessionId,
@@ -516,6 +516,7 @@ export class SessionStorageService {
             message.resumeCheckpoint
               ? JSON.stringify(message.resumeCheckpoint)
               : null,
+            message.tokenUsage ? JSON.stringify(message.tokenUsage) : null,
           ],
         );
 
@@ -639,6 +640,7 @@ export class SessionStorageService {
     options?: {
       streamingState?: ChatMessageStreamingState | null;
       resumeCheckpoint?: ChatMessage["resumeCheckpoint"];
+      tokenUsage?: ChatMessage["tokenUsage"];
       evidence?: EvidenceRecord[];
       sourceItemKeys?: string[];
       presentationArtifacts?: PresentationToolCardArtifact[];
@@ -716,7 +718,7 @@ export class SessionStorageService {
         await db.queryAsync(
           `UPDATE messages SET
             content = ?, reasoning = ?, timestamp = ?, streaming_state = ?, evidence = ?, source_item_keys = ?,
-            search_text = ?, search_index_version = ?, presentation_artifacts = ?, resume_checkpoint = ?
+            search_text = ?, search_index_version = ?, presentation_artifacts = ?, resume_checkpoint = ?, token_usage = ?
           WHERE id = ? AND session_id = ?`,
           [
             content,
@@ -731,6 +733,8 @@ export class SessionStorageService {
             options?.streamingState && nextResumeCheckpoint
               ? JSON.stringify(nextResumeCheckpoint)
               : null,
+            JSON.stringify(options?.tokenUsage ?? previousMessage.tokenUsage) ||
+              null,
             messageId,
             sessionId,
           ],
@@ -1166,8 +1170,8 @@ export class SessionStorageService {
             } = messagesForStorage[seq];
             await db.queryAsync(
               `INSERT INTO messages
-               (id, session_id, seq, role, content, reasoning, images, files, quoted_messages, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, source_item_keys, streaming_state, api_only, is_system_notice, search_text, search_index_version, presentation_artifacts, resume_checkpoint)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               (id, session_id, seq, role, content, reasoning, images, files, quoted_messages, timestamp, pdf_context, selected_text, tool_calls, tool_call_id, evidence, source_item_keys, streaming_state, api_only, is_system_notice, search_text, search_index_version, presentation_artifacts, resume_checkpoint, token_usage)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               [
                 msg.id,
                 session.id,
@@ -1194,6 +1198,7 @@ export class SessionStorageService {
                 msg.resumeCheckpoint
                   ? JSON.stringify(msg.resumeCheckpoint)
                   : null,
+                msg.tokenUsage ? JSON.stringify(msg.tokenUsage) : null,
               ],
             );
           }

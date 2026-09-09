@@ -1,3 +1,4 @@
+import { addTokenUsage } from "./message-token-usage";
 /**
  * ChatManager - 聊天会话管理核心类
  *
@@ -2520,6 +2521,7 @@ export class ChatManager {
             evidence: assistantMessage.evidence || [],
             presentationArtifacts: assistantMessage.presentationArtifacts || [],
             resumeCheckpoint: assistantMessage.resumeCheckpoint,
+            tokenUsage: assistantMessage.tokenUsage,
           },
         );
       } else {
@@ -2579,6 +2581,7 @@ export class ChatManager {
                   {
                     streamingState: assistantMessage.streamingState,
                     resumeCheckpoint: assistantMessage.resumeCheckpoint,
+                    tokenUsage: assistantMessage.tokenUsage,
                     presentationArtifacts:
                       assistantMessage.presentationArtifacts,
                   },
@@ -2745,6 +2748,7 @@ export class ChatManager {
                       evidence: [],
                       sourceItemKeys: assistantMessage.sourceItemKeys || [],
                       resumeCheckpoint: assistantMessage.resumeCheckpoint,
+                      tokenUsage: assistantMessage.tokenUsage,
                     },
                   );
                 });
@@ -2783,6 +2787,13 @@ export class ChatManager {
             const streamCurrentProvider = () =>
               new Promise<void>((resolve, reject) => {
                 const callbacks: StreamCallbacks = {
+                  onUsage: (usage) => {
+                    if (this.isSessionTracked(sendingSession, sessionRunId))
+                      assistantMessage.tokenUsage = addTokenUsage(
+                        assistantMessage.tokenUsage,
+                        usage,
+                      );
+                  },
                   onChunk: (chunk: string) => {
                     if (!this.isSessionTracked(sendingSession, sessionRunId)) {
                       return;
@@ -3975,6 +3986,7 @@ export class ChatManager {
           sourceItemKeys,
           presentationArtifacts: message.presentationArtifacts || [],
           resumeCheckpoint: message.resumeCheckpoint,
+          tokenUsage: message.tokenUsage,
         },
       );
     }

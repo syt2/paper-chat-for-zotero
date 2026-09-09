@@ -82,6 +82,10 @@ class FakeElement {
   set className(value: string) {
     this.setAttribute("class", value);
   }
+  contains(node: FakeElement | null): boolean {
+    return node === this || this.children.some((child) => child.contains(node));
+  }
+
   focus(): void {}
   setSelectionRange(_start: number, _end: number): void {}
   append(...children: FakeElement[]): void {
@@ -638,6 +642,7 @@ describe("chat message exact navigation", function () {
 
     const actions = wrapper.children[1];
     assert.lengthOf(actions.children, 3);
+    assert.isNull(actions.querySelector(".message-token-usage"));
     assert.equal(
       actions.children[1].getAttribute("class"),
       "message-action-btn retry-btn",
@@ -1013,6 +1018,7 @@ describe("chat message exact navigation", function () {
     assert.lengthOf(topup.listeners.get("click") || [], 1);
     const actions = wrapper.children[1];
     assert.lengthOf(actions.children, 1);
+    assert.isNull(actions.querySelector(".message-more-actions"));
     assert.equal(
       actions.children[0].getAttribute("class"),
       "message-action-btn copy-message-btn",
@@ -1033,6 +1039,12 @@ describe("chat message exact navigation", function () {
         message("assistant-to-summarize", {
           role: "assistant",
           content: "A completed answer",
+          tokenUsage: {
+            inputTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0,
+            cachedInputTokens: 0,
+          },
         }),
       ],
       darkTheme,
@@ -1048,13 +1060,60 @@ describe("chat message exact navigation", function () {
 
     const actions = history.children[0].children[1];
     assert.lengthOf(actions.children, 2);
+    assert.equal(
+      actions.children[1].children.at(-1)!.className,
+      "message-action-btn message-token-usage",
+    );
     const more = actions.children[1];
     const summaryButton = more.children[1];
     assert.equal(summaryButton.style.visibility, "hidden");
     more.listeners.get("mouseenter")?.[0]?.({});
     assert.equal(summaryButton.style.visibility, "visible");
-    assert.equal(more.style.width, "50px");
+    assert.equal(more.style.width, "78px");
     assert.equal(more.style.gap, "6px");
+    const info = more.children.at(-1)!;
+    more.listeners.get("mouseleave")?.[0]?.({ relatedTarget: info });
+    assert.equal(more.style.width, "78px", "moving to info must not shift it");
+    Object.assign(doc, { documentElement: { clientWidth: 400 } });
+    Object.assign(info, { closest: () => null });
+    const [infoButton, popup] = info.children;
+    const usageCells = popup.children[0].children;
+    assert.deepEqual(
+      usageCells.filter((_, i) => i % 2 === 0).map((cell) => cell.textContent),
+      [
+        "paperchat-chat-message-token-usage-input",
+        "paperchat-chat-message-token-usage-cached",
+        "paperchat-chat-message-token-usage-output",
+        "paperchat-chat-message-token-usage-total",
+      ],
+    );
+    assert.isTrue(
+      usageCells
+        .filter((_, i) => i % 2 === 1)
+        .every(
+          (cell) =>
+            cell.style.textAlign === "right" && cell.textContent === "0",
+        ),
+    );
+    info.listeners.get("mouseenter")?.[0]?.({});
+    assert.equal(popup.style.display, "block");
+    assert.equal(infoButton.getAttribute("aria-expanded"), "true");
+    info.listeners.get("mouseleave")?.[0]?.({});
+    assert.equal(popup.style.display, "none");
+    infoButton.listeners.get("click")?.[0]?.({
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+    });
+    assert.equal(popup.style.display, "block");
+    info.listeners.get("keydown")?.[0]?.({
+      key: "Escape",
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+    });
+    assert.equal(popup.style.display, "none");
+    for (const listener of actions.listeners.get("mouseleave") || [])
+      listener({});
+    assert.equal(more.style.width, "22px");
     assert.equal(
       summaryButton.getAttribute("class"),
       "message-action-btn summarize-reply-note-btn",
@@ -1109,6 +1168,8 @@ describe("chat message exact navigation", function () {
 
     const actions = history.children[0].children[1];
     assert.lengthOf(actions.children, 2);
+    assert.isNull(actions.querySelector(".message-token-usage"));
+    assert.lengthOf(actions.children[1].children, 2);
     const more = actions.children[1];
     const quoteButton = more.children[1];
     more.listeners.get("mouseenter")?.[0]?.({});

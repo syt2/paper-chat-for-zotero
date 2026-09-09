@@ -1,3 +1,4 @@
+import { parseStoredTokenUsage } from "../message-token-usage";
 /**
  * MessageRowStorage - shared message-row shapes and row→ChatMessage mapping.
  *
@@ -38,6 +39,7 @@ export interface MessageStorageRow {
   source_item_keys?: string | null;
   presentation_artifacts?: string | null;
   resume_checkpoint?: string | null;
+  token_usage?: string | null;
   streaming_state?: ChatMessageStreamingState | null;
   api_only?: number | null;
   is_system_notice?: number | null;
@@ -185,6 +187,10 @@ export function mapMessageRowToChatMessage(
     readOptionalMessageColumn(row, "resume_checkpoint"),
   );
   if (resumeCheckpoint) message.resumeCheckpoint = resumeCheckpoint;
+  const usage = parseStoredTokenUsage(
+    readOptionalMessageColumn(row, "token_usage"),
+  );
+  if (usage) message.tokenUsage = usage;
   const streamingState = readOptionalMessageColumn(row, "streaming_state");
   if (streamingState) message.streamingState = streamingState;
   if (readOptionalMessageColumn(row, "api_only")) message.apiOnly = true;

@@ -66,6 +66,7 @@ const MESSAGE_ACTION_ICON_SIZE = "14px";
 const MESSAGE_HIGHLIGHT_DURATION_MS = 1050;
 const MESSAGE_HIGHLIGHT_OVERLAY_CLASS = "paperchat-message-highlight-overlay";
 type MessageActionIconName =
+  | "info"
   | "more"
   | "play"
   | "change"
@@ -1354,6 +1355,7 @@ function createMoreMessageActions(
   doc: Document,
   theme: ThemeColors,
   buttons: HTMLElement[],
+  actionRow: HTMLElement,
 ): HTMLElement {
   const group = createElement(
     doc,
@@ -1365,7 +1367,7 @@ function createMoreMessageActions(
       height: "22px",
       gap: "6px",
       flexShrink: "0",
-      overflow: "hidden",
+      overflow: "visible",
       borderRadius: "5px",
       transition: doc.defaultView?.matchMedia(
         "(prefers-reduced-motion: reduce)",
@@ -1388,17 +1390,30 @@ function createMoreMessageActions(
     group.style.width = `${expanded ? 22 + buttons.length * 28 : 22}px`;
     for (const button of buttons) {
       button.style.visibility = expanded ? "visible" : "hidden";
-      button.setAttribute("tabindex", expanded ? "0" : "-1");
+      const focusTarget =
+        button.tagName.toLowerCase() === "button"
+          ? button
+          : button.querySelector("button");
+      focusTarget?.setAttribute("tabindex", expanded ? "0" : "-1");
     }
   };
   group.appendChild(trigger);
   for (const button of buttons) group.appendChild(button);
   setExpanded(false);
   group.addEventListener("mouseenter", () => setExpanded(true));
-  group.addEventListener("mouseleave", () => setExpanded(false));
+  group.addEventListener("mouseleave", (event: MouseEvent) => {
+    if (!actionRow.contains(event.relatedTarget as Node | null))
+      setExpanded(false);
+  });
+  actionRow.addEventListener("mouseleave", () => setExpanded(false));
   group.addEventListener("focusin", () => setExpanded(true));
   group.addEventListener("focusout", (event: FocusEvent) => {
-    if (!group.contains(event.relatedTarget as Node | null)) setExpanded(false);
+    if (!actionRow.contains(event.relatedTarget as Node | null))
+      setExpanded(false);
+  });
+  actionRow.addEventListener("focusout", (event: FocusEvent) => {
+    if (!actionRow.contains(event.relatedTarget as Node | null))
+      setExpanded(false);
   });
   trigger.addEventListener("click", (event) => {
     event.preventDefault();
@@ -1411,6 +1426,134 @@ function createMoreMessageActions(
     event.stopPropagation();
     trigger.focus();
     setExpanded(false);
+  });
+  return group;
+}
+
+/** Local popup stays attached to its message and is removed with it. */
+function createTokenUsageInfo(
+  doc: Document,
+  theme: ThemeColors,
+  usage: NonNullable<ChatMessage["tokenUsage"]>,
+): HTMLElement {
+  const group = createElement(
+    doc,
+    "div",
+    {
+      position: "relative",
+      display: "inline-flex",
+      flexShrink: "0",
+    },
+    { class: "message-action-btn message-token-usage" },
+  );
+  const button = createMessageActionButton(
+    doc,
+    theme,
+    getString("chat-message-token-usage-title"),
+  );
+  button.removeAttribute("title");
+  setIconButtonImage(button, "info", "");
+  button.setAttribute("aria-expanded", "false");
+  const popup = createElement(
+    doc,
+    "div",
+    {
+      display: "none",
+      position: "absolute",
+      bottom: "100%",
+      left: "0",
+      width: "280px",
+      boxSizing: "border-box",
+      padding: "10px 12px",
+      borderRadius: "8px",
+      border: `1px solid ${theme.borderColor}`,
+      background: theme.dropdownBg,
+      color: theme.textPrimary,
+      fontSize: chatFontSize(12),
+      lineHeight: "1.6",
+      whiteSpace: "pre-line",
+      boxShadow: "0 4px 16px rgba(0,0,0,0.12)",
+      zIndex: "20",
+    },
+    { role: "tooltip" },
+  );
+  const values = createElement(doc, "div", {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr) auto",
+    columnGap: "16px",
+    rowGap: "2px",
+  });
+  const rows: Array<[string, number, boolean?]> = [
+    [getString("chat-message-token-usage-input"), usage.inputTokens],
+  ];
+  if (usage.cachedInputTokens !== undefined) {
+    rows.push([
+      getString("chat-message-token-usage-cached"),
+      usage.cachedInputTokens,
+      true,
+    ]);
+  }
+  rows.push(
+    [getString("chat-message-token-usage-output"), usage.outputTokens],
+    [getString("chat-message-token-usage-total"), usage.totalTokens],
+  );
+  for (const [label, value, muted] of rows) {
+    const name = createElement(doc, "span", { color: theme.textSecondary });
+    name.textContent = label;
+    const count = createElement(doc, "span", {
+      textAlign: "right",
+      fontVariantNumeric: "tabular-nums",
+    });
+    if (muted) {
+      name.style.color = count.style.color = theme.textMuted;
+      name.style.fontSize = count.style.fontSize = chatFontSize(11);
+    }
+    count.textContent = value.toLocaleString();
+    values.appendChild(name);
+    values.appendChild(count);
+  }
+  popup.appendChild(values);
+  const show = () => {
+    popup.style.display = "block";
+    button.setAttribute("aria-expanded", "true");
+    const anchor = group.getBoundingClientRect();
+    const boundary = group
+      .closest(".message-actions")
+      ?.parentElement?.getBoundingClientRect();
+    const left = Math.max(8, boundary?.left ?? 8);
+    const right = Math.min(
+      doc.documentElement.clientWidth - 8,
+      boundary?.right ?? doc.documentElement.clientWidth - 8,
+    );
+    const width = Math.max(0, Math.min(280, right - left));
+    popup.style.width = `${width}px`;
+    popup.style.left = `${Math.max(left, Math.min(anchor.left, right - width)) - anchor.left}px`;
+    popup.style.bottom = anchor.top >= popup.offsetHeight + 8 ? "100%" : "auto";
+    popup.style.top = anchor.top >= popup.offsetHeight + 8 ? "auto" : "100%";
+  };
+  const hide = () => {
+    popup.style.display = "none";
+    button.setAttribute("aria-expanded", "false");
+  };
+  group.appendChild(button);
+  group.appendChild(popup);
+  group.addEventListener("mouseenter", show);
+  group.addEventListener("mouseleave", hide);
+  button.addEventListener("focus", show);
+  group.addEventListener("focusout", (event: FocusEvent) => {
+    if (!group.contains(event.relatedTarget as Node | null)) hide();
+  });
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    show();
+  });
+  group.addEventListener("keydown", (event: KeyboardEvent) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      hide();
+    }
   });
   return group;
 }
@@ -1562,8 +1705,14 @@ function createMessageActions(
     actions.appendChild(rerollButton);
   }
 
+  if (msg.role === "assistant" && msg.tokenUsage) {
+    secondaryActions.push(createTokenUsageInfo(doc, theme, msg.tokenUsage));
+  }
+
   if (secondaryActions.length) {
-    actions.appendChild(createMoreMessageActions(doc, theme, secondaryActions));
+    actions.appendChild(
+      createMoreMessageActions(doc, theme, secondaryActions, actions),
+    );
   }
 
   actions.addEventListener("mouseenter", () => {

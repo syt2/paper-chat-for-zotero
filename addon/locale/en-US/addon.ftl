@@ -435,3 +435,10 @@ paperchat-chat-empty-paper-3 = Let’s read “{ $title }”. Where would you li
 paperchat-chat-translation-language = Target language
 paperchat-chat-translation-model-label = Model
 paperchat-chat-translation-language-label = Language
+
+paperchat-chat-message-token-usage-title = Token usage
+
+paperchat-chat-message-token-usage-input = Input tokens:
+paperchat-chat-message-token-usage-cached = Cached tokens:
+paperchat-chat-message-token-usage-output = Output tokens:
+paperchat-chat-message-token-usage-total = Total tokens:

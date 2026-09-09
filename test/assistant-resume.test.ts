@@ -41,6 +41,12 @@ describe("assistant phase recovery", function () {
 
   it("restores a phase after restart independently of partial-content cleanup", function () {
     const checkpoint = { content: "A\n\nB\n", reasoning: "done" };
+    const usage = {
+      inputTokens: 100,
+      outputTokens: 20,
+      totalTokens: 120,
+      cachedInputTokens: 80,
+    };
     const restored = mapMessageRowToChatMessage({
       id: "reply",
       role: "assistant",
@@ -48,8 +54,10 @@ describe("assistant phase recovery", function () {
       content: "A\nB\npartial",
       streaming_state: "interrupted",
       resume_checkpoint: JSON.stringify(checkpoint),
+      token_usage: JSON.stringify(usage),
     });
     assert.deepEqual(getAssistantResumeCheckpoint(restored), checkpoint);
+    assert.deepEqual(restored.tokenUsage, usage);
   });
 
   it("handles old replies and malformed checkpoints without replaying partial prose", function () {

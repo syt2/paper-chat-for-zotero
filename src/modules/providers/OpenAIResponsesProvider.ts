@@ -1,3 +1,4 @@
+import { normalizeTokenUsage } from "../chat/message-token-usage";
 import type {
   ChatMessage,
   HostedWebSearchCall,
@@ -1471,6 +1472,7 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     this.logResponsesUsage(requestKind, response.usage);
 
     return {
+      tokenUsage: normalizeTokenUsage(response.usage),
       content: extractResponsesText(response, {
         includeSources: !isMaxOutputTokensIncomplete(response),
       }),
@@ -1519,6 +1521,8 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
       }
       this.commitResponseState(plan, completed, forceStateless);
       this.logResponsesUsage("responses-stream", completed.usage);
+      const usage = normalizeTokenUsage(completed.usage);
+      if (usage) callbacks.onUsage?.(usage);
       callbacks.onComplete(
         extractResponsesText(completed, {
           includeSources: !isMaxOutputTokensIncomplete(completed),

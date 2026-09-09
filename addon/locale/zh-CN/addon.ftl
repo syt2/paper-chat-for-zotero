@@ -435,3 +435,10 @@ paperchat-chat-empty-paper-3 = 一起读读《{ $title }》，想从哪里开始
 paperchat-chat-translation-language = 目标语言
 paperchat-chat-translation-model-label = 模型
 paperchat-chat-translation-language-label = 语言
+
+paperchat-chat-message-token-usage-title = Token 用量
+
+paperchat-chat-message-token-usage-input = 输入 Token:
+paperchat-chat-message-token-usage-cached = 缓存命中 Token:
+paperchat-chat-message-token-usage-output = 输出 Token:
+paperchat-chat-message-token-usage-total = 合计 Token:

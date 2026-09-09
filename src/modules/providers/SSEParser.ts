@@ -1,3 +1,7 @@
+import {
+  normalizeTokenUsage,
+  type MessageTokenUsage,
+} from "../chat/message-token-usage";
 /**
  * SSEParser - Unified Server-Sent Events stream parser
  *
@@ -15,6 +19,7 @@ export type SSEFormat = "openai" | "anthropic" | "gemini";
 // ============ 基础回调（纯文本流式） ============
 
 export interface SSEParserCallbacks {
+  onUsage?: (usage: MessageTokenUsage) => void;
   onText: (text: string) => void;
   onReasoning?: (text: string) => void;
   onDone: () => void;
@@ -32,6 +37,7 @@ export type SSEToolCallingEvent =
   | { type: "error"; error: Error };
 
 export interface SSEToolCallingCallbacks {
+  onUsage?: (usage: MessageTokenUsage) => void;
   onEvent: (event: SSEToolCallingEvent) => void;
 }
 
@@ -280,6 +286,7 @@ export async function parseSSEStream(
   const extractContent = contentExtractors[format];
   const decoder = new TextDecoder();
   let buffer = "";
+  let rawUsage: Record<string, unknown> = {};
 
   try {
     while (true) {
@@ -303,6 +310,10 @@ export async function parseSSEStream(
 
         try {
           const parsed = JSON.parse(data);
+          const usage =
+            parsed.usage ?? parsed.message?.usage ?? parsed.usageMetadata;
+          if (usage && typeof usage === "object")
+            rawUsage = { ...rawUsage, ...usage };
 
           // For OpenAI format, check reasoning_content before regular content
           if (format === "openai" && onReasoning) {
@@ -334,6 +345,8 @@ export async function parseSSEStream(
         }
       }
     }
+    const usage = normalizeTokenUsage(rawUsage, format);
+    if (usage) callbacks.onUsage?.(usage);
     onDone();
   } catch (error) {
     if (onError) {
@@ -362,6 +375,7 @@ export async function parseSSEStreamWithToolCalling(
       : parseAnthropicToolCallingEvents;
   const decoder = new TextDecoder();
   let buffer = "";
+  let rawUsage: Record<string, unknown> = {};
   let hasReceivedDone = false;
   const startedToolCallIndexes = new Set<number>();
 
@@ -398,6 +412,10 @@ export async function parseSSEStreamWithToolCalling(
 
         try {
           const parsed = JSON.parse(data);
+          const usage =
+            parsed.usage ?? parsed.message?.usage ?? parsed.usageMetadata;
+          if (usage && typeof usage === "object")
+            rawUsage = { ...rawUsage, ...usage };
           const events = parseEvents(parsed);
           for (const event of events) {
             if (event.type === "tool_call_start") {
@@ -430,6 +448,9 @@ export async function parseSSEStreamWithToolCalling(
         }
       }
     }
+
+    const usage = normalizeTokenUsage(rawUsage, format);
+    if (usage) callbacks.onUsage?.(usage);
 
     // 如果流结束但没有收到 done 事件，发送一个
     if (!hasReceivedDone) {

@@ -5007,6 +5007,7 @@ describe("agent runtime plan semantics", function () {
     };
     session.messages.push(assistantMessage);
     const streamingUpdates: string[] = [];
+    let persistedUsage: ChatMessage["tokenUsage"];
     const progressEvents: AgentRuntimeEvent[] = [];
     let paperSource: { itemKey?: string; libraryID?: number } | undefined;
     const persistedPresentationArtifacts: Array<
@@ -5030,8 +5031,10 @@ describe("agent runtime plan semantics", function () {
           _reasoning?: string,
           options?: {
             presentationArtifacts?: ChatMessage["presentationArtifacts"];
+            tokenUsage?: ChatMessage["tokenUsage"];
           },
         ) => {
+          persistedUsage = options?.tokenUsage;
           if (options?.presentationArtifacts?.length) {
             persistedPresentationArtifacts.push(
               structuredClone(options.presentationArtifacts),
@@ -5079,6 +5082,24 @@ describe("agent runtime plan semantics", function () {
         createExecutionBatches: (requests: any[]) => [requests],
         executeBatch: async (requests: any[]) => {
           paperSource = requests[0].executionContext.paperSource;
+          await requests[0].executionContext.presentationPlanner({
+            intent: { sourceItemKey: "ITEM-1" },
+            paper: {
+              metadata: { title: "Test" },
+              sections: [],
+              fullText: "Evidence",
+              pages: [],
+              pageCount: 0,
+            },
+          });
+          await requests[0].executionContext.presentationVisualReviewer({
+            stage: "draft",
+            title: "Deck",
+            outline: "Test",
+            previewSlides: ["data:image/png;base64,AAAA"],
+          });
+          assert.equal(assistantMessage.tokenUsage?.totalTokens, 2500);
+
           await requests[0].executionContext.presentationProgress({
             phase: "planning",
             message: "正在规划 6 页结构",
@@ -5160,11 +5181,40 @@ describe("agent runtime plan semantics", function () {
         type: "paperchat",
         defaultModel: "gpt-5.6-terra",
       },
-      chatCompletionWithTools: async () => {
+      chatCompletionWithTools: async (
+        messages: ChatMessage[],
+        _tools: unknown,
+        _signal: unknown,
+        options: any,
+      ) => {
+        if (options?.stateless) {
+          return {
+            tokenUsage: {
+              inputTokens: 1000,
+              outputTokens: 200,
+              totalTokens: 1200,
+              cachedInputTokens: 800,
+            },
+            content: JSON.stringify(
+              messages[0].content.includes("visual quality gate")
+                ? { verdict: "pass", summary: "OK" }
+                : {
+                    title: "Deck",
+                    sourceItemKey: "ITEM-1",
+                    slides: [{ title: "Evidence" }],
+                  },
+            ),
+          };
+        }
         providerCalls += 1;
         return providerCalls === 1
           ? {
               content: "",
+              tokenUsage: {
+                inputTokens: 80,
+                outputTokens: 20,
+                totalTokens: 100,
+              },
               toolCalls: [
                 {
                   id: "presentation-progress-call",
@@ -5176,7 +5226,14 @@ describe("agent runtime plan semantics", function () {
                 },
               ],
             }
-          : { content: "PPT 已生成。" };
+          : {
+              content: "PPT 已生成。",
+              tokenUsage: {
+                inputTokens: 80,
+                outputTokens: 20,
+                totalTokens: 100,
+              },
+            };
       },
     };
 
@@ -5206,6 +5263,13 @@ describe("agent runtime plan semantics", function () {
         }),
       });
 
+      assert.deepEqual(assistantMessage.tokenUsage, {
+        inputTokens: 2160,
+        outputTokens: 440,
+        totalTokens: 2600,
+        cachedInputTokens: 1600,
+      });
+      assert.deepEqual(persistedUsage, assistantMessage.tokenUsage);
       assert.isTrue(
         formattedCards.some(
           (card) =>
@@ -5539,13 +5603,21 @@ describe("agent runtime plan semantics", function () {
     ) as any;
     const capturedMessages: ChatMessage[][] = [];
     let callCount = 0;
+    const receivedUsage: unknown[] = [];
+    const tokenUsage = {
+      inputTokens: 1000,
+      outputTokens: 200,
+      totalTokens: 1200,
+      cachedInputTokens: 800,
+    };
     const provider = {
       chatCompletionWithTools: async (messages: ChatMessage[]) => {
         callCount += 1;
         capturedMessages.push(messages);
         return callCount === 1
-          ? { content: "not-json" }
+          ? { content: "not-json", tokenUsage }
           : {
+              tokenUsage,
               content: JSON.stringify({
                 title: "Repaired deck",
                 sourceItemKey: "SBZ2M99R",
@@ -5557,6 +5629,8 @@ describe("agent runtime plan semantics", function () {
     const planner = runtime.createPresentationPlanner(
       provider,
       async (operation: () => Promise<unknown>) => operation(),
+      undefined,
+      (usage: unknown) => receivedUsage.push(usage),
     );
 
     const result = await planner({
@@ -5571,6 +5645,7 @@ describe("agent runtime plan semantics", function () {
     });
 
     assert.equal(callCount, 2);
+    assert.deepEqual(receivedUsage, [tokenUsage, tokenUsage]);
     assert.equal(result.title, "Repaired deck");
     assert.equal(
       capturedMessages[0][0].content,
@@ -5601,6 +5676,13 @@ describe("agent runtime plan semantics", function () {
     let capturedOptions: Record<string, unknown> | undefined;
     const capturedMessageSnapshots: ChatMessage[][] = [];
     let callCount = 0;
+    const receivedUsage: unknown[] = [];
+    const tokenUsage = {
+      inputTokens: 1000,
+      outputTokens: 200,
+      totalTokens: 1200,
+      cachedInputTokens: 800,
+    };
     const provider = {
       chatCompletionWithTools: async (
         messages: ChatMessage[],
@@ -5611,12 +5693,14 @@ describe("agent runtime plan semantics", function () {
         callCount += 1;
         capturedMessageSnapshots.push(messages);
         capturedOptions = options;
-        return { content: "", suppressedToolCall: true };
+        return { content: "", suppressedToolCall: true, tokenUsage };
       },
     };
     const reviewer = runtime.createPresentationVisualReviewer(
       provider,
       async (operation: () => Promise<unknown>) => operation(),
+      undefined,
+      (usage: unknown) => receivedUsage.push(usage),
     );
 
     let rejected: unknown;
@@ -5633,6 +5717,7 @@ describe("agent runtime plan semantics", function () {
     assert.instanceOf(rejected, Error);
     assert.match((rejected as Error).message, /tool call instead of JSON/);
     assert.equal(callCount, 2);
+    assert.deepEqual(receivedUsage, [tokenUsage, tokenUsage]);
     assert.deepEqual(capturedOptions, {
       toolChoice: "none",
       stateless: true,
