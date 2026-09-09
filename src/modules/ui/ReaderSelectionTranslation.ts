@@ -1,3 +1,7 @@
+import {
+  translationLanguages,
+  normalizeTranslationLanguage,
+} from "./SelectionTranslationLanguage";
 import type { SelectionTranslationContext } from "./SelectionTranslationContext";
 import { getPref, setPref } from "../../utils/prefs";
 import { getTranslationModelOptions } from "./SelectionTranslationModels";
@@ -56,7 +60,7 @@ export function showReaderSelectionTranslation(
     display: "flex",
     alignItems: "center",
     padding: "7px 10px",
-    gap: "8px",
+    gap: "4px",
     flexShrink: "0",
     cursor: "grab",
     userSelect: "none",
@@ -66,6 +70,7 @@ export function showReaderSelectionTranslation(
   title.textContent = getString("chat-reader-translate");
   title.style.flexShrink = "0";
   title.style.opacity = ".65";
+  title.style.marginRight = "4px";
   const modelSelect = doc.createElement("select");
   modelSelect.setAttribute("aria-label", getString("chat-translation-model"));
   Object.assign(modelSelect.style, {
@@ -90,6 +95,27 @@ export function showReaderSelectionTranslation(
     modelSelect.appendChild(option);
   }
   modelSelect.value = getPref("translationModel") || "auto";
+  const languageSelect = doc.createElement("select");
+  languageSelect.setAttribute(
+    "aria-label",
+    getString("chat-translation-language"),
+  );
+  languageSelect.style.cssText = modelSelect.style.cssText;
+  languageSelect.style.flex = "0 1 88px";
+  languageSelect.style.minWidth = "64px";
+  languageSelect.style.marginRight = "0";
+  for (const item of [
+    { value: "auto", label: getString("pref-translation-auto") },
+    ...translationLanguages,
+  ]) {
+    const option = doc.createElement("option");
+    option.value = item.value;
+    option.textContent = item.label;
+    languageSelect.appendChild(option);
+  }
+  languageSelect.value = normalizeTranslationLanguage(
+    getPref("translationLanguage"),
+  );
   const close = doc.createElement("button");
   close.type = "button";
   close.textContent = "×";
@@ -103,9 +129,33 @@ export function showReaderSelectionTranslation(
     height: "24px",
     padding: "0",
     borderRadius: "6px",
-    fontSize: "18px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    boxSizing: "border-box",
+    appearance: "none",
+    font: "18px/1 system-ui, sans-serif",
   });
-  header.append(title, modelSelect, close);
+  const modelLabel = doc.createElement("span");
+  modelLabel.textContent = getString("chat-translation-model-label");
+  const languageLabel = doc.createElement("span");
+  languageLabel.textContent = getString("chat-translation-language-label");
+  for (const label of [modelLabel, languageLabel]) {
+    label.style.fontSize = "11px";
+    label.style.opacity = ".65";
+    label.style.whiteSpace = "nowrap";
+    label.style.flexShrink = "0";
+  }
+  languageLabel.style.marginLeft = "4px";
+  close.style.flexShrink = "0";
+  header.append(
+    title,
+    modelLabel,
+    modelSelect,
+    languageLabel,
+    languageSelect,
+    close,
+  );
   const body = doc.createElement("div");
   Object.assign(body.style, {
     padding: "0 12px 12px",
@@ -166,7 +216,8 @@ export function showReaderSelectionTranslation(
     if (
       event.button !== 0 ||
       close.contains(event.target as Node) ||
-      modelSelect.contains(event.target as Node)
+      modelSelect.contains(event.target as Node) ||
+      languageSelect.contains(event.target as Node)
     )
       return;
     event.preventDefault();
@@ -229,6 +280,7 @@ export function showReaderSelectionTranslation(
     body.replaceChildren(content, loading);
     panel.setAttribute("aria-busy", "true");
     modelSelect.title = modelSelect.selectedOptions[0]?.textContent || "";
+    languageSelect.title = languageSelect.selectedOptions[0]?.textContent || "";
     place();
     void streamSelectionTranslation(
       text,
@@ -262,6 +314,10 @@ export function showReaderSelectionTranslation(
   };
   modelSelect.addEventListener("change", () => {
     setPref("translationModel", modelSelect.value);
+    translate();
+  });
+  languageSelect.addEventListener("change", () => {
+    setPref("translationLanguage", languageSelect.value);
     translate();
   });
   translate();

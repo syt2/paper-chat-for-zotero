@@ -1,3 +1,4 @@
+import { getTranslationTargetLocale } from "./SelectionTranslationLanguage";
 import {
   normalizeTranslationContext,
   type SelectionTranslationContext,
@@ -56,6 +57,10 @@ export async function streamSelectionTranslation(
 ): Promise<void> {
   if (signal.aborted) return;
   const reference = normalizeTranslationContext(context);
+  const locale = getTranslationTargetLocale(
+    getPref("translationLanguage"),
+    Zotero.locale,
+  );
   const manager = getProviderManager();
   const active = manager.getActiveProvider();
   if (!active)
@@ -99,6 +104,7 @@ export async function streamSelectionTranslation(
             usedPaperchat ||= paperchat;
           },
           reference,
+          locale,
         );
         return;
       } catch (error) {
@@ -141,8 +147,8 @@ async function translateWithProvider(
   onText: (text: string) => void,
   onRequest: () => void,
   context: SelectionTranslationContext,
+  locale: string,
 ): Promise<void> {
-  const locale = Zotero.locale || "en-US";
   // Include runtime generation settings so a model/configuration change cannot
   // reuse a result from a different setup. This key stays only in memory.
   const cacheKey = JSON.stringify([

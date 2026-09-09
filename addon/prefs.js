@@ -51,3 +51,5 @@ pref("agentMaxPlanningIterations", 30); // 单个 agent turn 的最大 planning 
 
 // Automatic uses the API translation default for PaperChat, otherwise the chat model.
 pref("translationModel", "auto");
+
+pref("translationLanguage", "auto");

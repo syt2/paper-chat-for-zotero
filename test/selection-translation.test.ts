@@ -1,3 +1,4 @@
+import { getTranslationTargetLocale } from "../src/modules/ui/SelectionTranslationLanguage.ts";
 import { getTranslationModelOptions } from "../src/modules/ui/SelectionTranslationModels.ts";
 import { getModelRoutingDefaults } from "../src/modules/preferences/ModelsFetcher.ts";
 import { assert } from "chai";
@@ -60,6 +61,45 @@ describe("reader selection translation", function () {
         },
       }) as any;
   }
+
+  it("uses the UI language for automatic or unavailable language choices", () => {
+    assert.equal(getTranslationTargetLocale("auto", "zh-TW"), "zh-TW");
+    assert.equal(getTranslationTargetLocale(undefined, "ja"), "ja");
+    assert.equal(getTranslationTargetLocale("invalid", "en-US"), "en-US");
+    assert.equal(getTranslationTargetLocale("zh-CN", "en-US"), "zh-CN");
+  });
+
+  it("uses the chosen target language and keeps cached translations separate", async () => {
+    let language = "ja";
+    runtime.Zotero.Prefs.get = (key: string) =>
+      key.endsWith("translationLanguage") ? language : undefined;
+    const calls: string[] = [];
+    getProviderManager().createIsolatedActiveProvider = () =>
+      ({
+        config: { type: "openai", id: "language-cache-test" },
+        isReady: () => true,
+        streamChatCompletion: async (messages: any[], cb: StreamCallbacks) => {
+          assert.include(messages[0].content, "locale " + language + ",");
+          calls.push(language);
+          cb.onComplete(language + " translation");
+        },
+      }) as any;
+    const results: string[] = [];
+    for (const target of ["ja", "en", "ja"]) {
+      language = target;
+      await streamSelectionTranslation(
+        "language-cache-passage",
+        new AbortController().signal,
+        (text) => results.push(text),
+      );
+    }
+    assert.deepEqual(calls, ["ja", "en"]);
+    assert.deepEqual(results, [
+      "ja translation",
+      "en translation",
+      "ja translation",
+    ]);
+  });
 
   it("keeps the selected passage intact and targets the UI locale", function () {
     const messages = buildSelectionTranslationMessages(

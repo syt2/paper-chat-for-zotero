@@ -431,3 +431,7 @@ paperchat-chat-empty-home-3 = 有什么问题想一起看看？
 paperchat-chat-empty-paper-1 = 你想了解《{ $title }》的哪些内容？
 paperchat-chat-empty-paper-2 = 关于《{ $title }》，你有什么想问的？
 paperchat-chat-empty-paper-3 = 一起读读《{ $title }》，想从哪里开始？
+
+paperchat-chat-translation-language = 目标语言
+paperchat-chat-translation-model-label = 模型
+paperchat-chat-translation-language-label = 语言

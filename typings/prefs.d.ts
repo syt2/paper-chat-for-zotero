@@ -43,6 +43,7 @@ declare namespace _ZoteroTypes {
       "webSearchProvider": string;
       "agentMaxPlanningIterations": number;
       "translationModel": string;
+      "translationLanguage": string;
     };
   }
 }
