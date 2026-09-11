@@ -26,9 +26,9 @@ import {
   formatModelLabel,
   getModelRatios,
   getModelRoutingMeta,
+  getSelectablePaperchatModels,
 } from "./ModelsFetcher";
 import { clearElement } from "./utils";
-import { isEmbeddingModel } from "../embedding/providers/PaperChatEmbedding";
 import { getString } from "../../utils/locale";
 import {
   bindPaperChatNoticeEvents,
@@ -146,35 +146,6 @@ function saveTierState(state: PaperChatTierState): void {
   setPref("paperchatTierState", JSON.stringify(state));
 }
 
-function getAvailableChatModels(
-  config?: PaperChatProviderConfig,
-  models?: string[],
-): string[] {
-  let modelList = models;
-  if (!modelList) {
-    const cachedModels = getPref("paperchatModelsCache") as string;
-    if (cachedModels) {
-      try {
-        modelList = JSON.parse(cachedModels) as string[];
-      } catch (error) {
-        ztoolkit.log(
-          "[Preferences] Invalid paperchatModelsCache, falling back to provider config:",
-          error,
-        );
-        modelList = undefined;
-      }
-    }
-  }
-  if (
-    !modelList &&
-    config?.availableModels &&
-    config.availableModels.length > 0
-  ) {
-    modelList = config.availableModels;
-  }
-  return (modelList || []).filter((model) => !isEmbeddingModel(model));
-}
-
 function populateTierOverridePopup(
   doc: Document,
   tier: PaperChatTier,
@@ -205,7 +176,9 @@ function populateTierOverridePopup(
 
   const entry = state.tiers[tier];
   select.value =
-    entry.mode === "manual" && entry.modelId ? entry.modelId : "auto";
+    entry.mode === "manual" && entry.modelId && models.includes(entry.modelId)
+      ? entry.modelId
+      : "auto";
 }
 
 /**
@@ -330,7 +303,7 @@ function clearPaperChatBaseUrlOverride(doc: Document): void {
 }
 
 /**
- * Populate PaperChat tier and override dropdowns from cache, defaults, or API response
+ * Populate PaperChat tier and override dropdowns from the key/routing intersection.
  */
 export function populatePaperchatModels(
   doc: Document,
@@ -338,9 +311,6 @@ export function populatePaperchatModels(
   saveToCache: boolean = false,
 ): void {
   const providerManager = getProviderManager();
-  const config = providerManager.getProviderConfig(
-    "paperchat",
-  ) as PaperChatProviderConfig;
   const tierSelect = doc.getElementById(
     "pref-paperchat-tier",
   ) as unknown as XULMenuListElement | null;
@@ -349,7 +319,7 @@ export function populatePaperchatModels(
     return;
   }
 
-  const chatModels = getAvailableChatModels(config, models);
+  const chatModels = getSelectablePaperchatModels(models);
 
   if (saveToCache && models) {
     setPref("paperchatModelsCache", JSON.stringify(models));
@@ -390,9 +360,7 @@ export function savePaperchatConfig(doc: Document): void {
   ) as HTMLTextAreaElement;
 
   const state = loadTierState();
-  const availableModels = getAvailableChatModels(
-    providerManager.getProviderConfig("paperchat") as PaperChatProviderConfig,
-  );
+  const availableModels = getSelectablePaperchatModels();
   const tierPools = deriveTierPools(
     availableModels,
     getModelRatios(),

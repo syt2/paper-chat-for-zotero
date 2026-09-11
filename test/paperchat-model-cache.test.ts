@@ -1,10 +1,16 @@
 import { assert } from "chai";
+import { getTranslationModelOptions } from "../src/modules/ui/SelectionTranslationModels.ts";
+import {
+  getProviderManager,
+  destroyProviderManager,
+} from "../src/modules/providers/ProviderManager.ts";
 import {
   clearPaperchatModelCaches,
   fetchPaperchatRoutingMeta,
   getModelRatios,
   getModelRoutingDefaults,
   getModelRoutingMeta,
+  getSelectablePaperchatModels,
   loadCachedRatios,
 } from "../src/modules/preferences/ModelsFetcher";
 
@@ -39,12 +45,160 @@ describe("PaperChat model cache", function () {
       },
     };
     (globalThis as any).ztoolkit = { log: () => undefined };
+    loadCachedRatios();
   });
 
   afterEach(function () {
+    clearPaperchatModelCaches();
     (globalThis as any).Zotero = originalZotero;
     (globalThis as any).ztoolkit = originalZtoolkit;
     (globalThis as any).fetch = originalFetch;
+  });
+
+  it("lists only the key/routing intersection without losing raw key models", function () {
+    const raw = ["model-a", "key-only", "text-embedding-3-small", "model-a"];
+    prefStore.set(`${PREFS_PREFIX}paperchatModelsCache`, JSON.stringify(raw));
+    prefStore.set(
+      `${PREFS_PREFIX}paperchatRoutingConfigCache`,
+      JSON.stringify({
+        "model-a": {},
+        "route-only": {},
+        "text-embedding-3-small": {},
+      }),
+    );
+    loadCachedRatios();
+    assert.deepEqual(getSelectablePaperchatModels(), ["model-a"]);
+    assert.deepEqual(getSelectablePaperchatModels(["route-only", "key-only"]), [
+      "route-only",
+    ]);
+    assert.equal(
+      prefStore.get(`${PREFS_PREFIX}paperchatModelsCache`),
+      JSON.stringify(raw),
+    );
+  });
+
+  it("uses an empty intersection when either source is missing or empty", function () {
+    clearPaperchatModelCaches();
+    assert.deepEqual(getSelectablePaperchatModels(["model-a"]), []);
+    prefStore.set(
+      `${PREFS_PREFIX}paperchatRoutingConfigCache`,
+      '{"model-a":{}}',
+    );
+    loadCachedRatios();
+    assert.deepEqual(getSelectablePaperchatModels([]), []);
+    prefStore.set(`${PREFS_PREFIX}paperchatModelsCache`, "invalid");
+    assert.deepEqual(getSelectablePaperchatModels(), []);
+  });
+
+  it("handles malformed caches and entries without exposing invalid models", function () {
+    for (const cached of ["invalid", "null", "[]", '"model-a"', "42"]) {
+      prefStore.set(`${PREFS_PREFIX}paperchatRoutingConfigCache`, cached);
+      loadCachedRatios();
+      assert.deepEqual(getSelectablePaperchatModels(), [], cached);
+      assert.deepEqual(getModelRoutingMeta(), {}, cached);
+    }
+
+    prefStore.set(
+      `${PREFS_PREFIX}paperchatRoutingConfigCache`,
+      '{"model-a":{},"broken":null,"array":[],"scalar":true,"":{}}',
+    );
+    prefStore.set(
+      `${PREFS_PREFIX}paperchatModelsCache`,
+      '["model-a",null,42,"broken","array","scalar","","toString"]',
+    );
+    // The list can also be read before the in-memory routing cache is loaded.
+    assert.deepEqual(getSelectablePaperchatModels(), ["model-a"]);
+    loadCachedRatios();
+    assert.deepEqual(getSelectablePaperchatModels(), ["model-a"]);
+    for (const cached of ["null", "{}", '"model-a"']) {
+      prefStore.set(`${PREFS_PREFIX}paperchatModelsCache`, cached);
+      assert.deepEqual(getSelectablePaperchatModels(), [], cached);
+    }
+  });
+
+  it("removes stale choices after a successful empty routing refresh", async function () {
+    assert.deepEqual(getSelectablePaperchatModels(), ["model-a"]);
+    (globalThis as any).fetch = async () =>
+      new Response(JSON.stringify({ models: {} }), { status: 200 });
+    await fetchPaperchatRoutingMeta();
+    assert.deepEqual(getSelectablePaperchatModels(), []);
+    loadCachedRatios();
+    assert.deepEqual(getSelectablePaperchatModels(), []);
+  });
+
+  it("keeps route entries without optional metadata and cached routes on network failure", async function () {
+    prefStore.set(`${PREFS_PREFIX}paperchatModelsCache`, '["plain","removed"]');
+    (globalThis as any).fetch = async () =>
+      new Response(
+        JSON.stringify({
+          models: { plain: {}, broken: null },
+        }),
+        { status: 200 },
+      );
+    await fetchPaperchatRoutingMeta();
+    assert.deepEqual(getSelectablePaperchatModels(), ["plain"]);
+    (globalThis as any).fetch = async () => {
+      throw new Error("offline");
+    };
+    await fetchPaperchatRoutingMeta();
+    assert.deepEqual(getSelectablePaperchatModels(), ["plain"]);
+    loadCachedRatios();
+    assert.deepEqual(getSelectablePaperchatModels(), ["plain"]);
+    clearPaperchatModelCaches();
+    assert.deepEqual(getSelectablePaperchatModels(), []);
+  });
+
+  it("filters translation choices without readding a disallowed default or changing other providers", function () {
+    loadCachedRatios();
+    const previousAddon = (globalThis as any).addon;
+    (globalThis as any).addon = {
+      data: {
+        locale: {
+          current: {
+            formatMessagesSync: ([request]: any[]) => [
+              { value: request.id, attributes: null },
+            ],
+          },
+        },
+      },
+    };
+    destroyProviderManager();
+    try {
+      getProviderManager().getAllConfigs = () =>
+        [
+          {
+            id: "paperchat",
+            type: "paperchat",
+            name: "PaperChat",
+            enabled: true,
+            availableModels: ["model-a", "key-only"],
+            defaultModel: "key-only",
+          },
+          {
+            id: "custom",
+            type: "openai-compatible",
+            name: "Custom",
+            enabled: true,
+            availableModels: ["custom-model"],
+            defaultModel: "custom-model",
+          },
+        ] as any;
+      prefStore.set(
+        `${PREFS_PREFIX}translationModel`,
+        JSON.stringify({ providerId: "paperchat", model: "key-only" }),
+      );
+      assert.deepEqual(
+        getTranslationModelOptions().map((option) => option.value),
+        [
+          "auto",
+          JSON.stringify({ providerId: "paperchat", model: "model-a" }),
+          JSON.stringify({ providerId: "custom", model: "custom-model" }),
+        ],
+      );
+    } finally {
+      destroyProviderManager();
+      (globalThis as any).addon = previousAddon;
+    }
   });
 
   it("clears persisted and in-memory model metadata", function () {

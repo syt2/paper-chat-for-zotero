@@ -216,15 +216,9 @@ export function parseModelRoutingConfig(
       }
     }
 
-    if (
-      meta.tierCode !== undefined ||
-      meta.priority !== undefined ||
-      meta.contextWindow !== undefined ||
-      meta.maxOutput !== undefined ||
-      meta.apiCapabilities !== undefined
-    ) {
-      routingMeta[modelName] = meta;
-    }
+    // Presence in the routing file also defines whether a model is listed,
+    // even when it has no optional routing/capability overrides.
+    routingMeta[modelName] = meta;
   }
 
   return routingMeta;

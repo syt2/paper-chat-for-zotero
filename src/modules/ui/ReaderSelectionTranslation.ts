@@ -95,6 +95,10 @@ export function showReaderSelectionTranslation(
     modelSelect.appendChild(option);
   }
   modelSelect.value = getPref("translationModel") || "auto";
+  if (!modelSelect.value) {
+    modelSelect.value = "auto";
+    setPref("translationModel", "auto");
+  }
   const languageSelect = doc.createElement("select");
   languageSelect.setAttribute(
     "aria-label",

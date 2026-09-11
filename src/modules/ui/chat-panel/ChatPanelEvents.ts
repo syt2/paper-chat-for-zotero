@@ -36,6 +36,7 @@ import {
   formatModelLabel,
   getModelRatios,
   getModelRoutingMeta,
+  getSelectablePaperchatModels,
 } from "../../preferences/ModelsFetcher";
 import {
   PAPERCHAT_TIERS,
@@ -2906,7 +2907,10 @@ function populateModelDropdown(
 
   for (const provider of providers) {
     const config = provider.config;
-    const models = config.availableModels || [];
+    const models =
+      config.id === "paperchat"
+        ? getSelectablePaperchatModels()
+        : config.availableModels || [];
     const isActiveProvider = config.id === activeProviderId;
 
     // Provider section header

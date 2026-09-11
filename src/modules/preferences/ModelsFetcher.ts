@@ -3,6 +3,7 @@
  */
 
 import { parsePaperChatEmbeddingConfig } from "../embedding/PaperChatEmbeddingConfig";
+import { isEmbeddingModel } from "../embedding/providers/PaperChatEmbedding";
 
 import { getString } from "../../utils/locale";
 import { getPref, setPref } from "../../utils/prefs";
@@ -49,6 +50,52 @@ export function getModelRoutingMeta(): Record<
   PaperChatModelRoutingMeta
 > {
   return paperchatModelRoutingMeta;
+}
+
+function readCachedModelRoutingMeta(): Record<
+  string,
+  PaperChatModelRoutingMeta
+> {
+  try {
+    const cached = JSON.parse(getPref("paperchatRoutingConfigCache") || "{}");
+    if (cached && typeof cached === "object" && !Array.isArray(cached)) {
+      return Object.fromEntries(
+        Object.entries(cached).filter(
+          ([, meta]) =>
+            meta && typeof meta === "object" && !Array.isArray(meta),
+        ),
+      ) as Record<string, PaperChatModelRoutingMeta>;
+    }
+  } catch {
+    // A missing or invalid routing cache cannot authorize selectable models.
+  }
+  return {};
+}
+
+/** User-selectable models must be present in both the key list and routing config. */
+export function getSelectablePaperchatModels(
+  models?: readonly string[],
+): string[] {
+  let keyModels: unknown = models;
+  if (keyModels === undefined) {
+    try {
+      keyModels = JSON.parse(getPref("paperchatModelsCache") || "[]");
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(keyModels)) return [];
+  let routing = getModelRoutingMeta();
+  if (Object.keys(routing).length === 0) {
+    routing = readCachedModelRoutingMeta();
+  }
+  return [...new Set(keyModels)].filter(
+    (model): model is string =>
+      typeof model === "string" &&
+      model.length > 0 &&
+      !isEmbeddingModel(model) &&
+      Object.prototype.hasOwnProperty.call(routing, model),
+  );
 }
 
 export function getPaperchatModelCacheGeneration(): number {
@@ -140,20 +187,12 @@ export function loadCachedRatios(): void {
     }
   }
 
-  paperchatModelRoutingMeta = {};
-  const cachedRoutingMeta = getPref("paperchatRoutingConfigCache") as string;
-  if (cachedRoutingMeta) {
-    try {
-      paperchatModelRoutingMeta = JSON.parse(cachedRoutingMeta);
-      ztoolkit.log(
-        "[Preferences] Loaded cached routing metadata for",
-        Object.keys(paperchatModelRoutingMeta).length,
-        "models",
-      );
-    } catch {
-      // ignore parse error
-    }
-  }
+  paperchatModelRoutingMeta = readCachedModelRoutingMeta();
+  ztoolkit.log(
+    "[Preferences] Loaded cached routing metadata for",
+    Object.keys(paperchatModelRoutingMeta).length,
+    "models",
+  );
 
   paperchatModelRoutingDefaults = {};
   const cachedRoutingDefaults = getPref(
