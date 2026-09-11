@@ -1,6 +1,6 @@
 {
   "name": "paper-chat",
-  "version": "3.4.3",
+  "version": "3.4.4",
   "description": "AI research assistant: chat with papers, translate selections, find literature, and generate notes and slides.",
   "config": {
     "addonName": "AI Paper Chat",
