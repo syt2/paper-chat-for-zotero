@@ -1,7 +1,7 @@
 {
   "name": "paper-chat",
   "version": "3.4.3",
-  "description": "Zotero Paper Chat - Chat with AI about your PDF documents in Zotero",
+  "description": "AI research assistant: chat with papers, translate selections, find literature, and generate notes and slides.",
   "config": {
     "addonName": "AI Paper Chat",
     "addonID": "paper-chat@zotero.plugin",
