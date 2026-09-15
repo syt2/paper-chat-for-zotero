@@ -452,6 +452,19 @@ function convertMessagesToResponsesInput(
  * Other items, especially web search actions and encrypted reasoning, pass through.
  */
 function toReplayInputItem(item: ResponsesInputItem): ResponsesInputItem {
+  // Some Responses-compatible gateways reject optional lifecycle status on
+  // replayed messages and tool items. It is output metadata, so omit it while
+  // retaining semantic fields such as phase and encrypted_content.
+  if (
+    item.type === "message" ||
+    item.type === "reasoning" ||
+    item.type === "function_call" ||
+    item.type === "function_call_output"
+  ) {
+    const input = { ...item };
+    delete input.status;
+    return input;
+  }
   if (item.type !== "image_generation_call") return item;
   return {
     id: item.id,
