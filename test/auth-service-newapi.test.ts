@@ -569,6 +569,7 @@ describe("AuthService NewAPI authentication", function () {
     manager.environmentGeneration = 0;
     manager.authService = {
       hasDashboardRefreshCookie: () => false,
+      hasZoteroBridgeSession: () => false,
       clearSessionCookie: () => undefined,
       login: async () => {
         calls++;
@@ -1203,6 +1204,7 @@ describe("AuthService NewAPI authentication", function () {
     manager.state = { userId: null, sessionToken: null };
     manager.authService = {
       hasDashboardRefreshCookie: () => true,
+      hasZoteroBridgeSession: () => false,
       refreshDashboardSession: () => {
         refreshCalls += 1;
         return new Promise((resolve) => {
@@ -1261,6 +1263,7 @@ describe("AuthService NewAPI authentication", function () {
     manager.state = { userId: 123, sessionToken: null };
     manager.authService = {
       hasDashboardRefreshCookie: () => true,
+      hasZoteroBridgeSession: () => false,
       refreshDashboardSession: async () => ({
         success: false,
         message: "Too Many Requests",
@@ -1276,6 +1279,71 @@ describe("AuthService NewAPI authentication", function () {
 
     assert.isFalse(recovered);
     assert.equal(loginCalls, 0);
+  });
+
+  it("does not fall back to a saved password when the Zotero bridge is transiently unavailable", async function () {
+    const manager = Object.create(AuthManager.prototype) as any;
+    let loginCalls = 0;
+    manager.environmentGeneration = 0;
+    manager.autoReloginAttempt = null;
+    manager.passwordLoginBlockedUntil = 0;
+    manager.state = { userId: 123, sessionToken: null };
+    manager.authService = {
+      hasDashboardRefreshCookie: () => false,
+      hasZoteroBridgeSession: () => true,
+      reloginWithZoteroBridge: async () => ({
+        success: false,
+        message: "ZOTERO_UNAVAILABLE",
+        status: 503,
+      }),
+      login: async () => {
+        loginCalls += 1;
+        return { success: true, message: "" };
+      },
+    };
+
+    // A transient bridge failure must not silently switch to a saved password.
+    assert.isFalse(await manager.autoRelogin());
+    assert.equal(loginCalls, 0);
+  });
+
+  it("falls back to the saved password once the Zotero bridge session is gone", async function () {
+    const manager = Object.create(AuthManager.prototype) as any;
+    let loginCalls = 0;
+    (globalThis as any).Zotero = {
+      DataDirectory: { dir: "/tmp/zotero-profile" },
+      Prefs: {
+        get(key: string) {
+          if (key.endsWith(".username")) return "user";
+          if (key.endsWith(".loginPassword")) return btoa("pass");
+          return undefined;
+        },
+      },
+    };
+    manager.environmentGeneration = 0;
+    manager.autoReloginAttempt = null;
+    manager.passwordLoginBlockedUntil = 0;
+    manager.state = { userId: 123, sessionToken: null };
+    manager.authService = {
+      hasDashboardRefreshCookie: () => false,
+      hasZoteroBridgeSession: () => true,
+      reloginWithZoteroBridge: async () => ({
+        success: false,
+        message: "ZOTERO_BRIDGE_SESSION_EXPIRED",
+        status: 401,
+      }),
+      clearSessionCookie: () => undefined,
+      login: async () => {
+        loginCalls += 1;
+        return { success: true, message: "" };
+      },
+      getUserId: () => 123,
+      setUserId: () => undefined,
+      getSessionToken: () => null,
+    };
+
+    assert.isTrue(await manager.autoRelogin());
+    assert.equal(loginCalls, 1);
   });
 
   it("falls back to one password login after refresh is explicitly unauthorized", async function () {
@@ -1297,6 +1365,7 @@ describe("AuthService NewAPI authentication", function () {
     manager.state = { userId: 123, sessionToken: null };
     manager.authService = {
       hasDashboardRefreshCookie: () => true,
+      hasZoteroBridgeSession: () => false,
       refreshDashboardSession: async () => ({
         success: false,
         message: "Unauthorized",
@@ -1341,6 +1410,7 @@ describe("AuthService NewAPI authentication", function () {
     manager.state = { userId: 123, sessionToken: null };
     manager.authService = {
       hasDashboardRefreshCookie: () => false,
+      hasZoteroBridgeSession: () => false,
       clearSessionCookie: () => undefined,
       login: async () => {
         loginCalls += 1;
@@ -1380,6 +1450,7 @@ describe("AuthService NewAPI authentication", function () {
     };
     manager.authService = {
       hasDashboardRefreshCookie: () => true,
+      hasZoteroBridgeSession: () => false,
       hasDashboardAccessToken: () => false,
       getSessionToken: () => null,
     };

@@ -53,6 +53,9 @@ import {
 // 加密密钥基于插件 ID 和用户 profile 路径生成，比纯 Base64 更安全
 const ENCRYPTION_SALT = "paper-chat-v1-salt";
 const PASSWORD_LOGIN_CONFLICT_COOLDOWN_MS = 10_000;
+// The bridge device flow expires in 5 minutes; poll politely while the user
+// finishes the Zotero consent screen.
+const ZOTERO_DEVICE_POLL_INTERVAL_MS = 2000;
 
 function getEncryptionKey(): string {
   // 使用插件 ID、salt 和 Zotero 数据目录生成密钥
@@ -739,6 +742,119 @@ export class AuthManager {
     }
   }
 
+  /**
+   * The Zotero entry point is only usable while the PaperChat API has the OAuth
+   * bridge configured; ask the service instead of guessing from local state.
+   */
+  async isZoteroLoginAvailable(): Promise<boolean> {
+    return this.authService.isZoteroLoginAvailable();
+  }
+
+  async loginWithZotero(): Promise<{ success: boolean; message: string }> {
+    if (!(await this.isZoteroLoginAvailable())) {
+      return {
+        success: false,
+        message: getString("auth-zotero-unavailable"),
+      };
+    }
+    if (this.interactiveLoginGeneration === this.environmentGeneration) {
+      return { success: false, message: getString("auth-login-cancelled") };
+    }
+    const generation = ++this.environmentGeneration;
+    this.interactiveLoginGeneration = generation;
+    try {
+      // Mirror the password flow: switching accounts must not leave the previous
+      // NewAPI session alive or its identity in local state.
+      if (this.authService.hasAuthenticationState()) {
+        ztoolkit.log("[AuthManager] Revoking old session before Zotero login");
+        await this.authService.logout();
+        if (generation !== this.environmentGeneration) {
+          return { success: false, message: getString("auth-login-cancelled") };
+        }
+      }
+      this.state.userId = null;
+      this.state.user = null;
+      this.state.subscription = null;
+      this.state.apiKey = null;
+      this.state.sessionToken = null;
+      this.state.isLoggedIn = false;
+      this.authService.setUserId(null);
+      this.authService.clearSessionCookie();
+      setPref("userSubscriptionJson", "");
+
+      const started = await this.authService.startZoteroDeviceLogin();
+      if (generation !== this.environmentGeneration) {
+        return { success: false, message: getString("auth-login-cancelled") };
+      }
+      if (!started.success || !started.data) return started;
+      Zotero.launchURL(started.data.authorization_url);
+      const deadline = Date.now() + started.data.expires_in * 1000;
+      let result: Awaited<ReturnType<typeof this.authService.pollZoteroDeviceLogin>> =
+        await this.authService.pollZoteroDeviceLogin(started.data.device_token);
+      while (result.success && result.pending && Date.now() < deadline) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, ZOTERO_DEVICE_POLL_INTERVAL_MS),
+        );
+        if (generation !== this.environmentGeneration) {
+          return { success: false, message: getString("auth-login-cancelled") };
+        }
+        result = await this.authService.pollZoteroDeviceLogin(started.data.device_token);
+      }
+      if (generation !== this.environmentGeneration) {
+        return { success: false, message: getString("auth-login-cancelled") };
+      }
+      if (result.pending) {
+        return { success: false, message: getString("auth-zotero-authorization-timeout") };
+      }
+      if (!result.success) {
+        return {
+          success: false,
+          message: result.message || getString("auth-zotero-login-failed"),
+        };
+      }
+
+      this.syncAuthServiceIdentity();
+      const userId = this.authService.getUserId();
+      if (userId === null || userId <= 0) {
+        return { success: false, message: getString("api-error-parse-user-failed") };
+      }
+      this.state.userId = userId;
+      this.authService.setUserId(userId);
+
+      await this.refreshUserInfo(generation);
+      if (generation !== this.environmentGeneration) {
+        return { success: false, message: getString("auth-login-cancelled") };
+      }
+      await this.ensurePluginToken(false, generation);
+      if (generation !== this.environmentGeneration) {
+        return { success: false, message: getString("auth-login-cancelled") };
+      }
+      await this.fetchAndSetDefaultModel(generation);
+      if (generation !== this.environmentGeneration) {
+        return { success: false, message: getString("auth-login-cancelled") };
+      }
+
+      this.saveState();
+      this.state.isLoggedIn = true;
+      this.notifyLoginStatusChange(true);
+      this.startModelRefreshTimer();
+      this.syncLocalLanguagePreference().catch((error) => {
+        ztoolkit.log("[AuthManager] Zotero login language sync failed:", error);
+      });
+      return { success: true, message: getString("api-success-login") };
+    } catch (error) {
+      return {
+        success: false,
+        message:
+          error instanceof Error
+            ? error.message
+            : getString("auth-zotero-login-failed"),
+      };
+    } finally {
+      if (this.interactiveLoginGeneration === generation) this.interactiveLoginGeneration = null;
+    }
+  }
+
   private async performInteractiveLogin(
     username: string,
     password: string,
@@ -916,6 +1032,28 @@ export class AuthManager {
         );
         return false;
       }
+    }
+
+    if (this.authService.hasZoteroBridgeSession()) {
+      ztoolkit.log("[AuthManager] Recreating NewAPI Session through Zotero bridge");
+      const zoteroResult = await this.authService.reloginWithZoteroBridge();
+      if (generation !== this.environmentGeneration) return false;
+      if (zoteroResult.success) {
+        this.passwordLoginBlockedUntil = 0;
+        this.syncAuthServiceIdentity();
+        ztoolkit.log("[AuthManager] NewAPI Session restored through Zotero bridge");
+        return true;
+      }
+      // Only a dead bridge session (401) may fall through to password login.
+      // Network errors, 429 and 5xx must not silently switch accounts.
+      if (zoteroResult.status !== 401) {
+        ztoolkit.log(
+          "[AuthManager] Zotero bridge automatic login failed without password fallback:",
+          zoteroResult.message,
+        );
+        return false;
+      }
+      ztoolkit.log("[AuthManager] Zotero bridge session is gone:", zoteroResult.message);
     }
 
     if (Date.now() < this.passwordLoginBlockedUntil) {

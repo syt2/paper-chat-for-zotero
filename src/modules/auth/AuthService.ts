@@ -67,11 +67,16 @@ export interface PaperChatPricingResult extends ApiResponse<
 
 const LEGACY_SESSION_COOKIE = "session";
 const DASHBOARD_REFRESH_COOKIE = "new_api_refresh";
+const ZOTERO_BRIDGE_COOKIE = "paperchat_zotero_session";
 const LEGACY_SESSION_COOKIE_PATH = "/";
 const DASHBOARD_REFRESH_COOKIE_PATH = "/api/user/auth";
+const ZOTERO_BRIDGE_COOKIE_PATH = "/";
+// Must match the bridge's ZOTERO_OAUTH_SESSION_MAX_AGE_SECONDS default.
+const ZOTERO_BRIDGE_COOKIE_LIFETIME_SECONDS = 180 * 24 * 60 * 60;
 const AUTH_COOKIE_NAMES = [
   LEGACY_SESSION_COOKIE,
   DASHBOARD_REFRESH_COOKIE,
+  ZOTERO_BRIDGE_COOKIE,
 ] as const;
 
 type AuthCookieName = (typeof AUTH_COOKIE_NAMES)[number];
@@ -95,6 +100,19 @@ interface LoginResponseData extends DashboardAuthData {
   flow_token?: string;
   expires_at?: number;
   methods?: Array<{ method: string; available: boolean }>;
+}
+
+interface ZoteroDeviceStartResponse {
+  authorization_url: string;
+  device_token: string;
+  expires_in: number;
+}
+
+interface ZoteroDevicePollResponse extends DashboardAuthData {
+  pending: boolean;
+  expires_in?: number;
+  refresh_token?: string;
+  zotero_bridge_session?: string;
 }
 
 export interface DashboardSessionRefreshResult extends ApiResponse<DashboardAuthData> {
@@ -127,6 +145,8 @@ const SENSITIVE_LOG_FIELDS = new Set([
   "code",
   "flow_token",
   "backup_code",
+  "device_token",
+  "zotero_bridge_session",
 ]);
 
 function stringifyForAuthLog(value: unknown): string {
@@ -150,6 +170,7 @@ export class AuthService {
   private dashboardAccessToken: string | null = null;
   private dashboardRefreshToken: string | null = null;
   private dashboardSessionId: string | null = null;
+  private zoteroBridgeSession: string | null = null;
   private pendingAuthCookies = new Map<AuthCookieName, PendingAuthCookie>();
   private loginAttempt: {
     generation: number;
@@ -186,7 +207,7 @@ export class AuthService {
           const channel = subject.QueryInterface(Ci.nsIHttpChannel);
           const url = channel.URI.spec;
 
-          if (!url.startsWith(baseUrl)) return;
+          if (new URL(url).origin !== new URL(baseUrl).origin) return;
           // Associate cookies with the request that produced them, not with
           // whichever observer happens to be installed when it completes.
           const requestGeneration = this.authRequestGenerations.get(
@@ -278,11 +299,27 @@ export class AuthService {
     return Boolean(this.dashboardRefreshToken);
   }
 
+  hasZoteroBridgeSession(): boolean {
+    return Boolean(this.zoteroBridgeSession);
+  }
+
+  /** Reports whether the PaperChat API has the Zotero bridge configured. */
+  async isZoteroLoginAvailable(): Promise<boolean> {
+    const result = await this.request<ApiResponse<{ enabled?: boolean }>>(
+      "GET",
+      `${new URL(this.baseUrl).origin}/ext/paperchat/oauth/zotero/status`,
+      { includeAuthentication: false, noCache: true },
+    );
+    if (result.error || result.status >= 400) return false;
+    return result.data?.data?.enabled === true;
+  }
+
   hasAuthenticationState(): boolean {
     return Boolean(
       this.sessionToken ||
       this.dashboardAccessToken ||
-      this.dashboardRefreshToken,
+      this.dashboardRefreshToken ||
+      this.zoteroBridgeSession,
     );
   }
 
@@ -294,6 +331,7 @@ export class AuthService {
     this.dashboardAccessToken = null;
     this.dashboardRefreshToken = null;
     this.dashboardSessionId = null;
+    this.zoteroBridgeSession = null;
     this.pendingAuthCookies.clear();
     this.removeAuthCookieFromJar(
       LEGACY_SESSION_COOKIE,
@@ -303,6 +341,7 @@ export class AuthService {
       DASHBOARD_REFRESH_COOKIE,
       DASHBOARD_REFRESH_COOKIE_PATH,
     );
+    this.removeAuthCookieFromJar(ZOTERO_BRIDGE_COOKIE, ZOTERO_BRIDGE_COOKIE_PATH);
   }
 
   /**
@@ -324,11 +363,17 @@ export class AuthService {
           cookie.path === DASHBOARD_REFRESH_COOKIE_PATH
         ) {
           this.dashboardRefreshToken = cookie.value;
+        } else if (
+          cookie.name === ZOTERO_BRIDGE_COOKIE &&
+          cookie.path === ZOTERO_BRIDGE_COOKIE_PATH
+        ) {
+          this.zoteroBridgeSession = cookie.value;
         }
       }
       ztoolkit.log("[AuthService] Auth cookies restored from cookie jar", {
         legacySession: Boolean(this.sessionToken),
         dashboardRefresh: Boolean(this.dashboardRefreshToken),
+        zoteroBridge: Boolean(this.zoteroBridgeSession),
       });
     } catch (e) {
       ztoolkit.log(
@@ -363,6 +408,16 @@ export class AuthService {
     );
   }
 
+  private saveZoteroBridgeCookieToJar(): void {
+    if (!this.zoteroBridgeSession) return;
+    this.saveAuthCookieToJar(
+      ZOTERO_BRIDGE_COOKIE,
+      this.zoteroBridgeSession,
+      ZOTERO_BRIDGE_COOKIE_PATH,
+      Ci.nsICookie.SAMESITE_LAX as number,
+    );
+  }
+
   private saveAuthCookieToJar(
     name: AuthCookieName,
     value: string,
@@ -373,8 +428,13 @@ export class AuthService {
       const url = new URL(this.baseUrl);
       const host = url.hostname;
       const isSecure = url.protocol === "https:";
-      // 设置过期时间为 30 天后
-      const expiry = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60;
+      // 桥接 cookie 是长期缺登录后唯一能静默续期的凭据，必须活到服务端会话
+      // 过期为止（默认 180 天）；NewAPI 自己的 refresh cookie 保持 30 天。
+      const lifetimeSeconds =
+        name === ZOTERO_BRIDGE_COOKIE
+          ? ZOTERO_BRIDGE_COOKIE_LIFETIME_SECONDS
+          : 30 * 24 * 60 * 60;
+      const expiry = Math.floor(Date.now() / 1000) + lifetimeSeconds;
 
       Services.cookies.add(
         host, // domain
@@ -492,6 +552,13 @@ export class AuthService {
           `${DASHBOARD_REFRESH_COOKIE}=${this.dashboardRefreshToken}`,
         );
       }
+      if (
+        options.includeAuthentication !== false &&
+        this.zoteroBridgeSession &&
+        requestPath.startsWith("/ext/paperchat/oauth/zotero/")
+      ) {
+        cookies.push(`${ZOTERO_BRIDGE_COOKIE}=${this.zoteroBridgeSession}`);
+      }
       if (cookies.length > 0) {
         headers["Cookie"] = [headers["Cookie"], ...cookies]
           .filter(Boolean)
@@ -589,6 +656,10 @@ export class AuthService {
             LEGACY_SESSION_COOKIE_PATH,
           );
         }
+      } else if (name === ZOTERO_BRIDGE_COOKIE) {
+        this.zoteroBridgeSession = pending.value || null;
+        if (this.zoteroBridgeSession) this.saveZoteroBridgeCookieToJar();
+        else this.removeAuthCookieFromJar(ZOTERO_BRIDGE_COOKIE, ZOTERO_BRIDGE_COOKIE_PATH);
       } else {
         this.dashboardRefreshToken = pending.value || null;
         if (this.dashboardRefreshToken) {
@@ -901,6 +972,87 @@ export class AuthService {
     }
   }
 
+  async reloginWithZoteroBridge(): Promise<DashboardSessionRefreshResult> {
+    if (!this.zoteroBridgeSession) {
+      return { success: false, message: "No Zotero bridge session", status: 0 };
+    }
+    const origin = new URL(this.baseUrl).origin;
+    const result = await this.request<ApiResponse<DashboardAuthData & { refresh_token?: string }>>(
+      "POST",
+      `${origin}/ext/paperchat/oauth/zotero/auto-login`,
+      { extractAuthCookies: true },
+    );
+    if (result.error || result.status >= 400 || !result.data?.success) {
+      if (result.status === 401) {
+        this.zoteroBridgeSession = null;
+        this.removeAuthCookieFromJar(ZOTERO_BRIDGE_COOKIE, ZOTERO_BRIDGE_COOKIE_PATH);
+      }
+      return {
+        success: false,
+        message: result.error || this.parseErrorMessage(result.data, "Zotero automatic login failed"),
+        status: result.status,
+      };
+    }
+    const data = result.data.data;
+    const accessToken = data?.access_token?.trim();
+    const userId = data?.user?.id;
+    if (!accessToken || !userId) return { success: false, message: "Invalid automatic login response", status: result.status };
+    this.dashboardAccessToken = accessToken;
+    this.userId = userId;
+    if (data?.refresh_token) {
+      this.dashboardRefreshToken = data.refresh_token;
+      this.saveDashboardRefreshCookieToJar();
+    }
+    const sessionId = data?.session?.sid?.trim();
+    if (sessionId) this.dashboardSessionId = sessionId;
+    return { ...result.data, status: result.status };
+  }
+
+  async startZoteroDeviceLogin(): Promise<{ success: boolean; message: string; data?: ZoteroDeviceStartResponse }> {
+    const result = await this.request<ZoteroDeviceStartResponse>(
+      "POST",
+      `${new URL(this.baseUrl).origin}/ext/paperchat/oauth/zotero/device/start`,
+      { body: {}, includeAuthentication: false },
+    );
+    if (result.error || result.status >= 400 || !result.data?.authorization_url || !result.data.device_token) {
+      if (result.status === 404) {
+        return { success: false, message: getString("auth-zotero-unavailable") };
+      }
+      return {
+        success: false,
+        message:
+          result.error ||
+          this.parseErrorMessage(result.data, getString("auth-zotero-unavailable")),
+      };
+    }
+    return { success: true, message: "", data: result.data };
+  }
+
+  async pollZoteroDeviceLogin(deviceToken: string): Promise<DashboardSessionRefreshResult & { pending?: boolean; expires_in?: number }> {
+    const result = await this.request<ZoteroDevicePollResponse>(
+      "POST",
+      `${new URL(this.baseUrl).origin}/ext/paperchat/oauth/zotero/device/poll`,
+      { body: { device_token: deviceToken }, includeAuthentication: false },
+    );
+    if (result.error || result.status >= 400 || !result.data) return { success: false, message: result.error || "Zotero login failed", status: result.status };
+    if (result.data.pending) return { success: true, message: "", status: result.status, pending: true, expires_in: result.data.expires_in };
+    const accessToken = result.data.access_token?.trim();
+    const userId = result.data.user?.id;
+    if (!accessToken || !userId) return { success: false, message: "Invalid Zotero login response", status: result.status };
+    this.dashboardAccessToken = accessToken;
+    this.userId = userId;
+    this.dashboardSessionId = result.data.session?.sid?.trim() || null;
+    if (result.data.refresh_token) {
+      this.dashboardRefreshToken = result.data.refresh_token;
+      this.saveDashboardRefreshCookieToJar();
+    }
+    if (result.data.zotero_bridge_session) {
+      this.zoteroBridgeSession = result.data.zotero_bridge_session;
+      this.saveZoteroBridgeCookieToJar();
+    }
+    return { success: true, message: "", ...result.data, status: result.status };
+  }
+
   private async performDashboardSessionRefresh(
     generation: number,
   ): Promise<DashboardSessionRefreshResult> {
@@ -1014,11 +1166,23 @@ export class AuthService {
         headers: this.getDashboardSessionHeaders(),
       },
     );
+    // The bridge cookie outlives the NewAPI session, so logging out locally would
+    // leave a credential that can silently mint a new session. Revoke it too.
+    const bridgeRevoke = this.zoteroBridgeSession
+      ? this.request<ApiResponse>(
+          "POST",
+          `${new URL(baseUrl).origin}/ext/paperchat/oauth/zotero/logout`,
+        )
+      : null;
     // request() captures the current credentials synchronously. Clear local
     // authentication immediately, even if the server is slow or unreachable.
     this.userId = null;
     this.clearSessionCookie();
     let result = await request;
+    if (bridgeRevoke) {
+      // Best effort: a failed revoke must not block logout.
+      await bridgeRevoke;
+    }
     if (result.status === 404 && generation === this.environmentGeneration) {
       result = await this.request<ApiResponse>(
         "GET",

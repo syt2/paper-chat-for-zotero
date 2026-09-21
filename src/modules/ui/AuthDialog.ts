@@ -334,6 +334,27 @@ export async function showAuthDialog(
           // 标签切换
           {
             tag: "div",
+            id: "zotero-oauth-field",
+            styles: { display: "flex", marginTop: "12px" },
+            children: [
+              {
+                tag: "button",
+                id: "zotero-oauth-btn",
+                properties: { textContent: getString("auth-zotero-login") },
+                styles: {
+                  flex: "1",
+                  padding: "8px 16px",
+                  cursor: "pointer",
+                  borderRadius: "4px",
+                  border: `1px solid ${authColors.buttonSecondaryBorder}`,
+                  background: authColors.buttonSecondary,
+                  color: authColors.buttonSecondaryText,
+                },
+              },
+            ],
+          },
+          {
+            tag: "div",
             styles: {
               display: "flex",
               marginBottom: "8px",
@@ -767,6 +788,15 @@ export async function showAuthDialog(
             doc,
             "auth-cancel-btn",
           );
+          const zoteroOAuthField = requireAuthElement<HTMLElement>(
+            doc,
+            "zotero-oauth-field",
+          );
+          const zoteroOAuthBtn = requireAuthElement<HTMLButtonElement>(
+            doc,
+            "zotero-oauth-btn",
+          );
+          let zoteroLoginAvailable = true;
           const messageDiv = requireAuthElement<HTMLElement>(
             doc,
             "auth-message",
@@ -839,6 +869,10 @@ export async function showAuthDialog(
           // 更新UI状态
           function updateUI() {
             const isRegister = currentMode === "register";
+            // The button only makes sense while the API reports the bridge as
+            // configured; it is hidden rather than failing on click.
+            zoteroOAuthField.style.display =
+              isRegister || !zoteroLoginAvailable ? "none" : "flex";
 
             // 标签样式
             tabLogin.style.fontWeight = isRegister ? "normal" : "bold";
@@ -951,6 +985,40 @@ export async function showAuthDialog(
           });
 
           // 忘记密码
+          zoteroOAuthBtn.addEventListener("click", async () => {
+            if (submitting || settled || currentMode !== "login") return;
+            submitting = true;
+            zoteroOAuthBtn.disabled = true;
+            submitBtn.disabled = true;
+            cancelBtn.disabled = true;
+            showMessage(getString("auth-zotero-opening"), false);
+            try {
+              const result = await getAuthManager().loginWithZotero();
+              if (result.success) {
+                showMessage(getString("auth-success"), false);
+                finish(true);
+                setTimeout(() => closeDialogWindow(dialogHelper.window), 700);
+              } else {
+                showMessage(
+                  result.message || getString("auth-zotero-login-failed"),
+                  true,
+                );
+              }
+            } catch (error) {
+              showMessage(
+                error instanceof Error
+                  ? error.message
+                  : getString("auth-zotero-login-failed"),
+                true,
+              );
+            } finally {
+              submitting = false;
+              zoteroOAuthBtn.disabled = false;
+              submitBtn.disabled = false;
+              cancelBtn.disabled = false;
+            }
+          });
+
           forgotPasswordLink?.addEventListener("click", async () => {
             const username = usernameInput?.value?.trim();
             if (!username) {
@@ -1239,6 +1307,22 @@ export async function showAuthDialog(
           // 初始化UI
           updateUI();
           trackAuthPageViewed(currentMode);
+
+          // Hide the Zotero entry point unless the API reports the OAuth bridge
+          // as configured, instead of letting the click fail.
+          getAuthManager()
+            .isZoteroLoginAvailable()
+            .then((available) => {
+              if (settled) return;
+              zoteroLoginAvailable = available;
+              updateUI();
+            })
+            .catch((error) => {
+              ztoolkit.log("[AuthDialog] Zotero availability check failed:", error);
+              if (settled) return;
+              zoteroLoginAvailable = false;
+              updateUI();
+            });
         } catch (error) {
           ztoolkit.log("[AuthDialog] Failed to initialize auth dialog:", error);
           clearCurrentDialog();
