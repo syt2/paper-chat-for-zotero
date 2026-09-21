@@ -14,6 +14,7 @@ declare namespace _ZoteroTypes {
       "temperature": string;
       "systemPrompt": string;
       "username": string;
+      "userDisplayName": string;
       "loginPassword": string;
       "userId": number;
       "userQuotaJson": string;

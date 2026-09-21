@@ -66,7 +66,7 @@ paperchat-api-success-redeem = Redemption successful! Added balance: { $amount }
 
 # User Panel
 paperchat-user-panel-title = User Info
-paperchat-user-panel-logged-in = Logged in: { $username }
+paperchat-user-panel-logged-in = Logged in: { $name }
 paperchat-user-panel-not-logged-in = Not logged in
 paperchat-user-panel-balance = Token Balance
 paperchat-user-panel-subscription = Subscription: { $total }

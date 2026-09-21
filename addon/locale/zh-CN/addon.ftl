@@ -66,7 +66,7 @@ paperchat-api-success-redeem = 兑换成功! 增加余额: { $amount }
 
 # User Panel
 paperchat-user-panel-title = 用户信息
-paperchat-user-panel-logged-in = 已登录: { $username }
+paperchat-user-panel-logged-in = 已登录: { $name }
 paperchat-user-panel-not-logged-in = 未登录
 paperchat-user-panel-balance = Token余额
 paperchat-user-panel-subscription = 订阅额度: { $total }

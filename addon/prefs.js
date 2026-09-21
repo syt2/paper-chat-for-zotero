@@ -10,6 +10,7 @@ pref(
 );
 
 pref("username", "");
+pref("userDisplayName", "");
 pref("loginPassword", ""); // 存储密码用于自动重新登录
 pref("userId", 0);
 pref("userQuotaJson", "");

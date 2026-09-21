@@ -314,6 +314,20 @@ export function openPaperChatPreferences(): void {
 }
 
 /**
+ * The PaperChat account name is an internal identifier (for Zotero logins it is
+ * `zotero_<id>`). Prefer the display name the identity provider supplied, which
+ * for Zotero accounts is the user's Zotero username.
+ */
+type DisplayNameSource = {
+  display_name?: string | null;
+  username?: string | null;
+} | null;
+
+export function getUserDisplayName(user: DisplayNameSource): string {
+  return user?.display_name?.trim() || user?.username?.trim() || "";
+}
+
+/**
  * Update user status display in preferences
  */
 export function updateUserDisplay(
@@ -351,7 +365,7 @@ export function updateUserDisplay(
     if (userStatusEl) {
       setDynamicXulText(
         userStatusEl,
-        `${getString("user-panel-logged-in", { args: { username: user?.username || "" } })}`,
+        `${getString("user-panel-logged-in", { args: { name: getUserDisplayName(user) } })}`,
         "value",
       );
       userStatusEl.style.color = prefColors.userLoggedIn;

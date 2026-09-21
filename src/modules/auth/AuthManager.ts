@@ -369,6 +369,7 @@ export class AuthManager {
     const savedApiKey = getPref("apiKey");
     const savedUserId = getPref("userId");
     const savedUsername = getPref("username");
+    const savedDisplayName = getPref("userDisplayName");
     // quota 值可能超过 32 位整数，存为 JSON 字符串
     let savedQuota = 0;
     let savedUsedQuota = 0;
@@ -442,7 +443,7 @@ export class AuthManager {
       this.state.user = {
         id: finalUserId,
         username: savedUsername as string,
-        display_name: savedUsername as string,
+        display_name: (savedDisplayName as string) || (savedUsername as string),
         email: "",
         role: 0,
         status: 1,
@@ -474,6 +475,10 @@ export class AuthManager {
     // quota 值可能超过 32 位整数，存为 JSON 字符串
     if (this.state.user) {
       setPref("username", this.state.user.username);
+      setPref(
+        "userDisplayName",
+        this.state.user.display_name || this.state.user.username,
+      );
       setPref(
         "userQuotaJson",
         JSON.stringify({
@@ -1160,6 +1165,7 @@ export class AuthManager {
     setPref("apiKey", "");
     setPref("userId", 0);
     setPref("username", "");
+    setPref("userDisplayName", "");
     setPref("userQuotaJson", "");
     setPref("userSubscriptionJson", "");
     this.state.subscription = null;
@@ -1190,6 +1196,7 @@ export class AuthManager {
     setPref("apiKey", "");
     setPref("userId", 0);
     setPref("username", "");
+    setPref("userDisplayName", "");
     setPref("loginPassword", "");
     setPref("userQuotaJson", "");
     setPref("userSubscriptionJson", "");
@@ -1267,6 +1274,10 @@ export class AuthManager {
         affCode: result.data.aff_code,
       });
       setPref("username", result.data.username);
+      setPref(
+        "userDisplayName",
+        result.data.display_name || result.data.username,
+      );
       setPref(
         "userQuotaJson",
         JSON.stringify({

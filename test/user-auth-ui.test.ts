@@ -4,6 +4,7 @@ import {
   getInitialPaperChatProduct,
   getProductAnalyticsProps,
   updateUserDisplay,
+  getUserDisplayName,
   openPaperChatSettingsForTopup,
 } from "../src/modules/preferences/UserAuthUI";
 
@@ -31,7 +32,7 @@ describe("PaperChat user auth preferences", function () {
   beforeEach(function () {
     originalAddon = (globalThis as any).addon;
     const messages: Record<string, string> = {
-      "paperchat-user-panel-logged-in": "Logged in: {username}",
+      "paperchat-user-panel-logged-in": "Logged in: {name}",
       "paperchat-user-panel-balance": "Balance",
       "paperchat-user-panel-used": "Used",
       "paperchat-user-panel-logout-btn": "Log out",
@@ -48,8 +49,8 @@ describe("PaperChat user auth preferences", function () {
             }>) => [
               {
                 value: messages[request.id]?.replace(
-                  "{username}",
-                  String(request.args?.username ?? ""),
+                  "{name}",
+                  String(request.args?.name ?? ""),
                 ),
                 attributes: null,
               },
@@ -183,6 +184,42 @@ describe("PaperChat user auth preferences", function () {
     assert.equal(loginButton.textContent, "Log in");
     assert.isNull(status.getAttribute("value"));
     assert.isNull(loginButton.getAttribute("label"));
+  });
+
+  it("prefers the provider display name over the internal account name", function () {
+    const status = new FakeElement();
+    const doc = {
+      getElementById: (id: string) =>
+        id === "pref-user-status" ? status : null,
+    } as unknown as Document;
+    const authManager = {
+      isLoggedIn: () => true,
+      getUser: () => ({
+        username: "zotero_14652967",
+        display_name: "shenyutao",
+      }),
+      getSubscriptionUsageSummary: () => null,
+      getBalance: () => ({ quota: 100_000 }),
+      formatBalance: () => "100K",
+      formatUsedQuota: () => "2K",
+    } as any;
+
+    assert.equal(
+      getUserDisplayName({
+        username: "zotero_14652967",
+        display_name: "shenyutao",
+      }),
+      "shenyutao",
+    );
+    assert.equal(
+      getUserDisplayName({ username: "reader", display_name: "   " }),
+      "reader",
+    );
+    assert.equal(getUserDisplayName(null), "");
+
+    updateUserDisplay(doc, authManager);
+
+    assert.equal(status.textContent, "Logged in: shenyutao");
   });
 
   it("uses the product SKU as the stable analytics item", function () {
