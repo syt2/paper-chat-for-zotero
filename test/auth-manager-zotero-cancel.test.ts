@@ -95,8 +95,8 @@ describe("AuthManager Zotero device login cancellation", function () {
     assert.equal(firstResult.message, "paperchat-auth-login-cancelled");
     assert.isNull(manager.getZoteroAuthorizationUrl());
     const pollsAfterCancel = polls;
-    await new Promise((resolve) => setTimeout(resolve, 2500));
-    // The cancelled flow must not keep polling the bridge.
+    // Wait past a full poll interval: a cancelled flow must not keep polling.
+    await new Promise((resolve) => setTimeout(resolve, 3500));
     assert.equal(polls, pollsAfterCancel);
     // A cancelled attempt must not hold the interactive slot: the next click
     // starts a fresh device login instead of reporting "login cancelled".

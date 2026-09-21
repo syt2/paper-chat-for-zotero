@@ -55,8 +55,9 @@ import {
 const ENCRYPTION_SALT = "paper-chat-v1-salt";
 const PASSWORD_LOGIN_CONFLICT_COOLDOWN_MS = 10_000;
 // The bridge device flow expires in 5 minutes; poll politely while the user
-// finishes the Zotero consent screen.
-const ZOTERO_DEVICE_POLL_INTERVAL_MS = 2000;
+// finishes the Zotero consent screen. Three seconds keeps the bridge load low
+// without making a completed authorization feel laggy.
+const ZOTERO_DEVICE_POLL_INTERVAL_MS = 3000;
 
 /**
  * Resolves after `ms`, or as soon as `signal` aborts. Zotero's consent screen
