@@ -103,6 +103,14 @@ export const authColors = {
   // Links
   link: colors.linkHover,
 
+  // Zotero brand: the entry point has to read as "Zotero", not as a generic
+  // secondary button next to the password form.
+  zoteroBrand: "#cc2936",
+  zoteroBrandDark: "#a01f2b",
+  zoteroButtonBg: "#ffffff",
+  zoteroButtonHover: "#fdf2f3",
+  zoteroButtonBorder: "#e3b3b8",
+
   // Form
   inputBorder: colors.inputBorder,
 

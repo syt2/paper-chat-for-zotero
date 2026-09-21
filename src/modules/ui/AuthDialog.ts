@@ -331,29 +331,6 @@ export async function showAuthDialog(
           minWidth: "360px",
         },
         children: [
-          // 标签切换
-          {
-            tag: "div",
-            id: "zotero-oauth-field",
-            // Hidden until isZoteroLoginAvailable() resolves true.
-            styles: { display: "none", marginTop: "12px" },
-            children: [
-              {
-                tag: "button",
-                id: "zotero-oauth-btn",
-                properties: { textContent: getString("auth-zotero-login") },
-                styles: {
-                  flex: "1",
-                  padding: "8px 16px",
-                  cursor: "pointer",
-                  borderRadius: "4px",
-                  border: `1px solid ${authColors.buttonSecondaryBorder}`,
-                  background: authColors.buttonSecondary,
-                  color: authColors.buttonSecondaryText,
-                },
-              },
-            ],
-          },
           {
             tag: "div",
             styles: {
@@ -408,6 +385,104 @@ export async function showAuthDialog(
               borderRadius: "4px",
               display: "none",
             },
+          },
+          // 使用 Zotero 登录 / 注册：两种模式共用同一个入口，桥接层会在
+          // 账号不存在时直接创建，所以注册标签页也需要它。
+          {
+            tag: "div",
+            id: "zotero-oauth-field",
+            // Hidden until isZoteroLoginAvailable() resolves true. The bridge
+            // signs in and creates the account with the same call, so this is
+            // shown on both tabs.
+            styles: {
+              display: "none",
+              flexDirection: "column",
+              gap: "14px",
+              marginBottom: "14px",
+            },
+            children: [
+              {
+                tag: "button",
+                id: "zotero-oauth-btn",
+                attributes: { type: "button" },
+                styles: {
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "8px",
+                  width: "100%",
+                  padding: "10px 16px",
+                  cursor: "pointer",
+                  borderRadius: "6px",
+                  border: `1px solid ${authColors.zoteroButtonBorder}`,
+                  background: authColors.zoteroButtonBg,
+                  color: authColors.zoteroBrand,
+                  fontSize: "13px",
+                  fontWeight: "600",
+                },
+                children: [
+                  {
+                    tag: "span",
+                    id: "zotero-oauth-mark",
+                    properties: { textContent: "Z" },
+                    styles: {
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      width: "18px",
+                      height: "18px",
+                      flex: "0 0 auto",
+                      borderRadius: "4px",
+                      background: authColors.zoteroBrand,
+                      color: "#ffffff",
+                      fontSize: "12px",
+                      fontWeight: "700",
+                      lineHeight: "1",
+                    },
+                  },
+                  {
+                    tag: "span",
+                    id: "zotero-oauth-label",
+                    properties: { textContent: getString("auth-zotero-login") },
+                  },
+                ],
+              },
+              {
+                tag: "div",
+                styles: {
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                },
+                children: [
+                  {
+                    tag: "span",
+                    styles: {
+                      flex: "1",
+                      height: "1px",
+                      background: authColors.inputBorder,
+                    },
+                  },
+                  {
+                    tag: "span",
+                    properties: { textContent: getString("auth-or") },
+                    styles: {
+                      color: authColors.zoteroBrandDark,
+                      fontSize: "12px",
+                      opacity: "0.7",
+                    },
+                  },
+                  {
+                    tag: "span",
+                    styles: {
+                      flex: "1",
+                      height: "1px",
+                      background: authColors.inputBorder,
+                    },
+                  },
+                ],
+              },
+            ],
           },
           // 用户名/邮箱 (登录时显示用户名，注册时显示邮箱)
           {
@@ -723,6 +798,9 @@ export async function showAuthDialog(
             null;
           let submitting = false;
           let twoFactorActive = false;
+          let zoteroPending = false;
+          let zoteroAuthorizationURL: string | null = null;
+          let zoteroLoginController: AbortController | null = null;
 
           const cancelLogin = () => {
             submitController?.abort();
@@ -730,9 +808,20 @@ export async function showAuthDialog(
             resolveTwoFactorCode = null;
           };
 
+          // A device login keeps polling the bridge until it completes, times
+          // out, or is cancelled. Closing the dialog must stop it too, or the
+          // next attempt would report "login cancelled" while the stale poll
+          // is still holding the interactive slot. The abort is enough: the
+          // click handler's `finally` clears the pending state, so a password
+          // login that supersedes the device flow cannot be overwritten later.
+          const cancelZoteroLogin = () => {
+            zoteroLoginController?.abort();
+          };
+
           // 监听窗口关闭事件，清理单例引用
           dialogWinRef.addEventListener("unload", () => {
             if (!settled) cancelLogin();
+            cancelZoteroLogin();
             if (countdownTimer) clearInterval(countdownTimer);
             clearCurrentDialog();
             finish(false);
@@ -796,6 +885,10 @@ export async function showAuthDialog(
           const zoteroOAuthBtn = requireAuthElement<HTMLButtonElement>(
             doc,
             "zotero-oauth-btn",
+          );
+          const zoteroOAuthLabel = requireAuthElement<HTMLElement>(
+            doc,
+            "zotero-oauth-label",
           );
           // Start hidden: the entry point is revealed only once the API confirms
           // the bridge is configured, so an unconfigured or slow deployment never
@@ -871,12 +964,27 @@ export async function showAuthDialog(
           }
 
           // 更新UI状态
+          function applyZoteroButtonState() {
+            // While the consent page waits for the user the only useful action
+            // is re-opening it; starting a second device flow would orphan the
+            // poll that is already running.
+            zoteroOAuthLabel.textContent = getString(
+              zoteroPending ? "auth-zotero-reopen" : "auth-zotero-login",
+            );
+            zoteroOAuthBtn.style.background = authColors.zoteroButtonBg;
+            zoteroOAuthBtn.style.borderColor = authColors.zoteroButtonBorder;
+          }
+
           function updateUI() {
             const isRegister = currentMode === "register";
             // The button only makes sense while the API reports the bridge as
-            // configured; it is hidden rather than failing on click.
-            zoteroOAuthField.style.display =
-              isRegister || !zoteroLoginAvailable ? "none" : "flex";
+            // configured; it is hidden rather than failing on click. Zotero
+            // creates the account when it does not exist yet, so both tabs get
+            // the same entry point.
+            zoteroOAuthField.style.display = zoteroLoginAvailable
+              ? "flex"
+              : "none";
+            applyZoteroButtonState();
 
             // 标签样式
             tabLogin.style.fontWeight = isRegister ? "normal" : "bold";
@@ -988,16 +1096,59 @@ export async function showAuthDialog(
             trackAuthPageViewed("register");
           });
 
-          // 忘记密码
+          // 使用 Zotero 登录
+          zoteroOAuthBtn.addEventListener("mouseenter", () => {
+            if (submitting) return;
+            zoteroOAuthBtn.style.background = authColors.zoteroButtonHover;
+            zoteroOAuthBtn.style.borderColor = authColors.zoteroBrand;
+          });
+          zoteroOAuthBtn.addEventListener("mouseleave", () => {
+            zoteroOAuthBtn.style.background = authColors.zoteroButtonBg;
+            zoteroOAuthBtn.style.borderColor = authColors.zoteroButtonBorder;
+          });
+
           zoteroOAuthBtn.addEventListener("click", async () => {
-            if (submitting || settled || currentMode !== "login") return;
-            submitting = true;
-            zoteroOAuthBtn.disabled = true;
-            submitBtn.disabled = true;
-            cancelBtn.disabled = true;
+            if (settled) return;
+            // A device login is already waiting for the user in the browser.
+            // Re-open that consent page instead of starting a second flow.
+            // This stays reachable while `submitting`, so the user can recover
+            // after closing the browser tab by accident.
+            if (zoteroPending) {
+              if (!zoteroAuthorizationURL) return;
+              try {
+                Zotero.launchURL(zoteroAuthorizationURL);
+                showMessage(getString("auth-zotero-opening"), false);
+              } catch (error) {
+                ztoolkit.log(
+                  "[AuthDialog] Failed to reopen Zotero authorization page:",
+                  error,
+                );
+                showMessage(getString("auth-zotero-login-failed"), true);
+              }
+              return;
+            }
+            if (submitting) return;
+            hideMessage();
+            // Wait, do not block: the device flow runs next to the password
+            // form. Submitting the form cancels it, and Cancel still closes
+            // the dialog, so no control is left dead while Zotero waits.
+            zoteroPending = true;
+            applyZoteroButtonState();
             showMessage(getString("auth-zotero-opening"), false);
+            // Zotero's plugin sandbox has no global AbortController.
+            const controller = new (
+              dialogWinRef as Window & typeof globalThis
+            ).AbortController();
+            zoteroLoginController = controller;
+            const authManager = getAuthManager();
             try {
-              const result = await getAuthManager().loginWithZotero();
+              const result = await authManager.loginWithZotero({
+                signal: controller.signal,
+                onAuthorizationURL: (authorizationUrl) => {
+                  zoteroAuthorizationURL = authorizationUrl;
+                },
+              });
+              if (controller.signal.aborted || dialogWinRef.closed) return;
               if (result.success) {
                 showMessage(getString("auth-success"), false);
                 finish(true);
@@ -1009,6 +1160,7 @@ export async function showAuthDialog(
                 );
               }
             } catch (error) {
+              if (controller.signal.aborted || dialogWinRef.closed) return;
               showMessage(
                 error instanceof Error
                   ? error.message
@@ -1016,10 +1168,20 @@ export async function showAuthDialog(
                 true,
               );
             } finally {
-              submitting = false;
-              zoteroOAuthBtn.disabled = false;
-              submitBtn.disabled = false;
-              cancelBtn.disabled = false;
+              if (zoteroLoginController === controller) {
+                zoteroLoginController = null;
+              }
+              zoteroPending = false;
+              // Keep the last consent URL only for a re-open while the device
+              // code is alive; a finished flow always starts over.
+              zoteroAuthorizationURL = null;
+              // Only touch the shared submit state when the device flow still
+              // owns it; a password login started meanwhile must not be
+              // re-enabled or have its message hidden.
+              if (!dialogWinRef.closed && !settled && !submitting) {
+                applyZoteroButtonState();
+                updateUI();
+              }
             }
           });
 
@@ -1064,6 +1226,7 @@ export async function showAuthDialog(
 
           // 发送验证码
           sendCodeBtn?.addEventListener("click", async () => {
+            if (submitting || settled) return;
             const email = emailInput?.value?.trim();
             if (!email) {
               showMessage(getString("auth-error-email-required"), true);
@@ -1181,6 +1344,11 @@ export async function showAuthDialog(
               }
             }
 
+            // The user chose the password form while Zotero waited in the
+            // browser, so stop that poll before starting this login. Doing it
+            // after validation keeps a rejected form from killing the wait.
+            cancelZoteroLogin();
+
             // 禁用提交按钮
             submitting = true;
             const buttons = doc.querySelectorAll("button");
@@ -1287,6 +1455,8 @@ export async function showAuthDialog(
           // 绑定取消按钮
           cancelBtn?.addEventListener("click", () => {
             cancelLogin();
+            // Stop a Zotero device login that is still waiting for the user.
+            cancelZoteroLogin();
             if (countdownTimer) clearInterval(countdownTimer);
             finish(false);
             closeDialogWindow(dialogHelper.window);
@@ -1322,7 +1492,10 @@ export async function showAuthDialog(
               updateUI();
             })
             .catch((error) => {
-              ztoolkit.log("[AuthDialog] Zotero availability check failed:", error);
+              ztoolkit.log(
+                "[AuthDialog] Zotero availability check failed:",
+                error,
+              );
               if (settled) return;
               zoteroLoginAvailable = false;
               updateUI();

@@ -17,6 +17,16 @@ export interface LoginInteraction {
 }
 
 /**
+ * Zotero's device flow has no two-factor step. `signal` cancels the pending
+ * poll (and the browser consent screen can be re-opened through
+ * `onAuthorizationURL` while the device code is still valid).
+ */
+export interface ZoteroLoginInteraction {
+  signal?: AbortSignal;
+  onAuthorizationURL?: (authorizationUrl: string) => void;
+}
+
+/**
  * 注册请求
  */
 export interface RegisterRequest {

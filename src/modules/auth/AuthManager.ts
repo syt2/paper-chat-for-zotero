@@ -19,6 +19,7 @@ import type {
   SubscriptionSelfInfo,
   SubscriptionUsageSummary,
   LoginInteraction,
+  ZoteroLoginInteraction,
 } from "../../types/auth";
 import { clearPref, getPref, setPref } from "../../utils/prefs";
 import { getString } from "../../utils/locale";
@@ -56,6 +57,24 @@ const PASSWORD_LOGIN_CONFLICT_COOLDOWN_MS = 10_000;
 // The bridge device flow expires in 5 minutes; poll politely while the user
 // finishes the Zotero consent screen.
 const ZOTERO_DEVICE_POLL_INTERVAL_MS = 2000;
+
+/**
+ * Resolves after `ms`, or as soon as `signal` aborts. Zotero's consent screen
+ * lives in the browser and can take minutes, so cancelling has to wake the
+ * poll loop instead of leaving it parked in a timer.
+ */
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    signal?.addEventListener("abort", finish, { once: true });
+  });
+}
 
 function getEncryptionKey(): string {
   // 使用插件 ID、salt 和 Zotero 数据目录生成密钥
@@ -214,6 +233,7 @@ export class AuthManager {
   } | null = null;
   private passwordLoginBlockedUntil = 0;
   private interactiveLoginGeneration: number | null = null;
+  private zoteroAuthorizationUrl: string | null = null;
   private modelRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private environmentGeneration = 0;
 
@@ -755,18 +775,33 @@ export class AuthManager {
     return this.authService.isZoteroLoginAvailable();
   }
 
-  async loginWithZotero(): Promise<{ success: boolean; message: string }> {
+  async loginWithZotero(
+    interaction?: ZoteroLoginInteraction,
+  ): Promise<{ success: boolean; message: string }> {
     if (!(await this.isZoteroLoginAvailable())) {
       return {
         success: false,
         message: getString("auth-zotero-unavailable"),
       };
     }
-    if (this.interactiveLoginGeneration === this.environmentGeneration) {
+    if (
+      this.interactiveLoginGeneration === this.environmentGeneration ||
+      interaction?.signal?.aborted
+    ) {
       return { success: false, message: getString("auth-login-cancelled") };
     }
     const generation = ++this.environmentGeneration;
     this.interactiveLoginGeneration = generation;
+    let authorizationUrl: string | null = null;
+    // The consent screen lives in the user's browser, so cancelling has to
+    // stop the poll loop here. Bumping the generation makes the pending poll
+    // and every later step of this attempt discard their result.
+    const cancel = () => {
+      if (generation !== this.environmentGeneration) return;
+      this.environmentGeneration += 1;
+      this.zoteroAuthorizationUrl = null;
+    };
+    interaction?.signal?.addEventListener("abort", cancel, { once: true });
     try {
       // Mirror the password flow: switching accounts must not leave the previous
       // NewAPI session alive or its identity in local state.
@@ -792,24 +827,33 @@ export class AuthManager {
         return { success: false, message: getString("auth-login-cancelled") };
       }
       if (!started.success || !started.data) return started;
-      Zotero.launchURL(started.data.authorization_url);
+      authorizationUrl = started.data.authorization_url;
+      this.zoteroAuthorizationUrl = authorizationUrl;
+      interaction?.onAuthorizationURL?.(authorizationUrl);
+      Zotero.launchURL(authorizationUrl);
       const deadline = Date.now() + started.data.expires_in * 1000;
-      let result: Awaited<ReturnType<typeof this.authService.pollZoteroDeviceLogin>> =
-        await this.authService.pollZoteroDeviceLogin(started.data.device_token);
+      let result: Awaited<
+        ReturnType<typeof this.authService.pollZoteroDeviceLogin>
+      > = await this.authService.pollZoteroDeviceLogin(
+        started.data.device_token,
+      );
       while (result.success && result.pending && Date.now() < deadline) {
-        await new Promise((resolve) =>
-          setTimeout(resolve, ZOTERO_DEVICE_POLL_INTERVAL_MS),
-        );
+        await delay(ZOTERO_DEVICE_POLL_INTERVAL_MS, interaction?.signal);
         if (generation !== this.environmentGeneration) {
           return { success: false, message: getString("auth-login-cancelled") };
         }
-        result = await this.authService.pollZoteroDeviceLogin(started.data.device_token);
+        result = await this.authService.pollZoteroDeviceLogin(
+          started.data.device_token,
+        );
       }
       if (generation !== this.environmentGeneration) {
         return { success: false, message: getString("auth-login-cancelled") };
       }
       if (result.pending) {
-        return { success: false, message: getString("auth-zotero-authorization-timeout") };
+        return {
+          success: false,
+          message: getString("auth-zotero-authorization-timeout"),
+        };
       }
       if (!result.success) {
         return {
@@ -821,7 +865,10 @@ export class AuthManager {
       this.syncAuthServiceIdentity();
       const userId = this.authService.getUserId();
       if (userId === null || userId <= 0) {
-        return { success: false, message: getString("api-error-parse-user-failed") };
+        return {
+          success: false,
+          message: getString("api-error-parse-user-failed"),
+        };
       }
       this.state.userId = userId;
       this.authService.setUserId(userId);
@@ -856,8 +903,20 @@ export class AuthManager {
             : getString("auth-zotero-login-failed"),
       };
     } finally {
-      if (this.interactiveLoginGeneration === generation) this.interactiveLoginGeneration = null;
+      interaction?.signal?.removeEventListener("abort", cancel);
+      if (this.interactiveLoginGeneration === generation)
+        this.interactiveLoginGeneration = null;
+      if (this.zoteroAuthorizationUrl === authorizationUrl)
+        this.zoteroAuthorizationUrl = null;
     }
+  }
+
+  /**
+   * The consent page for a device login that is still waiting, so the dialog
+   * can re-open it after the user closed the browser tab.
+   */
+  getZoteroAuthorizationUrl(): string | null {
+    return this.zoteroAuthorizationUrl;
   }
 
   private async performInteractiveLogin(
@@ -1040,13 +1099,17 @@ export class AuthManager {
     }
 
     if (this.authService.hasZoteroBridgeSession()) {
-      ztoolkit.log("[AuthManager] Recreating NewAPI Session through Zotero bridge");
+      ztoolkit.log(
+        "[AuthManager] Recreating NewAPI Session through Zotero bridge",
+      );
       const zoteroResult = await this.authService.reloginWithZoteroBridge();
       if (generation !== this.environmentGeneration) return false;
       if (zoteroResult.success) {
         this.passwordLoginBlockedUntil = 0;
         this.syncAuthServiceIdentity();
-        ztoolkit.log("[AuthManager] NewAPI Session restored through Zotero bridge");
+        ztoolkit.log(
+          "[AuthManager] NewAPI Session restored through Zotero bridge",
+        );
         return true;
       }
       // Only a dead bridge session (401) may fall through to password login.
@@ -1058,7 +1121,10 @@ export class AuthManager {
         );
         return false;
       }
-      ztoolkit.log("[AuthManager] Zotero bridge session is gone:", zoteroResult.message);
+      ztoolkit.log(
+        "[AuthManager] Zotero bridge session is gone:",
+        zoteroResult.message,
+      );
     }
 
     if (Date.now() < this.passwordLoginBlockedUntil) {
