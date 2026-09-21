@@ -341,7 +341,10 @@ export class AuthService {
       DASHBOARD_REFRESH_COOKIE,
       DASHBOARD_REFRESH_COOKIE_PATH,
     );
-    this.removeAuthCookieFromJar(ZOTERO_BRIDGE_COOKIE, ZOTERO_BRIDGE_COOKIE_PATH);
+    this.removeAuthCookieFromJar(
+      ZOTERO_BRIDGE_COOKIE,
+      ZOTERO_BRIDGE_COOKIE_PATH,
+    );
   }
 
   /**
@@ -659,7 +662,11 @@ export class AuthService {
       } else if (name === ZOTERO_BRIDGE_COOKIE) {
         this.zoteroBridgeSession = pending.value || null;
         if (this.zoteroBridgeSession) this.saveZoteroBridgeCookieToJar();
-        else this.removeAuthCookieFromJar(ZOTERO_BRIDGE_COOKIE, ZOTERO_BRIDGE_COOKIE_PATH);
+        else
+          this.removeAuthCookieFromJar(
+            ZOTERO_BRIDGE_COOKIE,
+            ZOTERO_BRIDGE_COOKIE_PATH,
+          );
       } else {
         this.dashboardRefreshToken = pending.value || null;
         if (this.dashboardRefreshToken) {
@@ -977,26 +984,36 @@ export class AuthService {
       return { success: false, message: "No Zotero bridge session", status: 0 };
     }
     const origin = new URL(this.baseUrl).origin;
-    const result = await this.request<ApiResponse<DashboardAuthData & { refresh_token?: string }>>(
-      "POST",
-      `${origin}/ext/paperchat/oauth/zotero/auto-login`,
-      { extractAuthCookies: true },
-    );
+    const result = await this.request<
+      ApiResponse<DashboardAuthData & { refresh_token?: string }>
+    >("POST", `${origin}/ext/paperchat/oauth/zotero/auto-login`, {
+      extractAuthCookies: true,
+    });
     if (result.error || result.status >= 400 || !result.data?.success) {
       if (result.status === 401) {
         this.zoteroBridgeSession = null;
-        this.removeAuthCookieFromJar(ZOTERO_BRIDGE_COOKIE, ZOTERO_BRIDGE_COOKIE_PATH);
+        this.removeAuthCookieFromJar(
+          ZOTERO_BRIDGE_COOKIE,
+          ZOTERO_BRIDGE_COOKIE_PATH,
+        );
       }
       return {
         success: false,
-        message: result.error || this.parseErrorMessage(result.data, "Zotero automatic login failed"),
+        message:
+          result.error ||
+          this.parseErrorMessage(result.data, "Zotero automatic login failed"),
         status: result.status,
       };
     }
     const data = result.data.data;
     const accessToken = data?.access_token?.trim();
     const userId = data?.user?.id;
-    if (!accessToken || !userId) return { success: false, message: "Invalid automatic login response", status: result.status };
+    if (!accessToken || !userId)
+      return {
+        success: false,
+        message: "Invalid automatic login response",
+        status: result.status,
+      };
     this.dashboardAccessToken = accessToken;
     this.userId = userId;
     if (data?.refresh_token) {
@@ -1008,37 +1025,73 @@ export class AuthService {
     return { ...result.data, status: result.status };
   }
 
-  async startZoteroDeviceLogin(): Promise<{ success: boolean; message: string; data?: ZoteroDeviceStartResponse }> {
+  async startZoteroDeviceLogin(): Promise<{
+    success: boolean;
+    message: string;
+    data?: ZoteroDeviceStartResponse;
+  }> {
     const result = await this.request<ZoteroDeviceStartResponse>(
       "POST",
       `${new URL(this.baseUrl).origin}/ext/paperchat/oauth/zotero/device/start`,
       { body: {}, includeAuthentication: false },
     );
-    if (result.error || result.status >= 400 || !result.data?.authorization_url || !result.data.device_token) {
+    if (
+      result.error ||
+      result.status >= 400 ||
+      !result.data?.authorization_url ||
+      !result.data.device_token
+    ) {
       if (result.status === 404) {
-        return { success: false, message: getString("auth-zotero-unavailable") };
+        return {
+          success: false,
+          message: getString("auth-zotero-unavailable"),
+        };
       }
       return {
         success: false,
         message:
           result.error ||
-          this.parseErrorMessage(result.data, getString("auth-zotero-unavailable")),
+          this.parseErrorMessage(
+            result.data,
+            getString("auth-zotero-unavailable"),
+          ),
       };
     }
     return { success: true, message: "", data: result.data };
   }
 
-  async pollZoteroDeviceLogin(deviceToken: string): Promise<DashboardSessionRefreshResult & { pending?: boolean; expires_in?: number }> {
+  async pollZoteroDeviceLogin(
+    deviceToken: string,
+  ): Promise<
+    DashboardSessionRefreshResult & { pending?: boolean; expires_in?: number }
+  > {
     const result = await this.request<ZoteroDevicePollResponse>(
       "POST",
       `${new URL(this.baseUrl).origin}/ext/paperchat/oauth/zotero/device/poll`,
       { body: { device_token: deviceToken }, includeAuthentication: false },
     );
-    if (result.error || result.status >= 400 || !result.data) return { success: false, message: result.error || "Zotero login failed", status: result.status };
-    if (result.data.pending) return { success: true, message: "", status: result.status, pending: true, expires_in: result.data.expires_in };
+    if (result.error || result.status >= 400 || !result.data)
+      return {
+        success: false,
+        message: result.error || "Zotero login failed",
+        status: result.status,
+      };
+    if (result.data.pending)
+      return {
+        success: true,
+        message: "",
+        status: result.status,
+        pending: true,
+        expires_in: result.data.expires_in,
+      };
     const accessToken = result.data.access_token?.trim();
     const userId = result.data.user?.id;
-    if (!accessToken || !userId) return { success: false, message: "Invalid Zotero login response", status: result.status };
+    if (!accessToken || !userId)
+      return {
+        success: false,
+        message: "Invalid Zotero login response",
+        status: result.status,
+      };
     this.dashboardAccessToken = accessToken;
     this.userId = userId;
     this.dashboardSessionId = result.data.session?.sid?.trim() || null;
@@ -1050,7 +1103,12 @@ export class AuthService {
       this.zoteroBridgeSession = result.data.zotero_bridge_session;
       this.saveZoteroBridgeCookieToJar();
     }
-    return { success: true, message: "", ...result.data, status: result.status };
+    return {
+      success: true,
+      message: "",
+      ...result.data,
+      status: result.status,
+    };
   }
 
   private async performDashboardSessionRefresh(
