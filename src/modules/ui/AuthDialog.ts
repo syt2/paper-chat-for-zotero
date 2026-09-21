@@ -335,7 +335,8 @@ export async function showAuthDialog(
           {
             tag: "div",
             id: "zotero-oauth-field",
-            styles: { display: "flex", marginTop: "12px" },
+            // Hidden until isZoteroLoginAvailable() resolves true.
+            styles: { display: "none", marginTop: "12px" },
             children: [
               {
                 tag: "button",
@@ -796,7 +797,10 @@ export async function showAuthDialog(
             doc,
             "zotero-oauth-btn",
           );
-          let zoteroLoginAvailable = true;
+          // Start hidden: the entry point is revealed only once the API confirms
+          // the bridge is configured, so an unconfigured or slow deployment never
+          // shows a button that cannot work.
+          let zoteroLoginAvailable = false;
           const messageDiv = requireAuthElement<HTMLElement>(
             doc,
             "auth-message",
