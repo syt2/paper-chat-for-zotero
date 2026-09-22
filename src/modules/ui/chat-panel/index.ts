@@ -17,6 +17,7 @@ export {
   getChatManager,
   stopChatSearchBackfillForShutdown,
   addSelectedTextAttachment,
+  sendCommentSelectionToChat,
   addImageAttachment,
   openPresentationForItem,
   focusRunningPresentationTask,

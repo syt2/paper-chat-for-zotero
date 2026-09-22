@@ -1,10 +1,13 @@
 import { assert } from "chai";
 import {
+  appendSelectionCommentToDraft,
   collectAnnotationText,
   FLOATING_SELECTION_ENTRY_PROXIMITY_PX,
+  getSelectionEntryExpandedWidth,
   getSelectionEntryRefreshAction,
   getSelectionEntryRect,
   getSelectionEntryPosition,
+  isReaderSelectionEntryEnabled,
   isSelectionEntryPointerNear,
   isSelectionEntryTextEligible,
 } from "../src/modules/ui/reader-chat-selection.ts";
@@ -179,5 +182,50 @@ describe("reader chat selection", function () {
       ),
       { left: 448, top: 382 },
     );
+  });
+
+  it("grows the entry by one slot per revealed action", function () {
+    assert.equal(getSelectionEntryExpandedWidth(0), 18);
+    assert.equal(getSelectionEntryExpandedWidth(2), 74);
+    assert.equal(getSelectionEntryExpandedWidth(3), 102);
+  });
+
+  it("appends a comment to the draft on its own line", function () {
+    assert.equal(
+      appendSelectionCommentToDraft("existing draft", "what does this mean?"),
+      "existing draft\nwhat does this mean?",
+    );
+    assert.equal(
+      appendSelectionCommentToDraft("  existing draft  ", "  spaced  "),
+      "existing draft\nspaced",
+    );
+  });
+
+  it("uses only the comment when the draft is empty or blank", function () {
+    assert.equal(
+      appendSelectionCommentToDraft("", "first thought"),
+      "first thought",
+    );
+    assert.equal(
+      appendSelectionCommentToDraft("   \n  ", "first thought"),
+      "first thought",
+    );
+  });
+
+  it("keeps the draft untouched when the comment is empty or blank", function () {
+    assert.equal(
+      appendSelectionCommentToDraft("existing draft", ""),
+      "existing draft",
+    );
+    assert.equal(
+      appendSelectionCommentToDraft("existing draft", "  \n "),
+      "existing draft",
+    );
+  });
+
+  it("keeps the floating entry enabled unless the pref is explicitly false", function () {
+    assert.isTrue(isReaderSelectionEntryEnabled(true));
+    assert.isTrue(isReaderSelectionEntryEnabled(undefined));
+    assert.isFalse(isReaderSelectionEntryEnabled(false));
   });
 });

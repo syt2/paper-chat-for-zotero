@@ -43,6 +43,7 @@ import type {
 import { ANALYTICS_EVENTS, getAnalyticsService } from "../analytics";
 import { refreshPaperChatNoticeUI } from "./PaperChatNoticeRenderer";
 import { getReadingLoopService } from "../reading-loop";
+import { applyReaderSelectionEntryPreference } from "../ui/ReaderChatEntry";
 
 // Current selected provider ID
 let currentProviderId: string = "paperchat";
@@ -189,6 +190,9 @@ export async function refreshPrefsUI(
   // Initialize Reading Loop settings checkbox
   initReadingLoopSettings(doc);
 
+  // Initialize reader selection entry settings checkbox
+  initReaderSelectionEntrySettings(doc);
+
   initPaperSkillSettings(doc);
 
   // Initialize AISummary settings
@@ -310,6 +314,9 @@ export function bindPrefEvents(): void {
   // Bind Reading Loop settings checkbox event
   bindReadingLoopSettingsEvent(doc);
 
+  // Bind reader selection entry settings checkbox event
+  bindReaderSelectionEntrySettingsEvent(doc);
+
   bindPaperSkillSettingsEvents(doc);
 
   // Bind AISummary settings events
@@ -399,6 +406,57 @@ function bindReadingLoopSettingsEvent(doc: Document): void {
       initReadingLoopSettings(doc);
       ztoolkit.log(
         "[Preferences] Failed to refresh Reading Loop setting:",
+        error,
+      );
+    }
+  });
+}
+
+function initReaderSelectionEntrySettings(doc: Document): void {
+  const enabledCheckbox = doc.getElementById(
+    "pref-reader-selection-entry-enabled",
+  ) as XUL.Checkbox | null;
+  if (enabledCheckbox) {
+    enabledCheckbox.checked = getPref("readerSelectionEntryEnabled") !== false;
+  }
+}
+
+export function applyReaderSelectionEntryEnabledPreference(
+  enabled: boolean,
+): void {
+  const previousEnabled = getPref("readerSelectionEntryEnabled") !== false;
+  try {
+    setPref("readerSelectionEntryEnabled", enabled);
+    applyReaderSelectionEntryPreference();
+  } catch (error) {
+    try {
+      setPref("readerSelectionEntryEnabled", previousEnabled);
+      applyReaderSelectionEntryPreference();
+    } catch (rollbackError) {
+      ztoolkit.log(
+        "[Preferences] Failed to roll back reader selection entry setting:",
+        rollbackError,
+      );
+    }
+    throw error;
+  }
+}
+
+function bindReaderSelectionEntrySettingsEvent(doc: Document): void {
+  const enabledCheckbox = doc.getElementById(
+    "pref-reader-selection-entry-enabled",
+  ) as XUL.Checkbox | null;
+  if (!enabledCheckbox) {
+    return;
+  }
+
+  enabledCheckbox.addEventListener("command", () => {
+    try {
+      applyReaderSelectionEntryEnabledPreference(enabledCheckbox.checked);
+    } catch (error) {
+      initReaderSelectionEntrySettings(doc);
+      ztoolkit.log(
+        "[Preferences] Failed to refresh reader selection entry setting:",
         error,
       );
     }

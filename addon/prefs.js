@@ -32,6 +32,7 @@ pref("paperchatBaseUrlOverride", "");
 // UI Settings
 pref("panelMode", "sidebar");
 pref("debugContextExportEnabled", false);
+pref("readerSelectionEntryEnabled", true);
 pref("readingLoopEnabled", true);
 pref("readingLoopHistory", "");
 

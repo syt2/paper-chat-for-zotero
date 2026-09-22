@@ -32,6 +32,7 @@ declare namespace _ZoteroTypes {
       "paperchatBaseUrlOverride": string;
       "panelMode": string;
       "debugContextExportEnabled": boolean;
+      "readerSelectionEntryEnabled": boolean;
       "readingLoopEnabled": boolean;
       "readingLoopHistory": string;
       "firstInstalledVersion": string;

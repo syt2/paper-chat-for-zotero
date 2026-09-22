@@ -903,6 +903,7 @@ describe("reader figure screenshot", function () {
     runtime.Zotero = {
       getMainWindow: () => ({ Zotero_Tabs: { selectedID: "reader-tab" } }),
       Reader: { getByTabID: () => activeReader },
+      Prefs: { get: () => true },
     };
 
     try {
@@ -920,6 +921,44 @@ describe("reader figure screenshot", function () {
       };
       watchActivePdfSelection();
       assert.lengthOf(firstDoc.body.children, 0);
+    } finally {
+      activeReader = null;
+      watchActivePdfSelection();
+      runtime.Zotero = previousZotero;
+    }
+  });
+
+  it("re-applies the selection entry listeners when the preference changes", function () {
+    const runtime = globalThis as Record<string, any>;
+    const previousZotero = runtime.Zotero;
+    const doc = new FakeDocument();
+    createPage(doc);
+    let entryEnabled = false;
+    let activeReader: Record<string, any> | null = {
+      _internalReader: {
+        _lastView: { _iframeWindow: { document: doc } },
+      },
+    };
+    runtime.Zotero = {
+      getMainWindow: () => ({ Zotero_Tabs: { selectedID: "reader-tab" } }),
+      Reader: { getByTabID: () => activeReader },
+      Prefs: { get: () => entryEnabled },
+    };
+
+    try {
+      watchActivePdfSelection();
+      assert.equal(doc.listenerCount("selectionchange"), 0, "disabled");
+
+      // The reader tab stays selected while the setting is toggled, so the
+      // watcher has to react to the new preference instead of short-circuiting
+      // on the unchanged document.
+      entryEnabled = true;
+      watchActivePdfSelection();
+      assert.equal(doc.listenerCount("selectionchange"), 1, "enabled");
+
+      entryEnabled = false;
+      watchActivePdfSelection();
+      assert.equal(doc.listenerCount("selectionchange"), 0, "disabled again");
     } finally {
       activeReader = null;
       watchActivePdfSelection();

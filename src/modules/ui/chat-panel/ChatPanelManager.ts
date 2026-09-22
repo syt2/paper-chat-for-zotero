@@ -22,6 +22,7 @@ import type {
 } from "../../../types/tool";
 import { getAuthManager } from "../../auth";
 import { ConversationNavigator } from "./ConversationNavigator";
+import { dispatchInputEvent } from "./InputEvents";
 import { getProviderManager } from "../../providers";
 import { providerSupportsToolCalling } from "../../providers/provider-capabilities";
 import { getPref, setPref } from "../../../utils/prefs";
@@ -108,6 +109,7 @@ import {
   updateUserBarDisplay,
   updatePdfCheckboxVisibilityForItem,
   focusInput,
+  sendMessage,
   setActiveReaderItemFn,
   setTogglePanelModeFn,
   updatePanelModeButtonIcon,
@@ -134,6 +136,7 @@ import {
   requestNextQuestionHintAfterRecentRender,
 } from "./NextQuestionHintController";
 import { cancelReaderFigureScreenshot } from "../ReaderFigureScreenshot";
+import { appendSelectionCommentToDraft } from "../reader-chat-selection";
 import {
   getResolvedImageInputAvailability,
   MAX_PENDING_IMAGE_ATTACHMENTS,
@@ -3971,6 +3974,85 @@ export function addSelectedTextAttachment(text: string): void {
   if (!trimmed) return;
   pendingSelectedText = trimmed;
   syncPendingAttachmentsPreviews();
+}
+
+/**
+ * Send a reader selection together with the user's comment on it.
+ *
+ * `send` picks the attachment slot: sending immediately pins the passage so it
+ * survives the composer being cleared, while attaching only fills the draft and
+ * keeps the selection replaceable. Either way the comment lands in the composer
+ * rather than inside the quoted passage, so the user can still edit it.
+ */
+export function sendCommentSelectionToChat(
+  selectedText: string,
+  comment: string,
+  send: boolean,
+): void {
+  const trimmedText = selectedText.trim();
+  if (!trimmedText) return;
+
+  if (send) {
+    const previousPinnedTexts = pinnedSelectedTexts;
+    const previousPendingText = pendingSelectedText;
+    pinnedSelectedTexts = [...pinnedSelectedTexts, trimmedText];
+    pendingSelectedText = null;
+    try {
+      showPanel("reader_selection");
+    } catch (error) {
+      pinnedSelectedTexts = previousPinnedTexts;
+      pendingSelectedText = previousPendingText;
+      syncPendingAttachmentsPreviews();
+      throw error;
+    }
+    if (!isPanelShown()) {
+      pinnedSelectedTexts = previousPinnedTexts;
+      pendingSelectedText = previousPendingText;
+      syncPendingAttachmentsPreviews();
+      return;
+    }
+    syncPendingAttachmentsPreviews();
+  } else {
+    // Attaching keeps the passage replaceable, so it lands in the pending slot.
+    showPanelWithSelectedText(trimmedText, "reader_selection");
+    if (!isPanelShown()) return;
+  }
+
+  // A freshly opened panel finishes its DOM, session, and auth initialization
+  // asynchronously, and in floating mode the container does not exist yet at
+  // all. Defer the composer write until then so the comment is neither dropped
+  // nor sent before there is a session to receive it.
+  runWhenPanelReady(() => {
+    const container = getVisibleChatContainer();
+    const messageInput = container?.querySelector(
+      "#chat-message-input",
+    ) as HTMLTextAreaElement | null;
+    if (!container || !messageInput) return;
+
+    messageInput.value = appendSelectionCommentToDraft(
+      messageInput.value,
+      comment,
+    );
+    messageInput.setSelectionRange(
+      messageInput.value.length,
+      messageInput.value.length,
+    );
+    dispatchInputEvent(messageInput);
+    focusInput(container);
+
+    if (!send) return;
+    const sendButton = container.querySelector(
+      "#chat-send-button",
+    ) as HTMLButtonElement | null;
+    void sendMessage(
+      createContext(container),
+      messageInput,
+      sendButton,
+      container.querySelector(
+        "#chat-attachments-preview",
+      ) as HTMLElement | null,
+    );
+  });
 }
 
 function getImageAttachmentByteLength(image: ImageAttachment): number | null {

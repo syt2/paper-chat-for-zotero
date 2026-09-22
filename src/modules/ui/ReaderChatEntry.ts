@@ -11,7 +11,8 @@ import {
  * - createAnnotationContextMenu: a menu entry on saved annotations that sends
  *   the annotation text (and its comment) to the chat panel.
  *
- * The selection entry expands into attachment and streaming translation actions.
+ * The selection entry expands into a comment composer and a streaming
+ * translation action.
  * Annotation menu entries attach their passage directly to the chat panel.
  *
  * Reader listeners are registered globally per addonRef (not per window), so
@@ -21,7 +22,11 @@ import {
 import { config } from "../../../package.json";
 import { showReaderSelectionTranslation } from "./ReaderSelectionTranslation";
 import { getString } from "../../utils/locale";
-import { showPanelWithSelectedText } from "./chat-panel";
+import { getPref } from "../../utils/prefs";
+import {
+  sendCommentSelectionToChat,
+  showPanelWithSelectedText,
+} from "./chat-panel";
 import type { ChatPanelOpenSource } from "./chat-panel/ChatPanelManager";
 import { cancelReaderFigureScreenshot } from "./ReaderFigureScreenshot";
 import {
@@ -30,7 +35,9 @@ import {
   FLOATING_SELECTION_ENTRY_SIZE,
   getSelectionEntryRefreshAction,
   getSelectionEntryRect,
+  getSelectionEntryExpandedWidth,
   getSelectionEntryPosition,
+  isReaderSelectionEntryEnabled,
   isSelectionEntryPointerNear,
   isSelectionEntryTextEligible,
   type ReaderLike,
@@ -64,6 +71,8 @@ let annotationMenuHandler: ((event: AnnotationMenuEvent) => void) | undefined;
 let selectionPopupHandler: ((event: SelectionPopupEvent) => void) | undefined;
 let readerWatchTimer: ReturnType<typeof setInterval> | undefined;
 let watchedPdfDocument: Document | undefined;
+/** Preference value the watched document's listeners were applied for. */
+let watchedEntryEnabled: boolean | undefined;
 let dismissedSelectionSignature = "";
 let selectionRefreshFrame: number | undefined;
 let selectionRefreshWindow: Window | undefined;
@@ -89,13 +98,17 @@ function getSelectionIconURL(name: string): Promise<string> {
 type FloatingSelectionEntry = {
   button: HTMLElement;
   expanded: boolean;
+  actionCount: number;
   translationContext: SelectionTranslationContext;
   dispose?: () => void;
+  closeCommentPopover?: () => void;
   anchor: SelectionRect;
   doc: Document;
   text: string;
   signature: string;
   source: "selection" | "popup";
+  /** Set while the translate popover for this entry is open. */
+  translating?: boolean;
 };
 
 let floatingSelectionEntry: FloatingSelectionEntry | undefined;
@@ -123,11 +136,16 @@ function openChatWithSelection(
   showPanelWithSelectedText(trimmed, source);
 }
 
+function isSelectionEntryEnabled(): boolean {
+  return isReaderSelectionEntryEnabled(getPref("readerSelectionEntryEnabled"));
+}
+
 function removeFloatingSelectionEntry(): void {
   const entry = floatingSelectionEntry;
   floatingSelectionEntry = undefined;
   if (!entry) return;
 
+  entry.closeCommentPopover?.();
   entry.dispose?.();
   entry.button.remove();
 }
@@ -303,8 +321,235 @@ function positionFloatingSelectionEntry(
     removeFloatingSelectionEntry();
     return;
   }
-  entry.button.style.left = `${Math.max(0, Math.min(position.left, win.innerWidth - (entry.expanded ? 74 : FLOATING_SELECTION_ENTRY_SIZE)))}px`;
+  const width = entry.expanded
+    ? getSelectionEntryExpandedWidth(entry.actionCount)
+    : FLOATING_SELECTION_ENTRY_SIZE;
+  entry.button.style.left = `${Math.max(0, Math.min(position.left, win.innerWidth - width))}px`;
   entry.button.style.top = `${position.top}px`;
+}
+
+type SelectionCommentHandlers = {
+  onSend: (comment: string) => void;
+  onAttach: (comment: string) => void;
+  onClose: () => void;
+};
+
+/**
+ * Open a small composer beside the entry so the user can annotate the passage
+ * before it reaches the chat. Send hands the passage and the comment to the
+ * panel immediately; attach only stages them in the composer draft.
+ */
+function showSelectionCommentPopover(
+  doc: Document,
+  entry: FloatingSelectionEntry,
+  commentButton: HTMLElement,
+  handlers: SelectionCommentHandlers,
+): () => void {
+  const frame = doc.defaultView?.frameElement;
+  const popoverDoc = frame?.ownerDocument || doc;
+  const win = popoverDoc.defaultView;
+  if (!win || !popoverDoc.body) {
+    return () => {};
+  }
+
+  const dark = win.matchMedia("(prefers-color-scheme: dark)")?.matches;
+  const panel = popoverDoc.createElement("section");
+  panel.className = "paperchat-selection-comment";
+  panel.setAttribute("role", "dialog");
+  panel.setAttribute("aria-label", getString("chat-reader-comment"));
+  Object.assign(panel.style, {
+    position: "fixed",
+    zIndex: "2147483647",
+    boxSizing: "border-box",
+    width: `${Math.max(0, Math.min(300, win.innerWidth - 16))}px`,
+    display: "flex",
+    flexDirection: "column",
+    padding: "4px 6px 6px",
+    borderRadius: "10px",
+    border: `1px solid ${dark ? "#505055" : "#dedee3"}`,
+    background: dark ? "#27272b" : "#fff",
+    color: dark ? "#eeeeef" : "#292930",
+    boxShadow: "0 4px 18px rgba(0,0,0,.18)",
+    font: "13px/1.5 system-ui, sans-serif",
+  });
+
+  const input = popoverDoc.createElement("textarea");
+  input.rows = 3;
+  input.placeholder = getString("chat-reader-comment-placeholder");
+  Object.assign(input.style, {
+    width: "100%",
+    boxSizing: "border-box",
+    resize: "none",
+    padding: "6px 8px",
+    border: "none",
+    background: "transparent",
+    color: "inherit",
+    font: "14px/1.5 system-ui, sans-serif",
+    outline: "none",
+  });
+
+  // Footer actions follow the chat composer: a plain cancel, a bare icon
+  // action for keeping the passage in the draft, and the filled send button
+  // that matches the panel's own bubble.
+  const actions = popoverDoc.createElement("div");
+  Object.assign(actions.style, {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: "4px",
+    flexShrink: "0",
+  });
+  const makeTextButton = (label: string) => {
+    const control = popoverDoc.createElement("button");
+    control.type = "button";
+    control.textContent = label;
+    control.title = label;
+    Object.assign(control.style, {
+      border: "none",
+      background: "transparent",
+      color: dark ? "#a1a1aa" : "#6b7280",
+      cursor: "pointer",
+      padding: "6px 10px",
+      borderRadius: "8px",
+      font: "13px system-ui, sans-serif",
+    });
+    return control;
+  };
+  const makeIconButton = (label: string, filled: boolean) => {
+    const control = popoverDoc.createElement("button");
+    control.type = "button";
+    control.title = label;
+    control.setAttribute("aria-label", label);
+    Object.assign(control.style, {
+      border: "none",
+      background: filled ? (dark ? "#283b52" : "#eaf2fc") : "transparent",
+      color: dark ? "#e1ebf7" : "#263b53",
+      cursor: "pointer",
+      width: "28px",
+      height: "28px",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      borderRadius: "999px",
+      padding: "0",
+      flexShrink: "0",
+    });
+    return control;
+  };
+  const setIcon = (control: HTMLElement, name: string) => {
+    const icon = popoverDoc.createElement("img");
+    void getSelectionIconURL(name)
+      .then((url) => {
+        icon.src = url;
+      })
+      .catch((error) =>
+        ztoolkit.log("[ReaderChatEntry] Icon load failed:", error),
+      );
+    icon.alt = "";
+    icon.draggable = false;
+    Object.assign(icon.style, {
+      width: "16px",
+      height: "16px",
+      pointerEvents: "none",
+    });
+    control.append(icon);
+  };
+  const cancelButton = makeTextButton(getString("chat-reader-comment-cancel"));
+  const attachButton = makeIconButton(
+    getString("chat-reader-comment-attach"),
+    false,
+  );
+  setIcon(attachButton, "pushpin");
+  const sendButton = makeIconButton(
+    getString("chat-reader-comment-send"),
+    true,
+  );
+  setIcon(sendButton, "send");
+  actions.append(cancelButton, attachButton, sendButton);
+  panel.append(input, actions);
+  popoverDoc.body.append(panel);
+
+  let disposed = false;
+  const place = () => {
+    const width = panel.getBoundingClientRect().width;
+    const height = panel.getBoundingClientRect().height;
+    const frameRect = frame?.getBoundingClientRect();
+    const left = entry.anchor.left + (frameRect?.left || 0);
+    const top = entry.anchor.top + (frameRect?.top || 0);
+    const below = top + entry.anchor.height + 8;
+    panel.style.left = `${Math.max(8, Math.min(left, win.innerWidth - width - 8))}px`;
+    panel.style.top = `${Math.max(8, Math.min(below + height <= win.innerHeight - 8 ? below : top - height - 8, win.innerHeight - height - 8))}px`;
+  };
+  place();
+
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    panel.remove();
+    popoverDoc.removeEventListener("pointerdown", outside, true);
+    popoverDoc.removeEventListener("keydown", keydown, true);
+    doc.removeEventListener("pointerdown", outside, true);
+    doc.removeEventListener("keydown", keydown, true);
+    doc.defaultView?.removeEventListener("pagehide", dispose);
+    win.removeEventListener("pagehide", dispose);
+    win.removeEventListener("resize", place);
+    handlers.onClose();
+  };
+  const outside = (event: Event) => {
+    const target = event.target as Node | null;
+    // The comment button toggles this popover closed, so dismissing here would
+    // just reopen it and throw away whatever the user had typed.
+    if (target && (panel.contains(target) || commentButton.contains(target))) {
+      return;
+    }
+    dispose();
+  };
+  const keydown = (event: KeyboardEvent) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      dispose();
+      return;
+    }
+    // Enter sends, Shift+Enter keeps the newline; the mention-free composer
+    // mirrors the chat panel's own composer behavior.
+    if (event.key === "Enter" && !event.shiftKey && event.target === input) {
+      event.preventDefault();
+      event.stopPropagation();
+      const comment = input.value;
+      dispose();
+      handlers.onSend(comment);
+    }
+  };
+  panel.addEventListener("pointerdown", (event) => event.stopPropagation());
+  cancelButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    dispose();
+  });
+  attachButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const comment = input.value;
+    dispose();
+    handlers.onAttach(comment);
+  });
+  sendButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const comment = input.value;
+    dispose();
+    handlers.onSend(comment);
+  });
+  popoverDoc.addEventListener("pointerdown", outside, true);
+  popoverDoc.addEventListener("keydown", keydown, true);
+  doc.addEventListener("pointerdown", outside, true);
+  doc.addEventListener("keydown", keydown, true);
+  doc.defaultView?.addEventListener("pagehide", dispose);
+  win.addEventListener("pagehide", dispose);
+  win.addEventListener("resize", place);
+  input.focus();
+  return dispose;
 }
 
 function showFloatingSelectionEntry(
@@ -315,7 +560,8 @@ function showFloatingSelectionEntry(
   if (
     !selection ||
     !isSelectionEntryTextEligible(selection.text) ||
-    !doc.body
+    !doc.body ||
+    !isSelectionEntryEnabled()
   ) {
     removeFloatingSelectionEntry();
     return;
@@ -400,16 +646,13 @@ function showFloatingSelectionEntry(
     });
     control.append(icon);
   };
-  const attach = makeButton(
-    getString("chat-reader-open-selection-tooltip"),
-    28,
-  );
-  setIcon(attach, "send");
+  const comment = makeButton(getString("chat-reader-comment"), 28);
+  setIcon(comment, "comment");
   const translate = makeButton(getString("chat-reader-translate"), 28);
   setIcon(translate, "translate");
-  attach.hidden = translate.hidden = true;
+  comment.hidden = translate.hidden = true;
   // Inline display is explicit so the PDF reader's styles cannot override hidden.
-  attach.style.display = translate.style.display = "none";
+  comment.style.display = translate.style.display = "none";
   let paperTitle: string | undefined;
   try {
     const tabs = (
@@ -434,6 +677,7 @@ function showFloatingSelectionEntry(
     button,
     doc,
     expanded: false,
+    actionCount: 2,
     translationContext: captureTranslationContext(
       doc,
       selection.text,
@@ -469,12 +713,12 @@ function showFloatingSelectionEntry(
     if (entry.expanded === expanded) return;
     entry.expanded = expanded;
     toggle.setAttribute("aria-expanded", String(entry.expanded));
-    attach.hidden = translate.hidden = !entry.expanded;
-    attach.style.display = translate.style.display = entry.expanded
+    comment.hidden = translate.hidden = !entry.expanded;
+    comment.style.display = translate.style.display = entry.expanded
       ? "flex"
       : "none";
     button.style.width = entry.expanded
-      ? "74px"
+      ? `${getSelectionEntryExpandedWidth(entry.actionCount)}px`
       : `${FLOATING_SELECTION_ENTRY_SIZE}px`;
     positionFloatingSelectionEntry(entry, {
       text: entry.text,
@@ -517,21 +761,48 @@ function showFloatingSelectionEntry(
   // Preserve keyboard/touch activation without toggling a hovered menu closed.
   activate(toggle, () => setExpanded(true));
   const dismiss = () => {
+    entry.closeCommentPopover?.();
     dismissedSelectionSignature = entry.signature;
     removeFloatingSelectionEntry();
   };
-  activate(attach, () => {
-    dismiss();
-    openChatWithSelection(entry.text, "reader_selection");
+  activate(comment, () => {
+    if (entry.closeCommentPopover) {
+      entry.closeCommentPopover();
+      return;
+    }
+    entry.closeCommentPopover = showSelectionCommentPopover(
+      doc,
+      entry,
+      comment,
+      {
+        onClose: () => {
+          entry.closeCommentPopover = undefined;
+        },
+        onSend: (text) => {
+          dismiss();
+          sendCommentSelectionToChat(entry.text, text, true);
+        },
+        onAttach: (text) => {
+          dismiss();
+          sendCommentSelectionToChat(entry.text, text, false);
+        },
+      },
+    );
   });
   activate(translate, () => {
-    dismiss();
     closeSelectionTranslation?.();
+    // Translation is a read-only side panel, so the entry stays put: the user
+    // can still comment, pin, or translate again without reselecting.
+    entry.translating = true;
+    setExpanded(true);
     closeSelectionTranslation = showReaderSelectionTranslation(
       doc,
       entry.text,
       entry.anchor,
       entry.translationContext,
+      () => {
+        entry.translating = false;
+      },
     );
   });
   button.addEventListener("keydown", (event) => {
@@ -542,7 +813,17 @@ function showFloatingSelectionEntry(
     }
   });
   const outside = (event: Event) => {
-    if (entry.expanded && !button.contains(event.target as Node)) dismiss();
+    // A click on the translation popover is not a dismissal: that panel is the
+    // entry's own side surface, and the user may still act on the passage.
+    if (!entry.expanded || entry.translating) return;
+    if (button.contains(event.target as Node)) return;
+    if (
+      (event.target as Element | null)?.closest?.(
+        ".paperchat-selection-translation",
+      )
+    )
+      return;
+    dismiss();
   };
   doc.addEventListener("pointerdown", outside, true);
   entry.dispose = () => {
@@ -550,7 +831,7 @@ function showFloatingSelectionEntry(
     doc.removeEventListener("pointermove", handlePointerMove, true);
     doc.documentElement.removeEventListener("pointerleave", handlePointerLeave);
   };
-  button.append(toggle, attach, translate);
+  button.append(toggle, comment, translate);
   doc.body.appendChild(button);
   floatingSelectionEntry = entry;
   positionFloatingSelectionEntry(entry, selection);
@@ -607,7 +888,11 @@ function refreshFloatingSelectionEntry(doc: Document): void {
 
 export function watchActivePdfSelection(): void {
   const doc = getActivePdfSelectionDocument();
-  if (doc === watchedPdfDocument) {
+  const enabled = isSelectionEntryEnabled();
+  // The reader poll calls this every 500ms, so an unchanged document and
+  // preference must stay a cheap no-op. The preference is part of the guard so
+  // toggling it re-applies the listeners even while the same PDF stays open.
+  if (doc === watchedPdfDocument && enabled === watchedEntryEnabled) {
     return;
   }
 
@@ -632,9 +917,12 @@ export function watchActivePdfSelection(): void {
     );
   }
   watchedPdfDocument = doc || undefined;
+  watchedEntryEnabled = enabled;
   dismissedSelectionSignature = "";
   removeFloatingSelectionEntry();
-  if (!doc) return;
+  // Teardown runs before the gate so disabling the preference also drops a pill
+  // that is already on screen, and the document listeners stay detached.
+  if (!doc || !enabled) return;
 
   doc.addEventListener("selectionchange", handlePdfSelectionChange);
   doc.addEventListener("scroll", handlePdfSelectionChange, true);
@@ -699,6 +987,8 @@ export function registerReaderChatEntries(): void {
   selectionPopupHandler = (event: SelectionPopupEvent) => {
     const text = event.params?.annotation?.text?.trim();
     if (!text || !isSelectionEntryTextEligible(text)) return;
+    // Do not intercept Zotero's native popup at all while the entry is off.
+    if (!isSelectionEntryEnabled()) return;
     const popupSelection = getPopupSelectionRect(event);
     if (popupSelection) {
       showFloatingSelectionEntry(
@@ -785,4 +1075,13 @@ export function unregisterReaderChatEntries(): void {
   }
 
   ztoolkit.log("[ReaderChatEntry] Reader chat entries unregistered");
+}
+
+/**
+ * Re-apply the entry preference at runtime. The annotation context-menu entry
+ * is deliberately left registered, so toggling only affects the floating pill.
+ * `watchActivePdfSelection` is idempotent, so this is safe to call repeatedly.
+ */
+export function applyReaderSelectionEntryPreference(): void {
+  watchActivePdfSelection();
 }

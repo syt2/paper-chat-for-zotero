@@ -23,13 +23,19 @@ export function showReaderSelectionTranslation(
   text: string,
   anchor: SelectionRect,
   context?: SelectionTranslationContext,
+  onClose?: () => void,
 ): () => void {
   // Render beside the PDF iframe, above Zotero's native selection palette.
   // A z-index inside the PDF cannot rise above that sibling palette.
   const frame = sourceDoc.defaultView?.frameElement;
   const doc = frame?.ownerDocument || sourceDoc;
   const win = doc.defaultView;
-  if (!win || !doc.body) return () => {};
+  if (!win || !doc.body) {
+    // No panel is created, so report it as already closed: the caller uses
+    // `onClose` to release the entry it was holding open for this panel.
+    onClose?.();
+    return () => {};
+  }
   let controller = new (win as Window & typeof globalThis).AbortController();
   const panel = doc.createElement("section");
   panel.className = "paperchat-selection-translation";
@@ -202,6 +208,7 @@ export function showReaderSelectionTranslation(
     sourceDoc.defaultView?.removeEventListener("pagehide", dispose);
     win.removeEventListener("pagehide", dispose);
     win.removeEventListener("resize", place);
+    onClose?.();
   };
   const outside = (event: Event) => {
     if (!panel.contains(event.target as Node)) dispose();

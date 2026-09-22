@@ -19,6 +19,44 @@ const FLOATING_SELECTION_ENTRY_GAP = 4;
 export const MIN_SELECTION_ENTRY_TEXT_LENGTH = 5;
 export const FLOATING_SELECTION_ENTRY_PROXIMITY_PX = 200;
 export const FLOATING_SELECTION_ENTRY_DIM_OPACITY = 0.85;
+export const FLOATING_SELECTION_ENTRY_ACTION_WIDTH = 28;
+
+/**
+ * An unset preference means the entry stays on, so the floating pill remains
+ * available until the user explicitly turns it off.
+ */
+export function isReaderSelectionEntryEnabled(
+  value: boolean | undefined,
+): boolean {
+  return value !== false;
+}
+
+/**
+ * The entry stays at its collapsed size while only the toggle is visible, then
+ * grows by one fixed slot per revealed action so the hover expansion keeps
+ * working as actions are added or removed.
+ */
+export function getSelectionEntryExpandedWidth(actionCount: number): number {
+  return (
+    FLOATING_SELECTION_ENTRY_SIZE +
+    actionCount * FLOATING_SELECTION_ENTRY_ACTION_WIDTH
+  );
+}
+
+/**
+ * Append a reader comment to whatever the user already drafted. A single
+ * newline joins them so a half-written draft is extended rather than replaced,
+ * and an empty draft collapses to just the comment.
+ */
+export function appendSelectionCommentToDraft(
+  draft: string,
+  comment: string,
+): string {
+  const trimmedComment = comment.trim();
+  if (!trimmedComment) return draft;
+  const trimmedDraft = draft.trim();
+  return trimmedDraft ? `${trimmedDraft}\n${trimmedComment}` : trimmedComment;
+}
 
 export function isSelectionEntryTextEligible(text: string): boolean {
   return text.trim().length >= MIN_SELECTION_ENTRY_TEXT_LENGTH;

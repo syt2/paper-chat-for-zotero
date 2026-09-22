@@ -129,7 +129,10 @@ pref-tool-permission-mode-deny = 始终拒绝
 # Reading Loop Settings
 pref-reading-loop-settings = 阅读伴随建议
 pref-reading-loop-enabled = 阅读时自动显示 PaperChat 建议
-pref-reading-loop-desc = 根据阅读停留、进度、高亮和连续提问等本地行为，在 PaperChat 入口和面板内显示轻量建议。关闭后不会影响手动聊天或其他明确触发的操作。
+
+# Reader Selection Entry Settings
+pref-reader-selection-entry-settings = PDF 选区快捷操作
+pref-reader-selection-entry-enabled = 在 PDF 中选中文字时显示“?”快捷操作按钮
 
 # Paper Skills Settings
 pref-paper-skills-settings = Paper Skills

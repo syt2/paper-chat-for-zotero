@@ -129,7 +129,10 @@ pref-tool-permission-mode-deny = Always deny
 # Reading Loop Settings
 pref-reading-loop-settings = Reading Suggestions
 pref-reading-loop-enabled = Show PaperChat suggestions while reading
-pref-reading-loop-desc = Shows lightweight suggestions in the PaperChat entry and panel based on local reading signals such as dwell time, progress, highlights, and follow-up questions. Manual chat and explicit actions remain available when disabled.
+
+# Reader Selection Entry Settings
+pref-reader-selection-entry-settings = PDF Selection Shortcut
+pref-reader-selection-entry-enabled = Show the “?” quick-action button when selecting text in the PDF
 
 # Paper Skills Settings
 pref-paper-skills-settings = Paper Skills
