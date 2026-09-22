@@ -18,7 +18,10 @@ import {
   resolvePaperChatSessionBinding,
 } from "../src/modules/chat/paperchat-session-state.ts";
 import { parsePaperChatError } from "../src/modules/providers/paperchat-errors.ts";
-import { parseModelRoutingConfig } from "../src/modules/providers/paperchat-routing-metadata.ts";
+import {
+  parseModelRoutingConfig,
+  sortModelsByTierThenWeight,
+} from "../src/modules/providers/paperchat-routing-metadata.ts";
 
 describe("paperchat tier routing", function () {
   it("defaults undefined state to paperchat-standard with auto tier entries", function () {
@@ -151,6 +154,39 @@ describe("paperchat tier routing", function () {
     assert.deepEqual(pools["paperchat-standard"], ["standard"]);
     assert.deepEqual(pools["paperchat-pro"], ["pro-high", "pro-low"]);
     assert.deepEqual(pools["paperchat-ultra"], []);
+  });
+
+  it("orders models by tier ladder and then by routing weight", function () {
+    const sorted = sortModelsByTierThenWeight(
+      ["pro-low", "unclassified", "lite", "standard", "pro-high", "lite-low"],
+      {
+        "pro-low": { tierCode: 3, priority: 1 },
+        "pro-high": { tierCode: 3, priority: 4 },
+        lite: { tierCode: 1, priority: 2 },
+        "lite-low": { tierCode: 1, priority: 1 },
+        standard: { tierCode: 2, priority: 9 },
+        unclassified: { priority: 99 },
+      },
+    );
+
+    assert.deepEqual(sorted, [
+      "lite",
+      "lite-low",
+      "standard",
+      "pro-high",
+      "pro-low",
+      "unclassified",
+    ]);
+  });
+
+  it("breaks equal tier and weight ties alphabetically", function () {
+    assert.deepEqual(
+      sortModelsByTierThenWeight(["b-model", "a-model", "c-model"], {
+        "a-model": { tierCode: 2, priority: 3 },
+        "b-model": { tierCode: 2, priority: 3 },
+      }),
+      ["a-model", "b-model", "c-model"],
+    );
   });
 
   it("uses old ratio buckets only for models missing routing tier metadata", function () {

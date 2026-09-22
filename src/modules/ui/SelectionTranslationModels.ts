@@ -1,4 +1,4 @@
-import { getSelectablePaperchatModels } from "../preferences/ModelsFetcher";
+import { getSelectablePaperchatModelsByTier } from "../preferences/ModelsFetcher";
 import { getPref } from "../../utils/prefs";
 import { getString } from "../../utils/locale";
 import { getProviderManager } from "../providers";
@@ -17,7 +17,7 @@ export function getTranslationModelOptions(): Array<{
     if (!provider.enabled) continue;
     const models =
       provider.type === "paperchat"
-        ? getSelectablePaperchatModels()
+        ? getSelectablePaperchatModelsByTier()
         : provider.availableModels;
     for (const model of new Set(
       [

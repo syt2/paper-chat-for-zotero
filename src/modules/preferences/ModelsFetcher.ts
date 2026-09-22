@@ -17,6 +17,7 @@ import {
   parseModelRoutingConfig,
   parseModelRoutingDefaults,
   sortModelsByRoutingWeight,
+  sortModelsByTierThenWeight,
   type PaperChatModelRoutingMeta,
   type PaperChatModelRoutingDefaults,
 } from "../providers/paperchat-routing-metadata";
@@ -73,6 +74,17 @@ function readCachedModelRoutingMeta(): Record<
   return {};
 }
 
+/**
+ * Routing metadata for model selection: the freshly fetched map when it is
+ * available, otherwise the copy cached from the last successful fetch.
+ */
+function resolveModelRoutingMeta(): Record<string, PaperChatModelRoutingMeta> {
+  const routing = getModelRoutingMeta();
+  return Object.keys(routing).length > 0
+    ? routing
+    : readCachedModelRoutingMeta();
+}
+
 /** User-selectable models must be present in both the key list and routing config. */
 export function getSelectablePaperchatModels(
   models?: readonly string[],
@@ -86,10 +98,7 @@ export function getSelectablePaperchatModels(
     }
   }
   if (!Array.isArray(keyModels)) return [];
-  let routing = getModelRoutingMeta();
-  if (Object.keys(routing).length === 0) {
-    routing = readCachedModelRoutingMeta();
-  }
+  const routing = resolveModelRoutingMeta();
   return sortModelsByRoutingWeight(
     [...new Set(keyModels)].filter(
       (model): model is string =>
@@ -99,6 +108,20 @@ export function getSelectablePaperchatModels(
         Object.prototype.hasOwnProperty.call(routing, model),
     ),
     routing,
+  );
+}
+
+/**
+ * Same selection as `getSelectablePaperchatModels`, ordered by tier ladder and
+ * then by routing weight. Pickers that list one option per tier, such as the
+ * translation model dropdown, read in the order the tiers are meant to be used.
+ */
+export function getSelectablePaperchatModelsByTier(
+  models?: readonly string[],
+): string[] {
+  return sortModelsByTierThenWeight(
+    getSelectablePaperchatModels(models),
+    resolveModelRoutingMeta(),
   );
 }
 

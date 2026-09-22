@@ -284,6 +284,48 @@ export function sortModelsByRoutingWeight(
   });
 }
 
+const TIER_SORT_RANK: Record<PaperChatTier, number> = {
+  "paperchat-lite": 0,
+  "paperchat-standard": 1,
+  "paperchat-pro": 2,
+  "paperchat-ultra": 3,
+};
+
+/** Models without tier metadata trail the classified ones. */
+const UNCLASSIFIED_TIER_RANK = Number.MAX_SAFE_INTEGER;
+
+function getTierSortRank(
+  model: string,
+  routingMeta: PaperChatModelRoutingMetaMap,
+): number {
+  const tier = getRoutingTier(model, routingMeta);
+  return tier ? TIER_SORT_RANK[tier] : UNCLASSIFIED_TIER_RANK;
+}
+
+/**
+ * Order models by tier ladder (lite → ultra), then by the routing priority
+ * weight inside each tier, with alphabetically ordered ties. Pickers that offer
+ * a model per tier read the same way the tier pools are built.
+ */
+export function sortModelsByTierThenWeight(
+  models: readonly string[],
+  routingMeta: PaperChatModelRoutingMetaMap = {},
+): string[] {
+  const weights = buildRoutingWeights([...models], routingMeta);
+  return [...models].sort((a, b) => {
+    const tierDelta =
+      getTierSortRank(a, routingMeta) - getTierSortRank(b, routingMeta);
+    if (tierDelta !== 0) {
+      return tierDelta;
+    }
+    const priorityDelta = (weights[b] ?? 1) - (weights[a] ?? 1);
+    if (priorityDelta !== 0) {
+      return priorityDelta;
+    }
+    return a.localeCompare(b);
+  });
+}
+
 export function hasCompleteRoutingTierCoverage(
   models: string[],
   routingMeta: PaperChatModelRoutingMetaMap,

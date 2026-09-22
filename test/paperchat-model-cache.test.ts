@@ -11,6 +11,7 @@ import {
   getModelRoutingDefaults,
   getModelRoutingMeta,
   getSelectablePaperchatModels,
+  getSelectablePaperchatModelsByTier,
   loadCachedRatios,
 } from "../src/modules/preferences/ModelsFetcher";
 
@@ -75,6 +76,104 @@ describe("PaperChat model cache", function () {
       prefStore.get(`${PREFS_PREFIX}paperchatModelsCache`),
       JSON.stringify(raw),
     );
+  });
+
+  it("orders the tier-aware selection by tier ladder and then by routing weight", function () {
+    prefStore.set(
+      `${PREFS_PREFIX}paperchatModelsCache`,
+      JSON.stringify([
+        "pro-high",
+        "lite",
+        "standard",
+        "unclassified",
+        "lite-low",
+      ]),
+    );
+    prefStore.set(
+      `${PREFS_PREFIX}paperchatRoutingConfigCache`,
+      JSON.stringify({
+        "pro-high": { tierCode: 3, priority: 4 },
+        lite: { tierCode: 1, priority: 2 },
+        "lite-low": { tierCode: 1, priority: 1 },
+        standard: { tierCode: 2, priority: 9 },
+        unclassified: { priority: 99 },
+      }),
+    );
+    loadCachedRatios();
+
+    assert.deepEqual(getSelectablePaperchatModelsByTier(), [
+      "lite",
+      "lite-low",
+      "standard",
+      "pro-high",
+      "unclassified",
+    ]);
+    // The weight-only order the other pickers share still leads with priority.
+    assert.deepEqual(getSelectablePaperchatModels(), [
+      "unclassified",
+      "standard",
+      "pro-high",
+      "lite",
+      "lite-low",
+    ]);
+  });
+
+  it("lists translation choices in tier order", function () {
+    loadCachedRatios();
+    const previousAddon = (globalThis as any).addon;
+    (globalThis as any).addon = {
+      data: {
+        locale: {
+          current: {
+            formatMessagesSync: ([request]: any[]) => [
+              { value: request.id, attributes: null },
+            ],
+          },
+        },
+      },
+    };
+    prefStore.set(
+      `${PREFS_PREFIX}paperchatModelsCache`,
+      JSON.stringify(["pro", "lite", "standard"]),
+    );
+    prefStore.set(
+      `${PREFS_PREFIX}paperchatRoutingConfigCache`,
+      JSON.stringify({
+        pro: { tierCode: 3, priority: 9 },
+        lite: { tierCode: 1, priority: 1 },
+        standard: { tierCode: 2, priority: 1 },
+      }),
+    );
+    loadCachedRatios();
+    destroyProviderManager();
+    try {
+      getProviderManager().getAllConfigs = () =>
+        [
+          {
+            id: "paperchat",
+            type: "paperchat",
+            name: "PaperChat",
+            enabled: true,
+            availableModels: ["pro", "lite", "standard"],
+            defaultModel: "standard",
+          },
+        ] as any;
+      const paperchatValue = (model: string) =>
+        JSON.stringify({ providerId: "paperchat", model });
+
+      assert.deepEqual(
+        getTranslationModelOptions().map((option) => option.value),
+        [
+          "auto",
+          paperchatValue("lite"),
+          paperchatValue("standard"),
+          paperchatValue("pro"),
+        ],
+      );
+    } finally {
+      destroyProviderManager();
+      (globalThis as any).addon = previousAddon;
+    }
   });
 
   it("uses an empty intersection when either source is missing or empty", function () {
