@@ -33,7 +33,6 @@ import {
 } from "./ChatPanelChrome";
 import { getPref, setPref } from "../../../utils/prefs";
 import {
-  formatModelLabel,
   getModelRatios,
   getModelRoutingMeta,
   getSelectablePaperchatModels,
@@ -2755,11 +2754,7 @@ export function updateModelSelectorDisplay(container: HTMLElement): void {
   if (providerManager.getActiveProviderId() !== "paperchat") {
     const currentModel = getPref("model") as string;
     if (currentModel) {
-      const modelShort = formatModelLabel(
-        currentModel,
-        providerManager.getActiveProviderId() || undefined,
-      );
-      modelSelectorText.textContent = `${activeProvider.getName()} · ${modelShort}`;
+      modelSelectorText.textContent = `${activeProvider.getName()} · ${currentModel}`;
       modelSelectorText.title = `${activeProvider.getName()}: ${currentModel}`;
     } else {
       modelSelectorText.textContent = activeProvider.getName();
@@ -3372,7 +3367,7 @@ function populateModelDropdown(
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
           });
-          modelName.textContent = formatModelLabel(model, config.id);
+          modelName.textContent = model;
           modelItem.appendChild(modelName);
           modelItem.addEventListener("mouseenter", () => {
             if (!isCurrentModel) {
@@ -3446,7 +3441,7 @@ function populateModelDropdown(
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
         });
-        modelName.textContent = formatModelLabel(model, config.id);
+        modelName.textContent = model;
         modelItem.appendChild(modelName);
 
         // Hover effect

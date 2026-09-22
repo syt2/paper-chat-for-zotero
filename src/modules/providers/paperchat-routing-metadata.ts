@@ -265,6 +265,25 @@ export function buildRoutingWeights(
   return weights;
 }
 
+/**
+ * Order models by the routing priority weight, heaviest first, with
+ * alphabetically ordered ties. This is the order the tier pools already use, so
+ * every model list reads consistently.
+ */
+export function sortModelsByRoutingWeight(
+  models: readonly string[],
+  routingMeta: PaperChatModelRoutingMetaMap = {},
+): string[] {
+  const weights = buildRoutingWeights([...models], routingMeta);
+  return [...models].sort((a, b) => {
+    const priorityDelta = (weights[b] ?? 1) - (weights[a] ?? 1);
+    if (priorityDelta !== 0) {
+      return priorityDelta;
+    }
+    return a.localeCompare(b);
+  });
+}
+
 export function hasCompleteRoutingTierCoverage(
   models: string[],
   routingMeta: PaperChatModelRoutingMetaMap,
@@ -304,15 +323,7 @@ export function deriveRoutingMetaTierPools(
     };
   }
 
-  const sortedModels = [...models].sort((a, b) => {
-    const priorityDelta =
-      getRoutingPriorityWeight(b, routingMeta) -
-      getRoutingPriorityWeight(a, routingMeta);
-    if (priorityDelta !== 0) {
-      return priorityDelta;
-    }
-    return a.localeCompare(b);
-  });
+  const sortedModels = sortModelsByRoutingWeight(models, routingMeta);
   const pools: PaperChatTierPools = {
     "paperchat-lite": [],
     "paperchat-standard": [],

@@ -16,6 +16,7 @@ import {
 import {
   parseModelRoutingConfig,
   parseModelRoutingDefaults,
+  sortModelsByRoutingWeight,
   type PaperChatModelRoutingMeta,
   type PaperChatModelRoutingDefaults,
 } from "../providers/paperchat-routing-metadata";
@@ -89,12 +90,15 @@ export function getSelectablePaperchatModels(
   if (Object.keys(routing).length === 0) {
     routing = readCachedModelRoutingMeta();
   }
-  return [...new Set(keyModels)].filter(
-    (model): model is string =>
-      typeof model === "string" &&
-      model.length > 0 &&
-      !isEmbeddingModel(model) &&
-      Object.prototype.hasOwnProperty.call(routing, model),
+  return sortModelsByRoutingWeight(
+    [...new Set(keyModels)].filter(
+      (model): model is string =>
+        typeof model === "string" &&
+        model.length > 0 &&
+        !isEmbeddingModel(model) &&
+        Object.prototype.hasOwnProperty.call(routing, model),
+    ),
+    routing,
   );
 }
 
@@ -152,20 +156,6 @@ export function resolveAutoModelSmart(
     return rb - ra;
   });
   return sorted[0];
-}
-
-/**
- * Format model label with ratio if available (for PaperChat models)
- * @param model Model ID
- * @param providerId Provider ID (only shows ratio for paperchat)
- * @returns Formatted label like "model-name (2x)" or just "model-name"
- */
-export function formatModelLabel(model: string, providerId?: string): string {
-  if (providerId !== "paperchat") {
-    return model;
-  }
-  const ratio = paperchatModelRatios[model];
-  return ratio !== undefined ? `${model} (${ratio}x)` : model;
 }
 
 /**

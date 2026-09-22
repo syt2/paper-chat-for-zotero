@@ -23,7 +23,6 @@ import {
 } from "../providers/paperchat-tier-routing";
 import type { PaperChatProviderConfig } from "../../types/provider";
 import {
-  formatModelLabel,
   getModelRatios,
   getModelRoutingMeta,
   getSelectablePaperchatModels,
@@ -169,7 +168,7 @@ function populateTierOverridePopup(
 
   for (const model of models) {
     const item = doc.createXULElement("menuitem");
-    item.setAttribute("label", formatModelLabel(model, "paperchat"));
+    item.setAttribute("label", model);
     item.setAttribute("value", model);
     popup.appendChild(item);
   }
