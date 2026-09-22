@@ -1,9 +1,11 @@
 import { assert } from "chai";
 import {
   collectAnnotationText,
+  FLOATING_SELECTION_ENTRY_PROXIMITY_PX,
   getSelectionEntryRefreshAction,
   getSelectionEntryRect,
   getSelectionEntryPosition,
+  isSelectionEntryPointerNear,
   isSelectionEntryTextEligible,
 } from "../src/modules/ui/reader-chat-selection.ts";
 
@@ -144,6 +146,28 @@ describe("reader chat selection", function () {
     assert.isFalse(isSelectionEntryTextEligible("abcd"));
     assert.isTrue(isSelectionEntryTextEligible("abcde"));
     assert.isFalse(isSelectionEntryTextEligible("  a  "));
+  });
+
+  it("uses full opacity only within the configured proximity of the entry", function () {
+    const rect = { left: 100, right: 118, top: 40, height: 24 };
+
+    assert.isTrue(
+      isSelectionEntryPointerNear(
+        rect,
+        100 - FLOATING_SELECTION_ENTRY_PROXIMITY_PX,
+        52,
+      ),
+    );
+    assert.isFalse(
+      isSelectionEntryPointerNear(
+        rect,
+        100 - FLOATING_SELECTION_ENTRY_PROXIMITY_PX - 1,
+        52,
+      ),
+    );
+    assert.isTrue(isSelectionEntryPointerNear(rect, 121, 68, 5));
+    assert.isFalse(isSelectionEntryPointerNear(rect, 122, 68, 5));
+    assert.isTrue(isSelectionEntryPointerNear(rect, 109, 52));
   });
 
   it("moves the selection entry to the left when the right edge has no room", function () {

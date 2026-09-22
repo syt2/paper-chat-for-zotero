@@ -26,10 +26,12 @@ import type { ChatPanelOpenSource } from "./chat-panel/ChatPanelManager";
 import { cancelReaderFigureScreenshot } from "./ReaderFigureScreenshot";
 import {
   collectAnnotationText,
+  FLOATING_SELECTION_ENTRY_DIM_OPACITY,
   FLOATING_SELECTION_ENTRY_SIZE,
   getSelectionEntryRefreshAction,
   getSelectionEntryRect,
   getSelectionEntryPosition,
+  isSelectionEntryPointerNear,
   isSelectionEntryTextEligible,
   type ReaderLike,
   type SelectionRect,
@@ -348,8 +350,11 @@ function showFloatingSelectionEntry(
     color: dark ? "#eee" : "#333",
     boxSizing: "border-box",
     overflow: "hidden",
+    opacity: String(FLOATING_SELECTION_ENTRY_DIM_OPACITY),
     pointerEvents: "auto",
-    transition: reducedMotion ? "none" : "width 180ms ease, left 180ms ease",
+    transition: reducedMotion
+      ? "none"
+      : "width 180ms ease, left 180ms ease, opacity 120ms ease",
   });
   const makeButton = (label: string, width: number) => {
     const control = doc.createElement("button");
@@ -479,6 +484,36 @@ function showFloatingSelectionEntry(
   // Watch the whole menu so moving between its controls does not collapse it.
   button.addEventListener("mouseenter", () => setExpanded(true));
   button.addEventListener("mouseleave", () => setExpanded(false));
+  let currentOpacity = FLOATING_SELECTION_ENTRY_DIM_OPACITY;
+  const setOpacityForPointer = (pointerX?: number, pointerY?: number) => {
+    let nextOpacity = FLOATING_SELECTION_ENTRY_DIM_OPACITY;
+    if (pointerX !== undefined && pointerY !== undefined) {
+      const rect = button.getBoundingClientRect();
+      if (
+        isSelectionEntryPointerNear(
+          {
+            left: rect.left,
+            right: rect.right,
+            top: rect.top,
+            height: rect.height,
+          },
+          pointerX,
+          pointerY,
+        )
+      ) {
+        nextOpacity = 1;
+      }
+    }
+    if (nextOpacity === currentOpacity) return;
+    currentOpacity = nextOpacity;
+    button.style.opacity = String(nextOpacity);
+  };
+  const handlePointerMove = (event: PointerEvent) => {
+    setOpacityForPointer(event.clientX, event.clientY);
+  };
+  const handlePointerLeave = () => setOpacityForPointer();
+  doc.addEventListener("pointermove", handlePointerMove, true);
+  doc.documentElement.addEventListener("pointerleave", handlePointerLeave);
   // Preserve keyboard/touch activation without toggling a hovered menu closed.
   activate(toggle, () => setExpanded(true));
   const dismiss = () => {
@@ -510,11 +545,21 @@ function showFloatingSelectionEntry(
     if (entry.expanded && !button.contains(event.target as Node)) dismiss();
   };
   doc.addEventListener("pointerdown", outside, true);
-  entry.dispose = () => doc.removeEventListener("pointerdown", outside, true);
+  entry.dispose = () => {
+    doc.removeEventListener("pointerdown", outside, true);
+    doc.removeEventListener("pointermove", handlePointerMove, true);
+    doc.documentElement.removeEventListener("pointerleave", handlePointerLeave);
+  };
   button.append(toggle, attach, translate);
   doc.body.appendChild(button);
   floatingSelectionEntry = entry;
   positionFloatingSelectionEntry(entry, selection);
+  if (
+    lastSelectionPointer?.doc === doc &&
+    Date.now() - lastSelectionPointer.at < 2000
+  ) {
+    setOpacityForPointer(lastSelectionPointer.x, lastSelectionPointer.y);
+  }
 }
 
 function refreshFloatingSelectionEntry(doc: Document): void {

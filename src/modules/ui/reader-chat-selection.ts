@@ -17,9 +17,43 @@ export type SelectionRect = {
 export const FLOATING_SELECTION_ENTRY_SIZE = 18;
 const FLOATING_SELECTION_ENTRY_GAP = 4;
 export const MIN_SELECTION_ENTRY_TEXT_LENGTH = 5;
+export const FLOATING_SELECTION_ENTRY_PROXIMITY_PX = 200;
+export const FLOATING_SELECTION_ENTRY_DIM_OPACITY = 0.85;
 
 export function isSelectionEntryTextEligible(text: string): boolean {
   return text.trim().length >= MIN_SELECTION_ENTRY_TEXT_LENGTH;
+}
+
+/**
+ * Treat the pointer as nearby when it is within the configured distance of
+ * the button's rectangle, rather than only its center. This keeps the full
+ * interaction area responsive while still fading the button away at a glance.
+ */
+export function isSelectionEntryPointerNear(
+  rect: SelectionRect,
+  pointerX: number,
+  pointerY: number,
+  proximity = FLOATING_SELECTION_ENTRY_PROXIMITY_PX,
+): boolean {
+  const bottom = rect.top + rect.height;
+  if (
+    ![rect.left, rect.right, rect.top, rect.height, pointerX, pointerY].every(
+      Number.isFinite,
+    ) ||
+    rect.right < rect.left ||
+    rect.height < 0 ||
+    proximity < 0
+  ) {
+    return false;
+  }
+
+  const horizontalDistance = Math.max(
+    rect.left - pointerX,
+    0,
+    pointerX - rect.right,
+  );
+  const verticalDistance = Math.max(rect.top - pointerY, 0, pointerY - bottom);
+  return Math.hypot(horizontalDistance, verticalDistance) <= proximity;
 }
 
 export type SelectionEntryRefreshAction = "reposition" | "replace";
