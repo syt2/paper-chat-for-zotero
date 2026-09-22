@@ -9,10 +9,10 @@ export const DEFAULT_MODE_BY_RISK_LEVEL: Record<
   ToolPermissionMode
 > = {
   read: "auto_allow",
-  network: "ask",
+  network: "auto_allow",
   write: "auto_allow",
   memory: "auto_allow",
-  high_cost: "ask",
+  high_cost: "auto_allow",
 };
 
 export const CONFIGURABLE_TOOL_PERMISSION_RISK_LEVELS: ToolPermissionRiskLevel[] =
