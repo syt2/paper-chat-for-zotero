@@ -30,6 +30,7 @@ import {
 import type { ChatPanelOpenSource } from "./chat-panel/ChatPanelManager";
 import { cancelReaderFigureScreenshot } from "./ReaderFigureScreenshot";
 import {
+  captureSelectionRanges,
   collectAnnotationText,
   FLOATING_SELECTION_ENTRY_DIM_OPACITY,
   FLOATING_SELECTION_ENTRY_SIZE,
@@ -40,6 +41,7 @@ import {
   isReaderSelectionEntryEnabled,
   isSelectionEntryPointerNear,
   isSelectionEntryTextEligible,
+  restoreSelectionRanges,
   type ReaderLike,
   type SelectionRect,
 } from "./reader-chat-selection";
@@ -470,6 +472,17 @@ function showSelectionCommentPopover(
   popoverDoc.body.append(panel);
 
   let disposed = false;
+  // This composer lives in the reader document, so focusing it takes document
+  // focus away from the PDF. The engine then clears the text-layer selection a
+  // tick later, after any synchronous write-back, so capture the ranges first
+  // and put them back the moment that clearing lands.
+  const selectionRanges = captureSelectionRanges(doc.getSelection());
+  const restoreSelectionAfterClear = () => {
+    const selection = doc.getSelection();
+    if (disposed || !selection || selection.rangeCount > 0) return;
+    doc.removeEventListener("selectionchange", restoreSelectionAfterClear);
+    restoreSelectionRanges(selection, selectionRanges);
+  };
   const place = () => {
     const width = panel.getBoundingClientRect().width;
     const height = panel.getBoundingClientRect().height;
@@ -493,6 +506,7 @@ function showSelectionCommentPopover(
     doc.defaultView?.removeEventListener("pagehide", dispose);
     win.removeEventListener("pagehide", dispose);
     win.removeEventListener("resize", place);
+    doc.removeEventListener("selectionchange", restoreSelectionAfterClear);
     handlers.onClose();
   };
   const outside = (event: Event) => {
@@ -548,6 +562,9 @@ function showSelectionCommentPopover(
   doc.defaultView?.addEventListener("pagehide", dispose);
   win.addEventListener("pagehide", dispose);
   win.addEventListener("resize", place);
+  if (selectionRanges.length > 0) {
+    doc.addEventListener("selectionchange", restoreSelectionAfterClear);
+  }
   input.focus();
   return dispose;
 }
@@ -692,8 +709,14 @@ function showFloatingSelectionEntry(
     event.preventDefault();
     event.stopPropagation();
   });
+  // Gecko focuses a clicked button on mousedown, which pulls focus back into
+  // the PDF and drops the text-layer selection. The pill handles its own
+  // activation, so it never needs focus of its own.
+  const keepPointerFocus = (event: Event) => event.preventDefault();
+  button.addEventListener("mousedown", keepPointerFocus);
   button.addEventListener("click", (event) => event.stopPropagation());
   const activate = (control: HTMLButtonElement, action: () => void) => {
+    control.addEventListener("mousedown", keepPointerFocus);
     control.addEventListener("pointerdown", (event) => {
       if (event.button !== 0) return;
       event.preventDefault();

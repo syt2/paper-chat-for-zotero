@@ -58,6 +58,46 @@ export function appendSelectionCommentToDraft(
   return trimmedDraft ? `${trimmedDraft}\n${trimmedComment}` : trimmedComment;
 }
 
+/**
+ * The reader only draws its text-layer selection while the PDF document holds
+ * focus. A composer in the reader document takes that focus away, so copy the
+ * ranges first and put them back once the engine drops them.
+ */
+export function captureSelectionRanges(
+  selection: Selection | null | undefined,
+): Range[] {
+  if (!selection || selection.rangeCount === 0) return [];
+  const ranges: Range[] = [];
+  for (let index = 0; index < selection.rangeCount; index += 1) {
+    try {
+      ranges.push(selection.getRangeAt(index).cloneRange());
+    } catch {
+      // A selection that is being torn down cannot be restored.
+    }
+  }
+  return ranges;
+}
+
+/**
+ * Re-apply ranges captured by `captureSelectionRanges`. Returns whether the
+ * selection accepted them; a document that is going away reports false.
+ */
+export function restoreSelectionRanges(
+  selection: Selection | null | undefined,
+  ranges: readonly Range[],
+): boolean {
+  if (!selection || ranges.length === 0) return false;
+  try {
+    selection.removeAllRanges();
+    for (const range of ranges) {
+      selection.addRange(range);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function isSelectionEntryTextEligible(text: string): boolean {
   return text.trim().length >= MIN_SELECTION_ENTRY_TEXT_LENGTH;
 }

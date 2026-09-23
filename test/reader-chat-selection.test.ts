@@ -1,6 +1,7 @@
 import { assert } from "chai";
 import {
   appendSelectionCommentToDraft,
+  captureSelectionRanges,
   collectAnnotationText,
   FLOATING_SELECTION_ENTRY_PROXIMITY_PX,
   getSelectionEntryExpandedWidth,
@@ -10,6 +11,7 @@ import {
   isReaderSelectionEntryEnabled,
   isSelectionEntryPointerNear,
   isSelectionEntryTextEligible,
+  restoreSelectionRanges,
 } from "../src/modules/ui/reader-chat-selection.ts";
 
 type FakeAnnotation = {
@@ -228,4 +230,104 @@ describe("reader chat selection", function () {
     assert.isTrue(isReaderSelectionEntryEnabled(undefined));
     assert.isFalse(isReaderSelectionEntryEnabled(false));
   });
+
+  it("copies every reader selection range before a focus change", function () {
+    const stub = createSelectionStub([fakeRange("a"), fakeRange("b")]);
+
+    const captured = captureSelectionRanges(stub.selection);
+
+    assert.deepEqual(
+      captured.map((range) => (range as FakeRange).id),
+      ["a-clone", "b-clone"],
+    );
+    assert.isEmpty(captureSelectionRanges(null));
+    assert.isEmpty(captureSelectionRanges(createSelectionStub().selection));
+  });
+
+  it("skips ranges that disappear while they are being copied", function () {
+    const goneRange = {
+      cloneRange: () => {
+        throw new Error("range is gone");
+      },
+    } as unknown as FakeRange;
+    const stub = createSelectionStub([goneRange, fakeRange("kept")]);
+
+    assert.deepEqual(
+      captureSelectionRanges(stub.selection).map(
+        (range) => (range as FakeRange).id,
+      ),
+      ["kept-clone"],
+    );
+  });
+
+  it("puts the captured ranges back after the engine drops them", function () {
+    const stub = createSelectionStub([fakeRange("user-selection")]);
+
+    const restored = restoreSelectionRanges(
+      stub.selection,
+      captureSelectionRanges(stub.selection),
+    );
+
+    assert.isTrue(restored);
+    assert.equal(stub.clearedCount(), 1);
+    assert.deepEqual(
+      stub.applied.map((range) => range.id),
+      ["user-selection-clone"],
+    );
+  });
+
+  it("reports nothing restored when there is no selection to put back", function () {
+    const stub = createSelectionStub();
+
+    assert.isFalse(restoreSelectionRanges(null, [fakeRange("a")]));
+    assert.isFalse(restoreSelectionRanges(stub.selection, []));
+    assert.equal(stub.clearedCount(), 0);
+  });
+
+  it("survives a selection that is already going away", function () {
+    const deadSelection = {
+      rangeCount: 1,
+      getRangeAt: () => {
+        throw new Error("document is gone");
+      },
+      removeAllRanges: () => {
+        throw new Error("document is gone");
+      },
+      addRange: () => {
+        throw new Error("document is gone");
+      },
+    } as unknown as Selection;
+
+    assert.isEmpty(captureSelectionRanges(deadSelection));
+    assert.isFalse(restoreSelectionRanges(deadSelection, [fakeRange("a")]));
+  });
 });
+
+type FakeRange = Range & { id: string };
+
+function fakeRange(id: string): FakeRange {
+  return {
+    id,
+    cloneRange: () => fakeRange(`${id}-clone`),
+  } as unknown as FakeRange;
+}
+
+function createSelectionStub(ranges: FakeRange[] = []) {
+  const applied: FakeRange[] = [];
+  let cleared = 0;
+  const selection = {
+    get rangeCount() {
+      return ranges.length;
+    },
+    getRangeAt: (index: number) => ranges[index],
+    removeAllRanges() {
+      cleared += 1;
+      applied.length = 0;
+    },
+    addRange: (range: FakeRange) => {
+      applied.push(range);
+    },
+  } as unknown as Selection;
+
+  return { selection, applied, clearedCount: () => cleared };
+}
