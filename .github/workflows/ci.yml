@@ -42,5 +42,8 @@ jobs:
       - name: Setup JS
         uses: zotero-plugin-dev/workflows/setup-js@main
       - run: npm run test:chat-search
+      # Node-only unit tests (they use node: builtins, setImmediate, or Buffer,
+      # so they cannot be bundled into the Zotero test harness).
+      - run: npm run test:node
       - run: npm run test:online-release-upgrade
       - run: npm run test
