@@ -4,6 +4,7 @@ import {
   captureSelectionRanges,
   collectAnnotationText,
   FLOATING_SELECTION_ENTRY_PROXIMITY_PX,
+  flattenSelectionText,
   getSelectionEntryExpandedWidth,
   getSelectionEntryRefreshAction,
   getSelectionEntryRect,
@@ -12,6 +13,7 @@ import {
   isSelectionEntryPointerNear,
   isSelectionEntryTextEligible,
   restoreSelectionRanges,
+  summarizeSelectionText,
 } from "../src/modules/ui/reader-chat-selection.ts";
 
 type FakeAnnotation = {
@@ -300,6 +302,46 @@ describe("reader chat selection", function () {
 
     assert.isEmpty(captureSelectionRanges(deadSelection));
     assert.isFalse(restoreSelectionRanges(deadSelection, [fakeRange("a")]));
+  });
+
+  it("flattens a passage into a single preview line", function () {
+    assert.equal(
+      flattenSelectionText("  first line\n\tsecond   line  "),
+      "first line second line",
+    );
+    assert.equal(flattenSelectionText("\n\n"), "");
+  });
+
+  it("keeps short passages whole in the preview", function () {
+    assert.equal(summarizeSelectionText("short passage", 40), "short passage");
+  });
+
+  it("trims long passages from the middle, keeping both ends", function () {
+    const summarized = summarizeSelectionText(
+      "alpha beta gamma delta epsilon zeta eta theta",
+      20,
+    );
+
+    assert.equal(summarized.length, 20);
+    assert.match(summarized, /^alpha beta/);
+    assert.match(summarized, /theta$/);
+    assert.include(summarized, "…");
+  });
+
+  it("never splits a grapheme when trimming the preview", function () {
+    const family = "👨‍👩‍👧‍👦";
+    const summarized = summarizeSelectionText(
+      `${family.repeat(4)}${"Z".repeat(20)}`,
+      6,
+    );
+
+    assert.equal(summarized, `${family.repeat(3)}…ZZ`);
+  });
+
+  it("handles degenerate preview budgets", function () {
+    assert.equal(summarizeSelectionText("passage", 0), "");
+    assert.equal(summarizeSelectionText("passage", 1), "…");
+    assert.equal(summarizeSelectionText("passage", 2), "p…");
   });
 });
 

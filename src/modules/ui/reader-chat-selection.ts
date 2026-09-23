@@ -5,6 +5,8 @@
  * global; ReaderChatEntry owns the listener registration and panel wiring.
  */
 
+import { graphemeSegments } from "unicode-segmenter/grapheme";
+
 export type ReaderLike = { itemID?: number };
 
 export type SelectionRect = {
@@ -96,6 +98,33 @@ export function restoreSelectionRanges(
   } catch {
     return false;
   }
+}
+
+/** Collapse a passage into a single line for a one-line preview. */
+export function flattenSelectionText(text: string): string {
+  return text.trim().replace(/\s+/g, " ");
+}
+
+/**
+ * Middle-truncate a passage for a one-line preview: keep the head and the tail
+ * and drop characters from the middle, so the excerpt still identifies the
+ * passage at both ends. Grapheme-aware, so emoji are never split, and never
+ * longer than `maxChars`.
+ */
+export function summarizeSelectionText(text: string, maxChars: number): string {
+  const flattened = flattenSelectionText(text);
+  if (maxChars <= 0) return "";
+  if (maxChars === 1) return "…";
+  const characters = Array.from(
+    graphemeSegments(flattened),
+    ({ segment }) => segment,
+  );
+  if (characters.length <= maxChars) return flattened;
+  const headLength = Math.ceil((maxChars - 1) / 2);
+  const tailLength = maxChars - 1 - headLength;
+  const head = characters.slice(0, headLength).join("");
+  const tail = tailLength > 0 ? characters.slice(-tailLength).join("") : "";
+  return `${head}…${tail}`;
 }
 
 export function isSelectionEntryTextEligible(text: string): boolean {

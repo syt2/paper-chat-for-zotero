@@ -34,6 +34,7 @@ import {
   collectAnnotationText,
   FLOATING_SELECTION_ENTRY_DIM_OPACITY,
   FLOATING_SELECTION_ENTRY_SIZE,
+  flattenSelectionText,
   getSelectionEntryRefreshAction,
   getSelectionEntryRect,
   getSelectionEntryExpandedWidth,
@@ -42,6 +43,7 @@ import {
   isSelectionEntryPointerNear,
   isSelectionEntryTextEligible,
   restoreSelectionRanges,
+  summarizeSelectionText,
   type ReaderLike,
   type SelectionRect,
 } from "./reader-chat-selection";
@@ -390,6 +392,22 @@ function showSelectionCommentPopover(
     outline: "none",
   });
 
+  // One line of the quoted passage: the composer never takes focus on open (so
+  // the PDF keeps its selection), so this is what tells the user which passage
+  // they are commenting on.
+  const quote = popoverDoc.createElement("div");
+  quote.className = "paperchat-selection-comment-quote";
+  Object.assign(quote.style, {
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    minWidth: "0",
+    margin: "2px 2px 4px",
+    padding: "0 0 4px",
+    borderBottom: `1px solid ${dark ? "#3a3a40" : "#ececf1"}`,
+    color: dark ? "#9b9ba4" : "#71717a",
+    font: "12px/1.5 system-ui, sans-serif",
+  });
+
   // Footer actions follow the chat composer: a plain cancel, a bare icon
   // action for keeping the passage in the draft, and the filled send button
   // that matches the panel's own bubble.
@@ -468,7 +486,7 @@ function showSelectionCommentPopover(
   );
   setIcon(sendButton, "send");
   actions.append(cancelButton, attachButton, sendButton);
-  panel.append(input, actions);
+  panel.append(quote, input, actions);
   popoverDoc.body.append(panel);
 
   let disposed = false;
@@ -483,6 +501,31 @@ function showSelectionCommentPopover(
     doc.removeEventListener("selectionchange", restoreSelectionAfterClear);
     restoreSelectionRanges(selection, selectionRanges);
   };
+  const flattenedSelection = flattenSelectionText(entry.text);
+  // Trim the passage from the middle until it fits its single line, so both
+  // ends stay readable instead of the tail being cut off.
+  const fitQuote = () => {
+    const width = quote.clientWidth;
+    if (width <= 0) {
+      quote.textContent = summarizeSelectionText(flattenedSelection, 60);
+      return;
+    }
+    let low = 1;
+    let high = flattenedSelection.length;
+    let fitted = summarizeSelectionText(flattenedSelection, 1);
+    while (low <= high) {
+      const middle = Math.floor((low + high) / 2);
+      const candidate = summarizeSelectionText(flattenedSelection, middle);
+      quote.textContent = candidate;
+      if (quote.scrollWidth <= width) {
+        fitted = candidate;
+        low = middle + 1;
+      } else {
+        high = middle - 1;
+      }
+    }
+    quote.textContent = fitted;
+  };
   const place = () => {
     const width = panel.getBoundingClientRect().width;
     const height = panel.getBoundingClientRect().height;
@@ -492,6 +535,7 @@ function showSelectionCommentPopover(
     const below = top + entry.anchor.height + 8;
     panel.style.left = `${Math.max(8, Math.min(left, win.innerWidth - width - 8))}px`;
     panel.style.top = `${Math.max(8, Math.min(below + height <= win.innerHeight - 8 ? below : top - height - 8, win.innerHeight - height - 8))}px`;
+    fitQuote();
   };
   place();
 
@@ -565,7 +609,6 @@ function showSelectionCommentPopover(
   if (selectionRanges.length > 0) {
     doc.addEventListener("selectionchange", restoreSelectionAfterClear);
   }
-  input.focus();
   return dispose;
 }
 
