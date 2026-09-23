@@ -21,6 +21,7 @@ import {
 import { showAuthDialog } from "../AuthDialog";
 import { getCurrentPresentationPaper } from "../../presentation/PresentationEntry";
 import { getString } from "../../../utils/locale";
+import { attachQuickPhrasesMenu } from "./QuickPhrasesMenu";
 import { getProviderManager } from "../../providers";
 import type { PaperChatProviderConfig } from "../../../types/provider";
 import type { SubscriptionUsageSummary } from "../../../types/auth";
@@ -762,6 +763,7 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
   // avoid leaking them (and the DOM they close over) on every panel rebuild.
   const disposers: Array<() => void> = [];
   disposers.push(ConversationNavigator.attach(container));
+  disposers.push(attachQuickPhrasesMenu(context));
 
   const openPluginPreferencesSafely = (): void => {
     void import("../../preferences/UserAuthUI")

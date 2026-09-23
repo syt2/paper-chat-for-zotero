@@ -35,6 +35,7 @@ declare namespace _ZoteroTypes {
       "readerSelectionEntryEnabled": boolean;
       "readingLoopEnabled": boolean;
       "readingLoopHistory": string;
+      "quickPhrases": string;
       "firstInstalledVersion": string;
       "guideStatus": number;
       "contextMaxRecentPairs": number;

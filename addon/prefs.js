@@ -35,6 +35,7 @@ pref("debugContextExportEnabled", false);
 pref("readerSelectionEntryEnabled", true);
 pref("readingLoopEnabled", true);
 pref("readingLoopHistory", "");
+pref("quickPhrases", ""); // 聊天输入框的快捷短语（JSON 数组）
 
 // Guide Settings
 pref("firstInstalledVersion", "");

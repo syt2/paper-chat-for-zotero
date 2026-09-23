@@ -400,6 +400,58 @@ export function getChatChromeStyles(theme: ThemeColors): string {
     .chat-panel-root #chat-toolbar-secondary-actions {
       border-top: 1px solid ${theme.borderColor}; margin-top: 4px; padding-top: 4px;
     }
+    .chat-panel-root #chat-quick-phrases-entry:hover { background: ${theme.hoverBg} !important; }
+    .chat-panel-root #chat-quick-phrases-entry[aria-expanded="true"] { background: ${theme.hoverBg} !important; }
+    .chat-panel-root .chat-quick-phrases-arrow { margin-left: auto; opacity: .55; font-size: 14px; line-height: 1; }
+    .chat-panel-root .chat-quick-phrases-flyout {
+      position: fixed; display: none; z-index: 10006;
+      min-width: 168px; max-width: 260px; max-height: min(320px, 70vh);
+      overflow-y: auto; box-sizing: border-box; padding: 4px;
+      border-radius: 8px; border: 1px solid ${theme.borderColor};
+      background: ${theme.dropdownBg}; color: ${theme.textPrimary};
+      box-shadow: 0 8px 24px rgba(0,0,0,.18);
+    }
+    .chat-panel-root .chat-quick-phrases-flyout[data-open="true"] { display: block; }
+    .chat-panel-root .chat-quick-phrase-row {
+      display: flex; align-items: center; gap: 2px; border-radius: 6px;
+    }
+    .chat-panel-root .chat-quick-phrase-row:hover { background: ${theme.dropdownItemHoverBg}; }
+    .chat-panel-root .chat-quick-phrase-use {
+      flex: 1; min-width: 0; border: 0; background: transparent; color: ${theme.textPrimary};
+      text-align: left; padding: 6px 8px; font: inherit; font-size: .92em; cursor: pointer;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .chat-panel-root .chat-quick-phrase-remove {
+      width: 22px; height: 22px; margin-right: 3px; flex-shrink: 0; padding: 0;
+      border: 0; border-radius: 5px; background: transparent; color: ${theme.textMuted};
+      font-size: 14px; line-height: 1; cursor: pointer; opacity: 0;
+    }
+    .chat-panel-root .chat-quick-phrase-row:hover .chat-quick-phrase-remove,
+    .chat-panel-root .chat-quick-phrase-remove:focus-visible { opacity: .7; }
+    .chat-panel-root .chat-quick-phrase-remove:hover {
+      opacity: 1; background: ${theme.buttonHoverBg}; color: ${theme.textPrimary};
+    }
+    .chat-panel-root .chat-quick-phrases-separator {
+      height: 1px; margin: 4px 6px; background: ${theme.borderColor};
+    }
+    .chat-panel-root .chat-quick-phrase-add {
+      display: flex; align-items: center; gap: 6px; width: 100%;
+      border: 0; border-radius: 6px; background: transparent; color: ${theme.textSecondary};
+      padding: 6px 8px; font: inherit; font-size: .92em; text-align: left; cursor: pointer;
+    }
+    .chat-panel-root .chat-quick-phrase-add::before { content: "+"; font-size: 15px; line-height: 1; }
+    .chat-panel-root .chat-quick-phrase-add:hover {
+      background: ${theme.dropdownItemHoverBg}; color: ${theme.textPrimary};
+    }
+    .chat-panel-root .chat-quick-phrase-input {
+      width: 100%; box-sizing: border-box; border: 1px solid ${theme.inputBorderColor};
+      border-radius: 6px; background: ${theme.inputBg}; color: ${theme.textPrimary};
+      padding: 6px 8px; font: inherit; font-size: .92em;
+    }
+    .chat-panel-root .chat-quick-phrases-empty,
+    .chat-panel-root .chat-quick-phrases-limit {
+      padding: 6px 8px; font-size: .82em; color: ${theme.textMuted};
+    }
     .chat-panel-root #chat-footer { position: relative; padding-top: 5px; width: 100%; flex: none !important; }
     .chat-panel-root #chat-utility-actions { margin-left: auto; align-items: center; }
     .chat-panel-root #chat-tools-trigger,

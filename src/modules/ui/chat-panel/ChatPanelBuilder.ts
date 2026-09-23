@@ -652,6 +652,39 @@ export function createChatContainer(
     });
   }
 
+  // Quick phrases open a submenu, so this entry keeps the tools menu open.
+  const quickPhrasesEntry = createElement(doc, "button", btnStyle, {
+    id: "chat-quick-phrases-entry",
+    type: "button",
+    title: getString("chat-quick-phrases"),
+    "aria-label": getString("chat-quick-phrases"),
+    "aria-haspopup": "true",
+    "aria-expanded": "false",
+  });
+  quickPhrasesEntry.appendChild(
+    createElement(doc, "img", iconStyle, {
+      src: `chrome://${config.addonRef}/content/icons/quote.svg`,
+      alt: "",
+    }),
+  );
+  const quickPhrasesLabel = createElement(
+    doc,
+    "span",
+    {},
+    { class: "chat-tool-label" },
+  );
+  quickPhrasesLabel.textContent = getString("chat-quick-phrases");
+  const quickPhrasesArrow = createElement(
+    doc,
+    "span",
+    {},
+    { class: "chat-quick-phrases-arrow" },
+  );
+  quickPhrasesArrow.textContent = "›";
+  quickPhrasesEntry.appendChild(quickPhrasesLabel);
+  quickPhrasesEntry.appendChild(quickPhrasesArrow);
+  toolbarButtons.appendChild(quickPhrasesEntry);
+
   sessionActions.appendChild(newChatBtn);
   toolbarButtons.appendChild(uploadFileBtn);
   toolbarButtons.appendChild(figureScreenshotBtn);
@@ -1238,6 +1271,16 @@ export function createChatContainer(
   root.appendChild(chatViewport);
   root.appendChild(inputArea);
   root.appendChild(historyDropdown);
+  // Quick phrases submenu: anchored to the panel root so it inherits the panel
+  // chrome styles, positioned in the window so the tools menu cannot clip it.
+  root.appendChild(
+    createElement(
+      doc,
+      "div",
+      {},
+      { id: "chat-quick-phrases-flyout", class: "chat-quick-phrases-flyout" },
+    ),
+  );
   composer.appendChild(mentionPopup);
   container.appendChild(root);
 

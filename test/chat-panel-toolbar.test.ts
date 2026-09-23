@@ -587,12 +587,26 @@ describe("chat panel presentation toolbar entry", function () {
     const bar = container.querySelector("#chat-input-bottom-bar");
     const selector = container.querySelector("#chat-model-selector-btn");
     const tools = container.querySelector("#chat-tools-menu");
+    const quickPhrases = container.querySelector("#chat-quick-phrases-entry");
+    const quickPhrasesFlyout = container.querySelector(
+      "#chat-quick-phrases-flyout",
+    );
     assert.strictEqual(bar?.parentElement, composer);
     assert.strictEqual(bar?.children[0], tools);
     assert.strictEqual(bar?.children[1], selector?.parentElement);
     assert.equal(bar?.children[2]?.getAttribute("id"), "chat-send-button");
     assert.equal(tools?.tagName, "details");
     assert.equal(tools?.children[0]?.getAttribute("id"), "chat-tools-trigger");
+    assert.strictEqual(
+      quickPhrases?.parentElement,
+      container.querySelector("#chat-toolbar-primary-actions"),
+    );
+    // The submenu anchors to the styled panel root, not to the scroll box that
+    // would clip it.
+    assert.strictEqual(
+      quickPhrasesFlyout?.parentElement,
+      container.querySelector(".chat-panel-root"),
+    );
     const footer = container.querySelector("#chat-footer");
     assert.strictEqual(footer?.parentElement, composer?.parentElement);
     assert.deepEqual(
