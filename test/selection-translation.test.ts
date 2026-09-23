@@ -62,14 +62,14 @@ describe("reader selection translation", function () {
       }) as any;
   }
 
-  it("uses the UI language for automatic or unavailable language choices", () => {
+  it("uses the UI language for automatic or unavailable language choices", function () {
     assert.equal(getTranslationTargetLocale("auto", "zh-TW"), "zh-TW");
     assert.equal(getTranslationTargetLocale(undefined, "ja"), "ja");
     assert.equal(getTranslationTargetLocale("invalid", "en-US"), "en-US");
     assert.equal(getTranslationTargetLocale("zh-CN", "en-US"), "zh-CN");
   });
 
-  it("uses the chosen target language and keeps cached translations separate", async () => {
+  it("uses the chosen target language and keeps cached translations separate", async function () {
     let language = "ja";
     runtime.Zotero.Prefs.get = (key: string) =>
       key.endsWith("translationLanguage") ? language : undefined;

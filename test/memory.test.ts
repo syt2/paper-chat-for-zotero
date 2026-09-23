@@ -1,8 +1,6 @@
 import { assert } from "chai";
 import { ProviderMemoryExtractor } from "../src/modules/chat/memory/MemoryExtractor";
-import {
-  parseMemoryExtractionResponse,
-} from "../src/modules/chat/memory/MemoryExtractionParser";
+import { parseMemoryExtractionResponse } from "../src/modules/chat/memory/MemoryExtractionParser";
 import {
   buildMemoryExtractionConversationText,
   buildMemoryExtractionPrompt,
@@ -24,16 +22,18 @@ describe("memory module", function () {
 
   it("deduplicates memories with matching embeddings", async function () {
     const repository = {
-      listEmbeddedRows: async () => [
-        { embedding: JSON.stringify([1, 0, 0]) },
-      ],
+      listEmbeddedRows: async () => [{ embedding: JSON.stringify([1, 0, 0]) }],
       listTextRows: async () => [],
       listRecent: async () => [],
       updateAccessStats: async () => undefined,
     };
 
     const service = new MemorySearchService(repository as any);
-    const duplicated = await service.isDuplicate("ignored", [1, 0, 0], "test-model");
+    const duplicated = await service.isDuplicate(
+      "ignored",
+      [1, 0, 0],
+      "test-model",
+    );
 
     assert.isTrue(duplicated);
   });
@@ -110,12 +110,17 @@ describe("memory module", function () {
 
     assert.isAtLeast(results.length, 1);
     assert.equal(results[0].id, "m1");
-    assert.deepEqual(touchedIds, results.map((memory) => memory.id));
+    assert.deepEqual(
+      touchedIds,
+      results.map((memory) => memory.id),
+    );
   });
 
   it("does not call embedding for an empty memory library", async function () {
-    const service = new MemorySearchService({count: async () => 0} as any);
-    (service as any).createEmbedding = async () => {throw new Error("must not call");};
+    const service = new MemorySearchService({ count: async () => 0 } as any);
+    (service as any).createEmbedding = async () => {
+      throw new Error("must not call");
+    };
     assert.isEmpty(await service.search("a meaningful query"));
   });
 
@@ -124,12 +129,27 @@ describe("memory module", function () {
       count: async () => 1,
       listRecent: async (_limit: number, modelId: string) => {
         assert.equal(modelId, "model-b");
-        return [{id: "m1", libraryId: 1, text: "unrelated words", category: "fact", importance: 0,
-          createdAt: 0, accessCount: 0, lastAccessedAt: 0, embedding: [1, 0], embeddingModel: "model-a"}];
+        return [
+          {
+            id: "m1",
+            libraryId: 1,
+            text: "unrelated words",
+            category: "fact",
+            importance: 0,
+            createdAt: 0,
+            accessCount: 0,
+            lastAccessedAt: 0,
+            embedding: [1, 0],
+            embeddingModel: "model-a",
+          },
+        ];
       },
       updateAccessStats: async () => undefined,
     } as any);
-    (service as any).createEmbedding = async () => ({embedding: [1, 0], embeddingModel: "model-b"});
+    (service as any).createEmbedding = async () => ({
+      embedding: [1, 0],
+      embeddingModel: "model-b",
+    });
     assert.isEmpty(await service.search("quantum physics"));
   });
 
@@ -152,9 +172,8 @@ describe("memory module", function () {
       listAll: async () => [],
     } as any);
 
-    const promptContext = await memoryService.buildPromptContext(
-      "concise answers",
-    );
+    const promptContext =
+      await memoryService.buildPromptContext("concise answers");
 
     assert.include(promptContext ?? "", "[preference]");
     assert.include(
@@ -191,7 +210,10 @@ describe("memory module", function () {
       },
     ];
 
-    const conversationText = buildMemoryExtractionConversationText(messages, 64);
+    const conversationText = buildMemoryExtractionConversationText(
+      messages,
+      64,
+    );
     const prompt = buildMemoryExtractionPrompt(conversationText);
 
     assert.notInclude(conversationText, "ignore this");
@@ -467,21 +489,23 @@ describe("memory module", function () {
           updateCalls++;
         },
       } as any,
-      () => ({
-        save: async () => ({ saved: true }),
-      }) as any,
-      () => ({
-        extract: async () => ({
-          ok: true,
-          entries: [
-            {
-              text: "The user prefers concise answers.",
-              category: "preference",
-              importance: 0.9,
-            },
-          ],
-        }),
-      }) as any,
+      () =>
+        ({
+          save: async () => ({ saved: true }),
+        }) as any,
+      () =>
+        ({
+          extract: async () => ({
+            ok: true,
+            entries: [
+              {
+                text: "The user prefers concise answers.",
+                category: "preference",
+                importance: 0.9,
+              },
+            ],
+          }),
+        }) as any,
     );
 
     const firstRun = orchestrator.scheduleExtraction(session);
@@ -509,26 +533,28 @@ describe("memory module", function () {
           updateCalls++;
         },
       } as any,
-      () => ({
-        save: async () => {
-          saveCalls++;
-          await saveGate;
-          return { saved: true };
-        },
-        buildPromptContext: async () => undefined,
-      }) as any,
-      () => ({
-        extract: async () => ({
-          ok: true,
-          entries: [
-            {
-              text: "The user works on a Zotero plugin.",
-              category: "fact",
-              importance: 0.8,
-            },
-          ],
-        }),
-      }) as any,
+      () =>
+        ({
+          save: async () => {
+            saveCalls++;
+            await saveGate;
+            return { saved: true };
+          },
+          buildPromptContext: async () => undefined,
+        }) as any,
+      () =>
+        ({
+          extract: async () => ({
+            ok: true,
+            entries: [
+              {
+                text: "The user works on a Zotero plugin.",
+                category: "fact",
+                importance: 0.8,
+              },
+            ],
+          }),
+        }) as any,
     );
 
     const session: ChatSession = {
@@ -570,7 +596,10 @@ describe("memory module", function () {
     }> = [];
 
     (manager as any).orchestrator = {
-      scheduleExtraction: (session: ChatSession, options?: { requireGrowth?: boolean }) => {
+      scheduleExtraction: (
+        session: ChatSession,
+        options?: { requireGrowth?: boolean },
+      ) => {
         scheduleCalls.push({
           sessionId: session.id,
           requireGrowth: options?.requireGrowth,
@@ -642,7 +671,9 @@ describe("memory module", function () {
       () => ({}) as any,
     );
 
-    const context = await manager.buildPromptContext("Please answer in concise bullet points.");
+    const context = await manager.buildPromptContext(
+      "Please answer in concise bullet points.",
+    );
 
     assert.equal(context, "memory:Please answer in concise bullet points.");
     assert.equal(buildCalls, 1);

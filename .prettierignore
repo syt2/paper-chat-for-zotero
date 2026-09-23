@@ -7,3 +7,6 @@ mobile_api
 package-lock.json
 yarn.lock
 pnpm-lock.yaml
+
+# XUL-hosted XHTML: prettier folds the processing-instruction prolog onto one line.
+addon/content/aisummary-tasks.xhtml

@@ -104,6 +104,18 @@ class FakeDocument {
   createElementNS(_namespace: string, tagName: string): FakeElement {
     return new FakeElement(this, tagName);
   }
+
+  getElementById(id: string): FakeElement | null {
+    const visit = (element: FakeElement): FakeElement | null => {
+      if (element.getAttribute("id") === id) return element;
+      for (const child of element.children) {
+        const match = visit(child);
+        if (match) return match;
+      }
+      return null;
+    };
+    return visit(this.documentElement);
+  }
 }
 
 describe("chat panel presentation toolbar entry", function () {

@@ -3,10 +3,12 @@ import { GeminiEmbedding } from "../src/modules/embedding/providers/GeminiEmbedd
 
 describe("Gemini Embedding 2 batching", function () {
   let originalFetch: typeof fetch;
-  beforeEach(() => {
+
+  beforeEach(function () {
     originalFetch = globalThis.fetch;
   });
-  afterEach(() => {
+
+  afterEach(function () {
     globalThis.fetch = originalFetch;
   });
 

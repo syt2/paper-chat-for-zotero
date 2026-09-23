@@ -23,13 +23,10 @@ describe("buildErrorProps", function () {
   });
 
   it("redacts email addresses", function () {
-    assert.deepEqual(
-      buildErrorProps("unknown", "failed for foo@example.com"),
-      {
-        reason: "unknown",
-        error_detail: "failed for [email]",
-      },
-    );
+    assert.deepEqual(buildErrorProps("unknown", "failed for foo@example.com"), {
+      reason: "unknown",
+      error_detail: "failed for [email]",
+    });
   });
 
   it("redacts urls and paths", function () {

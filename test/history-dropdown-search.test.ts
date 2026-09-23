@@ -636,7 +636,7 @@ describe("history dropdown grouped search UI", function () {
     assert.isTrue(next?.disabled);
   });
 
-  it("loads ordinary history near the bottom and removes the scroll listener on disposal", () => {
+  it("loads ordinary history near the bottom and removes the scroll listener on disposal", function () {
     const doc = new FakeDocument();
     const { dropdown, body } = createShell(doc);
     const state = createHistoryDropdownState();
@@ -678,7 +678,7 @@ describe("history dropdown grouped search UI", function () {
     assert.lengthOf(body.listeners.get("scroll") || [], 0);
   });
 
-  it("loads the next search page once while scrolling and waits for it to finish", async () => {
+  it("loads the next search page once while scrolling and waits for it to finish", async function () {
     const doc = new FakeDocument();
     const { dropdown, body, input } = createShell(doc);
     const state = createHistoryDropdownState();

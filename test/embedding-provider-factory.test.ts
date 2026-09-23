@@ -13,6 +13,11 @@ describe("embedding provider factory", function () {
   let prefStore: Map<string, unknown>;
 
   beforeEach(function () {
+    // Previous suites can leave these singletons alive with their own stubs.
+    destroyEmbeddingProviderFactory();
+    destroyAuthManager();
+    destroyProviderManager();
+
     originalZotero = (globalThis as any).Zotero;
     originalZtoolkit = (globalThis as any).ztoolkit;
     originalAddon = (globalThis as any).addon;
@@ -124,6 +129,7 @@ describe("embedding provider factory", function () {
       "http://localhost:9002/v1/embeddings",
     ]);
   });
+
   it("switches cached providers with configured defaults and reuses model identity on switchback", async function () {
     const { getEmbeddingProviderFactory } =
       await import("../src/modules/embedding/EmbeddingProviderFactory");

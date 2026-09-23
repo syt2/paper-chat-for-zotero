@@ -7,6 +7,7 @@ Introduce a stable tier-based model-selection layer for the PaperChat backend so
 ## User-facing behavior
 
 ### Tier semantics
+
 PaperChat exposes three logical chat tiers:
 
 - `paperchat-mini`
@@ -16,6 +17,7 @@ PaperChat exposes three logical chat tiers:
 These tiers are routing slots, not hard capability guarantees. By default they follow pricing-derived grouping, but advanced users may explicitly bind any available chat-capable model to any tier.
 
 ### Global tier configuration
+
 Each tier has persisted global routing state:
 
 - selected mode: `auto` or `manual`
@@ -38,6 +40,7 @@ They only change when:
 In `manual` mode, the tier uses the user-selected concrete model directly. If that manual model later disappears, the tier automatically falls back to `auto` mode and rebinds from the current tier pool.
 
 ### New session behavior
+
 When a new chat session is created:
 
 1. inherit the current global tier selection,
@@ -47,6 +50,7 @@ When a new chat session is created:
 A new session does **not** randomly choose a different model if the tier already has a valid global resolution.
 
 ### Existing session behavior
+
 Each session persists both:
 
 - `selectedTier`
@@ -55,6 +59,7 @@ Each session persists both:
 Switching between session A and session B restores each session's own saved model snapshot. Session A does not drift because session B changed, and vice versa.
 
 ### Switching tier inside a session
+
 When the user switches tier within the current session:
 
 1. update `selectedTier`,
@@ -66,6 +71,7 @@ If the user later switches back to the original tier, the session uses that tier
 ## Tier pool derivation
 
 ### Inputs
+
 Auto tier derivation uses:
 
 - fetched PaperChat chat-capable models,
@@ -75,6 +81,7 @@ Auto tier derivation uses:
 Only non-chat models are excluded. All chat-capable models may participate in tiering.
 
 ### Pool generation
+
 When the system needs to assign or reassign an auto tier binding:
 
 1. take all chat-capable models,
@@ -87,11 +94,13 @@ When the system needs to assign or reassign an auto tier binding:
 This pool derivation is used only for choosing / replacing auto tier bindings. It does not continuously reclassify already-bound models.
 
 ### Boundary drift rule
+
 An auto tier binding remains valid even if later model-list changes would place that model in a different third. Boundary drift alone is **not** a reason to rebind.
 
 This favors stability over mathematically perfect tier boundaries.
 
 ### Small model-count fallback
+
 If there are too few models for clean thirds:
 
 - 1 model: all three tiers bind to the same model
@@ -101,6 +110,7 @@ If there are too few models for clean thirds:
 ## Persistence design
 
 ### Global persistence
+
 Persist PaperChat tier state separately from raw `pref("model")` values.
 
 Global state must include:
@@ -129,6 +139,7 @@ Semantics:
 - `mode = "auto"`: `modelId` is the current sticky auto binding for that tier
 
 ### Session persistence
+
 Extend chat-session persistence with:
 
 ```ts
@@ -143,6 +154,7 @@ These values belong to the `sessions` table and the `ChatSession` type because t
 ## Resolution flow
 
 ### Resolving a tier
+
 When resolving a tier for a new session or a tier switch:
 
 1. load the tier config,
@@ -156,6 +168,7 @@ When resolving a tier for a new session or a tier switch:
 5. otherwise rebuild the pool, choose a replacement auto binding, and persist it.
 
 ### Before sending a request
+
 For the active session:
 
 1. read session `resolvedModelId`,
@@ -165,12 +178,14 @@ For the active session:
 5. update the session `resolvedModelId` with the repaired resolution if needed.
 
 ### During request failures
+
 Use a mixed validation strategy:
 
 1. **pre-check** against cached/refreshed `/models` list,
 2. **runtime fallback** if the request still fails because the list was stale.
 
 #### Hard failures
+
 Treat these as model invalidation events:
 
 - model missing from `/models`,
@@ -186,6 +201,7 @@ For hard failures:
 5. update the current session's `resolvedModelId`.
 
 #### Soft failures
+
 Treat these as transient failures:
 
 - timeout,
@@ -204,6 +220,7 @@ This preserves stability and avoids global rebinding due to temporary outages.
 ## Retry UX
 
 ### Dice action
+
 For soft-failure error messages, show a `🎲` action on the failed message.
 
 When the user clicks it:
@@ -215,14 +232,17 @@ When the user clicks it:
 5. retry the failed message.
 
 ### Dice scope
+
 The `🎲` action affects only the current session.
 
 It does **not** modify global tier state, because the failure may be transient and session-specific.
 
 ### Empty alternative pool
+
 If no alternative exists in the current tier after excluding the failed model, the dice action should be disabled or report that no same-tier alternative is available.
 
 ### Visibility
+
 After a successful dice reroute, the UI should make the model change visible, such as:
 
 - lightweight notice in chat, or
@@ -233,12 +253,14 @@ Users should be able to understand that the retry succeeded because the session 
 ## UI changes
 
 ### Tier selector
+
 PaperChat model selection UI should shift from raw model IDs to tier-first behavior:
 
 - expose `mini / pro / plus` as the primary selection,
 - keep the current selected global tier persisted.
 
 ### Advanced tier override controls
+
 In the PaperChat settings page advanced section, add three per-tier dropdowns:
 
 - Mini model
@@ -260,14 +282,17 @@ Behavior:
 - if a manually selected model later disappears, that tier automatically falls back to `Auto`
 
 ### Session model visibility
+
 The chat UI should have a lightweight way to reveal the session's actual concrete model, at least for troubleshooting and expectation-setting.
 
 ### Error message actions
+
 Assistant error bubbles should support a retry affordance for soft failures, with the `🎲` control rendered on the message.
 
 ## Code structure recommendation
 
 ### New tier-routing module
+
 Add a focused PaperChat routing module responsible for:
 
 - deriving tier pools from models + ratios,
@@ -280,11 +305,13 @@ Add a focused PaperChat routing module responsible for:
 This logic should not be spread across UI code, provider code, and auth refresh code.
 
 ### Provider boundary
+
 `PaperChatProvider` should continue to receive one resolved concrete model string for actual API calls.
 
 Tier logic should happen before request construction, not inside low-level OpenAI-compatible request assembly.
 
 ### Session boundary
+
 `ChatManager` should own session-level model decisions because it already owns:
 
 - current session lifecycle,
@@ -293,14 +320,17 @@ Tier logic should happen before request construction, not inside low-level OpenA
 - session persistence.
 
 ### Auth / model refresh boundary
+
 `AuthManager` should keep refreshing the PaperChat model list, but it should stop force-resetting the PaperChat chat model to `auto-smart` when the model disappears. Instead, tier-routing logic should validate and repair tier state.
 
 ## Data model changes
 
 ### `src/types/chat.ts`
+
 Extend `ChatSession` with tier-routing session state.
 
 ### `src/modules/chat/db/StorageDatabase.ts`
+
 Add new columns to `sessions` for:
 
 - `selected_tier`
@@ -309,6 +339,7 @@ Add new columns to `sessions` for:
 and bump schema version with a forward migration.
 
 ### preferences / global settings
+
 Add persisted PaperChat tier state, likely via prefs or existing provider settings storage, using a single serialized structure.
 
 ## Testing plan

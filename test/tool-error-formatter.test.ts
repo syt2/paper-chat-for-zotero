@@ -19,18 +19,16 @@ describe("tool error formatting", function () {
   });
 
   afterEach(async function () {
-    const { getToolPermissionManager } = await import(
-      "../src/modules/chat/tool-permissions/index.ts"
-    );
+    const { getToolPermissionManager } =
+      await import("../src/modules/chat/tool-permissions/index.ts");
     getToolPermissionManager().setDescriptorModeOverride("create_note", null);
     getToolPermissionManager().setDescriptorModeOverride("get_full_text", null);
     (globalThis as any).Zotero = originalZotero;
   });
 
   it("formats invalid JSON argument failures into structured recovery hints", async function () {
-    const { ToolScheduler } = await import(
-      "../src/modules/chat/tool-scheduler/ToolScheduler.ts"
-    );
+    const { ToolScheduler } =
+      await import("../src/modules/chat/tool-scheduler/ToolScheduler.ts");
     const scheduler = new ToolScheduler(async () => "ok");
     const toolCall: ToolCall = {
       id: "tool-bad-json",
@@ -41,7 +39,10 @@ describe("tool error formatting", function () {
       },
     };
 
-    const result = await scheduler.execute({ toolCall, sessionId: "session-1" });
+    const result = await scheduler.execute({
+      toolCall,
+      sessionId: "session-1",
+    });
 
     assert.equal(result.status, "failed");
     assert.include(result.content, "Category: invalid_arguments");
@@ -55,12 +56,10 @@ describe("tool error formatting", function () {
   });
 
   it("formats denied tool calls with stable recovery guidance", async function () {
-    const { getToolPermissionManager } = await import(
-      "../src/modules/chat/tool-permissions/index.ts"
-    );
-    const { ToolScheduler } = await import(
-      "../src/modules/chat/tool-scheduler/ToolScheduler.ts"
-    );
+    const { getToolPermissionManager } =
+      await import("../src/modules/chat/tool-permissions/index.ts");
+    const { ToolScheduler } =
+      await import("../src/modules/chat/tool-scheduler/ToolScheduler.ts");
     getToolPermissionManager().setDescriptorModeOverride("create_note", "deny");
     const scheduler = new ToolScheduler(async () => "ok");
     const toolCall: ToolCall = {
@@ -72,7 +71,10 @@ describe("tool error formatting", function () {
       },
     };
 
-    const result = await scheduler.execute({ toolCall, sessionId: "session-1" });
+    const result = await scheduler.execute({
+      toolCall,
+      sessionId: "session-1",
+    });
 
     assert.equal(result.status, "denied");
     assert.include(result.content, "Category: permission_denied");
@@ -86,21 +88,18 @@ describe("tool error formatting", function () {
   });
 
   it("normalizes raw executor errors into structured missing-context hints", async function () {
-    const { getToolPermissionManager } = await import(
-      "../src/modules/chat/tool-permissions/index.ts"
-    );
-    const { ToolScheduler } = await import(
-      "../src/modules/chat/tool-scheduler/ToolScheduler.ts"
-    );
-    const { parseToolError } = await import(
-      "../src/modules/chat/tool-errors/ToolErrorFormatter.ts"
-    );
+    const { getToolPermissionManager } =
+      await import("../src/modules/chat/tool-permissions/index.ts");
+    const { ToolScheduler } =
+      await import("../src/modules/chat/tool-scheduler/ToolScheduler.ts");
+    const { parseToolError } =
+      await import("../src/modules/chat/tool-errors/ToolErrorFormatter.ts");
     getToolPermissionManager().setDescriptorModeOverride(
       "get_full_text",
       "auto_allow",
     );
     const scheduler = new ToolScheduler(async () => {
-      return "Error: Could not extract PDF content for item \"ITEM-1\". The item may not exist or may not have a PDF attachment.";
+      return 'Error: Could not extract PDF content for item "ITEM-1". The item may not exist or may not have a PDF attachment.';
     });
     const toolCall: ToolCall = {
       id: "tool-missing-context",
@@ -111,7 +110,10 @@ describe("tool error formatting", function () {
       },
     };
 
-    const result = await scheduler.execute({ toolCall, sessionId: "session-1" });
+    const result = await scheduler.execute({
+      toolCall,
+      sessionId: "session-1",
+    });
     const parsed = parseToolError(result.content);
 
     assert.equal(result.status, "failed");
@@ -121,13 +123,11 @@ describe("tool error formatting", function () {
   });
 
   it("keeps structured fix guidance available for runtime recovery consumption", async function () {
-    const {
-      normalizeToolErrorContent,
-      parseToolError,
-    } = await import("../src/modules/chat/tool-errors/ToolErrorFormatter.ts");
+    const { normalizeToolErrorContent, parseToolError } =
+      await import("../src/modules/chat/tool-errors/ToolErrorFormatter.ts");
     const normalized = normalizeToolErrorContent(
       "get_full_text",
-      "Error: Could not extract PDF content for item \"ITEM-1\". The item may not exist or may not have a PDF attachment.",
+      'Error: Could not extract PDF content for item "ITEM-1". The item may not exist or may not have a PDF attachment.',
     );
     const parsed = parseToolError(normalized.content);
 
@@ -137,9 +137,8 @@ describe("tool error formatting", function () {
   });
 
   it("parses legacy structured labels during migration", async function () {
-    const { normalizeToolErrorContent, parseToolError } = await import(
-      "../src/modules/chat/tool-errors/ToolErrorFormatter.ts"
-    );
+    const { normalizeToolErrorContent, parseToolError } =
+      await import("../src/modules/chat/tool-errors/ToolErrorFormatter.ts");
     const legacyContent = [
       "Error: Required paper context is unavailable for get_full_text.",
       "Category: missing_context",
@@ -147,7 +146,10 @@ describe("tool error formatting", function () {
       "Suggested fix: Retry with a valid itemKey.",
       "Safer alternative: Use metadata first.",
     ].join("\n");
-    const normalized = normalizeToolErrorContent("get_full_text", legacyContent);
+    const normalized = normalizeToolErrorContent(
+      "get_full_text",
+      legacyContent,
+    );
     const parsed = parseToolError(legacyContent);
 
     assert.include(normalized.content, "Fix hint: Retry with a valid itemKey.");

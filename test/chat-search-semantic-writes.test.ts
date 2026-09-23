@@ -213,8 +213,11 @@ class SemanticWriteFakeDatabase {
       return [];
     }
     if (statement.startsWith("UPDATE messages SET content = ?")) {
-      const message = this.messages.get(String(params[10]));
-      if (message && message.session_id === params[11]) {
+      // Keep this in step with the column list in
+      // SessionStorageService.persistMessageRow: token_usage sits between
+      // resume_checkpoint and the WHERE clause.
+      const message = this.messages.get(String(params[11]));
+      if (message && message.session_id === params[12]) {
         message.content = String(params[0] || "");
         message.reasoning = (params[1] as string | null) || null;
         message.timestamp = Number(params[2]);

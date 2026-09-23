@@ -13,10 +13,12 @@
 ## File structure
 
 ### New files
+
 - Create: `src/modules/providers/paperchat-tier-routing.ts` — tier aliases, persistence shapes, auto/manual resolution, pool derivation, rebinding helpers, same-tier reroll helper
 - Create: `test/paperchat-tier-routing.test.ts` — unit tests for tier derivation, sticky auto behavior, manual override fallback, and reroll logic
 
 ### Existing files to modify
+
 - Modify: `src/types/chat.ts` — add session-scoped `selectedTier`, `resolvedModelId`, retry metadata for dice reroute if needed
 - Modify: `src/types/provider.ts` — extend `PaperChatProviderConfig` with resolved-model override field or tier-state support if the provider must accept a concrete override
 - Modify: `src/modules/chat/db/StorageDatabase.ts` — schema v5 migration adding `selected_tier` and `resolved_model_id` to `sessions`
@@ -38,6 +40,7 @@
 - Modify: `addon/locale/en-US/addon.ftl` and `addon/locale/zh-CN/addon.ftl` — add chat tier labels, dice retry text, reroute notice text
 
 ### Tests / verification files
+
 - Test: `test/paperchat-tier-routing.test.ts`
 - Test: `test/startup.test.ts` (only if schema init coverage or boot behavior needs a regression guard)
 - Test: `npm run build`
@@ -48,6 +51,7 @@
 ### Task 1: Add tier types, pref shapes, and pure routing helpers
 
 **Files:**
+
 - Create: `src/modules/providers/paperchat-tier-routing.ts`
 - Modify: `typings/prefs.d.ts`
 - Test: `test/paperchat-tier-routing.test.ts`
@@ -67,10 +71,14 @@ import {
 
 describe("paperchat tier routing", function () {
   it("derives mini/pro/plus pools from ascending ratio order", function () {
-    const pools = deriveTierPools(
-      ["m1", "m2", "m3", "m4", "m5", "m6"],
-      { m1: 1, m2: 2, m3: 3, m4: 4, m5: 5, m6: 6 },
-    );
+    const pools = deriveTierPools(["m1", "m2", "m3", "m4", "m5", "m6"], {
+      m1: 1,
+      m2: 2,
+      m3: 3,
+      m4: 4,
+      m5: 5,
+      m6: 6,
+    });
 
     assert.deepEqual(pools["paperchat-mini"], ["m1", "m2"]);
     assert.deepEqual(pools["paperchat-pro"], ["m3", "m4"]);
@@ -119,7 +127,11 @@ describe("paperchat tier routing", function () {
   });
 
   it("rerolls within the same tier while excluding the current model", function () {
-    const next = rerollTierModel(["m3", "m4", "m5"], "m4", (candidates) => candidates[0]);
+    const next = rerollTierModel(
+      ["m3", "m4", "m5"],
+      "m4",
+      (candidates) => candidates[0],
+    );
     assert.equal(next, "m3");
   });
 
@@ -150,6 +162,7 @@ describe("paperchat tier routing", function () {
 - [ ] **Step 2: Run the new test file and verify it fails**
 
 Run:
+
 ```bash
 npm exec mocha --require ts-node/register test/paperchat-tier-routing.test.ts
 ```
@@ -193,7 +206,10 @@ export interface PaperChatTierState {
 
 export type PaperChatTierPools = Record<PaperChatTier, string[]>;
 
-function sortByRatio(models: string[], ratios: Record<string, number>): string[] {
+function sortByRatio(
+  models: string[],
+  ratios: Record<string, number>,
+): string[] {
   return [...models].sort((a, b) => {
     const ra = ratios[a];
     const rb = ratios[b];
@@ -257,16 +273,27 @@ function defaultTierState(): PaperChatTierState {
   };
 }
 
-export function parseTierState(raw: string | undefined | null): PaperChatTierState {
+export function parseTierState(
+  raw: string | undefined | null,
+): PaperChatTierState {
   if (!raw) return defaultTierState();
   try {
     const parsed = JSON.parse(raw) as Partial<PaperChatTierState>;
     return {
       selectedTier: parsed.selectedTier ?? "paperchat-pro",
       tiers: {
-        "paperchat-mini": parsed.tiers?.["paperchat-mini"] ?? { mode: "auto", modelId: null },
-        "paperchat-pro": parsed.tiers?.["paperchat-pro"] ?? { mode: "auto", modelId: null },
-        "paperchat-plus": parsed.tiers?.["paperchat-plus"] ?? { mode: "auto", modelId: null },
+        "paperchat-mini": parsed.tiers?.["paperchat-mini"] ?? {
+          mode: "auto",
+          modelId: null,
+        },
+        "paperchat-pro": parsed.tiers?.["paperchat-pro"] ?? {
+          mode: "auto",
+          modelId: null,
+        },
+        "paperchat-plus": parsed.tiers?.["paperchat-plus"] ?? {
+          mode: "auto",
+          modelId: null,
+        },
       },
     };
   } catch {
@@ -279,7 +306,9 @@ export function rerollTierModel(
   excludedModelId: string,
   pickRandom: (candidates: string[]) => string,
 ): string | null {
-  const filtered = candidates.filter((candidate) => candidate !== excludedModelId);
+  const filtered = candidates.filter(
+    (candidate) => candidate !== excludedModelId,
+  );
   if (filtered.length === 0) return null;
   return pickRandom(filtered);
 }
@@ -310,9 +339,21 @@ export function validateTierState(
   return {
     selectedTier: state.selectedTier,
     tiers: {
-      "paperchat-mini": ensureAutoBinding(state.tiers["paperchat-mini"], pools["paperchat-mini"], pickRandom),
-      "paperchat-pro": ensureAutoBinding(state.tiers["paperchat-pro"], pools["paperchat-pro"], pickRandom),
-      "paperchat-plus": ensureAutoBinding(state.tiers["paperchat-plus"], pools["paperchat-plus"], pickRandom),
+      "paperchat-mini": ensureAutoBinding(
+        state.tiers["paperchat-mini"],
+        pools["paperchat-mini"],
+        pickRandom,
+      ),
+      "paperchat-pro": ensureAutoBinding(
+        state.tiers["paperchat-pro"],
+        pools["paperchat-pro"],
+        pickRandom,
+      ),
+      "paperchat-plus": ensureAutoBinding(
+        state.tiers["paperchat-plus"],
+        pools["paperchat-plus"],
+        pickRandom,
+      ),
     },
   };
 }
@@ -323,7 +364,11 @@ export function resolveTierModel(
   models: string[],
   ratios: Record<string, number>,
   pickRandom: (candidates: string[]) => string,
-): { state: PaperChatTierState; modelId: string | null; pools: PaperChatTierPools } {
+): {
+  state: PaperChatTierState;
+  modelId: string | null;
+  pools: PaperChatTierPools;
+} {
   const nextState = validateTierState(state, models, ratios, pickRandom);
   const pools = deriveTierPools(models, ratios);
   return {
@@ -337,6 +382,7 @@ export function resolveTierModel(
 - [ ] **Step 5: Run the routing tests and make them pass**
 
 Run:
+
 ```bash
 npm exec mocha --require ts-node/register test/paperchat-tier-routing.test.ts
 ```
@@ -353,6 +399,7 @@ git commit -m "feat: add paperchat tier routing primitives"
 ### Task 2: Persist selected tier and resolved model on sessions
 
 **Files:**
+
 - Modify: `src/types/chat.ts`
 - Modify: `src/modules/chat/db/StorageDatabase.ts`
 - Modify: `src/modules/chat/SessionStorageService.ts`
@@ -391,6 +438,7 @@ it("maps selected tier and resolved model from sqlite rows", function () {
 - [ ] **Step 2: Run the tests and verify they fail**
 
 Run:
+
 ```bash
 npm exec mocha --require ts-node/register test/paperchat-tier-routing.test.ts
 ```
@@ -467,18 +515,31 @@ resolvedModelId: row.resolved_model_id || undefined,
 Add a small pure export near the loader to support the test:
 
 ```ts
-export function mapSessionRowToChatSession(row: any, messages: ChatMessage[]): ChatSession {
+export function mapSessionRowToChatSession(
+  row: any,
+  messages: ChatMessage[],
+): ChatSession {
   return {
     id: row.id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lastActiveItemKey: row.last_active_item_key || null,
-    lastActiveItemKeys: row.last_active_item_keys ? JSON.parse(row.last_active_item_keys) : undefined,
+    lastActiveItemKeys: row.last_active_item_keys
+      ? JSON.parse(row.last_active_item_keys)
+      : undefined,
     messages: filterValidMessages(messages),
-    contextSummary: row.context_summary ? JSON.parse(row.context_summary) : undefined,
+    contextSummary: row.context_summary
+      ? JSON.parse(row.context_summary)
+      : undefined,
     contextState: row.context_state ? JSON.parse(row.context_state) : undefined,
-    memoryExtractedAt: row.memory_extracted_at != null ? (row.memory_extracted_at as number) : undefined,
-    memoryExtractedMsgCount: row.memory_extracted_msg_count != null ? (row.memory_extracted_msg_count as number) : undefined,
+    memoryExtractedAt:
+      row.memory_extracted_at != null
+        ? (row.memory_extracted_at as number)
+        : undefined,
+    memoryExtractedMsgCount:
+      row.memory_extracted_msg_count != null
+        ? (row.memory_extracted_msg_count as number)
+        : undefined,
     selectedTier: row.selected_tier || undefined,
     resolvedModelId: row.resolved_model_id || undefined,
   };
@@ -488,6 +549,7 @@ export function mapSessionRowToChatSession(row: any, messages: ChatMessage[]): C
 - [ ] **Step 6: Run the routing test file and verify it passes**
 
 Run:
+
 ```bash
 npm exec mocha --require ts-node/register test/paperchat-tier-routing.test.ts
 ```
@@ -504,6 +566,7 @@ git commit -m "feat: persist paperchat session routing state"
 ### Task 3: Add persisted global tier state and PaperChat settings UI
 
 **Files:**
+
 - Modify: `src/modules/preferences/ModelsFetcher.ts`
 - Modify: `src/modules/preferences/PaperchatProviderUI.ts`
 - Modify: `src/modules/preferences/PreferencesManager.ts`
@@ -655,7 +718,9 @@ function populateTierOverridePopup(
   state: PaperChatTierState,
 ): void {
   const popup = doc.getElementById(TIER_MODEL_POPUPS[tier]);
-  const select = doc.getElementById(TIER_MODEL_SELECTORS[tier]) as unknown as XULMenuListElement;
+  const select = doc.getElementById(
+    TIER_MODEL_SELECTORS[tier],
+  ) as unknown as XULMenuListElement;
   if (!popup || !select) return;
   clearElement(popup);
 
@@ -672,7 +737,8 @@ function populateTierOverridePopup(
   }
 
   const entry = state.tiers[tier];
-  select.value = entry.mode === "manual" && entry.modelId ? entry.modelId : "auto";
+  select.value =
+    entry.mode === "manual" && entry.modelId ? entry.modelId : "auto";
 }
 ```
 
@@ -681,20 +747,31 @@ Save state from UI like this:
 ```ts
 export function savePaperchatConfig(doc: Document): void {
   const providerManager = getProviderManager();
-  const tierSelect = doc.getElementById("pref-paperchat-tier") as unknown as XULMenuListElement;
-  const maxTokensEl = doc.getElementById("pref-paperchat-maxtokens") as HTMLInputElement;
-  const temperatureEl = doc.getElementById("pref-paperchat-temperature") as HTMLInputElement;
-  const systemPromptEl = doc.getElementById("pref-paperchat-systemprompt") as HTMLTextAreaElement;
+  const tierSelect = doc.getElementById(
+    "pref-paperchat-tier",
+  ) as unknown as XULMenuListElement;
+  const maxTokensEl = doc.getElementById(
+    "pref-paperchat-maxtokens",
+  ) as HTMLInputElement;
+  const temperatureEl = doc.getElementById(
+    "pref-paperchat-temperature",
+  ) as HTMLInputElement;
+  const systemPromptEl = doc.getElementById(
+    "pref-paperchat-systemprompt",
+  ) as HTMLTextAreaElement;
 
   const state = loadTierState();
   state.selectedTier = (tierSelect?.value || "paperchat-pro") as PaperChatTier;
 
   for (const tier of PAPERCHAT_TIERS) {
-    const select = doc.getElementById(TIER_MODEL_SELECTORS[tier]) as unknown as XULMenuListElement;
+    const select = doc.getElementById(
+      TIER_MODEL_SELECTORS[tier],
+    ) as unknown as XULMenuListElement;
     const value = select?.value || "auto";
-    state.tiers[tier] = value === "auto"
-      ? { mode: "auto", modelId: state.tiers[tier]?.modelId || null }
-      : { mode: "manual", modelId: value };
+    state.tiers[tier] =
+      value === "auto"
+        ? { mode: "auto", modelId: state.tiers[tier]?.modelId || null }
+        : { mode: "manual", modelId: value };
   }
 
   saveTierState(state);
@@ -736,6 +813,7 @@ for (const id of ids) {
 - [ ] **Step 7: Run build and focused tests**
 
 Run:
+
 ```bash
 npm exec mocha --require ts-node/register test/paperchat-tier-routing.test.ts && npm run build
 ```
@@ -752,6 +830,7 @@ git commit -m "feat: add paperchat mini pro plus settings"
 ### Task 4: Resolve per-session models before PaperChat requests
 
 **Files:**
+
 - Modify: `src/modules/chat/ChatManager.ts`
 - Modify: `src/modules/providers/PaperChatProvider.ts`
 - Modify: `src/types/provider.ts`
@@ -775,14 +854,16 @@ it("prefers the session resolved model while it remains available", function () 
       selectedTier: "paperchat-pro",
       resolvedModelId: "m3",
     },
-    parseTierState(JSON.stringify({
-      selectedTier: "paperchat-pro",
-      tiers: {
-        "paperchat-mini": { mode: "auto", modelId: "m1" },
-        "paperchat-pro": { mode: "auto", modelId: "m4" },
-        "paperchat-plus": { mode: "auto", modelId: "m6" },
-      },
-    })),
+    parseTierState(
+      JSON.stringify({
+        selectedTier: "paperchat-pro",
+        tiers: {
+          "paperchat-mini": { mode: "auto", modelId: "m1" },
+          "paperchat-pro": { mode: "auto", modelId: "m4" },
+          "paperchat-plus": { mode: "auto", modelId: "m6" },
+        },
+      }),
+    ),
     ["m1", "m3", "m4", "m6"],
     { m1: 1, m3: 3, m4: 4, m6: 6 },
     (candidates) => candidates[0],
@@ -795,6 +876,7 @@ it("prefers the session resolved model while it remains available", function () 
 - [ ] **Step 2: Run the test and verify it fails**
 
 Run:
+
 ```bash
 npm exec mocha --require ts-node/register test/paperchat-tier-routing.test.ts
 ```
@@ -833,13 +915,28 @@ export function resolveSessionPaperChatModel(
   availableModels: string[],
   ratios: Record<string, number>,
   pickRandom: (candidates: string[]) => string,
-): { modelId: string | null; session: ChatSession; tierState: PaperChatTierState } {
-  if (session.resolvedModelId && availableModels.includes(session.resolvedModelId)) {
+): {
+  modelId: string | null;
+  session: ChatSession;
+  tierState: PaperChatTierState;
+} {
+  if (
+    session.resolvedModelId &&
+    availableModels.includes(session.resolvedModelId)
+  ) {
     return { modelId: session.resolvedModelId, session, tierState };
   }
 
-  const tier = (session.selectedTier || tierState.selectedTier || "paperchat-pro") as PaperChatTier;
-  const resolved = resolveTierModel(tierState, tier, availableModels, ratios, pickRandom);
+  const tier = (session.selectedTier ||
+    tierState.selectedTier ||
+    "paperchat-pro") as PaperChatTier;
+  const resolved = resolveTierModel(
+    tierState,
+    tier,
+    availableModels,
+    ratios,
+    pickRandom,
+  );
   return {
     modelId: resolved.modelId,
     session: {
@@ -863,7 +960,9 @@ const activeProviderId = providerManager.getActiveProviderId();
 if (activeProviderId === "paperchat") {
   const availableModels = await provider.getAvailableModels();
   const ratios = getModelRatios();
-  const tierState = parseTierState(getPref("paperchatTierState") as string | undefined);
+  const tierState = parseTierState(
+    getPref("paperchatTierState") as string | undefined,
+  );
   const resolved = resolveSessionPaperChatModel(
     sendingSession,
     tierState,
@@ -872,12 +971,17 @@ if (activeProviderId === "paperchat") {
     (candidates) => candidates[Math.floor(Math.random() * candidates.length)],
   );
 
-  this.currentSession = this.currentSession?.id === sendingSession.id ? resolved.session : this.currentSession;
+  this.currentSession =
+    this.currentSession?.id === sendingSession.id
+      ? resolved.session
+      : this.currentSession;
   sendingSession.selectedTier = resolved.session.selectedTier;
   sendingSession.resolvedModelId = resolved.session.resolvedModelId;
   setPref("paperchatTierState", JSON.stringify(resolved.tierState));
   await this.sessionStorage.updateSessionMeta(sendingSession);
-  provider.updateConfig({ resolvedModelOverride: resolved.modelId || undefined });
+  provider.updateConfig({
+    resolvedModelOverride: resolved.modelId || undefined,
+  });
 }
 ```
 
@@ -888,7 +992,9 @@ Do not apply this to non-PaperChat providers.
 In `createNewSession()` and/or `SessionStorageService.createSession()`, initialize new sessions like this:
 
 ```ts
-const tierState = parseTierState(getPref("paperchatTierState") as string | undefined);
+const tierState = parseTierState(
+  getPref("paperchatTierState") as string | undefined,
+);
 session.selectedTier = tierState.selectedTier;
 ```
 
@@ -897,6 +1003,7 @@ Leave `resolvedModelId` empty until the first send or until you intentionally re
 - [ ] **Step 7: Run build and the routing tests**
 
 Run:
+
 ```bash
 npm exec mocha --require ts-node/register test/paperchat-tier-routing.test.ts && npm run build
 ```
@@ -913,6 +1020,7 @@ git commit -m "feat: resolve paperchat tiers per session"
 ### Task 5: Repair tier state during model refresh and hard failures
 
 **Files:**
+
 - Modify: `src/modules/auth/AuthManager.ts`
 - Modify: `src/modules/chat/ChatManager.ts`
 - Modify: `src/modules/providers/paperchat-tier-routing.ts`
@@ -926,15 +1034,26 @@ Append these tests:
 import { isPaperChatModelHardFailure } from "../src/modules/chat/ChatManager";
 
 it("classifies unsupported-model errors as hard failures", function () {
-  assert.isTrue(isPaperChatModelHardFailure(new Error("API Error: 400 - model not found")));
-  assert.isTrue(isPaperChatModelHardFailure(new Error("API Error: 404 - unsupported model")));
-  assert.isFalse(isPaperChatModelHardFailure(new Error("API Error: 429 - rate limit exceeded")));
+  assert.isTrue(
+    isPaperChatModelHardFailure(new Error("API Error: 400 - model not found")),
+  );
+  assert.isTrue(
+    isPaperChatModelHardFailure(
+      new Error("API Error: 404 - unsupported model"),
+    ),
+  );
+  assert.isFalse(
+    isPaperChatModelHardFailure(
+      new Error("API Error: 429 - rate limit exceeded"),
+    ),
+  );
 });
 ```
 
 - [ ] **Step 2: Run the test and verify it fails**
 
 Run:
+
 ```bash
 npm exec mocha --require ts-node/register test/paperchat-tier-routing.test.ts
 ```
@@ -948,7 +1067,9 @@ Export this helper from `ChatManager.ts`:
 ```ts
 export function isPaperChatModelHardFailure(error: Error): boolean {
   const message = error.message.toLowerCase();
-  return message.includes("model not found") || message.includes("unsupported model");
+  return (
+    message.includes("model not found") || message.includes("unsupported model")
+  );
 }
 ```
 
@@ -957,7 +1078,9 @@ export function isPaperChatModelHardFailure(error: Error): boolean {
 Replace the PaperChat raw-model-switching branch with tier-state repair:
 
 ```ts
-const tierState = parseTierState(getPref("paperchatTierState") as string | undefined);
+const tierState = parseTierState(
+  getPref("paperchatTierState") as string | undefined,
+);
 const repaired = validateTierState(
   tierState,
   chatModels,
@@ -977,11 +1100,22 @@ Delete the logic that force-switches `pref("model")` to `AUTO_MODEL_SMART`.
 In `ChatManager.sendMessage(...)`, inside the all-providers-failed `catch`, add a PaperChat-specific branch before inserting the final error message:
 
 ```ts
-if (providerManager.getActiveProviderId() === "paperchat" && error instanceof Error && isPaperChatModelHardFailure(error)) {
+if (
+  providerManager.getActiveProviderId() === "paperchat" &&
+  error instanceof Error &&
+  isPaperChatModelHardFailure(error)
+) {
   const availableModels = await provider.getAvailableModels();
-  const tierState = parseTierState(getPref("paperchatTierState") as string | undefined);
+  const tierState = parseTierState(
+    getPref("paperchatTierState") as string | undefined,
+  );
   const repaired = resolveTierModel(
-    validateTierState(tierState, availableModels, getModelRatios(), (candidates) => candidates[Math.floor(Math.random() * candidates.length)]),
+    validateTierState(
+      tierState,
+      availableModels,
+      getModelRatios(),
+      (candidates) => candidates[Math.floor(Math.random() * candidates.length)],
+    ),
     (sendingSession.selectedTier || tierState.selectedTier) as any,
     availableModels,
     getModelRatios(),
@@ -998,6 +1132,7 @@ This repairs session state before the user retries manually.
 - [ ] **Step 6: Run build and tests**
 
 Run:
+
 ```bash
 npm exec mocha --require ts-node/register test/paperchat-tier-routing.test.ts && npm run build
 ```
@@ -1014,6 +1149,7 @@ git commit -m "feat: repair paperchat tier state on invalid models"
 ### Task 6: Replace chat-panel model selector with mini/pro/plus session routing
 
 **Files:**
+
 - Modify: `src/modules/ui/chat-panel/ChatPanelEvents.ts`
 - Modify: `addon/locale/en-US/addon.ftl`
 - Modify: `addon/locale/zh-CN/addon.ftl`
@@ -1038,7 +1174,9 @@ Replace `updateModelSelectorDisplay(...)` in `ChatPanelEvents.ts` with:
 
 ```ts
 export function updateModelSelectorDisplay(container: HTMLElement): void {
-  const label = container.querySelector("#chat-model-selector-text") as HTMLElement | null;
+  const label = container.querySelector(
+    "#chat-model-selector-text",
+  ) as HTMLElement | null;
   if (!label) return;
 
   const providerManager = getProviderManager();
@@ -1053,7 +1191,9 @@ export function updateModelSelectorDisplay(container: HTMLElement): void {
     return;
   }
 
-  const tierState = parseTierState(getPref("paperchatTierState") as string | undefined);
+  const tierState = parseTierState(
+    getPref("paperchatTierState") as string | undefined,
+  );
   const chatManager = getChatManager();
   const session = chatManager.getActiveSession();
   const tier = session?.selectedTier || tierState.selectedTier;
@@ -1079,7 +1219,9 @@ In `populateModelDropdown(...)`, replace the PaperChat-specific `AUTO_MODEL` / `
 
 ```ts
 if (config.id === "paperchat") {
-  const tierState = parseTierState(getPref("paperchatTierState") as string | undefined);
+  const tierState = parseTierState(
+    getPref("paperchatTierState") as string | undefined,
+  );
   const tierOptions = [
     { value: "paperchat-mini", label: getString("chat-tier-mini") },
     { value: "paperchat-pro", label: getString("chat-tier-pro") },
@@ -1103,7 +1245,9 @@ if (config.id === "paperchat") {
     item.appendChild(label);
     item.addEventListener("click", async () => {
       if (!isActiveProvider) providerManager.setActiveProvider(config.id);
-      const state = parseTierState(getPref("paperchatTierState") as string | undefined);
+      const state = parseTierState(
+        getPref("paperchatTierState") as string | undefined,
+      );
       state.selectedTier = opt.value;
       setPref("paperchatTierState", JSON.stringify(state));
       const session = context.chatManager.getActiveSession();
@@ -1131,6 +1275,7 @@ Delete the `setPref("model", ...)` and `providerManager.updateProviderConfig(con
 - [ ] **Step 5: Run build and verify the chat panel compiles**
 
 Run:
+
 ```bash
 npm run build
 ```
@@ -1147,6 +1292,7 @@ git commit -m "feat: switch paperchat chat selector to tiers"
 ### Task 7: Add soft-failure dice reroute in the chat UI
 
 **Files:**
+
 - Modify: `src/modules/chat/ChatManager.ts`
 - Modify: `src/modules/ui/chat-panel/MessageRenderer.ts`
 - Modify: `src/modules/ui/chat-panel/types.ts`
@@ -1173,10 +1319,17 @@ If this already passes from Task 1, treat it as covered and continue.
 In `ChatManager.sendMessage(...)`, inside the all-providers-failed `catch`, after classifying the error as soft failure, set these fields before inserting the error message:
 
 ```ts
-const softFailure = error instanceof Error && !isPaperChatModelHardFailure(error);
-sendingSession.lastRetryableUserMessageId = softFailure ? userMessage.id : undefined;
-sendingSession.lastRetryableErrorMessageId = softFailure ? errorMessage.id : undefined;
-sendingSession.lastRetryableFailedModelId = softFailure ? sendingSession.resolvedModelId : undefined;
+const softFailure =
+  error instanceof Error && !isPaperChatModelHardFailure(error);
+sendingSession.lastRetryableUserMessageId = softFailure
+  ? userMessage.id
+  : undefined;
+sendingSession.lastRetryableErrorMessageId = softFailure
+  ? errorMessage.id
+  : undefined;
+sendingSession.lastRetryableFailedModelId = softFailure
+  ? sendingSession.resolvedModelId
+  : undefined;
 await this.sessionStorage.updateSessionMeta(sendingSession);
 ```
 
@@ -1216,7 +1369,8 @@ async rerollCurrentPaperChatTier(): Promise<{ previousModel: string; nextModel: 
 Extend `ChatPanelContext` in `src/modules/ui/chat-panel/types.ts`:
 
 ```ts
-rerollPaperChatTierForCurrentSession: () => Promise<{ previousModel: string; nextModel: string; tier: string } | null>;
+rerollPaperChatTierForCurrentSession: () =>
+  Promise<{ previousModel: string; nextModel: string; tier: string } | null>;
 ```
 
 Wire it in `ChatPanelManager.createContext(...)`:
@@ -1284,6 +1438,7 @@ Do not change global tier state here.
 - [ ] **Step 7: Run build and tests**
 
 Run:
+
 ```bash
 npm exec mocha --require ts-node/register test/paperchat-tier-routing.test.ts && npm run build
 ```
@@ -1300,6 +1455,7 @@ git commit -m "feat: add same-tier dice reroute for paperchat"
 ### Task 8: End-to-end verification and cleanup
 
 **Files:**
+
 - Modify: any touched files from prior tasks if fixes are needed
 - Test: `test/paperchat-tier-routing.test.ts`
 - Test: `npm run build`
@@ -1308,6 +1464,7 @@ git commit -m "feat: add same-tier dice reroute for paperchat"
 - [ ] **Step 1: Run the focused routing test suite**
 
 Run:
+
 ```bash
 npm exec mocha --require ts-node/register test/paperchat-tier-routing.test.ts
 ```
@@ -1317,6 +1474,7 @@ Expected: PASS.
 - [ ] **Step 2: Run the existing test suite**
 
 Run:
+
 ```bash
 npm run test
 ```
@@ -1326,6 +1484,7 @@ Expected: PASS with existing startup / memory / web-search coverage still green.
 - [ ] **Step 3: Run the full build**
 
 Run:
+
 ```bash
 npm run build
 ```
@@ -1369,6 +1528,7 @@ git commit -m "feat: ship paperchat tiered model routing"
 ## Self-review
 
 ### Spec coverage
+
 - Tier rename to `paperchat-mini / pro / plus`: covered in Tasks 1, 3, and 6
 - Sticky auto bindings and manual overrides: covered in Tasks 1, 3, and 5
 - Session snapshot persistence: covered in Tasks 2 and 4
@@ -1377,11 +1537,12 @@ git commit -m "feat: ship paperchat tiered model routing"
 - Preferences advanced per-tier dropdowns: covered in Task 3
 
 ### Placeholder scan
+
 - No `TODO`, `TBD`, or “write tests later” placeholders remain.
 - Every code-changing task contains concrete code snippets, commands, and target files.
 
 ### Type consistency
+
 - Tier names are consistently `paperchat-mini`, `paperchat-pro`, `paperchat-plus`
 - Global tier state key is consistently `paperchatTierState`
 - Session fields are consistently `selectedTier` and `resolvedModelId`
-

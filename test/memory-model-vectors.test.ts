@@ -15,6 +15,7 @@ describe("memory vectors by model (SQLite)", function () {
     const moduleName = ["node", "sqlite"].join(":");
     sqlite = await import(moduleName);
   });
+
   beforeEach(async function () {
     originalToolkit = (globalThis as any).ztoolkit;
     (globalThis as any).ztoolkit = { log() {} };
@@ -39,6 +40,7 @@ describe("memory vectors by model (SQLite)", function () {
     repository = new MemoryRepository(1);
     repository.getDb = async () => db;
   });
+
   afterEach(function () {
     db?.connection.close();
     (globalThis as any).ztoolkit = originalToolkit;
