@@ -3,7 +3,10 @@ import {
   mapMessageRowToChatMessage,
   type MessageStorageRow,
 } from "../src/modules/chat/SessionStorageService.ts";
-import { StorageDatabase } from "../src/modules/chat/db/StorageDatabase.ts";
+import {
+  SCHEMA_VERSION,
+  StorageDatabase,
+} from "../src/modules/chat/db/StorageDatabase.ts";
 
 type ProbeDatabase = {
   queryAsync(sql: string, params?: unknown[]): Promise<any[] | undefined>;
@@ -120,7 +123,7 @@ describe("upgrade from the official V2.6.1 database", function () {
 
     try {
       assert.equal(await readVersion(baseline), 8);
-      assert.equal(await readVersion(upgraded), 9);
+      assert.equal(await readVersion(upgraded), SCHEMA_VERSION);
 
       assert.equal(await readRowCount(baseline, "sessions"), 2);
       assert.equal(await readRowCount(baseline, "messages"), 3);
@@ -650,7 +653,7 @@ describe("upgrade from the official V2.6.1 database", function () {
 
       await storage.createTables(db);
       await storage.initSchemaVersion(db);
-      assert.equal(await readVersion(db), 9);
+      assert.equal(await readVersion(db), SCHEMA_VERSION);
       const reasoningRows =
         (await db.queryAsync(
           `SELECT reasoning FROM messages
@@ -666,7 +669,7 @@ describe("upgrade from the official V2.6.1 database", function () {
 
     const reopened = new Zotero.DBConnection(walPath) as ProbeDatabase;
     try {
-      assert.equal(await readVersion(reopened), 9);
+      assert.equal(await readVersion(reopened), SCHEMA_VERSION);
       const reasoningRows =
         (await reopened.queryAsync(
           `SELECT reasoning FROM messages
