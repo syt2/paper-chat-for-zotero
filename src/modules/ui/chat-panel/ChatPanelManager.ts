@@ -27,6 +27,10 @@ import { getProviderManager } from "../../providers";
 import { providerSupportsToolCalling } from "../../providers/provider-capabilities";
 import { getPref, setPref } from "../../../utils/prefs";
 import {
+  notifyChatPanelClosed,
+  setChatInUseCheck,
+} from "../../../utils/chatActivity";
+import {
   createNoteSummaryContext,
   type NoteSummarySourceItem,
 } from "../../chat/note-summary-destination";
@@ -1456,6 +1460,8 @@ function openFloatingWindow(): boolean {
       cancelReaderFigureScreenshot();
       if (!suppressFloatingUnloadTracking) {
         trackChatPanelClosed();
+        // User closed the floating window directly.
+        notifyChatPanelClosed();
       }
       suppressFloatingUnloadTracking = false;
       cleanupPanelIntegrations(floatingContainer);
@@ -2268,6 +2274,9 @@ export function isPanelShown(): boolean {
   }
 }
 
+// Lets non-UI modules (the self-update scheduler) know when PaperChat is in use.
+setChatInUseCheck(() => isPanelShown());
+
 function getVisibleChatSessionId(): string | null {
   if (!isPanelShown()) return null;
   const container =
@@ -2712,6 +2721,7 @@ export function hidePanel(): void {
 
   // Update toolbar button pressed state
   updateToolbarButtonState(false);
+  notifyChatPanelClosed();
 }
 
 /**

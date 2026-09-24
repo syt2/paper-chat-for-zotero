@@ -25,7 +25,6 @@ declare namespace _ZoteroTypes {
       "paperchatRoutingDefaultsCache": string;
       "paperchatEmbeddingConfigCache": string;
       "paperchatModelCacheClientVersion": string;
-      "paperchatModelCacheClientVersion": string;
       "paperchatTierState": string;
       "paperchatSuppressHighTierWarning": boolean;
       "paperchatPresentationSlideCount": number;

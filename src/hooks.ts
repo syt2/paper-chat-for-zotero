@@ -48,7 +48,10 @@ import {
   destroyReadingLoopService,
   initReadingLoopService,
 } from "./modules/reading-loop";
-import { updateSelfIfNeed } from "./utils/selfUpdate";
+import {
+  startSelfUpdateScheduler,
+  stopSelfUpdateScheduler,
+} from "./utils/selfUpdate";
 import {
   registerReaderChatEntries,
   unregisterReaderChatEntries,
@@ -142,9 +145,7 @@ async function onStartup() {
   getAnalyticsService().track(ANALYTICS_EVENTS.pluginStarted, {
     startup_mode: "normal",
   });
-  updateSelfIfNeed().catch((error) => {
-    ztoolkit.log("[Startup] Auto update check failed:", error);
-  });
+  startSelfUpdateScheduler();
 }
 
 async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
@@ -210,6 +211,7 @@ async function onMainWindowUnload(_win: Window): Promise<void> {
 }
 
 async function onShutdown(): Promise<void> {
+  stopSelfUpdateScheduler();
   ztoolkit.unregisterAll();
   ztoolkit.Menu.unregister("paperchat-chat-menuitem");
   getAISummaryService().unregisterMenus();

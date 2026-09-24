@@ -2,6 +2,134 @@ import pkg from "../../package.json";
 import { config } from "../../package.json";
 import { getGithubUrlCandidates, getUpdateURLTemplate } from "./updateUrls";
 import { NO_RETRY_ON_THROTTLE } from "./http";
+import { isChatInUse, onChatPanelClosed } from "./chatActivity";
+
+/** Re-check for a new release every three hours. */
+export const SELF_UPDATE_CHECK_INTERVAL_MS = 3 * 60 * 60 * 1000;
+/** Grace period after the chat panel closes before a deferred install runs. */
+export const SELF_UPDATE_CLOSE_DELAY_MS = 10 * 1000;
+
+let selfUpdateTimer: ReturnType<typeof setInterval> | null = null;
+let deferredInstallTimer: ReturnType<typeof setTimeout> | null = null;
+/** Update seen while the panel was open, waiting for an idle moment. */
+let pendingUpdateLink: string | null = null;
+let closeListenerRegistered = false;
+let closeDelayMs = SELF_UPDATE_CLOSE_DELAY_MS;
+
+function isProductionBuild(): boolean {
+  return typeof __env__ !== "undefined" && __env__ === "production";
+}
+
+/**
+ * Checks for updates on startup (never skipped, matching the behaviour before
+ * the scheduler existed) and then every three hours. An interval check that
+ * finds an update while the chat panel is open only remembers it: the install
+ * runs after the user closes the panel and it stays closed for
+ * {@link SELF_UPDATE_CLOSE_DELAY_MS}. Returns the startup check so callers
+ * (and tests) can await it.
+ */
+export function startSelfUpdateScheduler(): Promise<void> | undefined {
+  if (!isProductionBuild()) {
+    return undefined;
+  }
+  stopSelfUpdateScheduler();
+  registerCloseListener();
+  selfUpdateTimer = setInterval(() => {
+    void runSelfUpdateCheck("interval", { ignoreInUse: false });
+  }, SELF_UPDATE_CHECK_INTERVAL_MS);
+  return runSelfUpdateCheck("startup", { ignoreInUse: true });
+}
+
+export function stopSelfUpdateScheduler(): void {
+  if (selfUpdateTimer !== null) {
+    clearInterval(selfUpdateTimer);
+    selfUpdateTimer = null;
+  }
+  if (deferredInstallTimer !== null) {
+    clearTimeout(deferredInstallTimer);
+    deferredInstallTimer = null;
+  }
+  pendingUpdateLink = null;
+}
+
+export function setSelfUpdateCloseDelayForTests(delayMs: number): void {
+  closeDelayMs = delayMs;
+}
+
+export function resetSelfUpdateSchedulerForTests(): void {
+  stopSelfUpdateScheduler();
+  closeListenerRegistered = false;
+  closeDelayMs = SELF_UPDATE_CLOSE_DELAY_MS;
+}
+
+function registerCloseListener(): void {
+  if (closeListenerRegistered) {
+    return;
+  }
+  closeListenerRegistered = true;
+  onChatPanelClosed(() => {
+    scheduleDeferredInstallCheck();
+  });
+}
+
+function scheduleDeferredInstallCheck(): void {
+  if (!pendingUpdateLink) {
+    return;
+  }
+  if (deferredInstallTimer !== null) {
+    clearTimeout(deferredInstallTimer);
+  }
+  ztoolkit.log(
+    `[SelfUpdate] Chat panel closed; re-checking for updates in ${closeDelayMs}ms`,
+  );
+  deferredInstallTimer = setTimeout(() => {
+    deferredInstallTimer = null;
+    void runDeferredInstallCheck();
+  }, closeDelayMs);
+}
+
+/**
+ * Runs once the grace period after closing the panel elapses. Skipped when the
+ * user reopened the panel in the meantime.
+ */
+export async function runDeferredInstallCheck(): Promise<void> {
+  if (isChatInUse()) {
+    ztoolkit.log(
+      "[SelfUpdate] Chat panel is open again; keeping the update pending",
+    );
+    return;
+  }
+  await runSelfUpdateCheck("panel-closed", { ignoreInUse: false });
+}
+
+/** Test seam: performs an interval-style check without waiting three hours. */
+export function runScheduledUpdateCheckForTests(): Promise<void> {
+  return runSelfUpdateCheck("interval", { ignoreInUse: false });
+}
+
+async function runSelfUpdateCheck(
+  trigger: "startup" | "interval" | "panel-closed",
+  options: { ignoreInUse: boolean },
+): Promise<void> {
+  try {
+    const update = await findAvailableUpdate();
+    if (!update) {
+      pendingUpdateLink = null;
+      return;
+    }
+    if (!options.ignoreInUse && isChatInUse()) {
+      pendingUpdateLink = update.update_link ?? null;
+      ztoolkit.log(
+        `[SelfUpdate] ${trigger}: update ${update.version} available, deferred while PaperChat is in use`,
+      );
+      return;
+    }
+    pendingUpdateLink = null;
+    await installUpdate(update);
+  } catch (error) {
+    ztoolkit.log(`[SelfUpdate] ${trigger} check failed: ${error}`);
+  }
+}
 
 type AddonManagerLike = {
   STATE_AVAILABLE?: number;
@@ -52,31 +180,37 @@ export async function installAddonFrom(
   }
 }
 
+/** Returns the newest published release when it is newer than this build. */
+export async function findAvailableUpdate(): Promise<AddonUpdateEntry | null> {
+  const addonManager = getAddonManager();
+  const addon = await addonManager.getAddonByID(config.addonID);
+  if (!addon?.version) {
+    return null;
+  }
+  const updateInfo = await loadUpdateManifestWithFallback();
+  return findNewerUpdate(addon.version, updateInfo);
+}
+
+export async function installUpdate(update: AddonUpdateEntry): Promise<void> {
+  if (!update.update_link) {
+    ztoolkit.log(
+      `[SelfUpdate] Skip update ${update.version}: missing update_link`,
+    );
+    return;
+  }
+  await installWithFallback(update.update_link);
+}
+
 export async function updateSelfIfNeed(): Promise<void> {
-  if (__env__ !== "production") {
+  if (!isProductionBuild()) {
     return;
   }
   try {
-    const addonManager = getAddonManager();
-    const addon = await addonManager.getAddonByID(config.addonID);
-    if (!addon?.version) {
-      return;
-    }
-
-    const updateInfo = await loadUpdateManifestWithFallback();
-    const update = findNewerUpdate(addon.version, updateInfo);
+    const update = await findAvailableUpdate();
     if (!update) {
       return;
     }
-
-    if (!update.update_link) {
-      ztoolkit.log(
-        `[SelfUpdate] Skip update ${update.version}: missing update_link`,
-      );
-      return;
-    }
-
-    await installWithFallback(update.update_link);
+    await installUpdate(update);
   } catch (error) {
     ztoolkit.log(`autoupdate self failed: ${error}`);
   }
