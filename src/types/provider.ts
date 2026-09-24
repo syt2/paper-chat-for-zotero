@@ -33,6 +33,13 @@ export interface ModelReasoningCapability {
   protocol: ReasoningProtocol;
   efforts: ReasoningEffort[];
   default: ReasoningEffort;
+  /**
+   * Whether sampling parameters (temperature) must be omitted while reasoning
+   * is enabled. OpenAI reasoning models reject non-default values; DeepSeek,
+   * Step and Gemini accept temperature alongside their reasoning controls.
+   * Defaults to `protocol === "openai"`.
+   */
+  omitTemperature?: boolean;
 }
 
 /**

@@ -300,14 +300,33 @@ export abstract class BaseProvider implements AIProvider {
           }
         }
 
-        return { role: msg.role as "user" | "assistant" | "system", content };
+        const multimodalMessage: OpenAIMessage = {
+          role: msg.role as "user" | "assistant" | "system",
+          content,
+        };
+        if (
+          msg.role === "assistant" &&
+          msg.reasoning &&
+          this.shouldIncludeReasoningContent()
+        ) {
+          multimodalMessage.reasoning_content = msg.reasoning;
+        }
+        return multimodalMessage;
       }
 
       // Plain text message
-      return {
+      const plainMessage: OpenAIMessage = {
         role: msg.role as "user" | "assistant" | "system",
         content: msg.content,
       };
+      if (
+        msg.role === "assistant" &&
+        msg.reasoning &&
+        this.shouldIncludeReasoningContent()
+      ) {
+        plainMessage.reasoning_content = msg.reasoning;
+      }
+      return plainMessage;
     });
   }
 

@@ -177,6 +177,82 @@ describe("OpenAIResponsesProvider", function () {
     globalThis.fetch = originalFetch;
   });
 
+  it("omits temperature while reasoning is enabled", async function () {
+    let requestBody: Record<string, any> = {};
+    globalThis.fetch = (async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body));
+      return jsonResponse(completedResponse("resp_temperature", "done"));
+    }) as typeof fetch;
+
+    const reasoningCapability = {
+      protocol: "openai" as const,
+      efforts: ["none", "low", "medium", "high", "xhigh", "max"] as const,
+      default: "medium" as const,
+    };
+
+    await createProvider(
+      {},
+      {
+        defaultModel: "gpt-6-luna",
+        reasoningEffort: "high",
+        reasoningCapability: {
+          ...reasoningCapability,
+          efforts: [...reasoningCapability.efforts],
+        },
+      },
+    ).chatCompletion([message("u1", "user", "hi")]);
+    assert.notProperty(requestBody, "temperature");
+    assert.deepEqual(requestBody.reasoning, { effort: "high" });
+
+    await createProvider(
+      {},
+      {
+        defaultModel: "gpt-6-luna",
+        reasoningEffort: "none",
+        reasoningCapability: {
+          ...reasoningCapability,
+          efforts: [...reasoningCapability.efforts],
+        },
+      },
+    ).chatCompletion([message("u1", "user", "hi")]);
+    assert.equal(requestBody.temperature, 0.7);
+  });
+
+  it("never replays foreign reasoning into Responses input items", async function () {
+    let requestBody: Record<string, any> = {};
+    globalThis.fetch = (async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body));
+      return jsonResponse(completedResponse("resp_switch", "done"));
+    }) as typeof fetch;
+
+    // History produced by a DeepSeek turn before the model switched.
+    const history: ChatMessage[] = [
+      message("u1", "user", "hi"),
+      {
+        id: "a1",
+        role: "assistant",
+        content: "hello",
+        reasoning: "reasoning written by deepseek",
+        timestamp: 1,
+      },
+      message("u2", "user", "again"),
+    ];
+    await createProvider().chatCompletionWithTools(history, [
+      localWebSearchTool,
+    ]);
+
+    const input = requestBody.input as Array<Record<string, unknown>>;
+    assert.isArray(input);
+    for (const item of input) {
+      assert.notProperty(item, "reasoning");
+      assert.notProperty(item, "reasoning_content");
+    }
+    assert.isFalse(
+      input.some((item) => item.type === "reasoning"),
+      "reasoning items must not be synthesised from stored chat reasoning",
+    );
+  });
+
   it("uses Responses request shape and replaces local web_search with hosted search", async function () {
     let requestUrl = "";
     let requestBody: Record<string, any> = {};

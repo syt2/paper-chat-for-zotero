@@ -29,7 +29,11 @@ import {
   recordPromptCacheRequestShape,
   stablePromptCacheStringify,
 } from "./prompt-cache-diagnostics";
-import { applyReasoningRequestOptions } from "./reasoning-request";
+import {
+  applyReasoningRequestOptions,
+  needsThinkingDisabledForHistory,
+  shouldSuppressTemperatureForReasoning,
+} from "./reasoning-request";
 import { normalizeToolCallingStopReason } from "./stopReason";
 
 const EXTRA_REQUEST_BODY_PROTECTED_KEYS = new Set([
@@ -528,8 +532,14 @@ export function applyExtraRequestBody(
 }
 
 export class OpenAICompatibleProvider extends BaseProvider {
-  private applyGenerationOptions(requestBody: Record<string, unknown>): void {
-    if (supportsOpenAITemperature(this._config)) {
+  private applyGenerationOptions(
+    requestBody: Record<string, unknown>,
+    options?: { messages?: ChatMessage[]; hasTools?: boolean },
+  ): void {
+    if (
+      supportsOpenAITemperature(this._config) &&
+      !shouldSuppressTemperatureForReasoning(this._config)
+    ) {
       requestBody.temperature = this._config.temperature ?? 0.7;
     }
 
@@ -541,7 +551,26 @@ export class OpenAICompatibleProvider extends BaseProvider {
       }
     }
 
-    applyReasoningRequestOptions(requestBody, this._config, "chat_completions");
+    const disableThinking = needsThinkingDisabledForHistory(
+      options?.messages ?? [],
+      this._config,
+      options?.hasTools === true,
+    );
+    if (disableThinking) {
+      ztoolkit.log(
+        "[Reasoning] Tool history is missing reasoning_content for",
+        this._config.defaultModel,
+        "- sending thinking:disabled to avoid an upstream rejection.",
+      );
+    }
+    applyReasoningRequestOptions(
+      requestBody,
+      this._config,
+      "chat_completions",
+      {
+        disableThinking,
+      },
+    );
   }
 
   private prepareOpenAIRequestBody(
@@ -728,7 +757,10 @@ export class OpenAICompatibleProvider extends BaseProvider {
       stream: false,
     };
 
-    this.applyGenerationOptions(requestBody);
+    this.applyGenerationOptions(requestBody, {
+      messages,
+      hasTools: !!(tools && tools.length > 0),
+    });
     applyExtraRequestBody(requestBody, this._config);
 
     // Add tools if provided
@@ -918,7 +950,10 @@ export class OpenAICompatibleProvider extends BaseProvider {
         requestBody.tool_choice = options?.toolChoice || "auto";
       }
 
-      this.applyGenerationOptions(requestBody);
+      this.applyGenerationOptions(requestBody, {
+        messages,
+        hasTools: tools.length > 0,
+      });
       applyExtraRequestBody(requestBody, this._config);
 
       ztoolkit.log(

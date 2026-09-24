@@ -20,7 +20,10 @@ import {
   logPromptCacheUsage,
   stablePromptCacheStringify,
 } from "./prompt-cache-diagnostics";
-import { applyReasoningRequestOptions } from "./reasoning-request";
+import {
+  applyReasoningRequestOptions,
+  shouldSuppressTemperatureForReasoning,
+} from "./reasoning-request";
 import { normalizeToolCallingStopReason } from "./stopReason";
 import { stripOutputTruncationNotice } from "../chat/agent-runtime/messages";
 import { mergeContinuationText } from "../chat/agent-runtime/outputTruncationContinuation";
@@ -1300,7 +1303,10 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     if (this._config.maxTokens && this._config.maxTokens > 0) {
       body.max_output_tokens = this._config.maxTokens;
     }
-    if (supportsTemperature(this._config.defaultModel)) {
+    if (
+      supportsTemperature(this._config.defaultModel) &&
+      !shouldSuppressTemperatureForReasoning(this._config)
+    ) {
       body.temperature = this._config.temperature ?? 0.7;
     }
     if (this.runtimeOptions.sessionId) {

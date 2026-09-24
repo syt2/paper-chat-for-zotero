@@ -128,6 +128,9 @@ function parseReasoningCapability(
     protocol: record.protocol as ReasoningProtocol,
     efforts: uniqueEfforts,
     default: defaultEffort,
+    ...(typeof record.omitTemperature === "boolean"
+      ? { omitTemperature: record.omitTemperature }
+      : {}),
   };
 }
 
