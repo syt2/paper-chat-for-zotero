@@ -1,5 +1,8 @@
 import { assert } from "chai";
-import { StorageDatabase } from "../src/modules/chat/db/StorageDatabase.ts";
+import {
+  SCHEMA_VERSION,
+  StorageDatabase,
+} from "../src/modules/chat/db/StorageDatabase.ts";
 import {
   mapMessageRowToChatMessage,
   type MessageStorageRow,
@@ -470,7 +473,7 @@ describe("chat history search SQLite runtime", function () {
     }
   });
 
-  it("repairs reasoning and upgrades message metadata to schema v12", async function () {
+  it("repairs reasoning and upgrades message metadata to the current schema", async function () {
     const runtime = globalThis as any;
     if (
       !runtime.Zotero?.DBConnection ||
@@ -533,7 +536,7 @@ describe("chat history search SQLite runtime", function () {
         (await db.queryAsync(
           "SELECT version FROM schema_version WHERE id = 1",
         )) || [];
-      assert.equal(Number(versionRows[0]?.version), 12);
+      assert.equal(Number(versionRows[0]?.version), SCHEMA_VERSION);
 
       await db.queryAsync(
         `INSERT INTO messages
