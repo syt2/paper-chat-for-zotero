@@ -22,6 +22,7 @@ pref("paperchatRatiosCache", "");
 pref("paperchatRoutingConfigCache", "");
 pref("paperchatRoutingDefaultsCache", "");
 pref("paperchatEmbeddingConfigCache", "");
+pref("paperchatModelCacheClientVersion", "");
 pref("paperchatTierState", "");
 pref("paperchatSuppressHighTierWarning", false);
 pref("paperchatPresentationSlideCount", 6);

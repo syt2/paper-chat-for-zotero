@@ -22,6 +22,11 @@ import {
   type PaperChatModelRoutingDefaults,
 } from "../providers/paperchat-routing-metadata";
 import { getEffectivePricingModelRatio } from "./paperchat-effective-ratio";
+import {
+  getPaperChatClientHeaders,
+  getPaperChatClientQuery,
+  getPaperChatClientVersion,
+} from "../../utils/clientIdentity";
 
 // Store model ratios for PaperChat
 let paperchatModelRatios: Record<string, number> = {};
@@ -34,6 +39,7 @@ export const AUTO_MODEL = "auto";
 /** Special value stored in pref("model") to indicate auto-selection (smartest) */
 export const AUTO_MODEL_SMART = "auto-smart";
 const MODEL_ROUTING_META_PATH = "/ext/paperchat/model-routing.json";
+const ROUTING_CACHE_CLIENT_VERSION_PREF = "paperchatModelCacheClientVersion";
 
 /** Check if a model value is any auto mode */
 export function isAutoModel(model: string): boolean {
@@ -139,6 +145,30 @@ export function clearPaperchatModelCaches(): void {
   setPref("paperchatRoutingConfigCache", "");
   setPref("paperchatRoutingDefaultsCache", "");
   setPref("paperchatEmbeddingConfigCache", "");
+}
+
+function clearPaperchatRoutingCaches(): void {
+  paperchatModelCacheGeneration += 1;
+  paperchatModelRoutingMeta = {};
+  paperchatModelRoutingDefaults = {};
+  setPref("paperchatRoutingConfigCache", "");
+  setPref("paperchatRoutingDefaultsCache", "");
+}
+
+/**
+ * Drop the cached routing metadata when this build changes so an upgraded
+ * client never keeps capabilities it just learned about, and a downgraded one
+ * stops advertising capabilities it cannot handle. Runs before anything reads
+ * the routing cache; model and ratio caches are kept so an offline client
+ * still lists its models.
+ */
+export function ensurePaperchatRoutingCacheVersion(): void {
+  const currentVersion = getPaperChatClientVersion();
+  if (getPref(ROUTING_CACHE_CLIENT_VERSION_PREF) === currentVersion) {
+    return;
+  }
+  clearPaperchatRoutingCaches();
+  setPref(ROUTING_CACHE_CLIENT_VERSION_PREF, currentVersion);
 }
 
 /**
@@ -291,7 +321,7 @@ export async function fetchPaperchatRatios(): Promise<void> {
 
 export async function fetchPaperchatRoutingMeta(): Promise<void> {
   const generation = paperchatModelCacheGeneration;
-  const url = getPaperChatUrl(MODEL_ROUTING_META_PATH);
+  const url = `${getPaperChatUrl(MODEL_ROUTING_META_PATH)}${getPaperChatClientQuery()}`;
   ztoolkit.log("[Preferences] Fetching routing metadata from:", url);
 
   try {
@@ -299,6 +329,7 @@ export async function fetchPaperchatRoutingMeta(): Promise<void> {
       method: "GET",
       headers: {
         Accept: "application/json",
+        ...getPaperChatClientHeaders(),
       },
     });
 
@@ -368,6 +399,7 @@ export async function fetchPaperchatModels(
       method: "GET",
       headers: {
         Authorization: `Bearer ${apiKey}`,
+        ...getPaperChatClientHeaders(),
       },
     });
 

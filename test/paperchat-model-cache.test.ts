@@ -6,6 +6,7 @@ import {
 } from "../src/modules/providers/ProviderManager.ts";
 import {
   clearPaperchatModelCaches,
+  ensurePaperchatRoutingCacheVersion,
   fetchPaperchatRoutingMeta,
   getModelRatios,
   getModelRoutingDefaults,
@@ -14,6 +15,11 @@ import {
   getSelectablePaperchatModelsByTier,
   loadCachedRatios,
 } from "../src/modules/preferences/ModelsFetcher";
+import {
+  PAPERCHAT_CLIENT_CAPS_HEADER,
+  PAPERCHAT_CLIENT_HEADER,
+  getPaperChatClientVersion,
+} from "../src/utils/clientIdentity";
 
 const PREFS_PREFIX = "extensions.zotero.paperchat.";
 
@@ -245,6 +251,71 @@ describe("PaperChat model cache", function () {
     assert.deepEqual(getSelectablePaperchatModels(), ["plain"]);
     clearPaperchatModelCaches();
     assert.deepEqual(getSelectablePaperchatModels(), []);
+  });
+
+  it("announces the client build and capabilities on routing requests", async function () {
+    let requestHeaders: Record<string, string> = {};
+    let requestUrl = "";
+    (globalThis as any).fetch = async (url: string, init: any) => {
+      requestUrl = String(url);
+      requestHeaders = (init?.headers ?? {}) as Record<string, string>;
+      return new Response(JSON.stringify({ models: { "model-a": {} } }), {
+        status: 200,
+      });
+    };
+
+    await fetchPaperchatRoutingMeta();
+
+    assert.equal(
+      requestHeaders[PAPERCHAT_CLIENT_HEADER],
+      `paperchat/${getPaperChatClientVersion()}`,
+    );
+    assert.equal(requestHeaders[PAPERCHAT_CLIENT_CAPS_HEADER], "reasoning=1");
+    const params = new URL(requestUrl).searchParams;
+    assert.equal(
+      params.get("client"),
+      `paperchat/${getPaperChatClientVersion()}`,
+    );
+    assert.equal(params.get("caps"), "reasoning=1");
+  });
+
+  it("drops cached routing metadata when the plugin build changes", function () {
+    prefStore.set(`${PREFS_PREFIX}paperchatModelCacheClientVersion`, "0.0.1");
+
+    ensurePaperchatRoutingCacheVersion();
+
+    assert.equal(
+      prefStore.get(`${PREFS_PREFIX}paperchatRoutingConfigCache`),
+      "",
+    );
+    assert.equal(
+      prefStore.get(`${PREFS_PREFIX}paperchatRoutingDefaultsCache`),
+      "",
+    );
+    assert.equal(
+      prefStore.get(`${PREFS_PREFIX}paperchatModelCacheClientVersion`),
+      getPaperChatClientVersion(),
+    );
+    // Model list and ratios survive so an offline client still works.
+    assert.equal(
+      prefStore.get(`${PREFS_PREFIX}paperchatModelsCache`),
+      '["model-a"]',
+    );
+    assert.equal(
+      prefStore.get(`${PREFS_PREFIX}paperchatRatiosCache`),
+      '{"model-a":2}',
+    );
+
+    // Same build: the freshly fetched routing metadata is left alone.
+    prefStore.set(
+      `${PREFS_PREFIX}paperchatRoutingConfigCache`,
+      '{"model-a":{"tierCode":2}}',
+    );
+    ensurePaperchatRoutingCacheVersion();
+    assert.equal(
+      prefStore.get(`${PREFS_PREFIX}paperchatRoutingConfigCache`),
+      '{"model-a":{"tierCode":2}}',
+    );
   });
 
   it("filters translation choices without readding a disallowed default or changing other providers", function () {

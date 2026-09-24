@@ -30,12 +30,14 @@ import {
 } from "../providers/PaperChatUrls";
 import {
   clearPaperchatModelCaches,
+  ensurePaperchatRoutingCacheVersion,
   fetchPaperchatRoutingMeta,
   fetchPaperchatRatios,
   getModelRatios,
   getModelRoutingMeta,
   getPaperchatModelCacheGeneration,
 } from "../preferences/ModelsFetcher";
+import { getPaperChatClientHeaders } from "../../utils/clientIdentity";
 import {
   parseTierState,
   resolveSelectedTierModel,
@@ -1664,7 +1666,10 @@ export class AuthManager {
       const [response] = await Promise.all([
         fetch(url, {
           method: "GET",
-          headers: { Authorization: `Bearer ${apiKey}` },
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            ...getPaperChatClientHeaders(),
+          },
         }),
         fetchPaperchatRatios(),
         fetchPaperchatRoutingMeta(),
@@ -1853,6 +1858,14 @@ export class AuthManager {
       hasUser: !!this.state.user,
       isLoggedIn: this.state.isLoggedIn,
     });
+
+    // Drop routing metadata cached by a different plugin build before anything
+    // reads it, so capability changes take effect right after an update.
+    try {
+      ensurePaperchatRoutingCacheVersion();
+    } catch (error) {
+      ztoolkit.log("[AuthManager] Routing cache version check failed:", error);
+    }
 
     const hasCachedLogin = Boolean(
       this.state.apiKey && this.state.userId !== null && this.state.userId > 0,
