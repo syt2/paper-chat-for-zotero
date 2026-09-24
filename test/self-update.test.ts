@@ -2,10 +2,11 @@ import { assert } from "chai";
 import { config } from "../package.json";
 import { compareVersion, findNewerUpdate } from "../src/utils/selfUpdate.ts";
 import {
+  GITHUB_PROXY_BASES,
   getGithubUrlCandidates,
   getUpdateURLTemplate,
   toGhProxyUrl,
-  toKkGithubUrl,
+  toProxyUrl,
 } from "../src/utils/updateUrls.ts";
 
 describe("self update helpers", function () {
@@ -20,20 +21,24 @@ describe("self update helpers", function () {
     );
   });
 
-  it("builds GitHub fallback candidates in direct, ghproxy, kkgithub order", function () {
+  it("builds GitHub fallback candidates in direct-then-mirror order", function () {
     const githubUrl =
       "https://github.com/syt2/paper-chat-for-zotero/releases/download/release/update.json";
 
     assert.equal(toGhProxyUrl(githubUrl), `https://gh-proxy.org/${githubUrl}`);
-    assert.equal(
-      toKkGithubUrl(githubUrl),
-      "https://kkgithub.com/syt2/paper-chat-for-zotero/releases/download/release/update.json",
-    );
+    // kkgithub.com expired, so it must not be offered as a mirror any more.
+    assert.notInclude(GITHUB_PROXY_BASES.join(" "), "kkgithub");
     assert.deepEqual(getGithubUrlCandidates(githubUrl), [
       githubUrl,
       `https://gh-proxy.org/${githubUrl}`,
-      "https://kkgithub.com/syt2/paper-chat-for-zotero/releases/download/release/update.json",
+      `https://gh-proxy.com/${githubUrl}`,
+      `https://ghfast.top/${githubUrl}`,
+      `https://ghproxy.net/${githubUrl}`,
     ]);
+    assert.equal(
+      toProxyUrl("https://ghfast.top/", githubUrl),
+      `https://ghfast.top/${githubUrl}`,
+    );
   });
 
   it("selects the newest update only when it is newer than the installed version", function () {
