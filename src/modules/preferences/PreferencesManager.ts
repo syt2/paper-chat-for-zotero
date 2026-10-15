@@ -282,7 +282,7 @@ export function bindPrefEvents(): void {
   });
 
   // Bind API key events
-  bindApiKeyEvents(
+  const cleanupApiKeyEvents = bindApiKeyEvents(
     doc,
     getCurrentProviderId,
     refreshProviderList,
@@ -300,6 +300,7 @@ export function bindPrefEvents(): void {
       });
     },
   );
+  prefsWin.__paperchatPrefsCleanup.push(cleanupApiKeyEvents);
 
   // Bind provider list click events
   bindProviderListClickEvents(doc, setCurrentProviderId);

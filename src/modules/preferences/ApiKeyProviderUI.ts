@@ -6,7 +6,14 @@ import { getString } from "../../utils/locale";
 import { prefColors } from "../../utils/colors";
 import { getProviderManager } from "../providers";
 import type { ApiKeyProviderConfig } from "../../types/provider";
+import { getErrorMessage } from "../../utils/common";
 import { clearElement, showTestResult } from "./utils";
+import {
+  shouldAutoFetchModels,
+  type ModelFetchAttempt,
+  type ModelFetchStatus,
+  type ModelFetchTrigger,
+} from "./model-fetch-policy";
 
 type ProviderMetadata = ReturnType<
   typeof getProviderManager
@@ -18,6 +25,9 @@ const EXTRA_REQUEST_BODY_PLACEHOLDER =
   '{\n  "thinking": { "type": "disabled" }\n}';
 const MODEL_EXTRA_REQUEST_BODY_PLACEHOLDER =
   '{\n  "deepseek-v4-flash": {\n    "thinking": { "type": "enabled" },\n    "reasoning_effort": "max"\n  }\n}';
+
+/** How long to wait for a pasted key to settle in the field before fetching. */
+const PASTE_FETCH_DELAY_MS = 300;
 
 function isPlainJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -85,6 +95,65 @@ function clearExtraRequestBodyError(doc: Document): void {
 }
 
 /**
+ * Credentials a model list belongs to. Auto-fetch compares this string so a
+ * paste, a blur and a panel open for the same key collapse into one request,
+ * while any edit to the key or Base URL earns a fresh one.
+ */
+function getModelFetchCredentials(config: ApiKeyProviderConfig): string {
+  return `${(config.apiKey || "").trim()}\n${(config.baseUrl || "").trim()}`;
+}
+
+/** True while the API key panel renders the given provider. */
+function isPanelShowingProvider(doc: Document, providerId: string): boolean {
+  const panel = doc.getElementById("pref-panel-apikey");
+  return panel?.getAttribute("data-provider-id") === providerId;
+}
+
+/**
+ * Last automatic attempt per provider. Kept for the whole session, not per
+ * window, so reopening the settings does not re-fetch credentials whose result
+ * is already known.
+ */
+const modelFetchAttempts = new Map<string, ModelFetchAttempt>();
+
+interface ModelFetchRequest {
+  /** Credentials the request was queued for. */
+  credentials: string;
+  /** True when the user asked explicitly (Refresh button). */
+  manual: boolean;
+}
+
+/** Newest queued request per provider; a later trigger replaces an earlier one. */
+const pendingModelFetches = new Map<string, ModelFetchRequest>();
+
+/** Tail of the serialized fetch chain per provider, keeping one request in flight. */
+const modelFetchChains = new Map<string, Promise<void>>();
+
+/**
+ * Show a model fetch is running and keep the Refresh button from stacking
+ * requests on top of each other.
+ */
+function setModelFetchBusy(
+  doc: Document,
+  providerId: string,
+  busy: boolean,
+): void {
+  if (!isPanelShowingProvider(doc, providerId)) return;
+
+  const refreshBtn = doc.getElementById("pref-refresh-models");
+  if (refreshBtn) {
+    if (busy) {
+      refreshBtn.setAttribute("disabled", "true");
+    } else {
+      refreshBtn.removeAttribute("disabled");
+    }
+  }
+  if (busy) {
+    showTestResult(doc, getString("pref-fetching-models"), false);
+  }
+}
+
+/**
  * Populate API key panel with provider data
  */
 export function populateApiKeyPanel(
@@ -92,6 +161,16 @@ export function populateApiKeyPanel(
   config: ApiKeyProviderConfig,
   metadata: ProviderMetadata,
 ): void {
+  // Record which provider this panel shows: an asynchronous model fetch only
+  // renders its result when the panel still belongs to the provider it asked
+  // about.
+  doc
+    .getElementById("pref-panel-apikey")
+    ?.setAttribute("data-provider-id", config.id);
+  // A fetch for the provider that was shown before may still be running; the
+  // panel now belongs to this one, so its Refresh button starts enabled.
+  doc.getElementById("pref-refresh-models")?.removeAttribute("disabled");
+
   const titleEl = doc.getElementById("pref-provider-title");
   const descEl = doc.getElementById("pref-provider-description");
   const apikeyEl = doc.getElementById(
@@ -312,12 +391,16 @@ export function populateModelList(
 
 /**
  * Save current API key provider config
+ *
+ * Returns false when the panel holds input that cannot be saved (invalid
+ * JSON), so callers can tell the user instead of fetching models with a config
+ * that was never stored.
  */
 export function saveCurrentProviderConfig(
   doc: Document,
   currentProviderId: string,
-): void {
-  if (currentProviderId === "paperchat") return;
+): boolean {
+  if (currentProviderId === "paperchat") return true;
 
   const providerManager = getProviderManager();
 
@@ -347,9 +430,6 @@ export function saveCurrentProviderConfig(
   ) as HTMLTextAreaElement;
 
   const apiKey = apikeyEl?.value || "";
-  const wasEnabled = (
-    providerManager.getProviderConfig(currentProviderId) as ApiKeyProviderConfig
-  )?.enabled;
   const isNowEnabled = !!apiKey.trim();
 
   let extraRequestBody: Record<string, unknown> | undefined;
@@ -370,7 +450,7 @@ export function saveCurrentProviderConfig(
       error instanceof Error ? error.message : getString("pref-invalid-json"),
       true,
     );
-    return;
+    return false;
   }
 
   const updates: Partial<ApiKeyProviderConfig> = {
@@ -388,75 +468,200 @@ export function saveCurrentProviderConfig(
   providerManager.updateProviderConfig(currentProviderId, updates);
   clearExtraRequestBodyError(doc);
 
-  return wasEnabled !== isNowEnabled ? undefined : undefined; // Type placeholder, actual logic in caller
+  return true;
 }
 
 /**
- * Auto-fetch models from provider API after API key is entered
+ * Refresh a provider's model list and merge the result into its config.
+ *
+ * Callers are the moments that follow a credential edit - pasting a key,
+ * leaving the API key or Base URL field, opening the panel - plus the Refresh
+ * button. The automatic triggers are filtered by the fetch policy and
+ * serialized, so one edit produces one request instead of one per trigger.
  */
-export async function autoFetchModels(
+export function requestModelFetch(
+  doc: Document,
+  currentProviderId: string,
+  options: { trigger?: ModelFetchTrigger; manual?: boolean } = {},
+): Promise<void> {
+  if (currentProviderId === "paperchat") return Promise.resolve();
+
+  const providerManager = getProviderManager();
+  const config = providerManager.getProviderConfig(
+    currentProviderId,
+  ) as ApiKeyProviderConfig | null;
+  if (!config) return Promise.resolve();
+
+  const credentials = getModelFetchCredentials(config);
+  const manual = options.manual === true;
+  if (
+    !manual &&
+    !shouldAutoFetchModels({
+      trigger: options.trigger ?? "blur",
+      credentials,
+      hasApiKey: !!config.apiKey?.trim(),
+      hasBaseUrl: !!config.baseUrl?.trim(),
+      modelCount: config.availableModels?.length ?? 0,
+      attempt: modelFetchAttempts.get(currentProviderId),
+    })
+  ) {
+    return Promise.resolve();
+  }
+
+  pendingModelFetches.set(currentProviderId, { credentials, manual });
+  const previous = modelFetchChains.get(currentProviderId) ?? Promise.resolve();
+  const next = previous
+    .then(() => flushModelFetch(doc, currentProviderId))
+    // Never reject: the chain has to stay usable for the next trigger, and the
+    // callers are event handlers that cannot handle a rejection.
+    .catch((error) => {
+      ztoolkit.log("[Preferences] Model fetch failed:", getErrorMessage(error));
+    });
+  modelFetchChains.set(currentProviderId, next);
+  return next;
+}
+
+/**
+ * Run the newest queued request, if any. Queued behind the provider's previous
+ * request so responses cannot interleave, and a trigger that arrives while
+ * another one runs replaces it instead of adding a request.
+ */
+async function flushModelFetch(
   doc: Document,
   currentProviderId: string,
 ): Promise<void> {
-  const providerManager = getProviderManager();
-  const provider = providerManager.getProvider(currentProviderId);
-  if (!provider) return;
+  const request = pendingModelFetches.get(currentProviderId);
+  if (!request) return;
+  pendingModelFetches.delete(currentProviderId);
 
+  const providerManager = getProviderManager();
+  const config = providerManager.getProviderConfig(
+    currentProviderId,
+  ) as ApiKeyProviderConfig | null;
+  const provider = providerManager.getProvider(currentProviderId);
+  if (!config || !provider) return;
+
+  // The credentials moved on while this request waited its turn; the trigger
+  // that changed them queued its own request.
+  if (getModelFetchCredentials(config) !== request.credentials) return;
+
+  modelFetchAttempts.set(currentProviderId, {
+    credentials: request.credentials,
+    status: "running",
+  });
+  setModelFetchBusy(doc, currentProviderId, true);
+
+  let models: string[] | null = null;
+  let status: ModelFetchStatus = "failed";
   try {
-    showTestResult(doc, getString("pref-fetching-models"), false);
-    const models = await provider.getAvailableModels();
+    models = await provider.getAvailableModels();
+    status =
+      models === null ? "unsupported" : models.length > 0 ? "loaded" : "empty";
+  } catch (error) {
+    ztoolkit.log(
+      `[Preferences] Failed to fetch models for ${currentProviderId}:`,
+      getErrorMessage(error),
+    );
+  } finally {
+    modelFetchAttempts.set(currentProviderId, {
+      credentials: request.credentials,
+      status,
+    });
+    setModelFetchBusy(doc, currentProviderId, false);
+  }
+
+  applyModelFetchResult(doc, currentProviderId, request, models, status);
+}
+
+/**
+ * Store a fetched model list and report the outcome in the panel.
+ */
+function applyModelFetchResult(
+  doc: Document,
+  currentProviderId: string,
+  request: ModelFetchRequest,
+  models: string[] | null,
+  status: ModelFetchStatus,
+): void {
+  const providerManager = getProviderManager();
+  const visible = isPanelShowingProvider(doc, currentProviderId);
+
+  if (status === "loaded" && models) {
     const config = providerManager.getProviderConfig(
       currentProviderId,
-    ) as ApiKeyProviderConfig;
-    if (config && models.length > 0) {
-      const customModels = (config.models || []).filter(
-        (model) => model.isCustom,
-      );
-      const customModelIds = new Set(
-        customModels.map((model) => model.modelId),
-      );
-      const availableModels = [
-        ...models,
-        ...customModels
-          .map((model) => model.modelId)
-          .filter((modelId) => !models.includes(modelId)),
-      ];
-      const modelInfos = [
-        ...models
-          .filter((modelId) => !customModelIds.has(modelId))
-          .map((modelId) => ({ modelId })),
-        ...customModels,
-      ];
-      const defaultModel = availableModels.includes(config.defaultModel)
-        ? config.defaultModel
-        : availableModels[0] || "";
-      providerManager.updateProviderConfig(currentProviderId, {
-        defaultModel,
-        availableModels,
-        models: modelInfos,
-      });
-      // Refresh panel
-      const metadata = providerManager.getProviderMetadata(currentProviderId);
+    ) as ApiKeyProviderConfig | null;
+    // No config left: the provider was removed while the request ran.
+    if (!config) return;
+
+    // Keep user-added models that the provider does not report, and keep the
+    // current selection when it survived the refresh.
+    const customModels = (config.models || []).filter(
+      (model) => model.isCustom,
+    );
+    const customModelIds = new Set(customModels.map((model) => model.modelId));
+    const availableModels = [
+      ...models,
+      ...customModels
+        .map((model) => model.modelId)
+        .filter((modelId) => !models.includes(modelId)),
+    ];
+    const modelInfos = [
+      ...models
+        .filter((modelId) => !customModelIds.has(modelId))
+        .map((modelId) => ({ modelId })),
+      ...customModels,
+    ];
+    const defaultModel = availableModels.includes(config.defaultModel)
+      ? config.defaultModel
+      : availableModels[0] || "";
+    providerManager.updateProviderConfig(currentProviderId, {
+      defaultModel,
+      availableModels,
+      models: modelInfos,
+    });
+
+    if (visible) {
       populateApiKeyPanel(
         doc,
         { ...config, defaultModel, availableModels, models: modelInfos },
-        metadata,
+        providerManager.getProviderMetadata(currentProviderId),
       );
+      // After the re-render: populating the panel clears the status line.
       showTestResult(
         doc,
         getString("pref-models-loaded", { args: { count: models.length } }),
         false,
       );
+    }
+    return;
+  }
+
+  if (!visible) return;
+
+  // An automatic fetch stays quiet when the provider simply has no model list,
+  // so every paste into a Claude key does not look like a failure. The manual
+  // Refresh button reports it, since the user asked for a list there.
+  if (status === "unsupported") {
+    if (request.manual) {
+      showTestResult(doc, getString("pref-provider-models-unsupported"), true);
     } else {
       showTestResult(doc, "", false);
     }
-  } catch {
-    showTestResult(doc, getString("pref-fetch-models-failed"), true);
+    return;
   }
+
+  if (status === "empty") {
+    showTestResult(doc, getString("pref-provider-models-empty"), true);
+    return;
+  }
+
+  showTestResult(doc, getString("pref-provider-models-failed"), true);
 }
 
 /**
  * Bind API key panel events
+ *
+ * Returns a cleanup function that cancels a pending paste-triggered fetch.
  */
 export function bindApiKeyEvents(
   doc: Document,
@@ -465,21 +670,29 @@ export function bindApiKeyEvents(
   onActiveProviderRefresh: () => void,
   onProviderAdded?: (providerId: string) => void,
   onProviderRemoved?: () => void,
-): void {
+): () => void {
   const providerManager = getProviderManager();
 
-  // API Key input (save on blur and auto-fetch models)
+  let pasteFetchTimer: ReturnType<typeof setTimeout> | undefined;
+
   const apikeyInput = doc.getElementById(
     "pref-provider-apikey",
   ) as HTMLInputElement;
-  apikeyInput?.addEventListener("blur", async () => {
+
+  /**
+   * Persist the field edits and keep the provider list in sync. Returns the
+   * provider the fields belong to, or null when the fields could not be saved.
+   */
+  const savePanelFields = (): string | null => {
     const currentProviderId = getCurrentProviderId();
     const wasEnabled = (
       providerManager.getProviderConfig(
         currentProviderId,
       ) as ApiKeyProviderConfig
     )?.enabled;
-    saveCurrentProviderConfig(doc, currentProviderId);
+    if (!saveCurrentProviderConfig(doc, currentProviderId)) {
+      return null;
+    }
     const isNowEnabled = (
       providerManager.getProviderConfig(
         currentProviderId,
@@ -494,10 +707,31 @@ export function bindApiKeyEvents(
       onActiveProviderRefresh();
     }
 
-    // Auto-fetch models when API key is entered
-    if (apikeyInput.value.trim()) {
-      await autoFetchModels(doc, currentProviderId);
+    return currentProviderId;
+  };
+
+  // API Key input (save on blur and auto-fetch models)
+  apikeyInput?.addEventListener("blur", () => {
+    const currentProviderId = savePanelFields();
+    if (currentProviderId) {
+      void requestModelFetch(doc, currentProviderId, { trigger: "blur" });
     }
+  });
+
+  // A pasted key is the usual way to fill this field, and the user does not
+  // have to click away for the model list to appear. The pasted text only
+  // reaches the field after the event, so look at the value once it settled.
+  apikeyInput?.addEventListener("paste", () => {
+    if (pasteFetchTimer !== undefined) {
+      clearTimeout(pasteFetchTimer);
+    }
+    pasteFetchTimer = setTimeout(() => {
+      pasteFetchTimer = undefined;
+      const currentProviderId = savePanelFields();
+      if (currentProviderId) {
+        void requestModelFetch(doc, currentProviderId, { trigger: "paste" });
+      }
+    }, PASTE_FETCH_DELAY_MS);
   });
 
   // Toggle API key visibility
@@ -512,13 +746,17 @@ export function bindApiKeyEvents(
     }
   });
 
-  // Base URL input
+  // Base URL input. Also auto-fetch: a custom provider is often filled in
+  // key-first, and the first fetch attempt then had no URL to call.
   const baseurlInput = doc.getElementById(
     "pref-provider-baseurl",
   ) as HTMLInputElement;
-  baseurlInput?.addEventListener("blur", () =>
-    saveCurrentProviderConfig(doc, getCurrentProviderId()),
-  );
+  baseurlInput?.addEventListener("blur", () => {
+    const currentProviderId = savePanelFields();
+    if (currentProviderId) {
+      void requestModelFetch(doc, currentProviderId, { trigger: "blur" });
+    }
+  });
 
   // Model selection
   const modelSelect = doc.getElementById(
@@ -569,7 +807,7 @@ export function bindApiKeyEvents(
   // Refresh models button
   const refreshModelsBtn = doc.getElementById("pref-refresh-models");
   refreshModelsBtn?.addEventListener("click", () =>
-    autoFetchModels(doc, getCurrentProviderId()),
+    requestModelFetch(doc, getCurrentProviderId(), { manual: true }),
   );
 
   // Test connection button
@@ -648,4 +886,11 @@ export function bindApiKeyEvents(
       }
     }
   });
+
+  return () => {
+    if (pasteFetchTimer !== undefined) {
+      clearTimeout(pasteFetchTimer);
+      pasteFetchTimer = undefined;
+    }
+  };
 }

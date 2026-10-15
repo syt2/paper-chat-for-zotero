@@ -240,7 +240,10 @@ export class PaperChatProvider implements ToolCallingProvider {
     return this._delegate.testConnection();
   }
 
-  async getAvailableModels(): Promise<string[]> {
+  async getAvailableModels(): Promise<string[] | null> {
+    // PaperChat models are fetched from the API by the preferences panel
+    // (ModelsFetcher); here the provider only reports what it was configured
+    // with.
     return this.getConfiguredModels();
   }
 

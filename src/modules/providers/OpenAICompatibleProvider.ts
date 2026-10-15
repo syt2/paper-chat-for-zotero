@@ -705,27 +705,28 @@ export class OpenAICompatibleProvider extends BaseProvider {
     );
   }
 
-  async getAvailableModels(): Promise<string[]> {
+  async getAvailableModels(): Promise<string[] | null> {
     try {
       const response = await fetch(`${this._config.baseUrl}/models`, {
         headers: { Authorization: `Bearer ${this._config.apiKey}` },
       });
-      if (response.ok) {
-        const data = (await response.json()) as {
-          data?: Array<{ id: string }>;
-        };
-        return data.data?.map((m) => m.id) || [];
+      if (!response.ok) {
+        // Throwing instead of falling back to the stored list lets the settings
+        // panel report a failed refresh rather than showing stale models as if
+        // they had just been fetched.
+        throw new Error(`HTTP ${response.status}`);
       }
-      ztoolkit.log(
-        `[${this.getName()}] getAvailableModels failed: ${response.status}`,
-      );
+      const data = (await response.json()) as {
+        data?: Array<{ id: string }>;
+      };
+      return data.data?.map((m) => m.id) || [];
     } catch (error) {
       ztoolkit.log(
         `[${this.getName()}] getAvailableModels error:`,
         getErrorMessage(error),
       );
+      throw error;
     }
-    return this._config.availableModels || [];
   }
 
   /**

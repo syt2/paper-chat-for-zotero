@@ -70,7 +70,8 @@ export abstract class BaseProvider implements AIProvider {
 
   abstract testConnection(): Promise<boolean>;
 
-  abstract getAvailableModels(): Promise<string[]>;
+  /** See {@link AIProvider.getAvailableModels}. */
+  abstract getAvailableModels(): Promise<string[] | null>;
 
   /**
    * Parse SSE stream using unified parser

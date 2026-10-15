@@ -12,7 +12,7 @@ import type {
 } from "../../types/provider";
 import { clearElement } from "./utils";
 import { populatePaperchatPanel } from "./PaperchatProviderUI";
-import { populateApiKeyPanel } from "./ApiKeyProviderUI";
+import { populateApiKeyPanel, requestModelFetch } from "./ApiKeyProviderUI";
 import { collapsePaperChatNotice } from "./PaperChatNoticeRenderer";
 import { ANALYTICS_EVENTS, getAnalyticsService } from "../analytics";
 import { isPaperChatLowBalance } from "./UserAuthUI";
@@ -196,6 +196,10 @@ export function selectProvider(
 
     if (config) {
       populateApiKeyPanel(doc, config, metadata);
+      // Fill a model list that is still empty without waiting for a blur or the
+      // Refresh button. The fetch policy keeps reopening the panel from asking
+      // again for credentials that already answered.
+      void requestModelFetch(doc, providerId, { trigger: "open" });
     }
   }
 

@@ -99,6 +99,9 @@ pref-refresh-failed = Failed to refresh models
 pref-fetching-models = Fetching models...
 pref-models-loaded = Loaded { $count } models
 pref-fetch-models-failed = Failed to fetch models
+pref-provider-models-failed = Could not fetch models - check the API key and Base URL
+pref-provider-models-empty = The provider returned no models - add models manually
+pref-provider-models-unsupported = This provider has no model list - add model ids by hand
 
 # Custom Provider
 pref-enter-provider-name = Enter provider name:

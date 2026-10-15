@@ -99,6 +99,9 @@ pref-refresh-failed = 刷新模型列表失败
 pref-fetching-models = 正在获取模型列表...
 pref-models-loaded = 已加载 { $count } 个模型
 pref-fetch-models-failed = 获取模型列表失败
+pref-provider-models-failed = 获取模型列表失败，请检查 API Key 和 Base URL
+pref-provider-models-empty = 服务端未返回任何模型，请手动添加模型
+pref-provider-models-unsupported = 该服务商不支持自动获取模型列表，请手动添加模型ID
 
 # Custom Provider
 pref-enter-provider-name = 请输入提供商名称:

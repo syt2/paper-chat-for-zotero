@@ -277,8 +277,14 @@ export interface AIProvider {
   /** Test connection to the API */
   testConnection(): Promise<boolean>;
 
-  /** Get available models */
-  getAvailableModels(): Promise<string[]>;
+  /**
+   * Fetch the provider's live model list.
+   *
+   * Resolves `null` when the provider offers no model list at all, and throws
+   * when the request failed, so callers can tell "this provider cannot list
+   * models" from "the refresh did not work".
+   */
+  getAvailableModels(): Promise<string[] | null>;
 }
 
 /**

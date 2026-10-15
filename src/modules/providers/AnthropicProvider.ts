@@ -147,9 +147,11 @@ export class AnthropicProvider extends BaseProvider {
     );
   }
 
-  async getAvailableModels(): Promise<string[]> {
-    // Anthropic doesn't have a public models API, use config
-    return this._config.availableModels || [];
+  async getAvailableModels(): Promise<string[] | null> {
+    // The plugin never lists Claude models from the API, so the settings panel
+    // tells the user to add model ids by hand instead of pretending a refresh
+    // happened.
+    return null;
   }
 
   /**
