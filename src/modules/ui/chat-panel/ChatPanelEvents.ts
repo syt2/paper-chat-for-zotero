@@ -2888,23 +2888,77 @@ function populateReasoningDropdown(
 }
 
 /**
- * Native popup for "this route needs a purchase". Shown when the account taps a
- * locked model in the chat model list; it never switches the chat model, and it
- * reuses the same copy as the settings panel.
+ * Transient message inside the chat panel. Zotero's own progress window is a
+ * separate top-level window that can outlive the click which opened it, so the
+ * model list uses this panel-local toast instead: one element per panel, reused
+ * for every message, faded out on a timer or dismissed by clicking it.
  */
-function showPurchaseOnlyModelNotice(): void {
-  try {
-    const notice = new ztoolkit.ProgressWindow(addon.data.config.addonName);
-    notice
-      .createLine({
-        text: getString("pref-paperchat-locked-models"),
-        type: "default",
-      })
-      .show();
-    notice.startCloseTimer(4000);
-  } catch (error) {
-    ztoolkit.log("[Chat] Failed to show the purchase-only notice:", error);
+const CHAT_TOAST_ID = "chat-paperchat-toast";
+const CHAT_TOAST_VISIBLE_MS = 3200;
+let chatToastTimer: ReturnType<typeof setTimeout> | null = null;
+
+function hidePanelToast(toast: HTMLElement): void {
+  if (chatToastTimer) {
+    clearTimeout(chatToastTimer);
+    chatToastTimer = null;
   }
+  toast.style.opacity = "0";
+  toast.style.transform = "translate(-50%, 6px)";
+  toast.style.pointerEvents = "none";
+}
+
+function showPanelToast(container: HTMLElement, text: string): void {
+  const doc = container.ownerDocument;
+  if (!doc) {
+    return;
+  }
+  const root = container.querySelector(".chat-panel-root") ?? container;
+  const theme = getCurrentTheme();
+  let toast = root.querySelector(`#${CHAT_TOAST_ID}`) as HTMLElement | null;
+
+  if (!toast) {
+    toast = createElement(doc, "div", {
+      position: "fixed",
+      left: "50%",
+      bottom: "76px",
+      transform: "translate(-50%, 6px)",
+      maxWidth: "78%",
+      padding: "8px 14px",
+      borderRadius: "10px",
+      border: `1px solid ${theme.borderColor}`,
+      background: theme.dropdownBg,
+      color: theme.textPrimary,
+      boxShadow: "0 6px 18px rgba(0,0,0,0.18)",
+      fontSize: chatFontSize(12),
+      lineHeight: "1.45",
+      textAlign: "center",
+      whiteSpace: "normal",
+      opacity: "0",
+      pointerEvents: "none",
+      transition: "opacity .18s ease, transform .18s ease",
+      zIndex: "6",
+    });
+    toast.id = CHAT_TOAST_ID;
+    toast.setAttribute("role", "status");
+    toast.setAttribute("aria-live", "polite");
+    const element = toast;
+    element.addEventListener("click", () => hidePanelToast(element));
+    root.appendChild(element);
+  }
+
+  const element = toast;
+  element.textContent = text;
+  element.style.pointerEvents = "auto";
+  element.style.opacity = "1";
+  element.style.transform = "translate(-50%, 0)";
+
+  if (chatToastTimer) {
+    clearTimeout(chatToastTimer);
+  }
+  chatToastTimer = setTimeout(
+    () => hidePanelToast(element),
+    CHAT_TOAST_VISIBLE_MS,
+  );
 }
 
 /**
@@ -3465,7 +3519,10 @@ function populateModelDropdown(
           lockedItem.addEventListener("click", (event) => {
             event.preventDefault();
             event.stopPropagation();
-            showPurchaseOnlyModelNotice();
+            showPanelToast(
+              container,
+              getString("pref-paperchat-locked-models"),
+            );
           });
           submenu.appendChild(lockedItem);
         }
