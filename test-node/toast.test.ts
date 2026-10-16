@@ -15,11 +15,9 @@ class FakeElement {
   }
 
   appendChild(child: FakeElement): FakeElement {
-    if (child.parentElement) {
-      child.parentElement.children.splice(
-        child.parentElement.children.indexOf(child),
-        1,
-      );
+    const previousParent = child.parentElement;
+    if (previousParent) {
+      previousParent.children.splice(previousParent.children.indexOf(child), 1);
     }
     child.parentElement = this;
     this.children.push(child);
@@ -65,55 +63,60 @@ function stubMainWindow(doc?: FakeDocument): void {
   };
 }
 
-describe("panel toast", function () {
-  it("reuses one element per document and keeps the last message", function () {
+describe("toast", function () {
+  it("reuses one element per mount point and keeps the last message", function () {
     stubMainWindow();
     const doc = new FakeDocument();
-    const container = new FakeElement("div");
+    const container = asElement(new FakeElement("div"));
 
-    showToast("first", {
-      doc: asDocument(doc),
-      container: asElement(container),
-    });
-    const toast = showToast("second", {
-      doc: asDocument(doc),
-      container: asElement(container),
-    });
+    showToast("first", { doc: asDocument(doc), container });
+    const toast = showToast("second", { doc: asDocument(doc), container });
 
-    assert.lengthOf(container.children, 1);
-    assert.strictEqual(toast, container.children[0]);
-    assert.equal(container.children[0].textContent, "second");
-    hideToast(asDocument(doc));
+    const host = container as unknown as FakeElement;
+    assert.lengthOf(host.children, 1);
+    assert.strictEqual(toast, asElement(host.children[0]));
+    assert.equal(host.children[0].textContent, "second");
+    hideToast(toast);
   });
 
-  it("mounts in the container the caller passes", function () {
+  it("gives each container its own toast when it is asked to mount inside one", function () {
     stubMainWindow();
     const doc = new FakeDocument();
-    const first = new FakeElement("div");
-    const second = new FakeElement("div");
+    const panel = asElement(new FakeElement("div"));
+    const other = asElement(new FakeElement("div"));
 
-    showToast("in panel", {
+    const inPanel = showToast("in panel", {
       doc: asDocument(doc),
-      container: asElement(first),
-    });
-    showToast("in other window", {
-      doc: asDocument(doc),
-      container: asElement(second),
+      container: panel,
+      positioning: "container",
     });
 
-    assert.lengthOf(first.children, 0);
-    assert.lengthOf(second.children, 1);
-    hideToast(asDocument(doc));
+    assert.equal(inPanel?.style.position, "absolute");
+    const panelHost = panel as unknown as FakeElement;
+    const otherHost = other as unknown as FakeElement;
+    assert.lengthOf(panelHost.children, 1);
+    // The panel shares the main window's document, so a toast pinned to the
+    // viewport lands over the wrong pane: the container must be made a
+    // containing block for the toast.
+    assert.equal(panelHost.style.position, "relative");
+
+    showToast("over the window", {
+      doc: asDocument(doc),
+      container: other,
+      positioning: "viewport",
+    });
+    assert.lengthOf(otherHost.children, 1);
+    assert.equal(otherHost.style.position, undefined);
   });
 
   it("hides itself after the requested duration", async function () {
     stubMainWindow();
     const doc = new FakeDocument();
-    const container = new FakeElement("div");
+    const container = asElement(new FakeElement("div"));
 
     const toast = showToast("auto hide", {
       doc: asDocument(doc),
-      container: asElement(container),
+      container,
       durationMs: 10,
     });
     assert.equal(toast?.style.opacity, "1");
@@ -127,11 +130,11 @@ describe("panel toast", function () {
   it("is dismissed early by a click", function () {
     stubMainWindow();
     const doc = new FakeDocument();
-    const container = new FakeElement("div");
+    const container = asElement(new FakeElement("div"));
 
     const toast = showToast("click me", {
       doc: asDocument(doc),
-      container: asElement(container),
+      container,
       durationMs: 60_000,
     });
     (toast as unknown as FakeElement).click();
@@ -142,10 +145,14 @@ describe("panel toast", function () {
   it("falls back to the main window and survives having none", function () {
     const doc = new FakeDocument();
     stubMainWindow(doc);
-    const target = asDocument(doc).documentElement;
+    const toast = showToast("main window");
 
-    assert.isNotNull(showToast("main window"));
-    assert.lengthOf((target as unknown as FakeElement).children, 1);
+    assert.isNotNull(toast);
+    assert.lengthOf(
+      (asDocument(doc).documentElement as unknown as FakeElement).children,
+      1,
+    );
+    assert.equal(toast?.style.position, "fixed");
 
     stubMainWindow();
     assert.isNull(showToast("nowhere"));

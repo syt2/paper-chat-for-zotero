@@ -2893,10 +2893,19 @@ function populateReasoningDropdown(
  * never lands on top of the Zotero main window.
  */
 function showPanelToast(container: HTMLElement, text: string): void {
+  const theme = getCurrentTheme();
   showToast(text, {
     doc: container.ownerDocument ?? undefined,
     container: container.querySelector(".chat-panel-root") ?? container,
+    positioning: "container",
+    bottom: "40px",
     fontSize: chatFontSize(12),
+    styles: {
+      border: `1px solid ${theme.borderColor}`,
+      background: theme.dropdownBg,
+      color: theme.textPrimary,
+      boxShadow: "0 6px 18px rgba(0,0,0,0.18)",
+    },
   });
 }
 
