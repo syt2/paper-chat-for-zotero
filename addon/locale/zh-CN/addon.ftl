@@ -211,6 +211,7 @@ paperchat-chat-high-tier-warning-confirm = 继续切换
 paperchat-chat-high-tier-warning-cancel = 取消
 paperchat-chat-tier-models = 显示 { $tier } 模型
 paperchat-chat-tier-auto-reroute = 自动档位路由
+paperchat-chat-model-unavailable-switched = { $previous } 已不可用，已自动切换为 { $model }
 paperchat-chat-model-rerouted = 已将 { $tier } 从 { $old } 切换为 { $new }
 paperchat-chat-retry = 重试
 paperchat-chat-resume-reply = 继续回复

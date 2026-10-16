@@ -33,7 +33,7 @@ import {
   bindAccountQuotaPopover,
 } from "./ChatPanelChrome";
 import { getPref, setPref } from "../../../utils/prefs";
-import { showToast } from "../toast";
+import { showChatPanelToast } from "./ChatPanelToast";
 import {
   getPaperchatKeyModels,
   getModelRatios,
@@ -880,7 +880,10 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
         draft.pendingSelectedText ||
         draft.pendingQuotedMessages.length
       ) {
-        context.appendError(getString("chat-queue-draft-conflict"));
+        showChatPanelToast(
+          context.container,
+          getString("chat-queue-draft-conflict"),
+        );
         return;
       }
       const queuedTurn = sessionTurnQueue
@@ -892,7 +895,7 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
           queuedTurn.draft.attachmentState.pendingImages,
         )
       ) {
-        context.appendError(getImageAttachmentLimitMessage());
+        showChatPanelToast(context.container, getImageAttachmentLimitMessage());
         return;
       }
       const turn = sessionTurnQueue.remove(session.id, turnId);
@@ -1474,7 +1477,10 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
       (await refreshImageInputAvailability(container, chatManager)) ===
       "unsupported"
     ) {
-      context.appendError(getString("chat-image-input-unsupported"));
+      showChatPanelToast(
+        context.container,
+        getString("chat-image-input-unsupported"),
+      );
       return;
     }
     const started = startReaderFigureScreenshot(
@@ -1491,7 +1497,10 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
         ),
     );
     if (!started) {
-      context.appendError(getString("chat-reader-figure-screenshot-no-pdf"));
+      showChatPanelToast(
+        context.container,
+        getString("chat-reader-figure-screenshot-no-pdf"),
+      );
     }
   });
 
@@ -2357,7 +2366,7 @@ export async function sendMessage(
     if (
       !isImageAttachmentDraftWithinLimits(initialAttachmentState.pendingImages)
     ) {
-      context.appendError(getImageAttachmentLimitMessage());
+      showChatPanelToast(context.container, getImageAttachmentLimitMessage());
       return;
     }
     if (
@@ -2365,7 +2374,10 @@ export async function sendMessage(
       (await refreshImageInputAvailability(context.container, chatManager)) ===
         "unsupported"
     ) {
-      context.appendError(getString("chat-image-input-unsupported"));
+      showChatPanelToast(
+        context.container,
+        getString("chat-image-input-unsupported"),
+      );
       return;
     }
 
@@ -2444,7 +2456,7 @@ export async function sendMessage(
 
     const attachmentState = context.getAttachmentState();
     if (!isImageAttachmentDraftWithinLimits(attachmentState.pendingImages)) {
-      context.appendError(getImageAttachmentLimitMessage());
+      showChatPanelToast(context.container, getImageAttachmentLimitMessage());
       return;
     }
     const shouldAttachPdf = activeReaderItem !== null;
@@ -2531,7 +2543,7 @@ export async function sendMessage(
         ),
       ).some((element) => element?.textContent === `⚠️ ${queueFullMessage}`);
       if (!queueFullMessageExists) {
-        context.appendError(queueFullMessage);
+        showChatPanelToast(context.container, queueFullMessage);
       }
       return;
     }
@@ -2798,6 +2810,27 @@ export function updateModelSelectorDisplay(container: HTMLElement): void {
       : session?.resolvedModelId;
   const tierLabel = getPaperChatTierLabel(tier);
 
+  // The routing layer falls back to another model on its own when the stored
+  // one disappears (delisted, downgraded, or a limited-time model that went
+  // away), so say so once instead of letting the model change silently.
+  const previousModel = modelSelectorText.dataset.paperchatModel;
+  if (
+    previousModel &&
+    effectiveModel &&
+    previousModel !== effectiveModel &&
+    !getSelectablePaperchatModels().includes(previousModel)
+  ) {
+    showChatPanelToast(
+      container,
+      getString("chat-model-unavailable-switched", {
+        args: { previous: previousModel, model: effectiveModel },
+      }),
+    );
+  }
+  if (effectiveModel) {
+    modelSelectorText.dataset.paperchatModel = effectiveModel;
+  }
+
   modelSelectorText.textContent = effectiveModel
     ? `PaperChat · ${tierLabel} · ${effectiveModel}`
     : `PaperChat · ${tierLabel}`;
@@ -2886,27 +2919,6 @@ function populateReasoningDropdown(
     });
     dropdown.appendChild(item);
   }
-}
-
-/**
- * Show the shared toast inside the chat panel's own window, so the message
- * never lands on top of the Zotero main window.
- */
-function showPanelToast(container: HTMLElement, text: string): void {
-  const theme = getCurrentTheme();
-  showToast(text, {
-    doc: container.ownerDocument ?? undefined,
-    container: container.querySelector(".chat-panel-root") ?? container,
-    positioning: "container",
-    bottom: "40px",
-    fontSize: chatFontSize(12),
-    styles: {
-      border: `1px solid ${theme.borderColor}`,
-      background: theme.dropdownBg,
-      color: theme.textPrimary,
-      boxShadow: "0 6px 18px rgba(0,0,0,0.18)",
-    },
-  });
 }
 
 /**
@@ -3467,7 +3479,7 @@ function populateModelDropdown(
           lockedItem.addEventListener("click", (event) => {
             event.preventDefault();
             event.stopPropagation();
-            showPanelToast(
+            showChatPanelToast(
               container,
               getString("pref-paperchat-locked-models"),
             );

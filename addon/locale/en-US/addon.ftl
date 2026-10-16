@@ -211,6 +211,7 @@ paperchat-chat-high-tier-warning-confirm = Continue
 paperchat-chat-high-tier-warning-cancel = Cancel
 paperchat-chat-tier-models = Show { $tier } models
 paperchat-chat-tier-auto-reroute = Auto tier routing
+paperchat-chat-model-unavailable-switched = { $previous } is no longer available; switched to { $model }
 paperchat-chat-model-rerouted = Switched { $tier } from { $old } to { $new }
 paperchat-chat-retry = Retry
 paperchat-chat-resume-reply = Continue reply

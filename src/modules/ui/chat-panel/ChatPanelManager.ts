@@ -35,6 +35,7 @@ import {
   type NoteSummarySourceItem,
 } from "../../chat/note-summary-destination";
 import { normalizeSourceItemKeys } from "../../chat/note-source-provenance";
+import { showChatPanelToast } from "./ChatPanelToast";
 import { isPathInsidePresentationRoot } from "../../presentation";
 import {
   getCurrentPresentationPaper,
@@ -3250,14 +3251,20 @@ async function navigateToQuotedMessage(
       if (!isLatestNavigation()) return;
       if (manager.getActiveSession()?.id !== currentSession!.id) return;
       if (!scrollToAndHighlightMessage(chatHistory, quote.messageId)) {
-        context.appendError(getString("chat-quoted-reply-unavailable"));
+        showChatPanelToast(
+          context.container,
+          getString("chat-quoted-reply-unavailable"),
+        );
       }
     });
     return;
   }
 
   if (currentSession?.id === quote.sessionId) {
-    context.appendError(getString("chat-quoted-reply-unavailable"));
+    showChatPanelToast(
+      context.container,
+      getString("chat-quoted-reply-unavailable"),
+    );
     return;
   }
 
@@ -3265,7 +3272,10 @@ async function navigateToQuotedMessage(
   if (!isLatestNavigation()) return;
   if (!sourceSession) {
     if (manager.getActiveSession()?.id === currentSession?.id) {
-      context.appendError(getString("chat-quoted-reply-unavailable"));
+      showChatPanelToast(
+        context.container,
+        getString("chat-quoted-reply-unavailable"),
+      );
     }
     return;
   }
@@ -3290,7 +3300,10 @@ async function navigateToQuotedMessage(
       !sourceHistory ||
       !scrollToAndHighlightMessage(sourceHistory, quote.messageId)
     ) {
-      context.appendError(getString("chat-quoted-reply-unavailable"));
+      showChatPanelToast(
+        context.container,
+        getString("chat-quoted-reply-unavailable"),
+      );
     }
   });
   context.renderExecutionPlan(sourceSession.executionPlan);
@@ -3312,7 +3325,10 @@ function addAssistantReplyQuote(
     (candidate) => candidate.id === assistantMessageId,
   );
   if (!session || !message || !canQuoteAssistantReply(message)) {
-    context.appendError(getString("chat-quoted-reply-unavailable"));
+    showChatPanelToast(
+      context.container,
+      getString("chat-quoted-reply-unavailable"),
+    );
     return;
   }
 
@@ -3320,7 +3336,10 @@ function addAssistantReplyQuote(
     evidenceRecords: message.evidence,
   });
   if (!canQuoteAssistantReply(message, visibleContent)) {
-    context.appendError(getString("chat-quoted-reply-unavailable"));
+    showChatPanelToast(
+      context.container,
+      getString("chat-quoted-reply-unavailable"),
+    );
     return;
   }
 
