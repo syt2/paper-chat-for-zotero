@@ -43,6 +43,7 @@ export function createHelpTooltip(
   doc: Document,
   text: string,
   theme: ThemeColors,
+  tooltipId?: string,
 ): HTMLElement {
   const anchor = createElement(
     doc,
@@ -89,7 +90,7 @@ export function createHelpTooltip(
       zIndex: "10003",
       pointerEvents: "none",
     },
-    { role: "tooltip" },
+    { role: "tooltip", ...(tooltipId ? { id: tooltipId } : {}) },
   );
   tooltip.textContent = text;
   anchor.appendChild(tooltip);
@@ -900,86 +901,15 @@ export function createChatContainer(
     minWidth: "0",
   });
 
-  const modelHelpText = getString("chat-switch-model-help");
-  const modelSelectorHelp = createElement(
+  const modelSelectorHelp = createHelpTooltip(
     doc,
-    "span",
-    {
-      position: "relative",
-      display: "inline-flex",
-      alignItems: "center",
-      justifyContent: "center",
-      width: "14px",
-      height: "14px",
-      borderRadius: "50%",
-      border: `1px solid ${theme.inputBorderColor}`,
-      color: theme.textSecondary,
-      fontSize: "10px",
-      lineHeight: "14px",
-      cursor: "help",
-      opacity: "0.75",
-      userSelect: "none",
-    },
-    {
-      id: "chat-model-selector-help",
-      tabindex: "0",
-      "aria-label": modelHelpText,
-    },
+    getString("chat-switch-model-help"),
+    theme,
+    "chat-model-selector-tooltip",
   );
-  modelSelectorHelp.textContent = "?";
-
-  const modelSelectorTooltip = createElement(
-    doc,
-    "div",
-    {
-      display: "none",
-      position: "fixed",
-      left: "0",
-      top: "0",
-      width: "240px",
-      padding: "8px 10px",
-      border: `1px solid ${theme.borderColor}`,
-      borderRadius: "8px",
-      background: theme.dropdownBg,
-      color: theme.textPrimary,
-      boxShadow: "0 6px 18px rgba(0,0,0,0.22)",
-      fontSize: chatFontSize(12),
-      lineHeight: "1.4",
-      whiteSpace: "normal",
-      textAlign: "left",
-      zIndex: "10003",
-      pointerEvents: "none",
-    },
-    { id: "chat-model-selector-tooltip", role: "tooltip" },
-  );
-  modelSelectorTooltip.textContent = modelHelpText;
-  modelSelectorHelp.appendChild(modelSelectorTooltip);
-
-  const showModelHelp = () => {
-    modelSelectorTooltip.style.display = "block";
-    modelSelectorTooltip.style.visibility = "hidden";
-    const rect = modelSelectorHelp.getBoundingClientRect();
-    const win = doc.defaultView;
-    const viewportWidth = win?.innerWidth ?? 320;
-    const tooltipWidth = modelSelectorTooltip.offsetWidth || 240;
-    const tooltipHeight = modelSelectorTooltip.offsetHeight || 64;
-    const left = Math.max(
-      8,
-      Math.min(rect.left, viewportWidth - tooltipWidth - 8),
-    );
-    const top = Math.max(8, rect.top - tooltipHeight - 8);
-    modelSelectorTooltip.style.left = `${left}px`;
-    modelSelectorTooltip.style.top = `${top}px`;
-    modelSelectorTooltip.style.visibility = "visible";
-  };
-  const hideModelHelp = () => {
-    modelSelectorTooltip.style.display = "none";
-  };
-
-  modelSelectorHelp.addEventListener("mouseenter", showModelHelp);
-  modelSelectorHelp.addEventListener("mouseleave", hideModelHelp);
-  modelSelectorHelp.addEventListener("focus", showModelHelp);
-  modelSelectorHelp.addEventListener("blur", hideModelHelp);
+  // setAttribute rather than `.id`: the panel's fake documents in tests only
+  // record attributes.
+  modelSelectorHelp.setAttribute("id", "chat-model-selector-help");
 
   // Model selector container
   const modelSelectorContainer = createElement(doc, "div", {
