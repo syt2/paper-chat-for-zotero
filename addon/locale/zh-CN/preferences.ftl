@@ -74,7 +74,7 @@ pref-paperchat-pro-model = Pro 模型
 pref-paperchat-ultra-model = Ultra 模型
 pref-paperchat-model-auto = 自动
 pref-paperchat-model-auto-desc = 跟随自动档位路由
-pref-paperchat-locked-models = 🔒 消费一次后解锁付费专属模型
+pref-paperchat-locked-models = 🔒 购买一次额度后解锁付费专属模型
 pref-paperchat-locked-model-hint = 购买一次额度或套餐后即可使用该模型
 pref-official-website = 访问官网
 

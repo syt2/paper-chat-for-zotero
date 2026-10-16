@@ -34,10 +34,13 @@ import {
 } from "./ChatPanelChrome";
 import { getPref, setPref } from "../../../utils/prefs";
 import {
+  getPaperchatKeyModels,
   getModelRatios,
   getModelRoutingMeta,
   getSelectablePaperchatModels,
+  getUpgradeOnlyPaperchatModels,
 } from "../../preferences/ModelsFetcher";
+import { getMissingUpgradeModels } from "../../preferences/paperchat-upgrade-models";
 import {
   PAPERCHAT_TIERS,
   deriveTierPools,
@@ -2885,6 +2888,26 @@ function populateReasoningDropdown(
 }
 
 /**
+ * Native popup for "this route needs a purchase". Shown when the account taps a
+ * locked model in the chat model list; it never switches the chat model, and it
+ * reuses the same copy as the settings panel.
+ */
+function showPurchaseOnlyModelNotice(): void {
+  try {
+    const notice = new ztoolkit.ProgressWindow(addon.data.config.addonName);
+    notice
+      .createLine({
+        text: getString("pref-paperchat-locked-models"),
+        type: "default",
+      })
+      .show();
+    notice.startCloseTimer(4000);
+  } catch (error) {
+    ztoolkit.log("[Chat] Failed to show the purchase-only notice:", error);
+  }
+}
+
+/**
  * Populate model dropdown with providers and their models
  */
 function populateModelDropdown(
@@ -3029,6 +3052,16 @@ function populateModelDropdown(
       const selectedTier = session?.selectedTier || tierState.selectedTier;
       const tierPools = deriveTierPools(
         models,
+        getModelRatios(),
+        getModelRoutingMeta(),
+      );
+      // Purchase-only routes this account does not have yet, bucketed into the
+      // same tiers a paid account finds them in.
+      const lockedTierPools = deriveTierPools(
+        getMissingUpgradeModels(
+          getUpgradeOnlyPaperchatModels(),
+          getPaperchatKeyModels(),
+        ),
         getModelRatios(),
         getModelRoutingMeta(),
       );
@@ -3389,6 +3422,52 @@ function populateModelDropdown(
             await switchPaperChatSelection(tier, "manual", model);
           });
           submenu.appendChild(modelItem);
+        }
+
+        for (const lockedModel of lockedTierPools[tier] ?? []) {
+          // Locked rows take the click but never change the selection: tapping
+          // one only explains why the model is unavailable.
+          const lockedItem = createElement(doc, "button", {
+            padding: "7px 12px 7px 28px",
+            fontSize: chatFontSize(12),
+            color: theme.textMuted,
+            cursor: "pointer",
+            background: "transparent",
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            width: "100%",
+            border: "none",
+            textAlign: "left",
+          });
+          lockedItem.setAttribute("type", "button");
+          const lockedName = createElement(doc, "span", {
+            flex: "1",
+            minWidth: "0",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          });
+          lockedName.textContent = lockedModel;
+          lockedItem.appendChild(lockedName);
+          const lock = createElement(doc, "span", {
+            flexShrink: "0",
+            fontSize: chatFontSize(11),
+          });
+          lock.textContent = "🔒";
+          lockedItem.appendChild(lock);
+          lockedItem.addEventListener("mouseenter", () => {
+            lockedItem.style.background = theme.dropdownItemHoverBg;
+          });
+          lockedItem.addEventListener("mouseleave", () => {
+            lockedItem.style.background = "transparent";
+          });
+          lockedItem.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            showPurchaseOnlyModelNotice();
+          });
+          submenu.appendChild(lockedItem);
         }
 
         tierGroup.appendChild(submenu);

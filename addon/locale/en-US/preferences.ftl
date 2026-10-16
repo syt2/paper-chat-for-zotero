@@ -74,7 +74,7 @@ pref-paperchat-pro-model = Pro Model
 pref-paperchat-ultra-model = Ultra Model
 pref-paperchat-model-auto = Auto
 pref-paperchat-model-auto-desc = Follow automatic tier routing
-pref-paperchat-locked-models = 🔒 Unlock purchase-only models with a top-up or subscription
+pref-paperchat-locked-models = 🔒 Buy a quota pack to unlock purchase-only models
 pref-paperchat-locked-model-hint = Available after a top-up or subscription
 pref-official-website = Visit Official Website
 

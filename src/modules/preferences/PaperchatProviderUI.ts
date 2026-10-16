@@ -209,31 +209,6 @@ function populateTierOverridePopup(
 }
 
 /**
- * Summarise locked models under the tier selector. Kept outside the popups so
- * the hint stays visible even when a whole tier row is hidden for this
- * account.
- *
- * The label carries an inline `display` style, so it is shown and hidden
- * through `style.display`: the XUL rule behind `hidden="true"` is an ordinary
- * author rule and loses to the inline style.
- */
-function renderLockedModelsHint(doc: Document, lockedModels: string[]): void {
-  const hint = doc.getElementById("pref-paperchat-locked-models");
-  if (!hint) {
-    return;
-  }
-  if (lockedModels.length === 0) {
-    hint.textContent = "";
-    hint.style.display = "none";
-    return;
-  }
-  // Deliberately one plain sentence: the locked entries under each tier already
-  // name the models, so the hint never has to count or list them.
-  hint.textContent = getString("pref-paperchat-locked-models");
-  hint.style.display = "block";
-}
-
-/**
  * Populate PaperChat panel with settings from provider config
  */
 export function populatePaperchatPanel(doc: Document): void {
@@ -414,7 +389,6 @@ export function populatePaperchatModels(
       lockedTierPools[tier],
     );
   }
-  renderLockedModelsHint(doc, lockedModels);
 }
 
 /**
