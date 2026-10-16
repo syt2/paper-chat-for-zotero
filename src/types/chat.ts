@@ -450,6 +450,7 @@ export interface ChatSession {
   memoryExtractedAt?: number; // timestamp of last extraction
   memoryExtractedMsgCount?: number; // conversational msg count at last extraction
   selectedTier?:
+    | "paperchat-promo"
     | "paperchat-lite"
     | "paperchat-standard"
     | "paperchat-pro"

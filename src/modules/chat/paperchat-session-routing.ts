@@ -12,6 +12,7 @@ function createFastPathPools(
   modelId: string,
 ): PaperChatTierPools {
   return {
+    "paperchat-promo": selectedTier === "paperchat-promo" ? [modelId] : [],
     "paperchat-lite": selectedTier === "paperchat-lite" ? [modelId] : [],
     "paperchat-standard":
       selectedTier === "paperchat-standard" ? [modelId] : [],

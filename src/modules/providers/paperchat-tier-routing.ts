@@ -9,6 +9,7 @@ import {
 } from "./paperchat-routing-metadata";
 
 export const PAPERCHAT_TIERS = [
+  "paperchat-promo",
   "paperchat-lite",
   "paperchat-standard",
   "paperchat-pro",
@@ -56,10 +57,19 @@ export function getAvailablePaperChatTiers(
   return PAPERCHAT_TIERS.filter((tier) => pools[tier].length > 0);
 }
 
-function getFirstAvailablePaperChatTier(
+/**
+ * Tier to fall back to when nothing is selected (or the stored selection is
+ * gone). The free / discounted tier is skipped while any other tier is
+ * available: nobody should be moved onto models without a quality guarantee
+ * just because their previous pick disappeared.
+ */
+export function getFallbackPaperChatTier(
   pools: PaperChatTierPools,
 ): PaperChatTier | null {
-  return getAvailablePaperChatTiers(pools)[0] ?? null;
+  const available = getAvailablePaperChatTiers(pools);
+  return (
+    available.find((tier) => tier !== "paperchat-promo") ?? available[0] ?? null
+  );
 }
 
 function defaultPickRandom(
@@ -158,6 +168,7 @@ function sortModelsByRatio(
 
 function createEmptyTierPools(): PaperChatTierPools {
   return {
+    "paperchat-promo": [],
     "paperchat-lite": [],
     "paperchat-standard": [],
     "paperchat-pro": [],
@@ -175,6 +186,8 @@ function deriveRatioTierPools(
 
   if (!hasCompleteRatioCoverage(availableModels, ratios)) {
     return {
+      // The promo tier is declared by the admin, never inferred from ratios.
+      "paperchat-promo": [],
       "paperchat-lite": [...availableModels],
       "paperchat-standard": [...availableModels],
       "paperchat-pro": [...availableModels],
@@ -196,6 +209,7 @@ function deriveRatioTierPools(
   );
 
   return {
+    "paperchat-promo": [],
     "paperchat-lite": liteModels.length > 0 ? liteModels : [fallbackModel],
     "paperchat-standard":
       standardModels.length > 0 ? standardModels : [fallbackModel],
@@ -261,6 +275,7 @@ function createDefaultState(): PaperChatTierState {
   return {
     selectedTier: DEFAULT_SELECTED_TIER,
     tiers: {
+      "paperchat-promo": createDefaultEntry(),
       "paperchat-lite": createDefaultEntry(),
       "paperchat-standard": createDefaultEntry(),
       "paperchat-pro": createDefaultEntry(),
@@ -279,6 +294,7 @@ export function deriveTierPools(
 
   if (count === 0) {
     return {
+      "paperchat-promo": [],
       "paperchat-lite": [],
       "paperchat-standard": [],
       "paperchat-pro": [],
@@ -476,9 +492,7 @@ export function resolveTierModel(
     routingMeta,
   );
   const effectiveTier =
-    pools[tier]?.length > 0
-      ? tier
-      : (getFirstAvailablePaperChatTier(pools) ?? tier);
+    pools[tier]?.length > 0 ? tier : (getFallbackPaperChatTier(pools) ?? tier);
 
   return {
     state: {

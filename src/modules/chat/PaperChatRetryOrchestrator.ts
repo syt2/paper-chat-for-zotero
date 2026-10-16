@@ -110,13 +110,15 @@ export class PaperChatRetryOrchestrator {
     nextModel: string,
   ): string {
     const tierLabel =
-      tier === "paperchat-lite"
-        ? getString("chat-tier-lite")
-        : tier === "paperchat-ultra"
-          ? getString("chat-tier-ultra")
-          : tier === "paperchat-pro"
-            ? getString("chat-tier-pro")
-            : getString("chat-tier-standard");
+      tier === "paperchat-promo"
+        ? getString("chat-tier-promo")
+        : tier === "paperchat-lite"
+          ? getString("chat-tier-lite")
+          : tier === "paperchat-ultra"
+            ? getString("chat-tier-ultra")
+            : tier === "paperchat-pro"
+              ? getString("chat-tier-pro")
+              : getString("chat-tier-standard");
 
     return getString("chat-model-rerouted", {
       args: {

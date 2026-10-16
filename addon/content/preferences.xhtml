@@ -310,6 +310,10 @@
           >
             <menupopup id="pref-paperchat-tier-popup">
               <menuitem
+                value="paperchat-promo"
+                data-l10n-id="pref-paperchat-tier-promo"
+              ></menuitem>
+              <menuitem
                 value="paperchat-lite"
                 data-l10n-id="pref-paperchat-tier-lite"
               ></menuitem>
@@ -327,6 +331,18 @@
               ></menuitem>
             </menupopup>
           </menulist>
+          <!-- Free / discounted tier caveat, revealed on hover -->
+          <label
+            id="pref-paperchat-tier-promo-note"
+            hidden="true"
+            style="
+              margin-left: 4px;
+              color: var(--fill-secondary);
+              font-size: 12px;
+              cursor: help;
+            "
+            >?</label
+          >
           <button
             id="pref-paperchat-refresh-models"
             data-l10n-id="pref-refresh-models"
@@ -340,6 +356,20 @@
             data-l10n-id="pref-advanced-options"
             style="cursor: pointer; font-weight: bold; margin-bottom: 8px"
           ></html:summary>
+
+          <hbox align="center" style="margin-bottom: 8px; margin-left: 12px">
+            <label
+              for="pref-paperchat-promo-model"
+              data-l10n-id="pref-paperchat-promo-model"
+              style="width: 70px; text-align: right"
+            ></label>
+            <menulist
+              id="pref-paperchat-promo-model"
+              style="flex: 1; margin-left: 8px; min-width: 180px"
+            >
+              <menupopup id="pref-paperchat-promo-model-popup"></menupopup>
+            </menulist>
+          </hbox>
 
           <hbox align="center" style="margin-bottom: 8px; margin-left: 12px">
             <label

@@ -68,6 +68,7 @@ export function parseModelRoutingDefaults(
 }
 
 const TIER_CODE_TO_TIER: Record<number, PaperChatTier> = {
+  0: "paperchat-promo",
   1: "paperchat-lite",
   2: "paperchat-standard",
   3: "paperchat-pro",
@@ -75,6 +76,8 @@ const TIER_CODE_TO_TIER: Record<number, PaperChatTier> = {
 };
 
 const ROUTING_TIER_TO_CODE: Record<string, number> = {
+  promo: 0,
+  "paperchat-promo": 0,
   lite: 1,
   "paperchat-lite": 1,
   standard: 2,
@@ -299,6 +302,7 @@ export function sortModelsByRoutingWeight(
 }
 
 const TIER_SORT_RANK: Record<PaperChatTier, number> = {
+  "paperchat-promo": -1,
   "paperchat-lite": 0,
   "paperchat-standard": 1,
   "paperchat-pro": 2,
@@ -372,6 +376,7 @@ export function deriveRoutingMetaTierPools(
 ): PaperChatTierPools {
   if (models.length === 0) {
     return {
+      "paperchat-promo": [],
       "paperchat-lite": [],
       "paperchat-standard": [],
       "paperchat-pro": [],
@@ -381,6 +386,7 @@ export function deriveRoutingMetaTierPools(
 
   const sortedModels = sortModelsByRoutingWeight(models, routingMeta);
   const pools: PaperChatTierPools = {
+    "paperchat-promo": [],
     "paperchat-lite": [],
     "paperchat-standard": [],
     "paperchat-pro": [],

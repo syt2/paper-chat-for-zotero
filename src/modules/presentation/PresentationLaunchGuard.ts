@@ -19,6 +19,11 @@ export const PRESENTATION_LAUNCH_PROMPT =
 export function getPresentationMinimumRemainingTokens(
   paperChatTier?: PaperChatTier,
 ): number {
+  // Free and discounted models are the cheapest to run, so they use the same
+  // (lowest) balance gate as the lite tier.
+  if (paperChatTier === "paperchat-promo") {
+    return PRESENTATION_LITE_MINIMUM_REMAINING_TOKENS;
+  }
   if (paperChatTier === "paperchat-lite") {
     return PRESENTATION_LITE_MINIMUM_REMAINING_TOKENS;
   }

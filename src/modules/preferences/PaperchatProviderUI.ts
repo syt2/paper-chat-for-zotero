@@ -15,6 +15,7 @@ import {
 import {
   deriveTierPools,
   getAvailablePaperChatTiers,
+  getFallbackPaperChatTier,
   PAPERCHAT_TIERS,
   parseTierState,
   resolveSelectedTierModel,
@@ -45,6 +46,7 @@ import {
 } from "../providers/PaperChatNoticeService";
 
 const TIER_MODEL_SELECTORS: Record<PaperChatTier, string> = {
+  "paperchat-promo": "pref-paperchat-promo-model",
   "paperchat-lite": "pref-paperchat-lite-model",
   "paperchat-standard": "pref-paperchat-standard-model",
   "paperchat-pro": "pref-paperchat-pro-model",
@@ -52,6 +54,7 @@ const TIER_MODEL_SELECTORS: Record<PaperChatTier, string> = {
 };
 
 const TIER_MODEL_POPUPS: Record<PaperChatTier, string> = {
+  "paperchat-promo": "pref-paperchat-promo-model-popup",
   "paperchat-lite": "pref-paperchat-lite-model-popup",
   "paperchat-standard": "pref-paperchat-standard-model-popup",
   "paperchat-pro": "pref-paperchat-pro-model-popup",
@@ -76,6 +79,7 @@ const PAPERCHAT_CONFIG_INPUT_IDS = [
 ] as const;
 
 const TIER_LABEL_KEYS: Record<PaperChatTier, string> = {
+  "paperchat-promo": "pref-paperchat-tier-promo",
   "paperchat-lite": "pref-paperchat-tier-lite",
   "paperchat-standard": "pref-paperchat-tier-standard",
   "paperchat-pro": "pref-paperchat-tier-pro",
@@ -116,7 +120,7 @@ function syncTierSelectorVisibility(
   ) as unknown as XULMenuListElement | null;
   const popup = doc.getElementById("pref-paperchat-tier-popup");
   const visibleTiers = getAvailablePaperChatTiers(tierPools);
-  const fallbackTier = visibleTiers[0] ?? "paperchat-pro";
+  const fallbackTier = getFallbackPaperChatTier(tierPools) ?? "paperchat-pro";
   const selectedTier =
     tierSelect && visibleTiers.includes(tierSelect.value as PaperChatTier)
       ? (tierSelect.value as PaperChatTier)
@@ -206,6 +210,29 @@ function populateTierOverridePopup(
     entry.mode === "manual" && entry.modelId && models.includes(entry.modelId)
       ? entry.modelId
       : "auto";
+}
+
+/**
+ * "?" beside the tier selector. The caveat only matters while the free /
+ * discounted tier is the selected one, so the note follows the selection; the
+ * tier item itself stays hidden while nothing is declared for it.
+ */
+function syncTierPromoNote(doc: Document): void {
+  const tierSelect = doc.getElementById(
+    "pref-paperchat-tier",
+  ) as unknown as XULMenuListElement | null;
+  const note = doc.getElementById("pref-paperchat-tier-promo-note");
+  if (!note) {
+    return;
+  }
+
+  if (!tierSelect || tierSelect.value !== "paperchat-promo") {
+    note.setAttribute("hidden", "true");
+    return;
+  }
+
+  note.setAttribute("tooltiptext", getString("pref-paperchat-tier-promo-note"));
+  note.removeAttribute("hidden");
 }
 
 /**
@@ -379,6 +406,7 @@ export function populatePaperchatModels(
   );
   state.selectedTier = syncTierSelectorVisibility(doc, tierPools);
   syncTierSelectorLabels(doc);
+  syncTierPromoNote(doc);
 
   for (const tier of PAPERCHAT_TIERS) {
     populateTierOverridePopup(
@@ -419,7 +447,7 @@ export function savePaperchatConfig(doc: Document): void {
   state.selectedTier =
     selectedTier && visibleTiers.includes(selectedTier)
       ? selectedTier
-      : (visibleTiers[0] ?? "paperchat-pro");
+      : (getFallbackPaperChatTier(tierPools) ?? "paperchat-pro");
 
   for (const tier of PAPERCHAT_TIERS) {
     const select = doc.getElementById(
@@ -460,6 +488,8 @@ export function bindPaperchatEvents(
     ) as unknown as XULMenuListElement | null;
     select?.addEventListener("command", function () {
       savePaperchatConfig(doc);
+      // The free / discounted caveat follows the selection.
+      syncTierPromoNote(doc);
     });
   }
 

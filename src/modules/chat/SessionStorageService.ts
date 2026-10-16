@@ -146,6 +146,7 @@ function toValidSelectedTier(
   value: string | null,
 ): ChatSession["selectedTier"] {
   if (
+    value === "paperchat-promo" ||
     value === "paperchat-lite" ||
     value === "paperchat-standard" ||
     value === "paperchat-pro" ||
