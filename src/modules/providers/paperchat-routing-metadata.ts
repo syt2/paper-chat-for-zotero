@@ -14,6 +14,11 @@ export interface PaperChatModelRoutingMeta {
   priority?: number;
   contextWindow?: number;
   maxOutput?: number;
+  /**
+   * Route the account only gets after a purchase. The admin page sets it; the
+   * client uses it to decide which routes to advertise as locked.
+   */
+  upgradeOnly?: boolean;
   apiCapabilities?: {
     responses?: boolean;
     hostedWebSearch?: boolean;
@@ -157,6 +162,7 @@ export function parseModelRoutingConfig(
       priority?: unknown;
       contextWindow?: unknown;
       maxOutput?: unknown;
+      upgradeOnly?: unknown;
       apiCapabilities?: unknown;
     };
     const tier =
@@ -174,6 +180,11 @@ export function parseModelRoutingConfig(
           : undefined;
 
     const meta: PaperChatModelRoutingMeta = {};
+    // Only an explicit `true` declares a route as purchase-only: anything else
+    // keeps the route on the normal path.
+    if (metaRecord.upgradeOnly === true) {
+      meta.upgradeOnly = true;
+    }
     if (tierCode !== undefined) {
       meta.tierCode = tierCode;
     }

@@ -21,6 +21,7 @@ import {
   type PaperChatModelRoutingMeta,
   type PaperChatModelRoutingDefaults,
 } from "../providers/paperchat-routing-metadata";
+import { getDeclaredUpgradeModels } from "./paperchat-upgrade-models";
 import { getEffectivePricingModelRatio } from "./paperchat-effective-ratio";
 import {
   getPaperChatClientHeaders,
@@ -254,6 +255,33 @@ export function loadCachedRatios(): void {
 
 export function getModelRoutingDefaults(): PaperChatModelRoutingDefaults {
   return paperchatModelRoutingDefaults;
+}
+
+/**
+ * Routes the admin marked as requiring a purchase, in tier order. Which of
+ * them an account is actually missing is decided per account.
+ */
+export function getUpgradeOnlyPaperchatModels(): string[] {
+  return getDeclaredUpgradeModels(resolveModelRoutingMeta());
+}
+
+/**
+ * Model ids the account's key reported, including any the routing config does
+ * not list. The relay only reports models the account's group may use, so this
+ * is what tells which declared upgrade routes the account is still missing.
+ */
+export function getPaperchatKeyModels(): string[] {
+  try {
+    const parsed = JSON.parse(getPref("paperchatModelsCache") || "[]");
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed.filter(
+      (model): model is string => typeof model === "string" && model.length > 0,
+    );
+  } catch {
+    return [];
+  }
 }
 
 function getPricingModelName(

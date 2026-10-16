@@ -1616,7 +1616,17 @@ function bindProductPurchaseEvents(
             error,
           );
         });
+        // The order may have unlocked a paid group. Re-read the model list and
+        // the routing payload, otherwise the panel keeps showing locks for the
+        // routes the purchase just unlocked.
+        await authManager.refreshModelAccess().catch((error) => {
+          ztoolkit.log(
+            "[Preferences] Failed to refresh model access after payment:",
+            error,
+          );
+        });
         if (prefsDoc) {
+          populatePaperchatModels(prefsDoc);
           updateUserDisplay(prefsDoc, authManager);
         }
       }

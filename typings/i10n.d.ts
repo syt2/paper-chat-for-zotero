@@ -494,6 +494,8 @@ export type FluentMessageId =
   | 'pref-paperchat-buy-waiting'
   | 'pref-paperchat-description'
   | 'pref-paperchat-lite-model'
+  | 'pref-paperchat-locked-model-hint'
+  | 'pref-paperchat-locked-models'
   | 'pref-paperchat-model-auto'
   | 'pref-paperchat-model-auto-desc'
   | 'pref-paperchat-notice-collapse'

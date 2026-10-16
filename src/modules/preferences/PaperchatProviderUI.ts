@@ -25,8 +25,11 @@ import type { PaperChatProviderConfig } from "../../types/provider";
 import {
   getModelRatios,
   getModelRoutingMeta,
+  getPaperchatKeyModels,
   getSelectablePaperchatModels,
+  getUpgradeOnlyPaperchatModels,
 } from "./ModelsFetcher";
+import { getMissingUpgradeModels } from "./paperchat-upgrade-models";
 import { clearElement } from "./utils";
 import { getString } from "../../utils/locale";
 import {
@@ -59,6 +62,13 @@ const TIER_SELECTOR_IDS = [
   "pref-paperchat-tier",
   ...Object.values(TIER_MODEL_SELECTORS),
 ] as const;
+
+/**
+ * Entry value used for routes declared purchase-only that this account does not
+ * have yet. The prefix keeps a locked entry from ever matching a stored model
+ * id.
+ */
+const LOCKED_MODEL_VALUE_PREFIX = "locked:";
 
 const PAPERCHAT_CONFIG_INPUT_IDS = [
   "pref-paperchat-temperature",
@@ -150,6 +160,7 @@ function populateTierOverridePopup(
   tier: PaperChatTier,
   models: string[],
   state: PaperChatTierState,
+  lockedModels: string[] = [],
 ): void {
   const popup = doc.getElementById(TIER_MODEL_POPUPS[tier]);
   const select = doc.getElementById(
@@ -173,11 +184,53 @@ function populateTierOverridePopup(
     popup.appendChild(item);
   }
 
+  if (lockedModels.length > 0) {
+    popup.appendChild(doc.createXULElement("menuseparator"));
+    for (const model of lockedModels) {
+      const item = doc.createXULElement("menuitem");
+      // Keep the model name readable: the lock is the only place a free
+      // account learns what a purchase would add.
+      item.setAttribute("label", `🔒 ${model}`);
+      item.setAttribute("value", `${LOCKED_MODEL_VALUE_PREFIX}${model}`);
+      item.setAttribute("disabled", "true");
+      item.setAttribute(
+        "tooltiptext",
+        getString("pref-paperchat-locked-model-hint"),
+      );
+      popup.appendChild(item);
+    }
+  }
+
   const entry = state.tiers[tier];
   select.value =
     entry.mode === "manual" && entry.modelId && models.includes(entry.modelId)
       ? entry.modelId
       : "auto";
+}
+
+/**
+ * Summarise locked models under the tier selector. Kept outside the popups so
+ * the hint stays visible even when a whole tier row is hidden for this
+ * account.
+ *
+ * The label carries an inline `display` style, so it is shown and hidden
+ * through `style.display`: the XUL rule behind `hidden="true"` is an ordinary
+ * author rule and loses to the inline style.
+ */
+function renderLockedModelsHint(doc: Document, lockedModels: string[]): void {
+  const hint = doc.getElementById("pref-paperchat-locked-models");
+  if (!hint) {
+    return;
+  }
+  if (lockedModels.length === 0) {
+    hint.textContent = "";
+    hint.style.display = "none";
+    return;
+  }
+  // Deliberately one plain sentence: the locked entries under each tier already
+  // name the models, so the hint never has to count or list them.
+  hint.textContent = getString("pref-paperchat-locked-models");
+  hint.style.display = "block";
 }
 
 /**
@@ -334,12 +387,34 @@ export function populatePaperchatModels(
     getModelRatios(),
     getModelRoutingMeta(),
   );
+  // Routes the admin marked as purchase-only and this account does not have:
+  // the relay already leaves out everything the account's group cannot use, so
+  // a declared route missing from the key's list is one a purchase is meant to
+  // add.
+  // Bucketed by the tier the routing config gives them, so a lock sits exactly
+  // where the model appears once the account has it.
+  const lockedModels = getMissingUpgradeModels(
+    getUpgradeOnlyPaperchatModels(),
+    models ?? getPaperchatKeyModels(),
+  );
+  const lockedTierPools = deriveTierPools(
+    lockedModels,
+    getModelRatios(),
+    getModelRoutingMeta(),
+  );
   state.selectedTier = syncTierSelectorVisibility(doc, tierPools);
   syncTierSelectorLabels(doc);
 
   for (const tier of PAPERCHAT_TIERS) {
-    populateTierOverridePopup(doc, tier, tierPools[tier], state);
+    populateTierOverridePopup(
+      doc,
+      tier,
+      tierPools[tier],
+      state,
+      lockedTierPools[tier],
+    );
   }
+  renderLockedModelsHint(doc, lockedModels);
 }
 
 /**

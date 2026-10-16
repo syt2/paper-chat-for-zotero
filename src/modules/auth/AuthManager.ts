@@ -1744,6 +1744,15 @@ export class AuthManager {
   }
 
   /**
+   * Re-read the account's model access - model list, ratios and tier routing -
+   * after its entitlements changed, so routes the account just unlocked stop
+   * arriving as locked entries in the settings panel.
+   */
+  async refreshModelAccess(): Promise<void> {
+    await this.fetchAndSetDefaultModel();
+  }
+
+  /**
    * Start periodic model list refresh (every 1 hour)
    */
   private startModelRefreshTimer(): void {
