@@ -6,7 +6,11 @@ import { editSessionTitle } from "./SessionTitleEditor";
 import { config } from "../../../../package.json";
 import { graphemeSegments } from "unicode-segmenter/grapheme";
 import type { ChatPanelContext, AttachmentState, SessionInfo } from "./types";
-import { createElement, copyToClipboard } from "./ChatPanelBuilder";
+import {
+  copyToClipboard,
+  createElement,
+  createHelpTooltip,
+} from "./ChatPanelBuilder";
 import { darkTheme, getCurrentTheme } from "./ChatPanelTheme";
 import {
   createHistoryDropdownState,
@@ -46,6 +50,7 @@ import {
   PAPERCHAT_TIERS,
   deriveTierPools,
   getAvailablePaperChatTiers,
+  getFallbackPaperChatTier,
   parseTierState,
   type PaperChatTier,
 } from "../../providers/paperchat-tier-routing";
@@ -294,6 +299,10 @@ function mapSignInReason(error: unknown): string {
 }
 
 function getPaperChatTierLabel(tier: PaperChatTier): string {
+  if (tier === "paperchat-promo") {
+    return getString("chat-tier-promo");
+  }
+
   if (tier === "paperchat-lite") {
     return getString("chat-tier-lite");
   }
@@ -2798,7 +2807,7 @@ export function updateModelSelectorDisplay(container: HTMLElement): void {
   const visibleTiers = getAvailablePaperChatTiers(tierPools);
   const tier = visibleTiers.includes(requestedTier)
     ? requestedTier
-    : (visibleTiers[0] ?? requestedTier);
+    : (getFallbackPaperChatTier(tierPools) ?? requestedTier);
   const tierEntry = tierState.tiers[tier];
   // Mirror the availability check in paperchat-session-routing.ts so the
   // displayed model stays in sync with what the next request will actually use.
@@ -3240,7 +3249,35 @@ function populateModelDropdown(
           whiteSpace: "nowrap",
         });
         label.textContent = getPaperChatTierDropdownLabel(tier);
-        tierItem.appendChild(label);
+        if (tier === "paperchat-promo") {
+          // Same look and copy as the model selector's help marker: hovering
+          // explains the tier, clicking it must not switch the tier. The "?"
+          // hugs the label instead of drifting to the right edge.
+          const group = createElement(doc, "span", {
+            display: "flex",
+            alignItems: "center",
+            gap: "4px",
+            flex: "1",
+            minWidth: "0",
+          });
+          const help = createHelpTooltip(
+            doc,
+            getString("pref-paperchat-tier-promo-note"),
+            theme,
+          );
+          // The label must stop growing, otherwise it pushes the "?" back to
+          // the right edge of the group.
+          label.style.flex = "0 1 auto";
+          help.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          });
+          group.appendChild(label);
+          group.appendChild(help);
+          tierItem.appendChild(group);
+        } else {
+          tierItem.appendChild(label);
+        }
         const arrow = createElement(doc, "button", {
           fontSize: "10px",
           opacity: "0.6",

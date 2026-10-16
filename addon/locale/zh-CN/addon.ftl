@@ -198,6 +198,7 @@ paperchat-chat-reasoning-high = 高
 paperchat-chat-reasoning-xhigh = 极高
 paperchat-chat-reasoning-max = 最大
 paperchat-chat-tier-lite = Lite
+paperchat-chat-tier-promo = 限免/折扣
 paperchat-chat-tier-standard = Standard
 paperchat-chat-tier-pro = Pro
 paperchat-chat-tier-ultra = Ultra

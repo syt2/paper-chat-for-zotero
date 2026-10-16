@@ -198,6 +198,7 @@ paperchat-chat-reasoning-high = High
 paperchat-chat-reasoning-xhigh = Extra high
 paperchat-chat-reasoning-max = Maximum
 paperchat-chat-tier-lite = Lite
+paperchat-chat-tier-promo = Free / discounted
 paperchat-chat-tier-standard = Standard
 paperchat-chat-tier-pro = Pro
 paperchat-chat-tier-ultra = Ultra

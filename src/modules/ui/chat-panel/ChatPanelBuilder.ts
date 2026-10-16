@@ -34,6 +34,94 @@ export function createElement(
 /**
  * Create the chat container element using DOM API
  */
+/**
+ * Small circular "?" that reveals `text` on hover or focus, styled exactly
+ * like the model selector's help marker. Shared so every help marker in the
+ * panel reads the same.
+ */
+export function createHelpTooltip(
+  doc: Document,
+  text: string,
+  theme: ThemeColors,
+): HTMLElement {
+  const anchor = createElement(
+    doc,
+    "span",
+    {
+      position: "relative",
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+      width: "14px",
+      height: "14px",
+      borderRadius: "50%",
+      border: `1px solid ${theme.inputBorderColor}`,
+      color: theme.textSecondary,
+      fontSize: "10px",
+      lineHeight: "14px",
+      cursor: "help",
+      opacity: "0.75",
+      userSelect: "none",
+    },
+    { tabindex: "0", "aria-label": text },
+  );
+  anchor.textContent = "?";
+
+  const tooltip = createElement(
+    doc,
+    "div",
+    {
+      display: "none",
+      position: "fixed",
+      left: "0",
+      top: "0",
+      width: "240px",
+      padding: "8px 10px",
+      border: `1px solid ${theme.borderColor}`,
+      borderRadius: "8px",
+      background: theme.dropdownBg,
+      color: theme.textPrimary,
+      boxShadow: "0 6px 18px rgba(0,0,0,0.22)",
+      fontSize: chatFontSize(12),
+      lineHeight: "1.4",
+      whiteSpace: "normal",
+      textAlign: "left",
+      zIndex: "10003",
+      pointerEvents: "none",
+    },
+    { role: "tooltip" },
+  );
+  tooltip.textContent = text;
+  anchor.appendChild(tooltip);
+
+  const show = () => {
+    tooltip.style.display = "block";
+    tooltip.style.visibility = "hidden";
+    const rect = anchor.getBoundingClientRect();
+    const win = doc.defaultView;
+    const viewportWidth = win?.innerWidth ?? 320;
+    const tooltipWidth = tooltip.offsetWidth || 240;
+    const tooltipHeight = tooltip.offsetHeight || 64;
+    const left = Math.max(
+      8,
+      Math.min(rect.left, viewportWidth - tooltipWidth - 8),
+    );
+    const top = Math.max(8, rect.top - tooltipHeight - 8);
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${top}px`;
+    tooltip.style.visibility = "visible";
+  };
+  const hide = () => {
+    tooltip.style.display = "none";
+  };
+
+  anchor.addEventListener("mouseenter", show);
+  anchor.addEventListener("mouseleave", hide);
+  anchor.addEventListener("focus", show);
+  anchor.addEventListener("blur", hide);
+  return anchor;
+}
+
 export function createChatContainer(
   doc: Document,
   theme: ThemeColors,
