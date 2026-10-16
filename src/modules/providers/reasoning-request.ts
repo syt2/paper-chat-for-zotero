@@ -4,6 +4,7 @@ import type {
   ReasoningEffort,
 } from "../../types/provider";
 import type { ChatMessage } from "../../types/chat";
+import { HttpResponseError } from "./HttpResponseError";
 
 export const REASONING_EFFORT_OPTIONS = [
   "default",
@@ -142,4 +143,39 @@ export function applyReasoningRequestOptions(
 
   requestBody.thinking = { type: "enabled" };
   requestBody.reasoning_effort = effort;
+}
+
+/**
+ * Upstreams that keep thinking mode on insist that the reasoning of an earlier
+ * tool-calling turn is replayed, and answer 400 when it is missing. The history
+ * loses that reasoning whenever the turn came from another model, another
+ * channel, or a resumed session, so the request cannot be repaired - but it can
+ * be sent again with thinking switched off.
+ *
+ * Matching is deliberately narrow: only errors that name reasoning/thinking
+ * replay qualify, so an unrelated 400 (bad parameters, missing model, context
+ * overflow) still surfaces to the user untouched.
+ */
+const REASONING_REPLAY_REQUIRED_PATTERN =
+  /(?:reasoning_content|reasoning)\b[\s\S]{0,80}?(?:must be passed back|should be passed back|must be provided|is required|in the thinking mode)|thinking\b[\s\S]{0,120}?(?:must be passed back|should be passed back|must be provided|is required)/i;
+
+export function isReasoningReplayRequiredError(error: unknown): boolean {
+  if (!(error instanceof HttpResponseError)) {
+    return false;
+  }
+  if (error.status !== 400 && error.status !== 422) {
+    return false;
+  }
+  return REASONING_REPLAY_REQUIRED_PATTERN.test(error.responseBody);
+}
+
+/**
+ * Shape of the retry: no thinking at all, and no thinking-only effort hint
+ * either, so neither field can be rejected a second time.
+ */
+export function applyReasoningReplayFallback(
+  requestBody: Record<string, unknown>,
+): void {
+  delete requestBody.reasoning_effort;
+  requestBody.thinking = { type: "disabled" };
 }

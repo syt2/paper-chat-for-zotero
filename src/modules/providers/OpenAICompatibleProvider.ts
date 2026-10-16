@@ -30,7 +30,9 @@ import {
   stablePromptCacheStringify,
 } from "./prompt-cache-diagnostics";
 import {
+  applyReasoningReplayFallback,
   applyReasoningRequestOptions,
+  isReasoningReplayRequiredError,
   needsThinkingDisabledForHistory,
   shouldSuppressTemperatureForReasoning,
 } from "./reasoning-request";
@@ -586,6 +588,50 @@ export class OpenAICompatibleProvider extends BaseProvider {
     return stablePromptCacheStringify(requestBody);
   }
 
+  /**
+   * Send a chat-completions request and, when the upstream rejects it because a
+   * replayed thinking turn lost its reasoning, send it once more with thinking
+   * switched off. Returns the response the caller should read.
+   *
+   * Every chat-completions call site goes through here, streaming or not: the
+   * upstream picks the backend, so the callers cannot know whether the route
+   * ends up on a thinking-only provider.
+   */
+  private async sendChatCompletion(
+    requestBody: Record<string, unknown>,
+    requestKind: string,
+    signal?: AbortSignal,
+  ): Promise<Response> {
+    const send = () =>
+      fetch(`${this._config.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this._config.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: this.prepareOpenAIRequestBody(requestKind, requestBody),
+        signal,
+      });
+
+    let response = await send();
+    try {
+      await this.validateResponse(response);
+    } catch (error) {
+      if (!isReasoningReplayRequiredError(error)) {
+        throw error;
+      }
+      // Nothing was generated or billed for a rejected request, so resending
+      // cannot double-charge; anything unrelated stays untouched.
+      ztoolkit.log(
+        "[Reasoning] Upstream requires the reasoning of a tool turn to be replayed; retrying with thinking disabled.",
+      );
+      applyReasoningReplayFallback(requestBody);
+      response = await send();
+      await this.validateResponse(response);
+    }
+    return response;
+  }
+
   private logUsage(requestKind: string, usage: unknown): void {
     logPromptCacheUsage({
       providerId: this._config.id,
@@ -635,17 +681,11 @@ export class OpenAICompatibleProvider extends BaseProvider {
       this.applyGenerationOptions(requestBody);
       applyExtraRequestBody(requestBody, this._config);
 
-      const response = await fetch(`${this._config.baseUrl}/chat/completions`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this._config.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: this.prepareOpenAIRequestBody("stream", requestBody),
+      const response = await this.sendChatCompletion(
+        requestBody,
+        "stream",
         signal,
-      });
-
-      await this.validateResponse(response);
+      );
       await this.streamWithCallbacks(response, "openai", callbacks);
     } catch (error) {
       onError(this.wrapError(error));
@@ -677,17 +717,11 @@ export class OpenAICompatibleProvider extends BaseProvider {
     this.applyGenerationOptions(requestBody);
     applyExtraRequestBody(requestBody, this._config);
 
-    const response = await fetch(`${this._config.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this._config.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: this.prepareOpenAIRequestBody("completion", requestBody),
+    const response = await this.sendChatCompletion(
+      requestBody,
+      "completion",
       signal,
-    });
-
-    await this.validateResponse(response);
+    );
 
     const data = (await response.json()) as {
       choices?: Array<{ message?: { content?: string } }>;
@@ -785,17 +819,11 @@ export class OpenAICompatibleProvider extends BaseProvider {
     );
     ztoolkit.log("[chatCompletionWithTools] Model:", this._config.defaultModel);
 
-    const response = await fetch(`${this._config.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this._config.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: this.prepareOpenAIRequestBody("tools", requestBody),
+    const response = await this.sendChatCompletion(
+      requestBody,
+      "tools",
       signal,
-    });
-
-    await this.validateResponse(response);
+    );
 
     const data = (await response.json()) as {
       choices?: Array<{
@@ -963,17 +991,11 @@ export class OpenAICompatibleProvider extends BaseProvider {
         "tools",
       );
 
-      const response = await fetch(`${this._config.baseUrl}/chat/completions`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this._config.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: this.prepareOpenAIRequestBody("tools-stream", requestBody),
+      const response = await this.sendChatCompletion(
+        requestBody,
+        "tools-stream",
         signal,
-      });
-
-      await this.validateResponse(response);
+      );
       const reader = this.getResponseReader(response);
 
       // 累积状态
