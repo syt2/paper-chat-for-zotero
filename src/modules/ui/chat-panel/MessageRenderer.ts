@@ -1190,24 +1190,30 @@ function createRetryActionButton(
   onClick: () => void | Promise<void>,
   onError?: (error: Error) => void,
   onBusyChange?: (busy: boolean) => void,
+  variant: "icon" | "text" = "icon",
 ): HTMLElement {
+  const isTextButton = variant === "text";
   const btn = createElement(
     doc,
     "button",
     {
-      width: "22px",
-      height: "22px",
+      width: isTextButton ? "auto" : "22px",
+      minHeight: isTextButton ? "28px" : "22px",
       display: "inline-flex",
       flexShrink: "0",
       alignItems: "center",
       justifyContent: "center",
-      background: "transparent",
-      border: "none",
-      borderRadius: "4px",
-      padding: "0",
+      gap: isTextButton ? "6px" : "0",
+      background: isTextButton ? theme.buttonBg : "transparent",
+      border: isTextButton ? `1px solid ${theme.borderColor}` : "none",
+      borderRadius: isTextButton ? "6px" : "4px",
+      padding: isTextButton ? "0 10px" : "0",
       cursor: "pointer",
       opacity: "1",
       color: theme.textPrimary,
+      fontSize: isTextButton ? chatFontSize(12) : undefined,
+      fontWeight: isTextButton ? "600" : undefined,
+      whiteSpace: isTextButton ? "nowrap" : undefined,
       transition: "box-shadow 0.2s, opacity 0.2s, transform 0.2s",
     },
     {
@@ -1218,11 +1224,30 @@ function createRetryActionButton(
   btn.setAttribute("type", "button");
   btn.setAttribute("aria-label", label);
   setIconButtonImage(btn, iconName, "");
+  if (isTextButton) {
+    btn.setAttribute("data-retry-action-variant", "text");
+    btn.setAttribute("data-button-bg", theme.buttonBg);
+    btn.setAttribute("data-button-hover-bg", theme.buttonHoverBg);
+    const text = createElement(doc, "span", {
+      display: "inline-block",
+      lineHeight: "1.2",
+    });
+    text.textContent = label;
+    btn.appendChild(text);
+  }
   btn.addEventListener("mouseenter", () => {
     btn.style.transform = "translateY(-1px)";
+    if (isTextButton) {
+      btn.style.background =
+        btn.getAttribute("data-button-hover-bg") || theme.buttonHoverBg;
+    }
   });
   btn.addEventListener("mouseleave", () => {
     btn.style.transform = "translateY(0)";
+    if (isTextButton) {
+      btn.style.background =
+        btn.getAttribute("data-button-bg") || theme.buttonBg;
+    }
   });
   btn.addEventListener("focus", () => {
     btn.style.boxShadow = `0 0 0 2px ${theme.borderColor}`;
@@ -1608,20 +1633,23 @@ function createMessageActions(
   onResume?: () => void | Promise<void>,
   onResumeError?: (error: Error) => void,
 ): HTMLElement | null {
+  const hasRerollAction = showReroll && !!onReroll;
+  const baseOpacity = hasRerollAction ? "1" : "0.72";
   const actions = createElement(
     doc,
     "div",
     {
       display: "flex",
+      flexWrap: hasRerollAction ? "wrap" : "nowrap",
       alignItems: "center",
       justifyContent: msg.role === "user" ? "flex-end" : "flex-start",
       gap: "6px",
       width: "fit-content",
       maxWidth: "85%",
-      marginTop: "0",
+      marginTop: hasRerollAction ? "6px" : "0",
       marginLeft: msg.role === "user" ? "auto" : "0",
       marginRight: msg.role === "user" ? "0" : "auto",
-      opacity: "0.72",
+      opacity: baseOpacity,
       transition: "opacity 0.2s",
     },
     { class: "message-actions" },
@@ -1721,7 +1749,7 @@ function createMessageActions(
     actions.appendChild(retryButton);
   }
 
-  if (showReroll && onReroll) {
+  if (hasRerollAction) {
     const rerollLabel = getString("chat-reroll-model");
     const rerollButton = createRetryActionButton(
       doc,
@@ -1732,6 +1760,7 @@ function createMessageActions(
       onReroll,
       onRerollError,
       setRetryActionsBusy,
+      "text",
     );
     retryActionButtons.push(rerollButton);
     actions.appendChild(rerollButton);
@@ -1751,13 +1780,13 @@ function createMessageActions(
     actions.style.opacity = "1";
   });
   actions.addEventListener("mouseleave", () => {
-    actions.style.opacity = "0.72";
+    actions.style.opacity = baseOpacity;
   });
   actions.addEventListener("focusin", () => {
     actions.style.opacity = "1";
   });
   actions.addEventListener("focusout", () => {
-    actions.style.opacity = "0.72";
+    actions.style.opacity = baseOpacity;
   });
 
   return actions.childElementCount > 0 ? actions : null;

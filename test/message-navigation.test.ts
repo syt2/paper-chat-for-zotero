@@ -676,6 +676,25 @@ describe("chat message exact navigation", function () {
       actions.children[2].children[0].getAttribute("src"),
       "chrome://paperchat/content/icons/change.svg",
     );
+    assert.equal(actions.children[1].children.length, 1);
+    assert.equal(actions.children[2].children.length, 2);
+    assert.equal(
+      actions.children[2].children[1].textContent,
+      "paperchat-chat-reroll-model",
+    );
+    assert.equal(
+      actions.children[2].getAttribute("data-retry-action-variant"),
+      "text",
+    );
+    assert.equal(
+      actions.children[2].getAttribute("data-button-bg"),
+      darkTheme.buttonBg,
+    );
+    assert.equal(
+      actions.children[2].getAttribute("data-button-hover-bg"),
+      darkTheme.buttonHoverBg,
+    );
+    assert.equal(actions.style.opacity, "1");
     actions.children[2].listeners.get("click")?.[0]?.({
       preventDefault: () => undefined,
       stopPropagation: () => undefined,

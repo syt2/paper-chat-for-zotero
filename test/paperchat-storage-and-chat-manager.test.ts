@@ -3196,6 +3196,102 @@ describe("paperchat storage and chat manager", function () {
     }
   });
 
+  it("falls back to the next tier, then the previous tier, when the current tier has no alternate model", async function () {
+    const providerManager = getProviderManager() as any;
+    const originalGetActiveProviderId = providerManager.getActiveProviderId;
+    const originalGetActiveProvider = providerManager.getActiveProvider;
+    const originalGetProvider = providerManager.getProvider;
+    const originalGetProviderConfig = providerManager.getProviderConfig;
+    let availableModels: string[] = [];
+    let routingMeta: Record<string, { tier: string; tierCode: number }> = {};
+    const paperchatProvider = {
+      updateConfig: () => undefined,
+    };
+    providerManager.getActiveProviderId = () => "paperchat";
+    providerManager.getActiveProvider = () => paperchatProvider;
+    providerManager.getProvider = (providerId: string) =>
+      providerId === "paperchat" ? paperchatProvider : null;
+    providerManager.getProviderConfig = (providerId: string) =>
+      providerId === "paperchat" ? { id: "paperchat", availableModels } : null;
+
+    const applyRouting = () => {
+      clearPaperchatModelCaches();
+      prefStore.set(
+        `${PREFS_PREFIX}.paperchatRoutingConfigCache`,
+        JSON.stringify(routingMeta),
+      );
+      loadCachedRatios();
+    };
+
+    const session: ChatSession = {
+      id: "session-tier-fallback",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      messages: [],
+      selectedTier: "paperchat-standard",
+      resolvedModelId: "standard-only",
+    };
+    let persistedTier: ChatSession["selectedTier"];
+    let persistedModel: string | undefined;
+    const manager = Object.create(ChatManager.prototype) as any;
+    manager.currentSession = session;
+    manager.init = async () => undefined;
+    manager.sessionStorage = {
+      updateSessionMeta: async (updatedSession: ChatSession) => {
+        persistedTier = updatedSession.selectedTier;
+        persistedModel = updatedSession.resolvedModelId;
+      },
+    };
+
+    try {
+      availableModels = ["standard-only", "pro-only", "lite-only"];
+      routingMeta = {
+        "standard-only": { tier: "standard", tierCode: 2 },
+        "pro-only": { tier: "pro", tierCode: 3 },
+        "lite-only": { tier: "lite", tierCode: 1 },
+      };
+      applyRouting();
+
+      const nextTier = await manager.rerollCurrentPaperChatTier(false);
+      assert.deepEqual(nextTier, {
+        previousModel: "standard-only",
+        nextModel: "pro-only",
+        tier: "paperchat-pro",
+      });
+      assert.equal(session.selectedTier, "paperchat-pro");
+      assert.equal(session.resolvedModelId, "pro-only");
+      assert.equal(persistedTier, "paperchat-pro");
+      assert.equal(persistedModel, "pro-only");
+
+      availableModels = ["standard-only", "lite-only"];
+      routingMeta = {
+        "standard-only": { tier: "standard", tierCode: 2 },
+        "lite-only": { tier: "lite", tierCode: 1 },
+      };
+      applyRouting();
+      session.selectedTier = "paperchat-standard";
+      session.resolvedModelId = "standard-only";
+
+      const previousTier = await manager.rerollCurrentPaperChatTier(false);
+      assert.deepEqual(previousTier, {
+        previousModel: "standard-only",
+        nextModel: "lite-only",
+        tier: "paperchat-lite",
+      });
+      assert.equal(session.selectedTier, "paperchat-lite");
+      assert.equal(session.resolvedModelId, "lite-only");
+      assert.equal(persistedTier, "paperchat-lite");
+      assert.equal(persistedModel, "lite-only");
+    } finally {
+      providerManager.getActiveProviderId = originalGetActiveProviderId;
+      providerManager.getActiveProvider = originalGetActiveProvider;
+      providerManager.getProvider = originalGetProvider;
+      providerManager.getProviderConfig = originalGetProviderConfig;
+      clearPaperchatModelCaches();
+    }
+  });
+
   it("does not mutate session paper context when syncing the current reader item", function () {
     const manager = Object.create(ChatManager.prototype) as ChatManager & {
       currentSession: ChatSession;

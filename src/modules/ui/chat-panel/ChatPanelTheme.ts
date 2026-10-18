@@ -368,9 +368,15 @@ export function applyThemeToContainer(container: HTMLElement): void {
   // Update message action buttons
   container.querySelectorAll(".message-action-btn").forEach((btn: Element) => {
     const el = btn as HTMLElement;
-    el.style.background = "transparent";
-    el.style.borderColor = "transparent";
+    const isTextAction =
+      el.getAttribute("data-retry-action-variant") === "text";
+    el.style.background = isTextAction ? theme.buttonBg : "transparent";
+    el.style.borderColor = isTextAction ? theme.borderColor : "transparent";
     el.style.color = theme.textPrimary;
+    if (isTextAction) {
+      el.setAttribute("data-button-bg", theme.buttonBg);
+      el.setAttribute("data-button-hover-bg", theme.buttonHoverBg);
+    }
   });
 
   container

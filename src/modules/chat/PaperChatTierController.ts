@@ -18,6 +18,7 @@ import type { ChatMessage, ChatSession } from "../../types/chat";
 import { getErrorMessage } from "../../utils/common";
 import { getProviderManager } from "../providers";
 import {
+  PAPERCHAT_TIERS,
   rerollTierModel,
   deriveTierPools,
   type PaperChatTier,
@@ -171,37 +172,65 @@ export class PaperChatTierController {
       getModelRatios(),
       routingMeta,
     );
-    const candidates = requiresVision
-      ? pools[session.selectedTier].filter(
-          (model) =>
-            getPaperChatApiCapabilities(model, routingMeta).vision === true,
-        )
-      : pools[session.selectedTier];
-    const nextModel = rerollTierModel(
-      candidates,
-      session.resolvedModelId,
+    const getCandidates = (tier: PaperChatTier): string[] =>
+      requiresVision
+        ? pools[tier].filter(
+            (model) =>
+              getPaperChatApiCapabilities(model, routingMeta).vision === true,
+          )
+        : pools[tier];
+    const previousModel = session.resolvedModelId;
+    let targetTier = session.selectedTier;
+    let nextModel = rerollTierModel(
+      getCandidates(targetTier),
+      previousModel,
       pickRandomCandidate,
       routingMeta,
     );
 
     if (!nextModel) {
+      // Keep the user on the same quality tier when possible. If that tier has
+      // no alternate model, try higher tiers first, then lower tiers.
+      const currentTierIndex = PAPERCHAT_TIERS.indexOf(targetTier);
+      const fallbackTiers = [
+        ...PAPERCHAT_TIERS.slice(currentTierIndex + 1),
+        ...PAPERCHAT_TIERS.slice(0, currentTierIndex).reverse(),
+      ];
+      for (const tier of fallbackTiers) {
+        const candidate = rerollTierModel(
+          getCandidates(tier),
+          previousModel,
+          pickRandomCandidate,
+          routingMeta,
+        );
+        if (candidate) {
+          targetTier = tier;
+          nextModel = candidate;
+          break;
+        }
+      }
+    }
+
+    if (!nextModel) {
       return null;
     }
 
-    const previousModel = session.resolvedModelId;
     const previousRetryableState = {
       lastRetryableUserMessageId: session.lastRetryableUserMessageId,
       lastRetryableErrorMessageId: session.lastRetryableErrorMessageId,
       lastRetryableFailedModelId: session.lastRetryableFailedModelId,
     };
+    const previousSelectedTier = session.selectedTier;
     const previousUpdatedAt = session.updatedAt;
 
+    session.selectedTier = targetTier;
     session.resolvedModelId = nextModel;
     clearPaperChatRetryableState(session);
 
     try {
       await this.host.getSessionStorage().updateSessionMeta(session);
     } catch (error) {
+      session.selectedTier = previousSelectedTier;
       session.resolvedModelId = previousModel;
       session.lastRetryableUserMessageId =
         previousRetryableState.lastRetryableUserMessageId;
@@ -221,7 +250,7 @@ export class PaperChatTierController {
     return {
       previousModel,
       nextModel,
-      tier: session.selectedTier,
+      tier: targetTier,
     };
   }
 
@@ -383,6 +412,7 @@ export class PaperChatTierController {
 
     this.host.beginReroll(session.id);
     const previousState = {
+      selectedTier: session.selectedTier,
       resolvedModelId: session.resolvedModelId,
       lastRetryableUserMessageId: session.lastRetryableUserMessageId,
       lastRetryableErrorMessageId: session.lastRetryableErrorMessageId,
@@ -403,6 +433,7 @@ export class PaperChatTierController {
           (await this.host.insertSystemNotice(targetSession, content)).id,
         rollbackReroute: async (_reroute, noticeMessageId) => {
           const restoreState = (targetSession: ChatSession) => {
+            targetSession.selectedTier = previousState.selectedTier;
             targetSession.resolvedModelId = previousState.resolvedModelId;
             targetSession.lastRetryableUserMessageId =
               previousState.lastRetryableUserMessageId;

@@ -708,6 +708,30 @@ describe("chat panel presentation toolbar entry", function () {
     assert.equal(screenshot?.style.color, darkTheme.textPrimary);
   });
 
+  it("keeps the text retry action surface when applying the theme", function () {
+    const doc = new FakeDocument();
+    const container = createChatContainer(
+      doc as unknown as Document,
+      lightTheme,
+    ) as unknown as FakeElement;
+    const reroll = new FakeElement(doc, "button");
+    reroll.setAttribute("class", "message-action-btn reroll-btn");
+    reroll.setAttribute("data-retry-action-variant", "text");
+    container.appendChild(reroll);
+
+    updateCurrentTheme();
+    applyThemeToContainer(container as unknown as HTMLElement);
+
+    assert.equal(reroll.style.background, darkTheme.buttonBg);
+    assert.equal(reroll.style.borderColor, darkTheme.borderColor);
+    assert.equal(reroll.style.color, darkTheme.textPrimary);
+    assert.equal(reroll.getAttribute("data-button-bg"), darkTheme.buttonBg);
+    assert.equal(
+      reroll.getAttribute("data-button-hover-bg"),
+      darkTheme.buttonHoverBg,
+    );
+  });
+
   it("registers the panel as a Zotero UI root and scales readable input text", function () {
     let registeredRoot: FakeElement | null = null;
     runtime.Zotero.UIProperties = {

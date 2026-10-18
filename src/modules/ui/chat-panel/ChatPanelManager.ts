@@ -3781,6 +3781,10 @@ function createContext(container: HTMLElement): ChatPanelContext {
                 await context.rerollPaperChatTierForCurrentSession();
               },
               onRerollError: (error) => {
+                if (error.message === getString("chat-reroll-unavailable")) {
+                  showChatPanelToast(container, error.message);
+                  return;
+                }
                 context.appendError(error.message);
               },
               onFork: (assistantMessageId) =>
