@@ -4065,6 +4065,10 @@ const TOOL_RESULT_COMPACTED_PREFIX =
 const TOOL_RESULT_FULL_KEEP_COUNT = 6;
 const TOOL_RESULT_COMPACT_CHAR_LIMIT = 10000;
 const TOOL_RESULT_SUMMARY_CHAR_LIMIT = 700;
+// Search results start with a URL catalog, so a 700-char preview can contain
+// almost no titles or snippets. Keep a larger deterministic preview for
+// DeepSeek while still compacting the transcript.
+const DEEPSEEK_TOOL_RESULT_SUMMARY_CHAR_LIMIT = 4000;
 
 interface ToolResultCompactionPolicy {
   keepFullCount: number;
@@ -4089,7 +4093,7 @@ const DEFAULT_TOOL_RESULT_COMPACTION_POLICY: ToolResultCompactionPolicy = {
 const DEEPSEEK_TOOL_RESULT_COMPACTION_POLICY: ToolResultCompactionPolicy = {
   keepFullCount: 0,
   compactCharLimit: 0,
-  summaryCharLimit: 700,
+  summaryCharLimit: DEEPSEEK_TOOL_RESULT_SUMMARY_CHAR_LIMIT,
   stripAssistantToolCards: true,
 };
 
@@ -4329,6 +4333,7 @@ function buildCompactedToolResultContent(
   return [
     TOOL_RESULT_COMPACTED_PREFIX,
     `Original characters: ${content.length}`,
+    "No artifact is available for this compacted result; use the preview above.",
     `Preview: ${compacted}${content.length > summaryCharLimit ? "..." : ""}`,
   ].join("\n");
 }
