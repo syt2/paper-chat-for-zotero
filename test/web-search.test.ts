@@ -2,6 +2,7 @@ import { assert } from "chai";
 import {
   executeScholarlySearch,
   executeWebSearch,
+  getExplicitSourceProviderOrder,
 } from "../src/modules/chat/web-search/WebSearchService.ts";
 import {
   isValidScholarlySearchArgs,
@@ -703,6 +704,21 @@ describe("web search", function () {
 
     assert.include(result, "Error: Web search failed:");
     assert.include(result, "timed out");
+  });
+
+  it("keeps an explicit web source first and falls back to DeepSeek Search", function () {
+    assert.deepEqual(getExplicitSourceProviderOrder("bing", true), [
+      "bing",
+      "paperchat",
+    ]);
+    assert.deepEqual(getExplicitSourceProviderOrder("duckduckgo", true), [
+      "duckduckgo",
+      "paperchat",
+    ]);
+    assert.deepEqual(getExplicitSourceProviderOrder("google_scholar", true), [
+      "google_scholar",
+    ]);
+    assert.deepEqual(getExplicitSourceProviderOrder("bing", false), ["bing"]);
   });
 
   it("falls back from invalid prefs without mutating the stored value", async function () {

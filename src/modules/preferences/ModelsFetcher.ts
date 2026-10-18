@@ -112,8 +112,8 @@ export function getSelectablePaperchatModels(
   const routing = resolveModelRoutingMeta();
   if (Object.keys(routing).length === 0) {
     // Routing metadata is the whitelist. When it is temporarily unavailable
-    // (for example right after an upgrade), reuse the last list derived from
-    // it instead of falling back to raw key models.
+    // (for example right after an upgrade), reuse the last known chat-model
+    // list instead of falling back to arbitrary raw key models.
     const keyModelSet = new Set(keyModels);
     return readCachedPaperchatChatModels().filter(
       (model) => keyModelSet.has(model) && !isEmbeddingModel(model),
@@ -150,7 +150,7 @@ function readCachedPaperchatChatModels(): string[] {
   }
 }
 
-/** Persist the routing-derived chat-model list for offline/startup fallback. */
+/** Persist the last known chat-model list for offline/startup fallback. */
 export function setPaperchatChatModelsCache(models: readonly string[]): void {
   const selectable = [
     ...new Set(
@@ -216,8 +216,8 @@ export function ensurePaperchatRoutingCacheVersion(): void {
   if (getPref(ROUTING_CACHE_CLIENT_VERSION_PREF) === currentVersion) {
     return;
   }
-  // Preserve the last routing-derived chat list before dropping routing
-  // metadata that belongs to the previous plugin build.
+  // Preserve the last chat-model list before dropping routing metadata that
+  // belongs to the previous plugin build.
   const chatModels = getSelectablePaperchatModels();
   if (chatModels.length > 0) {
     setPaperchatChatModelsCache(chatModels);
@@ -338,6 +338,44 @@ export function getPaperchatKeyModels(): string[] {
   }
 }
 
+export interface PaperchatModelEntry {
+  id: string;
+  supported_endpoint_types?: string[];
+}
+
+function isToolOnlyModelEndpoint(entry: PaperchatModelEntry): boolean {
+  const types = entry.supported_endpoint_types;
+  if (!Array.isArray(types) || types.length === 0) {
+    return false;
+  }
+  return types.every(
+    (type) => typeof type === "string" && type.startsWith("deepseek-tools"),
+  );
+}
+
+/**
+ * First-login fallback when routing metadata is unavailable: use the key's
+ * `/v1/models` list, but drop models whose only supported endpoints are
+ * DeepSeek tool routes such as search/fetch.
+ */
+export function getFallbackPaperchatChatModels(
+  entries: readonly PaperchatModelEntry[],
+): string[] {
+  return [
+    ...new Set(
+      entries
+        .filter(
+          (entry) =>
+            typeof entry.id === "string" &&
+            entry.id.length > 0 &&
+            !isEmbeddingModel(entry.id) &&
+            !isToolOnlyModelEndpoint(entry),
+        )
+        .map((entry) => entry.id),
+    ),
+  ];
+}
+
 /**
  * True when the key's raw `/v1/models` list advertises NewAPI's DeepSeek
  * Search route. The route name is a search target, not a chat model, so it is
@@ -412,7 +450,8 @@ export async function fetchPaperchatRatios(): Promise<void> {
   }
 }
 
-export async function fetchPaperchatRoutingMeta(): Promise<void> {
+/** Returns whether fresh routing metadata was applied. */
+export async function fetchPaperchatRoutingMeta(): Promise<boolean> {
   const generation = paperchatModelCacheGeneration;
   const url = `${getPaperChatUrl(MODEL_ROUTING_META_PATH)}${getPaperChatClientQuery()}`;
   ztoolkit.log("[Preferences] Fetching routing metadata from:", url);
@@ -431,12 +470,12 @@ export async function fetchPaperchatRoutingMeta(): Promise<void> {
         "[Preferences] Failed to fetch routing metadata:",
         response.status,
       );
-      return;
+      return false;
     }
 
     const result = await response.json();
     if (generation !== paperchatModelCacheGeneration) {
-      return;
+      return false;
     }
     const parsed = parseModelRoutingConfig(result);
     const defaults = parseModelRoutingDefaults(result);
@@ -453,8 +492,10 @@ export async function fetchPaperchatRoutingMeta(): Promise<void> {
       Object.keys(parsed).length,
       "models",
     );
+    return true;
   } catch (e) {
     ztoolkit.log("[Preferences] Failed to fetch routing metadata:", e);
+    return false;
   }
 }
 

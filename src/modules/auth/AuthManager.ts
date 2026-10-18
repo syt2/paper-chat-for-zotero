@@ -36,8 +36,10 @@ import {
   getModelRatios,
   getModelRoutingMeta,
   getPaperchatModelCacheGeneration,
+  getFallbackPaperchatChatModels,
   getSelectablePaperchatModels,
   setPaperchatChatModelsCache,
+  type PaperchatModelEntry,
 } from "../preferences/ModelsFetcher";
 import { getPaperChatClientHeaders } from "../../utils/clientIdentity";
 import {
@@ -1664,7 +1666,7 @@ export class AuthManager {
 
     try {
       // Fetch models, ratios, and tier routing metadata in parallel.
-      const [response] = await Promise.all([
+      const [response, , routingLoaded] = await Promise.all([
         fetch(url, {
           method: "GET",
           headers: {
@@ -1689,7 +1691,7 @@ export class AuthManager {
       }
 
       const result = (await response.json()) as {
-        data?: Array<{ id: string }>;
+        data?: Array<PaperchatModelEntry>;
       };
 
       if (
@@ -1705,7 +1707,16 @@ export class AuthManager {
         setPref("paperchatModelsCache", JSON.stringify(allModels));
         // The routing metadata is the only chat-model whitelist. The raw
         // cache remains available for embedding/RAG model discovery.
-        const chatModels = getSelectablePaperchatModels(allModels);
+        let chatModels = getSelectablePaperchatModels(allModels);
+        if (chatModels.length === 0 && !routingLoaded) {
+          // First login with no routing metadata and no derived cache: fall
+          // back to the key's /v1/models list, excluding tool-only routes.
+          chatModels = getFallbackPaperchatChatModels(result.data);
+          ztoolkit.log(
+            "[AuthManager] Routing metadata unavailable; using /v1/models fallback:",
+            chatModels.length,
+          );
+        }
         setPaperchatChatModelsCache(chatModels);
         ztoolkit.log(
           "[AuthManager] Chat models:",

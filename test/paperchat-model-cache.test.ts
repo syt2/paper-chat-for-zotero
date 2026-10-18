@@ -11,6 +11,7 @@ import {
   getModelRatios,
   getModelRoutingDefaults,
   getModelRoutingMeta,
+  getFallbackPaperchatChatModels,
   getSelectablePaperchatModels,
   getSelectablePaperchatModelsByTier,
   hasPaperchatServiceSearchModel,
@@ -127,6 +128,29 @@ describe("PaperChat model cache", function () {
 
     prefStore.set(`${PREFS_PREFIX}paperchatModelsCache`, "not json");
     assert.isFalse(hasPaperchatServiceSearchModel());
+  });
+
+  it("builds a first-login fallback from /v1/models endpoint types", function () {
+    assert.deepEqual(
+      getFallbackPaperchatChatModels([
+        { id: "deepseek-flash", supported_endpoint_types: ["openai"] },
+        {
+          id: "deepseek-search",
+          supported_endpoint_types: ["deepseek-tools-search"],
+        },
+        {
+          id: "deepseek-fetch",
+          supported_endpoint_types: ["deepseek-tools-fetch"],
+        },
+        { id: "deepseek-v4-pro", supported_endpoint_types: ["openai"] },
+        { id: "legacy-model" },
+        {
+          id: "text-embedding-3-small",
+          supported_endpoint_types: ["openai"],
+        },
+      ]),
+      ["deepseek-flash", "deepseek-v4-pro", "legacy-model"],
+    );
   });
 
   it("orders the tier-aware selection by tier ladder and then by routing weight", function () {
@@ -285,12 +309,12 @@ describe("PaperChat model cache", function () {
         }),
         { status: 200 },
       );
-    await fetchPaperchatRoutingMeta();
+    assert.isTrue(await fetchPaperchatRoutingMeta());
     assert.deepEqual(getSelectablePaperchatModels(), ["plain"]);
     (globalThis as any).fetch = async () => {
       throw new Error("offline");
     };
-    await fetchPaperchatRoutingMeta();
+    assert.isFalse(await fetchPaperchatRoutingMeta());
     assert.deepEqual(getSelectablePaperchatModels(), ["plain"]);
     loadCachedRatios();
     assert.deepEqual(getSelectablePaperchatModels(), ["plain"]);

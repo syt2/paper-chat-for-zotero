@@ -128,20 +128,37 @@ function isPaperChatSearchAvailable(): boolean {
   }
 }
 
+export function getExplicitSourceProviderOrder(
+  source: WebSearchSource,
+  serviceSearchAvailable: boolean,
+): WebSearchSource[] {
+  return serviceSearchAvailable &&
+    (source === "bing" || source === "duckduckgo")
+    ? [source, "paperchat"]
+    : [source];
+}
+
 function buildProviderOrder(
   request: WebSearchRequest,
   configuredProvider: WebSearchSource,
 ): { providerIds: WebSearchSource[]; reason: string } {
+  const serviceSearchAvailable = isPaperChatSearchAvailable();
   // `paperchat` is an internal provider id, not a model-visible source. If it
   // reaches us explicitly, still honor the capability gate below.
   if (request.source !== "auto" && request.source !== "paperchat") {
+    const providerIds = getExplicitSourceProviderOrder(
+      request.source,
+      serviceSearchAvailable,
+    );
     return {
-      providerIds: [request.source],
-      reason: `explicit source=${request.source}`,
+      providerIds,
+      reason:
+        providerIds.length > 1
+          ? `explicit source=${request.source} with DeepSeek Search fallback`
+          : `explicit source=${request.source}`,
     };
   }
 
-  const serviceSearchAvailable = isPaperChatSearchAvailable();
   // DeepSeek Search belongs to the PaperChat chat path and is used only when
   // the key's raw model list advertises it. Older NewAPI builds therefore
   // never issue a probe request.
