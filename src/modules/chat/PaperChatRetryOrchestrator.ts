@@ -23,12 +23,12 @@ import { repairPaperChatSessionAfterHardFailureWithRollback } from "./paperchat-
 import {
   getModelRatios,
   getModelRoutingMeta,
+  getSelectablePaperchatModels,
 } from "../preferences/ModelsFetcher";
 import { getPref, setPref } from "../../utils/prefs";
 import { getString } from "../../utils/locale";
 import { ANALYTICS_EVENTS, getAnalyticsService } from "../analytics";
 import { getProviderManager } from "../providers";
-import { isEmbeddingModel } from "../embedding/providers/PaperChatEmbedding";
 
 export interface PaperChatRerouteDetails {
   previousModel: string;
@@ -88,17 +88,15 @@ export function pickRandomCandidate(
   return candidates[candidates.length - 1] ?? null;
 }
 
-/** Configured PaperChat chat models, excluding embedding models. */
+/** Configured PaperChat chat models from the routing whitelist. */
 export function getPaperChatChatModels(): string[] {
   const providerConfig = getProviderManager().getProviderConfig(
     "paperchat",
   ) as PaperChatProviderConfig | null;
   const configuredModels = providerConfig?.availableModels;
-  if (Array.isArray(configuredModels) && configuredModels.length > 0) {
-    return configuredModels.filter((model) => !isEmbeddingModel(model));
-  }
-
-  return [];
+  return Array.isArray(configuredModels)
+    ? getSelectablePaperchatModels(configuredModels)
+    : [];
 }
 
 export class PaperChatRetryOrchestrator {

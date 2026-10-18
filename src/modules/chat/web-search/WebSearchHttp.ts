@@ -8,8 +8,10 @@ export interface HttpResponse {
 
 interface RequestOptions {
   timeoutMs: number;
-  method?: "GET" | "HEAD";
+  method?: "GET" | "HEAD" | "POST";
   accept?: string;
+  headers?: Record<string, string>;
+  body?: string;
 }
 
 export function requestHttp(
@@ -18,6 +20,8 @@ export function requestHttp(
     timeoutMs,
     method = "GET",
     accept = "application/json,text/plain,*/*",
+    headers = {},
+    body,
   }: RequestOptions,
 ): Promise<HttpResponse> {
   return new Promise((resolve, reject) => {
@@ -27,6 +31,9 @@ export function requestHttp(
     xhr.open(method, url, true);
     xhr.timeout = timeoutMs;
     xhr.setRequestHeader("Accept", accept);
+    for (const [name, value] of Object.entries(headers)) {
+      xhr.setRequestHeader(name, value);
+    }
 
     xhr.onload = () => {
       const contentLengthHeader = xhr.getResponseHeader("Content-Length");
@@ -58,7 +65,7 @@ export function requestHttp(
       reject(new Error(`Request aborted: ${url}`));
     };
 
-    xhr.send();
+    xhr.send(body);
   });
 }
 

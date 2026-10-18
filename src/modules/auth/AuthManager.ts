@@ -36,6 +36,8 @@ import {
   getModelRatios,
   getModelRoutingMeta,
   getPaperchatModelCacheGeneration,
+  getSelectablePaperchatModels,
+  setPaperchatChatModelsCache,
 } from "../preferences/ModelsFetcher";
 import { getPaperChatClientHeaders } from "../../utils/clientIdentity";
 import {
@@ -43,7 +45,6 @@ import {
   resolveSelectedTierModel,
   validateTierState,
 } from "../providers/paperchat-tier-routing";
-import { isEmbeddingModel } from "../embedding/providers/PaperChatEmbedding";
 import {
   buildLegacyPluginTokenCreateRequest,
   buildPluginTokenCreateRequest,
@@ -1702,8 +1703,10 @@ export class AuthManager {
         const allModels = result.data.map((m) => m.id).sort();
         // Cache ALL models (embedding models are read from cache by RAG)
         setPref("paperchatModelsCache", JSON.stringify(allModels));
-        // Filter out embedding models for chat model selection
-        const chatModels = allModels.filter((m) => !isEmbeddingModel(m));
+        // The routing metadata is the only chat-model whitelist. The raw
+        // cache remains available for embedding/RAG model discovery.
+        const chatModels = getSelectablePaperchatModels(allModels);
+        setPaperchatChatModelsCache(chatModels);
         ztoolkit.log(
           "[AuthManager] Chat models:",
           chatModels.length,

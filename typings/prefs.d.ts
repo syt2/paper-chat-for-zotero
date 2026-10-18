@@ -20,6 +20,7 @@ declare namespace _ZoteroTypes {
       "userQuotaJson": string;
       "userSubscriptionJson": string;
       "paperchatModelsCache": string;
+      "paperchatChatModelsCache": string;
       "paperchatRatiosCache": string;
       "paperchatRoutingConfigCache": string;
       "paperchatRoutingDefaultsCache": string;

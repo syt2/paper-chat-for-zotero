@@ -1,12 +1,11 @@
 import type { AIProvider, PaperChatProviderConfig } from "../../types/provider";
-import { getPref } from "../../utils/prefs";
-import { isEmbeddingModel } from "../embedding/providers/PaperChatEmbedding";
 import { getProviderManager } from "./ProviderManager";
 import { PaperChatProvider } from "./PaperChatProvider";
 import { deriveTierPools } from "./paperchat-tier-routing";
 import {
   getModelRatios,
   getModelRoutingMeta,
+  getSelectablePaperchatModels,
 } from "../preferences/ModelsFetcher";
 
 export interface PaperChatLightweightProviderOptions {
@@ -25,7 +24,7 @@ export function createPaperChatLightweightProvider(
     return null;
   }
 
-  const availableModels = getConfiguredPaperChatModels(config);
+  const availableModels = getSelectablePaperchatModels();
   const ratios = getModelRatios();
   const pools = deriveTierPools(availableModels, ratios, getModelRoutingMeta());
   const modelId =
@@ -46,28 +45,6 @@ export function createPaperChatLightweightProvider(
     systemPrompt: options.systemPrompt || "",
   };
   return new PaperChatProvider(lightweightConfig);
-}
-
-export function getConfiguredPaperChatModels(
-  config: PaperChatProviderConfig,
-): string[] {
-  const cachedModels = getPref("paperchatModelsCache") as string;
-  if (cachedModels) {
-    try {
-      const models = JSON.parse(cachedModels) as string[];
-      if (Array.isArray(models) && models.length > 0) {
-        return models.filter((model) => !isEmbeddingModel(model));
-      }
-    } catch (error) {
-      ztoolkit.log(
-        "[PaperChatLightweightProvider] Invalid paperchatModelsCache:",
-        error,
-      );
-    }
-  }
-  return (config.availableModels || []).filter(
-    (model) => !isEmbeddingModel(model),
-  );
 }
 
 function pickLowestRatioModel(

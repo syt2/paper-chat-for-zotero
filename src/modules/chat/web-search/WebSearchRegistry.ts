@@ -2,6 +2,7 @@ import { BingProvider } from "./BingProvider";
 import { DuckDuckGoProvider } from "./DuckDuckGoProvider";
 import { GoogleScholarProvider } from "./GoogleScholarProvider";
 import { OpenAlexProvider } from "./OpenAlexProvider";
+import { PaperChatSearchProvider } from "./PaperChatSearchProvider";
 import { SemanticScholarWebProvider } from "./SemanticScholarWebProvider";
 import type { WebSearchProvider } from "./WebSearchProvider";
 
@@ -9,8 +10,7 @@ import type { WebSearchProvider } from "./WebSearchProvider";
  * Two id sets live here, intentionally distinct:
  *
  * - CONFIGURABLE_WEB_SEARCH_PROVIDER_IDS — ids accepted from the persisted
- *   webSearchProvider pref. The prefs UI no longer exposes this setting, but
- *   old fixed-provider values remain compatible.
+ *   legacy webSearchProvider pref.
  * - WEB_SEARCH_PROVIDER_IDS              — every id that
  *   `createWebSearchProvider` can instantiate. Superset of configurable ids.
  *   Includes `semantic_scholar` as a legacy alias (old prefs, old tool-arg
@@ -43,6 +43,7 @@ const CONFIGURABLE_WEB_SEARCH_PROVIDER_IDS = new Set<string>([
 
 const WEB_SEARCH_PROVIDER_IDS = new Set<string>([
   ...CONFIGURABLE_WEB_SEARCH_PROVIDER_IDS,
+  "paperchat",
   "semantic_scholar",
   "semantic_scholar_web",
 ]);
@@ -87,6 +88,8 @@ export function createWebSearchProvider(
       return new OpenAlexProvider();
     case "bing":
       return new BingProvider();
+    case "paperchat":
+      return new PaperChatSearchProvider();
     case "duckduckgo":
     default:
       return new DuckDuckGoProvider();

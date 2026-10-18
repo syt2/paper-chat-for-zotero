@@ -27,10 +27,10 @@ import {
   AUTO_MODEL_SMART,
   getModelRatios,
   getModelRoutingMeta,
+  getSelectablePaperchatModels,
   resolveAutoModel,
   resolveAutoModelSmart,
 } from "../preferences/ModelsFetcher";
-import { isEmbeddingModel } from "../embedding/providers/PaperChatEmbedding";
 import { resolveSelectedTierModel } from "./paperchat-tier-routing";
 import { getPaperChatApiCapabilities } from "./paperchat-routing-metadata";
 import { normalizeReasoningEffortPreference } from "./reasoning-request";
@@ -104,23 +104,9 @@ export class PaperChatProvider implements ToolCallingProvider {
   }
 
   private getConfiguredModels(): string[] {
-    const cachedModels = getPref("paperchatModelsCache") as string;
-    if (cachedModels) {
-      try {
-        const models = JSON.parse(cachedModels) as string[];
-        if (Array.isArray(models) && models.length > 0) {
-          return models.filter((model) => !isEmbeddingModel(model));
-        }
-      } catch (error) {
-        ztoolkit.log(
-          "[PaperChatProvider] Invalid paperchatModelsCache, falling back to provider config:",
-          error,
-        );
-      }
-    }
-    return (this._config.availableModels || []).filter(
-      (model) => !isEmbeddingModel(model),
-    );
+    // Routing metadata is the chat-model whitelist. The raw model cache is
+    // reserved for embedding/RAG discovery, not default or auto selection.
+    return getSelectablePaperchatModels();
   }
 
   /** Snapshot the effective model for an independent utility request. */

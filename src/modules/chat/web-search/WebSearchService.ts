@@ -20,6 +20,9 @@ import {
 } from "./WebSearchRegistry";
 import { truncate } from "./WebSearchUtils";
 import { formatToolError } from "../tool-errors/ToolErrorFormatter";
+import { getAuthManager } from "../../auth";
+import { hasPaperchatServiceSearchModel } from "../../preferences/ModelsFetcher";
+import { getProviderManager } from "../../providers";
 
 const WEB_SEARCH_SOURCE_SET = new Set<string>(WEB_SEARCH_SOURCES);
 const WEB_SEARCH_INTENT_SET = new Set<string>(WEB_SEARCH_INTENTS);
@@ -111,21 +114,64 @@ function buildScholarlyProviderOrder(request: WebSearchRequest): {
   };
 }
 
+function isPaperChatSearchAvailable(): boolean {
+  try {
+    const authManager = getAuthManager();
+    return (
+      authManager.isLoggedIn() &&
+      !!authManager.getApiKey() &&
+      getProviderManager().getActiveProviderId() === "paperchat" &&
+      hasPaperchatServiceSearchModel()
+    );
+  } catch {
+    return false;
+  }
+}
+
 function buildProviderOrder(
   request: WebSearchRequest,
   configuredProvider: WebSearchSource,
 ): { providerIds: WebSearchSource[]; reason: string } {
-  if (request.source !== "auto") {
+  // `paperchat` is an internal provider id, not a model-visible source. If it
+  // reaches us explicitly, still honor the capability gate below.
+  if (request.source !== "auto" && request.source !== "paperchat") {
     return {
       providerIds: [request.source],
       reason: `explicit source=${request.source}`,
     };
   }
 
-  if (configuredProvider !== "auto") {
+  const serviceSearchAvailable = isPaperChatSearchAvailable();
+  // DeepSeek Search belongs to the PaperChat chat path and is used only when
+  // the key's raw model list advertises it. Older NewAPI builds therefore
+  // never issue a probe request.
+  const effectiveProvider = serviceSearchAvailable
+    ? "auto"
+    : configuredProvider;
+
+  if (effectiveProvider !== "auto") {
     return {
-      providerIds: [configuredProvider],
-      reason: `settings default=${configuredProvider}`,
+      providerIds: [effectiveProvider],
+      reason: `legacy pref=${effectiveProvider}`,
+    };
+  }
+
+  if (serviceSearchAvailable) {
+    if (request.intent === "web") {
+      return {
+        providerIds: ["paperchat", "bing", "duckduckgo"],
+        reason:
+          "PaperChat with DeepSeek Search prefers service search for general web",
+      };
+    }
+    const scholarlyFirst =
+      request.intent === "discover"
+        ? (["openalex", "google_scholar"] as const)
+        : (["google_scholar", "openalex"] as const);
+    return {
+      providerIds: [...scholarlyFirst, "paperchat", "duckduckgo"],
+      reason:
+        "PaperChat keeps scholarly discovery first and falls back to DeepSeek Search",
     };
   }
 

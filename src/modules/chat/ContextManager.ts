@@ -17,8 +17,8 @@ import { getProviderManager } from "../providers";
 import {
   getModelRoutingDefaults,
   getModelRoutingMeta,
+  getSelectablePaperchatModels,
 } from "../preferences/ModelsFetcher";
-import { getConfiguredPaperChatModels } from "../providers/PaperChatLightweightProvider";
 import { PaperChatProvider } from "../providers/PaperChatProvider";
 import { createInterruptedAssistantContextMessage } from "./interrupted-message";
 import {
@@ -237,7 +237,7 @@ function getSummaryProvider() {
     return activeProvider;
   }
 
-  const availableModels = getConfiguredPaperChatModels(activeConfig);
+  const availableModels = getSelectablePaperchatModels();
   if (!availableModels.includes(configuredModel)) {
     return activeProvider;
   }

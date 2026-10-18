@@ -488,13 +488,14 @@ function omitResponseBackedContinuationOutput(
 function convertTools(
   tools: ToolDefinition[] | undefined,
   hostedWebSearch: boolean,
+  hostedToolType: "web_search" | "web_search_preview",
 ): ResponsesInputItem[] {
   const converted: ResponsesInputItem[] = [];
   let addedHostedWebSearch = false;
   for (const tool of tools || []) {
     if (hostedWebSearch && tool.function.name === "web_search") {
       if (!addedHostedWebSearch) {
-        converted.push({ type: "web_search_preview" });
+        converted.push({ type: hostedToolType });
         addedHostedWebSearch = true;
       }
       continue;
@@ -507,6 +508,18 @@ function convertTools(
     });
   }
   return converted;
+}
+
+/**
+ * NewAPI/DeepSeek expects the Responses tool name `web_search`; OpenAI uses
+ * `web_search_preview`. A DeepSeek channel ignores the preview spelling.
+ */
+export function getResponsesHostedWebSearchToolType(
+  model: string,
+): "web_search" | "web_search_preview" {
+  return /^deepseek(?:-|$)/i.test(model.trim())
+    ? "web_search"
+    : "web_search_preview";
 }
 
 function extractToolCalls(response: ResponsesApiResponse): ToolCall[] {
@@ -1284,9 +1297,11 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     const convertedTools = convertTools(
       tools,
       this.runtimeOptions.hostedWebSearch === true,
+      getResponsesHostedWebSearchToolType(this._config.defaultModel),
     );
     const hasHostedWebSearch = convertedTools.some(
-      (tool) => tool.type === "web_search_preview",
+      (tool) =>
+        tool.type === "web_search_preview" || tool.type === "web_search",
     );
     const body: Record<string, unknown> = {
       model: this._config.defaultModel,

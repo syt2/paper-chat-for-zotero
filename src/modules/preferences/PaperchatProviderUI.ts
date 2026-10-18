@@ -28,6 +28,7 @@ import {
   getModelRoutingMeta,
   getPaperchatKeyModels,
   getSelectablePaperchatModels,
+  setPaperchatChatModelsCache,
   getUpgradeOnlyPaperchatModels,
 } from "./ModelsFetcher";
 import { getMissingUpgradeModels } from "./paperchat-upgrade-models";
@@ -377,6 +378,7 @@ export function populatePaperchatModels(
 
   if (saveToCache && models) {
     setPref("paperchatModelsCache", JSON.stringify(models));
+    setPaperchatChatModelsCache(chatModels);
     providerManager.updateProviderConfig("paperchat", {
       availableModels: chatModels,
     });

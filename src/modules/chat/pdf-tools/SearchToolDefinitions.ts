@@ -21,7 +21,7 @@ function createGeneralWebSearchDefinition(): ToolDefinition {
     function: {
       name: "web_search",
       description:
-        "Search external sources beyond the local Zotero library. On models without hosted web search this local tool supports scholarly sources and general websites. On hosted-search models PaperChat replaces it with the model vendor's web search, and search_scholarly_sources remains available for papers, citations, DOI, authors, and related-work discovery.",
+        "Search external sources beyond the local Zotero library. On models without hosted web search this local tool supports scholarly sources and general websites; PaperChat chat models that advertise DeepSeek Search also use it in auto routing. On hosted-search models PaperChat replaces it with the model vendor's web search, and search_scholarly_sources remains available for papers, citations, DOI, authors, and related-work discovery.",
       parameters: {
         type: "object",
         properties: {
@@ -34,7 +34,7 @@ function createGeneralWebSearchDefinition(): ToolDefinition {
             type: "string",
             enum: [...MODEL_VISIBLE_WEB_SEARCH_SOURCES],
             description:
-              "Preferred local source selector. auto uses PaperChat's fallback routing; google_scholar and openalex target scholarly discovery, while bing and duckduckgo target general web pages. Hosted-search models use the vendor's routing instead.",
+              "Preferred local source selector. auto uses PaperChat's routing, including DeepSeek Search for PaperChat models that advertise it; google_scholar and openalex target scholarly discovery; bing and duckduckgo target general web pages. Hosted-search models use the vendor's routing instead.",
           },
           intent: {
             type: "string",

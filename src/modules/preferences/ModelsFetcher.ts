@@ -92,7 +92,11 @@ function resolveModelRoutingMeta(): Record<string, PaperChatModelRoutingMeta> {
     : readCachedModelRoutingMeta();
 }
 
-/** User-selectable models must be present in both the key list and routing config. */
+/**
+ * User-selectable models must be present in both the key list and routing
+ * config. If routing config is temporarily unavailable, the last list derived
+ * from it is used instead of raw key models.
+ */
 export function getSelectablePaperchatModels(
   models?: readonly string[],
 ): string[] {
@@ -106,6 +110,15 @@ export function getSelectablePaperchatModels(
   }
   if (!Array.isArray(keyModels)) return [];
   const routing = resolveModelRoutingMeta();
+  if (Object.keys(routing).length === 0) {
+    // Routing metadata is the whitelist. When it is temporarily unavailable
+    // (for example right after an upgrade), reuse the last list derived from
+    // it instead of falling back to raw key models.
+    const keyModelSet = new Set(keyModels);
+    return readCachedPaperchatChatModels().filter(
+      (model) => keyModelSet.has(model) && !isEmbeddingModel(model),
+    );
+  }
   return sortModelsByRoutingWeight(
     [...new Set(keyModels)].filter(
       (model): model is string =>
@@ -116,6 +129,40 @@ export function getSelectablePaperchatModels(
     ),
     routing,
   );
+}
+
+function readCachedPaperchatChatModels(): string[] {
+  try {
+    const parsed = JSON.parse(
+      getPref("paperchatChatModelsCache") || "[]",
+    ) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed.filter(
+      (model): model is string =>
+        typeof model === "string" &&
+        model.length > 0 &&
+        !isEmbeddingModel(model),
+    );
+  } catch {
+    return [];
+  }
+}
+
+/** Persist the routing-derived chat-model list for offline/startup fallback. */
+export function setPaperchatChatModelsCache(models: readonly string[]): void {
+  const selectable = [
+    ...new Set(
+      models.filter(
+        (model) =>
+          typeof model === "string" &&
+          model.length > 0 &&
+          !isEmbeddingModel(model),
+      ),
+    ),
+  ];
+  setPref("paperchatChatModelsCache", JSON.stringify(selectable));
 }
 
 /**
@@ -142,6 +189,7 @@ export function clearPaperchatModelCaches(): void {
   paperchatModelRoutingMeta = {};
   paperchatModelRoutingDefaults = {};
   setPref("paperchatModelsCache", "");
+  setPref("paperchatChatModelsCache", "");
   setPref("paperchatRatiosCache", "");
   setPref("paperchatRoutingConfigCache", "");
   setPref("paperchatRoutingDefaultsCache", "");
@@ -160,13 +208,19 @@ function clearPaperchatRoutingCaches(): void {
  * Drop the cached routing metadata when this build changes so an upgraded
  * client never keeps capabilities it just learned about, and a downgraded one
  * stops advertising capabilities it cannot handle. Runs before anything reads
- * the routing cache; model and ratio caches are kept so an offline client
- * still lists its models.
+ * the routing cache; model, ratio, and routing-derived chat model caches are
+ * kept so an offline client still lists its models.
  */
 export function ensurePaperchatRoutingCacheVersion(): void {
   const currentVersion = getPaperChatClientVersion();
   if (getPref(ROUTING_CACHE_CLIENT_VERSION_PREF) === currentVersion) {
     return;
+  }
+  // Preserve the last routing-derived chat list before dropping routing
+  // metadata that belongs to the previous plugin build.
+  const chatModels = getSelectablePaperchatModels();
+  if (chatModels.length > 0) {
+    setPaperchatChatModelsCache(chatModels);
   }
   clearPaperchatRoutingCaches();
   setPref(ROUTING_CACHE_CLIENT_VERSION_PREF, currentVersion);
@@ -282,6 +336,17 @@ export function getPaperchatKeyModels(): string[] {
   } catch {
     return [];
   }
+}
+
+/**
+ * True when the key's raw `/v1/models` list advertises NewAPI's DeepSeek
+ * Search route. The route name is a search target, not a chat model, so it is
+ * intentionally absent from model-routing.json.
+ */
+export function hasPaperchatServiceSearchModel(
+  models?: readonly string[],
+): boolean {
+  return (models ?? getPaperchatKeyModels()).includes("deepseek-search");
 }
 
 function getPricingModelName(

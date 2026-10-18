@@ -301,6 +301,29 @@ describe("OpenAIResponsesProvider", function () {
     });
   });
 
+  it("uses DeepSeek's native web_search tool name for hosted search", async function () {
+    let requestBody: Record<string, any> = {};
+    globalThis.fetch = (async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body));
+      return jsonResponse(completedResponse("resp_deepseek", "done"));
+    }) as typeof fetch;
+
+    const provider = createProvider(
+      { hostedWebSearch: true },
+      {
+        defaultModel: "deepseek-v4-pro",
+        availableModels: ["deepseek-v4-pro"],
+      },
+    );
+    await provider.chatCompletionWithTools(
+      [message("u1", "user", "find it")],
+      [localWebSearchTool],
+    );
+
+    assert.deepInclude(requestBody.tools, { type: "web_search" });
+    assert.notDeepInclude(requestBody.tools, { type: "web_search_preview" });
+  });
+
   it("sends reasoning effort without breaking previous_response_id", async function () {
     const requestBodies: Array<Record<string, any>> = [];
     const responses = [

@@ -1003,6 +1003,10 @@ describe("web search", function () {
       query: "valid bing source",
       source: "bing",
     });
+    const validPaperChat = isValidWebSearchArgs({
+      query: "valid paperchat source",
+      source: "paperchat",
+    });
     const invalidSource = isValidWebSearchArgs({
       query: "invalid source",
       source: "google-scholar",
@@ -1028,6 +1032,7 @@ describe("web search", function () {
     assert.isTrue(validGoogleScholar);
     assert.isTrue(validSemanticScholarWeb);
     assert.isTrue(validBing);
+    assert.isTrue(validPaperChat);
     assert.isFalse(invalidSource);
     assert.isFalse(removedEuropePmc);
     assert.isFalse(invalidDomainFilter);

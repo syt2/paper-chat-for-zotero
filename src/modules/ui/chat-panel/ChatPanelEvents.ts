@@ -27,7 +27,6 @@ import { getCurrentPresentationPaper } from "../../presentation/PresentationEntr
 import { getString } from "../../../utils/locale";
 import { attachQuickPhrasesMenu } from "./QuickPhrasesMenu";
 import { getProviderManager } from "../../providers";
-import type { PaperChatProviderConfig } from "../../../types/provider";
 import type { SubscriptionUsageSummary } from "../../../types/auth";
 import {
   updateChatHeaderTitle,
@@ -2794,10 +2793,7 @@ export function updateModelSelectorDisplay(container: HTMLElement): void {
     getPref("paperchatTierState") as string | undefined,
   );
   const session = getChatManager().getActiveSession();
-  const paperchatConfig = providerManager.getProviderConfig(
-    "paperchat",
-  ) as PaperChatProviderConfig | null;
-  const availableModels = paperchatConfig?.availableModels ?? [];
+  const availableModels = getSelectablePaperchatModels();
   const tierPools = deriveTierPools(
     availableModels,
     getModelRatios(),

@@ -13,6 +13,7 @@ import {
   getModelRoutingMeta,
   getSelectablePaperchatModels,
   getSelectablePaperchatModelsByTier,
+  hasPaperchatServiceSearchModel,
   loadCachedRatios,
 } from "../src/modules/preferences/ModelsFetcher";
 import {
@@ -82,6 +83,50 @@ describe("PaperChat model cache", function () {
       prefStore.get(`${PREFS_PREFIX}paperchatModelsCache`),
       JSON.stringify(raw),
     );
+  });
+
+  it("uses routing metadata as the chat model whitelist", function () {
+    prefStore.set(
+      `${PREFS_PREFIX}paperchatModelsCache`,
+      JSON.stringify(["model-a", "deepseek-search", "deepseek-fetch"]),
+    );
+    prefStore.set(
+      `${PREFS_PREFIX}paperchatRoutingConfigCache`,
+      JSON.stringify({ "model-a": {} }),
+    );
+    loadCachedRatios();
+
+    assert.deepEqual(getSelectablePaperchatModels(), ["model-a"]);
+  });
+
+  it("keeps the last routing-derived chat list when routing is unavailable", function () {
+    prefStore.set(
+      `${PREFS_PREFIX}paperchatModelsCache`,
+      JSON.stringify(["model-a", "deepseek-search", "deepseek-fetch"]),
+    );
+    prefStore.set(
+      `${PREFS_PREFIX}paperchatChatModelsCache`,
+      JSON.stringify(["model-a"]),
+    );
+    prefStore.set(`${PREFS_PREFIX}paperchatRoutingConfigCache`, "{}");
+    loadCachedRatios();
+
+    assert.deepEqual(getSelectablePaperchatModels(), ["model-a"]);
+  });
+
+  it("detects DeepSeek Search from the raw model cache", function () {
+    prefStore.set(
+      `${PREFS_PREFIX}paperchatModelsCache`,
+      JSON.stringify(["model-a", "deepseek-search", "deepseek-fetch"]),
+    );
+    assert.isTrue(hasPaperchatServiceSearchModel());
+    assert.isTrue(hasPaperchatServiceSearchModel(["deepseek-search"]));
+    assert.isFalse(
+      hasPaperchatServiceSearchModel(["model-a", "deepseek-fetch"]),
+    );
+
+    prefStore.set(`${PREFS_PREFIX}paperchatModelsCache`, "not json");
+    assert.isFalse(hasPaperchatServiceSearchModel());
   });
 
   it("orders the tier-aware selection by tier ladder and then by routing weight", function () {
@@ -305,6 +350,12 @@ describe("PaperChat model cache", function () {
       prefStore.get(`${PREFS_PREFIX}paperchatRatiosCache`),
       '{"model-a":2}',
     );
+    assert.equal(
+      prefStore.get(`${PREFS_PREFIX}paperchatChatModelsCache`),
+      '["model-a"]',
+    );
+    // The routing-derived list survives the build change for offline startup.
+    assert.deepEqual(getSelectablePaperchatModels(), ["model-a"]);
 
     // Same build: the freshly fetched routing metadata is left alone.
     prefStore.set(
