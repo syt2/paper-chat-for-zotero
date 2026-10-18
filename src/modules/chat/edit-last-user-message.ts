@@ -1,7 +1,11 @@
 import type { ChatMessage, ChatSession } from "../../types/chat";
 
 export function getLastEditableUserMessage(messages: ChatMessage[]) {
-  return [...messages].reverse().find((m) => m.role === "user" && !m.apiOnly);
+  return [...messages]
+    .reverse()
+    .find(
+      (m) => m.role === "user" && !m.apiOnly && m.deliveryState !== "sending",
+    );
 }
 
 function promptOffset(message: ChatMessage): number {

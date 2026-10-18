@@ -6,6 +6,8 @@ export interface TurnRunResult {
   accepted: boolean;
   errorId?: string;
   retry?: () => Promise<TurnRunResult>;
+  /** The caller already rolled this turn back; keep the waiting queue moving. */
+  discard?: boolean;
 }
 
 export interface QueuedTurn {
@@ -17,7 +19,8 @@ export interface QueuedTurn {
   };
   run: () => Promise<TurnRunResult>;
   cancel: () => Promise<boolean>;
-  onError?: (error: unknown) => void;
+  /** Return false after restoring the turn yourself to discard it. */
+  onError?: (error: unknown) => boolean | void;
 }
 
 export interface SessionTurnQueueSnapshot {
@@ -203,7 +206,7 @@ export class SessionTurnQueue {
           errorId: result.errorId,
           retry: result.retry,
         };
-      } else if (!result.accepted) {
+      } else if (!result.accepted && !result.discard) {
         state.queued.unshift(turn);
         state.failure = { turn };
       }
@@ -211,9 +214,16 @@ export class SessionTurnQueue {
       if (this.states.get(sessionId) !== state || state.active !== turn) {
         return;
       }
-      state.queued.unshift(turn);
-      state.failure = { turn };
-      turn.onError?.(error);
+      let discard = false;
+      try {
+        discard = turn.onError?.(error) === false;
+      } catch {
+        // A detached panel must not prevent the queue from advancing.
+      }
+      if (!discard) {
+        state.queued.unshift(turn);
+        state.failure = { turn };
+      }
     } finally {
       if (this.states.get(sessionId) === state && state.active === turn) {
         state.active = undefined;

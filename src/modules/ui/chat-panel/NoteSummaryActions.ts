@@ -6,6 +6,7 @@ export function hasConversationMessages(messages: ChatMessage[]): boolean {
   return messages.some(
     (message) =>
       !message.apiOnly &&
+      message.deliveryState !== "sending" &&
       (message.role === "user" || message.role === "assistant"),
   );
 }

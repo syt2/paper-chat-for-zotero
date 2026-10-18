@@ -197,6 +197,8 @@ type InternalSendMessageOptions = SendMessageOptions & {
   noteSummaryContext?: NoteSummaryContext;
   requiredProviderId?: "paperchat";
   presentationAuthorization?: PresentationLaunchAuthorization;
+  /** Render a user bubble immediately and reuse it when the send commits. */
+  optimisticUserMessageId?: string;
   onAssistantMessageCreated?: (location: {
     sessionId: string;
     assistantMessageId: string;
@@ -2137,6 +2139,7 @@ export class ChatManager {
       });
     };
     let presentationLaunchSession: PresentationToolLaunchSession | undefined;
+    let optimisticUserMessage: ChatMessage | undefined;
 
     getAnalyticsService().track(ANALYTICS_EVENTS.chatSent, {
       provider: getProviderManager().getActiveProviderId(),
@@ -2301,6 +2304,44 @@ export class ChatManager {
         throw new Error(getString("chat-note-summary-tools-unavailable"));
       }
 
+      const quotedMessages = normalizeQuotedMessageRefs(options.quotedMessages);
+      if (
+        options.optimisticUserMessageId &&
+        !reusedUserMessage &&
+        !options.editLastUserMessage
+      ) {
+        if (!this.isSessionTracked(sendingSession, sessionRunId)) {
+          trackChatCompleted(false);
+          return false;
+        }
+        if (
+          sendingSession.messages.some(
+            (message) => message.id === options.optimisticUserMessageId,
+          )
+        ) {
+          return false;
+        }
+        optimisticUserMessage = {
+          id: options.optimisticUserMessageId,
+          role: "user",
+          content,
+          images: options.images,
+          files: options.files,
+          quotedMessages:
+            quotedMessages.length > 0 ? quotedMessages : undefined,
+          timestamp: Date.now(),
+          selectedText:
+            selectedTexts.length > 0
+              ? serializeSelectedTexts(selectedTexts)
+              : undefined,
+          deliveryState: "sending",
+        };
+        sendingSession.messages.push(optimisticUserMessage);
+        if (this.isSessionActive(sendingSession)) {
+          this.onMessageUpdate?.(sendingSession.messages);
+        }
+      }
+
       if (options.editLastUserMessage) {
         // Keep the original attachment payload; editing must not switch papers
         // or re-read changed files from the current reader.
@@ -2354,6 +2395,25 @@ export class ChatManager {
         finalContent = `${formatSelectedTextsForPrompt(selectedTexts)}\n\n${questionAndAttachments}`;
       }
 
+      // PDF extraction can take long enough for the user to stop this turn.
+      // Do not persist an optimistic bubble after its run was invalidated.
+      if (
+        optimisticUserMessage?.deliveryState === "sending" &&
+        !this.isSessionTracked(sendingSession, sessionRunId)
+      ) {
+        const optimisticIndex = sendingSession.messages.indexOf(
+          optimisticUserMessage,
+        );
+        if (optimisticIndex >= 0) {
+          sendingSession.messages.splice(optimisticIndex, 1);
+        }
+        if (this.isSessionActive(sendingSession)) {
+          this.onMessageUpdate?.(sendingSession.messages);
+        }
+        trackChatCompleted(false);
+        return false;
+      }
+
       // 创建用户消息
       if (options.editLastUserMessage) {
         ensureSendingSessionTracked();
@@ -2374,25 +2434,65 @@ export class ChatManager {
       const wasDraftSession = !reusedUserMessage
         ? this.isDraftSession(sendingSession)
         : false;
-      const quotedMessages = normalizeQuotedMessageRefs(options.quotedMessages);
-      const userMessage: ChatMessage = reusedUserMessage || {
-        id: this.generateId(),
-        role: "user",
-        content: finalContent,
-        images: options.images,
-        files: options.files,
-        quotedMessages: quotedMessages.length > 0 ? quotedMessages : undefined,
-        timestamp: Date.now(),
-        pdfContext: pdfWasAttached,
-        selectedText:
-          selectedTexts.length > 0
-            ? serializeSelectedTexts(selectedTexts)
-            : undefined,
-      };
+      const userMessage: ChatMessage = reusedUserMessage ||
+        optimisticUserMessage || {
+          id: this.generateId(),
+          role: "user",
+          content: finalContent,
+          images: options.images,
+          files: options.files,
+          quotedMessages:
+            quotedMessages.length > 0 ? quotedMessages : undefined,
+          timestamp: Date.now(),
+          pdfContext: pdfWasAttached,
+          selectedText:
+            selectedTexts.length > 0
+              ? serializeSelectedTexts(selectedTexts)
+              : undefined,
+        };
 
       if (!reusedUserMessage) {
-        sendingSession.messages.push(userMessage);
+        userMessage.content = finalContent;
+        userMessage.pdfContext = pdfWasAttached;
+        userMessage.images = options.images;
+        userMessage.files = options.files;
+        userMessage.quotedMessages =
+          quotedMessages.length > 0 ? quotedMessages : undefined;
+        userMessage.selectedText =
+          selectedTexts.length > 0
+            ? serializeSelectedTexts(selectedTexts)
+            : undefined;
+        if (!optimisticUserMessage) {
+          sendingSession.messages.push(userMessage);
+        }
         await this.sessionStorage.insertMessage(sendingSession.id, userMessage);
+        if (optimisticUserMessage) {
+          if (!this.isSessionTracked(sendingSession, sessionRunId)) {
+            const optimisticIndex = sendingSession.messages.indexOf(
+              optimisticUserMessage,
+            );
+            if (optimisticIndex >= 0) {
+              sendingSession.messages.splice(optimisticIndex, 1);
+            }
+            try {
+              await this.sessionStorage.deleteMessage?.(
+                sendingSession.id,
+                userMessage.id,
+              );
+            } catch (error) {
+              ztoolkit.log(
+                "[ChatManager] Failed to roll back an invalidated optimistic message:",
+                error,
+              );
+            }
+            if (this.isSessionActive(sendingSession)) {
+              this.onMessageUpdate?.(sendingSession.messages);
+            }
+            trackChatCompleted(false);
+            return false;
+          }
+          optimisticUserMessage.deliveryState = undefined;
+        }
       }
       clearPaperChatRetryableState(sendingSession);
       const reusedUserIndex = reusedUserMessage
@@ -3003,6 +3103,17 @@ export class ChatManager {
         return true;
       }
     } catch (error) {
+      if (optimisticUserMessage?.deliveryState === "sending") {
+        const optimisticIndex = sendingSession.messages.indexOf(
+          optimisticUserMessage,
+        );
+        if (optimisticIndex >= 0) {
+          sendingSession.messages.splice(optimisticIndex, 1);
+        }
+        if (this.isSessionActive(sendingSession)) {
+          this.onMessageUpdate?.(sendingSession.messages);
+        }
+      }
       trackChatCompleted(false);
       throw error;
     } finally {
@@ -4147,7 +4258,10 @@ export class ChatManager {
 
   private isDraftSession(session: ChatSession): boolean {
     return !session.messages.some(
-      (message) => message.role === "user" && !message.apiOnly,
+      (message) =>
+        message.role === "user" &&
+        !message.apiOnly &&
+        message.deliveryState !== "sending",
     );
   }
 

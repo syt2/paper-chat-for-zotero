@@ -1003,6 +1003,38 @@ export function createMessageElement(
     bubble.appendChild(files);
   }
 
+  if (msg.role === "user" && msg.deliveryState === "sending") {
+    const state = createElement(
+      doc,
+      "div",
+      {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "flex-end",
+        gap: "5px",
+        marginTop: "6px",
+        fontSize: chatFontSize(11),
+        opacity: "0.72",
+      },
+      {
+        class: "chat-message-delivery-state",
+        role: "status",
+        "aria-live": "polite",
+      },
+    );
+    const dot = createElement(doc, "span", {
+      width: "5px",
+      height: "5px",
+      borderRadius: "50%",
+      background: "currentColor",
+      flex: "0 0 auto",
+    });
+    const label = createElement(doc, "span");
+    label.textContent = getString("chat-message-sending");
+    state.append(dot, label);
+    bubble.appendChild(state);
+  }
+
   if (msg.role === "assistant" && msg.streamingState === "interrupted") {
     bubble.appendChild(
       createInterruptedFooter(doc, theme, attachedError, attachedNotices),

@@ -67,7 +67,15 @@ describe("explicit chat send scrolling", function () {
     } as unknown as HTMLTextAreaElement;
     let activeSession = { id: "send-scroll", messages: [] };
     let cleared = false;
+    let restoredAttachmentState: unknown;
     const errors: string[] = [];
+    const attachmentState = {
+      pendingImages: [],
+      pendingFiles: [],
+      pinnedSelectedTexts: ["pinned"],
+      pendingSelectedText: "selection",
+      pendingQuotedMessages: [],
+    };
     const context = {
       container: {
         querySelector: (selector: string) =>
@@ -77,10 +85,21 @@ describe("explicit chat send scrolling", function () {
       chatManager: { getActiveSession: () => activeSession },
       getCurrentItem: () => ({ id: 0 }),
       getAttachmentState: () => ({
-        pendingImages: [],
-        pendingFiles: [],
-        pendingQuotedMessages: [],
+        pendingImages: [...attachmentState.pendingImages],
+        pendingFiles: [...attachmentState.pendingFiles],
+        pinnedSelectedTexts: [...attachmentState.pinnedSelectedTexts],
+        pendingSelectedText: attachmentState.pendingSelectedText,
+        pendingQuotedMessages: [...attachmentState.pendingQuotedMessages],
       }),
+      setAttachmentState: (state: typeof attachmentState) => {
+        restoredAttachmentState = {
+          pendingImages: [...state.pendingImages],
+          pendingFiles: [...state.pendingFiles],
+          pinnedSelectedTexts: [...state.pinnedSelectedTexts],
+          pendingSelectedText: state.pendingSelectedText,
+          pendingQuotedMessages: [...state.pendingQuotedMessages],
+        };
+      },
       clearAttachments: () => {
         cleared = true;
       },
@@ -95,6 +114,7 @@ describe("explicit chat send scrolling", function () {
       context,
       errors,
       cleared: () => cleared,
+      restoredAttachmentState: () => restoredAttachmentState,
       switchSession: () => {
         activeSession = { id: "other", messages: [] };
       },
@@ -123,7 +143,7 @@ describe("explicit chat send scrolling", function () {
     assert.equal(f.history.getAttribute("data-auto-scroll"), "false");
     assert.equal(f.input.value, "new question");
     assert.isFalse(f.cleared());
-    assert.lengthOf(f.errors, 1);
+    assert.isEmpty(f.errors);
   });
 
   it("does not scroll for an empty draft", async function () {
@@ -147,5 +167,29 @@ describe("explicit chat send scrolling", function () {
     await sendMessage(f.context, f.input, null, null);
     assert.equal(f.history.scrollTop, 120);
     assert.equal(f.history.getAttribute("data-auto-scroll"), "false");
+  });
+
+  it("restores the draft and discards the turn when a send fails before persistence", async function () {
+    const f = fixture();
+    let failedTurn: any;
+    sessionTurnQueue.enqueue = (_sessionId: string, turn) => {
+      failedTurn = turn;
+      return true;
+    };
+
+    await sendMessage(f.context, f.input, null, null);
+    assert.equal(f.input.value, "");
+
+    const retainTurn = failedTurn.onError(new Error("storage unavailable"));
+    assert.isFalse(retainTurn);
+    assert.equal(f.input.value, "new question");
+    assert.deepEqual(f.restoredAttachmentState(), {
+      pendingImages: [],
+      pendingFiles: [],
+      pinnedSelectedTexts: ["pinned"],
+      pendingSelectedText: "selection",
+      pendingQuotedMessages: [],
+    });
+    assert.deepEqual(f.errors, ["storage unavailable"]);
   });
 });

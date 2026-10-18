@@ -6581,6 +6581,291 @@ describe("paperchat storage and chat manager", function () {
     }
   });
 
+  it("renders a user message before PDF extraction and commits it after persistence", async function () {
+    const providerManager = getProviderManager() as any;
+    const originalGetActiveProviderId = providerManager.getActiveProviderId;
+    const contextManager = getContextManager() as any;
+    const originalCompactBeforeSendIfNeeded =
+      contextManager.compactBeforeSendIfNeeded;
+    const originalFilterMessages = contextManager.filterMessages;
+    let resolveExtractionStarted!: () => void;
+    const extractionStarted = new Promise<void>((resolve) => {
+      resolveExtractionStarted = resolve;
+    });
+    let resolvePdfText!: (text: string) => void;
+    const pdfText = new Promise<string>((resolve) => {
+      resolvePdfText = resolve;
+    });
+    const persisted: ChatMessage[] = [];
+    const rendered: ChatMessage[][] = [];
+    const provider = {
+      config: { id: "provider-optimistic" },
+      getName: () => "provider-optimistic",
+      isReady: () => true,
+      chatCompletionWithTools: async () => ({ content: "unused" }),
+    };
+    const item = {
+      id: 42,
+      key: "ITEM0001",
+      libraryID: 1,
+      isAttachment: () => false,
+      getField: () => "Optimistic paper",
+    };
+    const session: ChatSession = {
+      id: "session-optimistic",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: item.key,
+      lastActiveItemLibraryID: item.libraryID,
+      messages: [],
+    };
+
+    providerManager.getActiveProviderId = () => provider.config.id;
+    contextManager.compactBeforeSendIfNeeded = async () => false;
+    contextManager.filterMessages = (targetSession: ChatSession) => ({
+      messages: [...targetSession.messages],
+      summaryTriggered: false,
+    });
+
+    try {
+      const manager = Object.create(ChatManager.prototype) as any;
+      manager.currentSession = session;
+      manager.activeSessionRunIds = new Map();
+      manager.sessionRunCounters = new Map();
+      manager.activeSessionAbortControllers = new Map();
+      manager.streamingSessions = new Map();
+      manager.currentItemKey = item.key;
+      manager.currentItemLibraryID = item.libraryID;
+      manager.init = async () => undefined;
+      manager.getActiveProvider = () => provider;
+      manager.isSessionActive = () => true;
+      manager.onMessageUpdate = (messages: ChatMessage[]) => {
+        rendered.push(messages.map((message) => ({ ...message })));
+      };
+      manager.pdfExtractor = {
+        hasPdfAttachment: async () => true,
+        extractPdfText: async () => {
+          resolveExtractionStarted();
+          return pdfText;
+        },
+      };
+      manager.sessionStorage = {
+        insertMessage: async (_sessionId: string, message: ChatMessage) => {
+          persisted.push({ ...message });
+        },
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        deleteMessage: async () => undefined,
+      };
+      manager.sendMessageWithToolCalling = async () => true;
+
+      const sendPromise = manager.sendMessage("Explain this", {
+        item,
+        targetSession: session,
+        requireTargetSessionActive: true,
+        optimisticUserMessageId: "optimistic-message",
+      });
+      await extractionStarted;
+
+      const pending = session.messages.find(
+        (message) => message.id === "optimistic-message",
+      );
+      assert.equal(pending?.role, "user");
+      assert.equal(pending?.deliveryState, "sending");
+      assert.isTrue(
+        rendered.some((messages) =>
+          messages.some(
+            (message) =>
+              message.id === "optimistic-message" &&
+              message.deliveryState === "sending",
+          ),
+        ),
+      );
+      assert.notInclude(
+        persisted.map((message) => message.id),
+        "optimistic-message",
+      );
+
+      resolvePdfText("pdf text");
+      assert.isTrue(await sendPromise);
+
+      const committed = session.messages.find(
+        (message) => message.id === "optimistic-message",
+      );
+      assert.isUndefined(committed?.deliveryState);
+      assert.include(
+        persisted.map((message) => message.id),
+        "optimistic-message",
+      );
+    } finally {
+      providerManager.getActiveProviderId = originalGetActiveProviderId;
+      contextManager.compactBeforeSendIfNeeded =
+        originalCompactBeforeSendIfNeeded;
+      contextManager.filterMessages = originalFilterMessages;
+    }
+  });
+
+  it("rolls an optimistic user message back when persistence fails", async function () {
+    const providerManager = getProviderManager() as any;
+    const originalGetActiveProviderId = providerManager.getActiveProviderId;
+    const contextManager = getContextManager() as any;
+    const originalCompactBeforeSendIfNeeded =
+      contextManager.compactBeforeSendIfNeeded;
+    const originalFilterMessages = contextManager.filterMessages;
+    const rendered: ChatMessage[][] = [];
+    const provider = {
+      config: { id: "provider-optimistic-failure" },
+      getName: () => "provider-optimistic-failure",
+      isReady: () => true,
+      chatCompletionWithTools: async () => ({ content: "unused" }),
+    };
+    const session: ChatSession = {
+      id: "session-optimistic-failure",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      messages: [],
+    };
+
+    providerManager.getActiveProviderId = () => provider.config.id;
+    contextManager.compactBeforeSendIfNeeded = async () => false;
+    contextManager.filterMessages = (targetSession: ChatSession) => ({
+      messages: [...targetSession.messages],
+      summaryTriggered: false,
+    });
+
+    try {
+      const manager = Object.create(ChatManager.prototype) as any;
+      manager.currentSession = session;
+      manager.activeSessionRunIds = new Map();
+      manager.sessionRunCounters = new Map();
+      manager.activeSessionAbortControllers = new Map();
+      manager.streamingSessions = new Map();
+      manager.currentItemKey = null;
+      manager.init = async () => undefined;
+      manager.getActiveProvider = () => provider;
+      manager.isSessionActive = () => true;
+      manager.onMessageUpdate = (messages: ChatMessage[]) => {
+        rendered.push(messages.map((message) => ({ ...message })));
+      };
+      manager.sessionStorage = {
+        insertMessage: async () => {
+          throw new Error("storage unavailable");
+        },
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+        deleteMessage: async () => undefined,
+      };
+
+      let error: unknown;
+      try {
+        await manager.sendMessage("Explain this", {
+          targetSession: session,
+          requireTargetSessionActive: true,
+          optimisticUserMessageId: "optimistic-failure",
+        });
+      } catch (reason) {
+        error = reason;
+      }
+
+      assert.equal((error as Error)?.message, "storage unavailable");
+      assert.deepEqual(session.messages, []);
+      assert.isTrue(
+        rendered.some((messages) =>
+          messages.some((message) => message.deliveryState === "sending"),
+        ),
+      );
+      assert.deepEqual(rendered.at(-1), []);
+      assert.isFalse(manager.activeSessionRunIds.has(session.id));
+    } finally {
+      providerManager.getActiveProviderId = originalGetActiveProviderId;
+      contextManager.compactBeforeSendIfNeeded =
+        originalCompactBeforeSendIfNeeded;
+      contextManager.filterMessages = originalFilterMessages;
+    }
+  });
+
+  it("removes a message persisted after its optimistic run was invalidated", async function () {
+    const providerManager = getProviderManager() as any;
+    const originalGetActiveProviderId = providerManager.getActiveProviderId;
+    const contextManager = getContextManager() as any;
+    const originalCompactBeforeSendIfNeeded =
+      contextManager.compactBeforeSendIfNeeded;
+    const originalFilterMessages = contextManager.filterMessages;
+    let resolveInsertStarted!: () => void;
+    const insertStarted = new Promise<void>((resolve) => {
+      resolveInsertStarted = resolve;
+    });
+    let resolveInsert!: () => void;
+    const insertFinished = new Promise<void>((resolve) => {
+      resolveInsert = resolve;
+    });
+    const deleted: string[] = [];
+    const provider = {
+      config: { id: "provider-optimistic-cancel" },
+      getName: () => "provider-optimistic-cancel",
+      isReady: () => true,
+      chatCompletionWithTools: async () => ({ content: "unused" }),
+    };
+    const session: ChatSession = {
+      id: "session-optimistic-cancel",
+      createdAt: 1,
+      updatedAt: 1,
+      lastActiveItemKey: null,
+      messages: [],
+    };
+
+    providerManager.getActiveProviderId = () => provider.config.id;
+    contextManager.compactBeforeSendIfNeeded = async () => false;
+    contextManager.filterMessages = (targetSession: ChatSession) => ({
+      messages: [...targetSession.messages],
+      summaryTriggered: false,
+    });
+
+    try {
+      const manager = Object.create(ChatManager.prototype) as any;
+      manager.currentSession = session;
+      manager.activeSessionRunIds = new Map();
+      manager.sessionRunCounters = new Map();
+      manager.activeSessionAbortControllers = new Map();
+      manager.streamingSessions = new Map();
+      manager.currentItemKey = null;
+      manager.init = async () => undefined;
+      manager.getActiveProvider = () => provider;
+      manager.isSessionActive = () => true;
+      manager.onMessageUpdate = () => undefined;
+      manager.sessionStorage = {
+        insertMessage: async () => {
+          resolveInsertStarted();
+          await insertFinished;
+        },
+        deleteMessage: async (_sessionId: string, messageId: string) => {
+          deleted.push(messageId);
+        },
+        updateMessageContent: async () => undefined,
+        updateSessionMeta: async () => undefined,
+      };
+
+      const sendPromise = manager.sendMessage("Explain this", {
+        targetSession: session,
+        requireTargetSessionActive: true,
+        optimisticUserMessageId: "optimistic-cancelled",
+      });
+      await insertStarted;
+      manager.invalidateSessionRun(session.id, { abort: true });
+      resolveInsert();
+
+      assert.isFalse(await sendPromise);
+      assert.deepEqual(deleted, ["optimistic-cancelled"]);
+      assert.deepEqual(session.messages, []);
+    } finally {
+      providerManager.getActiveProviderId = originalGetActiveProviderId;
+      contextManager.compactBeforeSendIfNeeded =
+        originalCompactBeforeSendIfNeeded;
+      contextManager.filterMessages = originalFilterMessages;
+    }
+  });
+
   it("keeps the most substantial partial across same-provider retry failures", async function () {
     const providerManager = getProviderManager() as any;
     const originalGetActiveProviderId = providerManager.getActiveProviderId;

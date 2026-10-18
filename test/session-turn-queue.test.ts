@@ -316,6 +316,55 @@ describe("SessionTurnQueue", function () {
     assert.equal(queue.snapshot("s").status, "idle");
   });
 
+  it("discards a rolled-back send and continues with the waiting queue", async function () {
+    const queue = new SessionTurnQueue();
+    const order: string[] = [];
+    const failed = turn("failed", async () => {
+      throw new Error("storage unavailable");
+    });
+    failed.onError = () => {
+      order.push("rolled back");
+      return false;
+    };
+    queue.enqueue("s", failed);
+    queue.enqueue(
+      "s",
+      turn("waiting", async () => {
+        order.push("waiting");
+        return { accepted: true };
+      }),
+    );
+    await flush();
+
+    assert.deepEqual(order, ["rolled back", "waiting"]);
+    assert.equal(queue.snapshot("s").status, "idle");
+    assert.deepEqual(queue.snapshot("s").queued, []);
+  });
+
+  it("drops an unaccepted turn whose caller already restored it", async function () {
+    const queue = new SessionTurnQueue();
+    const order: string[] = [];
+    queue.enqueue(
+      "s",
+      turn("rejected", async () => {
+        order.push("rejected");
+        return { accepted: false, discard: true };
+      }),
+    );
+    queue.enqueue(
+      "s",
+      turn("waiting", async () => {
+        order.push("waiting");
+        return { accepted: true };
+      }),
+    );
+    await flush();
+
+    assert.deepEqual(order, ["rejected", "waiting"]);
+    assert.equal(queue.snapshot("s").status, "idle");
+    assert.deepEqual(queue.snapshot("s").queued, []);
+  });
+
   it("does not drain stale turns after a session is cleared", async function () {
     const queue = new SessionTurnQueue();
     const active = deferred<TurnRunResult>();

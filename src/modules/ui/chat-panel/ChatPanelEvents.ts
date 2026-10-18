@@ -2320,6 +2320,7 @@ export function createTurnRunner(options: {
   manager: ChatPanelContext["chatManager"];
   resolveSession: () => ChatSession;
   send: (session: ChatSession) => Promise<boolean>;
+  onUnaccepted?: () => boolean | void;
 }): () => Promise<TurnRunResult> {
   const run = async (retryErrorId?: string): Promise<TurnRunResult> => {
     const session = options.resolveSession();
@@ -2331,7 +2332,12 @@ export function createTurnRunner(options: {
     const accepted = retryErrorId
       ? await options.manager.retryFailedTurn(session.id, retryErrorId)
       : await options.send(session);
-    if (!accepted) return { accepted: false };
+    if (!accepted) {
+      return {
+        accepted: false,
+        discard: options.onUnaccepted?.() === false,
+      };
+    }
 
     const error = [...options.resolveSession().messages]
       .reverse()
@@ -2510,9 +2516,60 @@ export async function sendMessage(
       if (current?.id === session.id) retainedSession = current;
       return retainedSession;
     };
+    const turnSequence = ++queuedTurnSequence;
+    const optimisticUserMessageId = `optimistic-${Date.now()}-${turnSequence}`;
+    const rollbackOptimisticMessage = (): boolean => {
+      const targetSession = resolveSession();
+      const optimisticIndex = targetSession.messages.findIndex(
+        (message) => message.id === optimisticUserMessageId,
+      );
+      const optimisticMessage =
+        optimisticIndex >= 0
+          ? targetSession.messages[optimisticIndex]
+          : undefined;
+      const wasPending =
+        !optimisticMessage || optimisticMessage.deliveryState === "sending";
+      if (optimisticMessage?.deliveryState === "sending") {
+        targetSession.messages.splice(optimisticIndex, 1);
+        if (chatManager.getActiveSession()?.id === targetSession.id) {
+          context.renderMessages(targetSession.messages);
+        }
+      }
+      return wasPending;
+    };
+    const restoreFailedDraft = (): boolean => {
+      if (chatManager.getActiveSession()?.id !== session.id || !messageInput) {
+        return false;
+      }
+      // Never overwrite text the user started composing while the send was
+      // preparing. In that case the failed turn stays in the queue instead.
+      if (messageInput.value.trim()) return false;
+      messageInput.value = content;
+      resizeMessageInput(messageInput, chatHistory);
+      context.setAttachmentState?.(attachmentState);
+      context.updateAttachmentsPreview?.();
+      focusTextarea(messageInput);
+      return true;
+    };
+    const handleSendFailure = (error?: unknown): boolean => {
+      const wasUncommitted = rollbackOptimisticMessage();
+      const restored = wasUncommitted && restoreFailedDraft();
+      if (error && chatManager.getActiveSession()?.id === session.id) {
+        const message = error instanceof Error ? error.message : String(error);
+        context.appendError(message);
+        showChatPanelToast(
+          context.container,
+          `${getString("chat-send-failed")} ${message}`,
+        );
+      }
+      // A retained turn preserves its draft in the visible queue. A restored
+      // composer (or committed message) no longer needs the queue entry.
+      return wasUncommitted && !restored;
+    };
     const run = createTurnRunner({
       manager: chatManager,
       resolveSession,
+      onUnaccepted: () => handleSendFailure(),
       send: async (targetSession) => {
         if (!isImageAttachmentDraftWithinLimits(pendingImageAttachments)) {
           throw new Error(getImageAttachmentLimitMessage());
@@ -2521,6 +2578,7 @@ export async function sendMessage(
           item: targetItem,
           attachPdf: shouldAttachPdf,
           targetSession,
+          optimisticUserMessageId,
           ...attachmentOptions,
         });
         if (accepted) {
@@ -2530,17 +2588,19 @@ export async function sendMessage(
       },
     });
     const turn: QueuedTurn = {
-      id: `${Date.now()}-${++queuedTurnSequence}`,
+      id: `${Date.now()}-${turnSequence}`,
       content,
       draft: { content, attachmentState },
       run,
-      cancel: () => chatManager.cancelSessionTurn(session.id),
-      onError: (error) => {
-        if (chatManager.getActiveSession()?.id === session.id) {
-          context.appendError(
-            error instanceof Error ? error.message : String(error),
-          );
+      cancel: async () => {
+        const cancelled = await chatManager.cancelSessionTurn(session.id);
+        if (cancelled && rollbackOptimisticMessage()) {
+          restoreFailedDraft();
         }
+        return cancelled;
+      },
+      onError: (error) => {
+        return handleSendFailure(error);
       },
     };
     if (!sessionTurnQueue.enqueue(session.id, turn)) {

@@ -53,6 +53,11 @@ export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "system" | "error" | "tool";
   content: string;
+  /**
+   * UI-only delivery state for an optimistic user message. This is cleared
+   * once the message is persisted and is never written to storage.
+   */
+  deliveryState?: "sending";
   reasoning?: string; // Reasoning/thinking chain (e.g. DeepSeek-Reasoner)
   images?: ImageAttachment[];
   files?: FileAttachment[];
