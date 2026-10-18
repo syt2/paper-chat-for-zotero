@@ -9,6 +9,7 @@ import { getString } from "../../utils/locale";
 import { getPref, setPref } from "../../utils/prefs";
 import { getAuthManager } from "../auth";
 import { showMessage } from "./utils";
+import { getPaperchatLoadedModelCount } from "./paperchat-model-count";
 import {
   getPaperChatApiBaseUrl,
   getPaperChatUrl,
@@ -549,8 +550,13 @@ export async function fetchPaperchatModels(
       JSON.stringify(result).substring(0, 200),
     );
 
-    // Wait for ratios and routing metadata to complete
-    await Promise.all([ratiosPromise, routingMetaPromise]);
+    // Wait for ratios and routing metadata to complete. The routing result
+    // decides whether the loaded count is the routing intersection or the raw
+    // relay count fallback.
+    const [, routingMetaApplied] = await Promise.all([
+      ratiosPromise,
+      routingMetaPromise,
+    ]);
 
     if (generation !== paperchatModelCacheGeneration) {
       return;
@@ -560,9 +566,20 @@ export async function fetchPaperchatModels(
       const models = result.data.map((m) => m.id).sort();
       ztoolkit.log("[Preferences] Parsed models count:", models.length);
       onModelsLoaded(models);
+      const loadedCount = getPaperchatLoadedModelCount(
+        models,
+        Object.keys(getModelRoutingMeta()),
+        routingMetaApplied,
+      );
+      ztoolkit.log(
+        "[Preferences] Loaded PaperChat model count:",
+        loadedCount,
+        "routing metadata applied:",
+        routingMetaApplied,
+      );
       showMessage(
         doc,
-        getString("pref-models-loaded", { args: { count: models.length } }),
+        getString("pref-models-loaded", { args: { count: loadedCount } }),
         false,
       );
     }
