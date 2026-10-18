@@ -17,7 +17,10 @@ import {
   repairPaperChatSessionBindingAfterHardFailure,
   resolvePaperChatSessionBinding,
 } from "../src/modules/chat/paperchat-session-state.ts";
-import { parsePaperChatError } from "../src/modules/providers/paperchat-errors.ts";
+import {
+  parsePaperChatError,
+  parsePaperChatModelUnavailableError,
+} from "../src/modules/providers/paperchat-errors.ts";
 import {
   parseModelRoutingConfig,
   sortModelsByTierThenWeight,
@@ -559,6 +562,26 @@ describe("paperchat tier routing", function () {
         new Error(
           'API Error: 400 - {"error":{"code":123,"message":"tool calls unsupported"}}',
         ),
+      ),
+    );
+  });
+
+  it("recognizes unavailable-channel errors and extracts the model name", function () {
+    assert.deepEqual(
+      parsePaperChatModelUnavailableError(
+        "分组 auto 下模型 beam-promo 无可用渠道（distributor） (request id: 202610181548364645441768268d9d6TfZ1sPBJ)",
+      ),
+      { model: "beam-promo" },
+    );
+    assert.deepEqual(
+      parsePaperChatModelUnavailableError(
+        'API Error: 503 - {"error":{"code":"model_not_found","message":"分组 default 下模型 test-model 无可用渠道（distributor）"}}',
+      ),
+      { model: "test-model" },
+    );
+    assert.isNull(
+      parsePaperChatModelUnavailableError(
+        "API Error: 429 - rate limit exceeded",
       ),
     );
   });

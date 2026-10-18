@@ -10,6 +10,10 @@ export interface PaperChatParsedError {
   code?: string;
 }
 
+export interface PaperChatModelUnavailableErrorDetails {
+  model: string | null;
+}
+
 interface PaperChatErrorPayload {
   error?: {
     message?: unknown;
@@ -50,7 +54,45 @@ export function parsePaperChatError(raw: string): PaperChatParsedError {
   };
 }
 
+function extractUnavailableModelName(raw: string): string | null {
+  const patterns = [
+    /下模型\s*["“]?([^"”\s，,（）()]+)["”]?\s*无可用渠道/i,
+    /model\s+["“]?([^"”\s，,（）()]+)["”]?\s+(?:has no available channel|no available channel)/i,
+  ];
+  for (const pattern of patterns) {
+    const match = raw.match(pattern);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+  return null;
+}
+
+export function parsePaperChatModelUnavailableError(
+  raw: string,
+): PaperChatModelUnavailableErrorDetails | null {
+  const { message } = parsePaperChatError(raw);
+  const combined = `${raw}\n${message}`;
+  if (
+    !combined.includes("无可用渠道") &&
+    !/no available channel/i.test(combined)
+  ) {
+    return null;
+  }
+  return {
+    model: extractUnavailableModelName(combined),
+  };
+}
+
 export function getPaperChatErrorDisplayMessage(raw: string): string {
+  const unavailable = parsePaperChatModelUnavailableError(raw);
+  if (unavailable) {
+    return unavailable.model
+      ? getString("chat-error-model-unavailable", {
+          args: { model: unavailable.model },
+        })
+      : getString("chat-error-model-unavailable-unknown");
+  }
   return parsePaperChatError(raw).message;
 }
 

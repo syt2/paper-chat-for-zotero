@@ -142,6 +142,8 @@ export type FluentMessageId =
   | 'paperchat-chat-empty-paper-1'
   | 'paperchat-chat-empty-paper-2'
   | 'paperchat-chat-empty-paper-3'
+  | 'paperchat-chat-error-model-unavailable'
+  | 'paperchat-chat-error-model-unavailable-unknown'
   | 'paperchat-chat-error-no-provider'
   | 'paperchat-chat-error-paperchat-insufficient-quota'
   | 'paperchat-chat-error-paperchat-topup-action'
