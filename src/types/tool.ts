@@ -479,6 +479,7 @@ export const WEB_SEARCH_SOURCES = [
   "bing",
   "duckduckgo",
   "paperchat",
+  "deepseek",
 ] as const;
 
 export type WebSearchSource = (typeof WEB_SEARCH_SOURCES)[number];

@@ -5,6 +5,10 @@ import {
   getExplicitSourceProviderOrder,
 } from "../src/modules/chat/web-search/WebSearchService.ts";
 import {
+  isOfficialDeepSeekBaseUrl,
+  normalizeDeepSeekToolsBaseUrl,
+} from "../src/modules/chat/web-search/deepseek-official.ts";
+import {
   isValidScholarlySearchArgs,
   isValidWebSearchArgs,
 } from "../src/modules/chat/web-search/WebSearchArgs.ts";
@@ -707,18 +711,36 @@ describe("web search", function () {
   });
 
   it("keeps an explicit web source first and falls back to DeepSeek Search", function () {
-    assert.deepEqual(getExplicitSourceProviderOrder("bing", true), [
+    assert.deepEqual(getExplicitSourceProviderOrder("bing", "paperchat"), [
       "bing",
       "paperchat",
     ]);
-    assert.deepEqual(getExplicitSourceProviderOrder("duckduckgo", true), [
+    assert.deepEqual(getExplicitSourceProviderOrder("duckduckgo", "deepseek"), [
       "duckduckgo",
-      "paperchat",
+      "deepseek",
     ]);
-    assert.deepEqual(getExplicitSourceProviderOrder("google_scholar", true), [
-      "google_scholar",
-    ]);
-    assert.deepEqual(getExplicitSourceProviderOrder("bing", false), ["bing"]);
+    assert.deepEqual(
+      getExplicitSourceProviderOrder("google_scholar", "deepseek"),
+      ["google_scholar"],
+    );
+    assert.deepEqual(getExplicitSourceProviderOrder("bing", null), ["bing"]);
+  });
+
+  it("recognizes the official DeepSeek search base URL", function () {
+    assert.isTrue(isOfficialDeepSeekBaseUrl("https://api.deepseek.com/v1"));
+    assert.isTrue(isOfficialDeepSeekBaseUrl("https://api.deepseek.com"));
+    assert.isFalse(
+      isOfficialDeepSeekBaseUrl("https://api.deepseek.com.evil.test/v1"),
+    );
+    assert.isFalse(isOfficialDeepSeekBaseUrl("https://openrouter.ai/api/v1"));
+    assert.equal(
+      normalizeDeepSeekToolsBaseUrl("https://api.deepseek.com"),
+      "https://api.deepseek.com/v1",
+    );
+    assert.equal(
+      normalizeDeepSeekToolsBaseUrl("https://api.deepseek.com/v1/"),
+      "https://api.deepseek.com/v1",
+    );
   });
 
   it("falls back from invalid prefs without mutating the stored value", async function () {
@@ -1023,6 +1045,10 @@ describe("web search", function () {
       query: "valid paperchat source",
       source: "paperchat",
     });
+    const validDeepSeek = isValidWebSearchArgs({
+      query: "valid deepseek source",
+      source: "deepseek",
+    });
     const invalidSource = isValidWebSearchArgs({
       query: "invalid source",
       source: "google-scholar",
@@ -1049,6 +1075,7 @@ describe("web search", function () {
     assert.isTrue(validSemanticScholarWeb);
     assert.isTrue(validBing);
     assert.isTrue(validPaperChat);
+    assert.isTrue(validDeepSeek);
     assert.isFalse(invalidSource);
     assert.isFalse(removedEuropePmc);
     assert.isFalse(invalidDomainFilter);

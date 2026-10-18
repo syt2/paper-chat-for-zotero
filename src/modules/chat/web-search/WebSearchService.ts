@@ -23,6 +23,7 @@ import { formatToolError } from "../tool-errors/ToolErrorFormatter";
 import { getAuthManager } from "../../auth";
 import { hasPaperchatServiceSearchModel } from "../../preferences/ModelsFetcher";
 import { getProviderManager } from "../../providers";
+import { isOfficialDeepSeekSearchAvailable } from "./deepseek-official";
 
 const WEB_SEARCH_SOURCE_SET = new Set<string>(WEB_SEARCH_SOURCES);
 const WEB_SEARCH_INTENT_SET = new Set<string>(WEB_SEARCH_INTENTS);
@@ -114,7 +115,7 @@ function buildScholarlyProviderOrder(request: WebSearchRequest): {
   };
 }
 
-function isPaperChatSearchAvailable(): boolean {
+function isPaperChatServiceSearchAvailable(): boolean {
   try {
     const authManager = getAuthManager();
     return (
@@ -128,13 +129,28 @@ function isPaperChatSearchAvailable(): boolean {
   }
 }
 
+export type ServiceSearchProviderId = "paperchat" | "deepseek";
+
+function getServiceSearchProvider(): ServiceSearchProviderId | null {
+  if (isPaperChatServiceSearchAvailable()) {
+    return "paperchat";
+  }
+  if (isOfficialDeepSeekSearchAvailable()) {
+    return "deepseek";
+  }
+  return null;
+}
+
+function getServiceSearchLabel(providerId: ServiceSearchProviderId): string {
+  return providerId === "paperchat" ? "PaperChat Search" : "DeepSeek Search";
+}
+
 export function getExplicitSourceProviderOrder(
   source: WebSearchSource,
-  serviceSearchAvailable: boolean,
+  serviceSearchProvider: ServiceSearchProviderId | null,
 ): WebSearchSource[] {
-  return serviceSearchAvailable &&
-    (source === "bing" || source === "duckduckgo")
-    ? [source, "paperchat"]
+  return serviceSearchProvider && (source === "bing" || source === "duckduckgo")
+    ? [source, serviceSearchProvider]
     : [source];
 }
 
@@ -142,29 +158,31 @@ function buildProviderOrder(
   request: WebSearchRequest,
   configuredProvider: WebSearchSource,
 ): { providerIds: WebSearchSource[]; reason: string } {
-  const serviceSearchAvailable = isPaperChatSearchAvailable();
-  // `paperchat` is an internal provider id, not a model-visible source. If it
-  // reaches us explicitly, still honor the capability gate below.
-  if (request.source !== "auto" && request.source !== "paperchat") {
+  const serviceSearchProvider = getServiceSearchProvider();
+  // `paperchat` and `deepseek` are internal service-search ids, not
+  // model-visible sources. If one reaches us explicitly, still honor the
+  // capability gate below.
+  if (
+    request.source !== "auto" &&
+    request.source !== "paperchat" &&
+    request.source !== "deepseek"
+  ) {
     const providerIds = getExplicitSourceProviderOrder(
       request.source,
-      serviceSearchAvailable,
+      serviceSearchProvider,
     );
     return {
       providerIds,
       reason:
-        providerIds.length > 1
-          ? `explicit source=${request.source} with DeepSeek Search fallback`
+        serviceSearchProvider && providerIds.length > 1
+          ? `explicit source=${request.source} with ${getServiceSearchLabel(serviceSearchProvider)} fallback`
           : `explicit source=${request.source}`,
     };
   }
 
-  // DeepSeek Search belongs to the PaperChat chat path and is used only when
-  // the key's raw model list advertises it. Older NewAPI builds therefore
-  // never issue a probe request.
-  const effectiveProvider = serviceSearchAvailable
-    ? "auto"
-    : configuredProvider;
+  // Service search is available through PaperChat (when its model list
+  // advertises deepseek-search) or the official DeepSeek provider.
+  const effectiveProvider = serviceSearchProvider ? "auto" : configuredProvider;
 
   if (effectiveProvider !== "auto") {
     return {
@@ -173,12 +191,12 @@ function buildProviderOrder(
     };
   }
 
-  if (serviceSearchAvailable) {
+  if (serviceSearchProvider) {
+    const serviceLabel = getServiceSearchLabel(serviceSearchProvider);
     if (request.intent === "web") {
       return {
-        providerIds: ["paperchat", "bing", "duckduckgo"],
-        reason:
-          "PaperChat with DeepSeek Search prefers service search for general web",
+        providerIds: [serviceSearchProvider, "bing", "duckduckgo"],
+        reason: `${serviceLabel} prefers service search for general web`,
       };
     }
     const scholarlyFirst =
@@ -186,9 +204,8 @@ function buildProviderOrder(
         ? (["openalex", "google_scholar"] as const)
         : (["google_scholar", "openalex"] as const);
     return {
-      providerIds: [...scholarlyFirst, "paperchat", "duckduckgo"],
-      reason:
-        "PaperChat keeps scholarly discovery first and falls back to DeepSeek Search",
+      providerIds: [...scholarlyFirst, serviceSearchProvider, "duckduckgo"],
+      reason: `Keeps scholarly discovery first and falls back to ${serviceLabel}`,
     };
   }
 

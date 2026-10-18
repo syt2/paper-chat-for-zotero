@@ -2,7 +2,10 @@ import { BingProvider } from "./BingProvider";
 import { DuckDuckGoProvider } from "./DuckDuckGoProvider";
 import { GoogleScholarProvider } from "./GoogleScholarProvider";
 import { OpenAlexProvider } from "./OpenAlexProvider";
-import { PaperChatSearchProvider } from "./PaperChatSearchProvider";
+import {
+  createOfficialDeepSeekSearchProvider,
+  createPaperChatSearchProvider,
+} from "./DeepSeekToolsSearchProvider";
 import { SemanticScholarWebProvider } from "./SemanticScholarWebProvider";
 import type { WebSearchProvider } from "./WebSearchProvider";
 
@@ -13,8 +16,9 @@ import type { WebSearchProvider } from "./WebSearchProvider";
  *   legacy webSearchProvider pref.
  * - WEB_SEARCH_PROVIDER_IDS              — every id that
  *   `createWebSearchProvider` can instantiate. Superset of configurable ids.
- *   Includes `semantic_scholar` as a legacy alias (old prefs, old tool-arg
- *   usage) that is hidden from the UI but still callable, plus
+ *   Includes `paperchat` and `deepseek` as internal service-search ids, plus
+ *   `semantic_scholar` as a legacy alias (old prefs, old tool-arg usage)
+ *   that is hidden from the UI but still callable, plus
  *   `semantic_scholar_web` which is only exposed via the tool `source`
  *   argument.
  *
@@ -44,6 +48,7 @@ const CONFIGURABLE_WEB_SEARCH_PROVIDER_IDS = new Set<string>([
 const WEB_SEARCH_PROVIDER_IDS = new Set<string>([
   ...CONFIGURABLE_WEB_SEARCH_PROVIDER_IDS,
   "paperchat",
+  "deepseek",
   "semantic_scholar",
   "semantic_scholar_web",
 ]);
@@ -89,7 +94,9 @@ export function createWebSearchProvider(
     case "bing":
       return new BingProvider();
     case "paperchat":
-      return new PaperChatSearchProvider();
+      return createPaperChatSearchProvider();
+    case "deepseek":
+      return createOfficialDeepSeekSearchProvider();
     case "duckduckgo":
     default:
       return new DuckDuckGoProvider();
