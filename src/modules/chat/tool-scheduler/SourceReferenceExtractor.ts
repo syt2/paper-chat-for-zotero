@@ -469,7 +469,17 @@ export function deriveToolSourceReferences(
     addCollection(args.collectionKey);
   }
 
-  if (toolName === "web_search" || toolName === "search_scholarly_sources") {
+  if (
+    toolName === "web_search" ||
+    toolName === "web_fetch" ||
+    toolName === "search_scholarly_sources"
+  ) {
+    if (toolName === "web_fetch" && typeof args.url === "string") {
+      const url = normalizeSourceUrl(args.url);
+      if (url) {
+        addReference({ type: "web", url });
+      }
+    }
     for (const rawUrl of extractWebResultUrls(rawContent)) {
       const url = normalizeSourceUrl(rawUrl);
       if (url) {

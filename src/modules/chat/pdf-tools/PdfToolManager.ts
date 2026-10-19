@@ -45,6 +45,7 @@ import type {
   LinkRelatedItemsArgs,
   ScholarlySearchArgs,
   WebSearchArgs,
+  WebFetchArgs,
   GetCollectionsArgs,
   GetCollectionItemsArgs,
   GetTagsArgs,
@@ -61,8 +62,11 @@ import type {
 import { getMemoryService } from "../memory/MemoryService";
 import {
   executeScholarlySearch,
+  executeWebFetch,
   executeWebSearch,
+  isWebFetchAvailable,
   isValidScholarlySearchArgs,
+  isValidWebFetchArgs,
   isValidWebSearchArgs,
 } from "../web-search";
 import { preflightToolArguments } from "../tool-arguments/ToolArgumentPreflight";
@@ -685,7 +689,7 @@ export class PdfToolManager {
           },
         },
       },
-      ...createSearchToolDefinitions(),
+      ...createSearchToolDefinitions({ includeFetch: isWebFetchAvailable() }),
       createDownloadToolDefinition(),
       {
         type: "function",
@@ -1583,6 +1587,10 @@ export class PdfToolManager {
     return isValidWebSearchArgs(args);
   }
 
+  private isWebFetchArgs(args: unknown): args is WebFetchArgs {
+    return isValidWebFetchArgs(args);
+  }
+
   private isScholarlySearchArgs(args: unknown): args is ScholarlySearchArgs {
     return isValidScholarlySearchArgs(args);
   }
@@ -1729,12 +1737,20 @@ export class PdfToolManager {
         if (!this.isWebSearchArgs(args)) {
           return "Error: Invalid arguments for web_search. Required: query (string)";
         }
-        return executeWebSearch(args);
+        return executeWebSearch(args, executionContext?.originalUserRequest);
+      case "web_fetch":
+        if (!this.isWebFetchArgs(args)) {
+          return "Error: Invalid arguments for web_fetch. Required: url (string)";
+        }
+        return executeWebFetch(args);
       case "search_scholarly_sources":
         if (!this.isScholarlySearchArgs(args)) {
           return "Error: Invalid arguments for search_scholarly_sources. Required: query (string)";
         }
-        return executeScholarlySearch(args);
+        return executeScholarlySearch(
+          args,
+          executionContext?.originalUserRequest,
+        );
       case "list_all_items":
         if (!this.isListAllItemsArgs(args)) {
           return "Error: Invalid arguments for list_all_items";

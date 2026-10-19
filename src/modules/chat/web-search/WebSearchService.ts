@@ -8,6 +8,7 @@ import {
   type WebSearchIntent,
   type WebSearchSource,
 } from "../../../types/tool";
+import { normalizeDeepSeekOriginalQuestion } from "./DeepSeekSearchResult";
 import type {
   WebSearchProvider,
   WebSearchRequest,
@@ -65,6 +66,7 @@ function normalizeYear(year?: number): number | undefined {
 
 function normalizeRequest(
   args: WebSearchArgs | ScholarlySearchArgs,
+  originalQuestion?: string,
 ): WebSearchRequest {
   const maxResults = Math.min(Math.max(args.max_results ?? 5, 1), 8);
   const rawDomainFilter =
@@ -77,6 +79,11 @@ function normalizeRequest(
     query: args.query.trim(),
     source: normalizeSource(args.source),
     intent: normalizeIntent(args.intent),
+    language:
+      "language" in args && typeof args.language === "string"
+        ? args.language.trim() || undefined
+        : undefined,
+    originalQuestion: normalizeDeepSeekOriginalQuestion(originalQuestion),
     maxResults,
     domainFilter:
       domainFilter && domainFilter.length > 0 ? domainFilter : undefined,
@@ -277,8 +284,25 @@ function formatResultDetails(result: WebSearchResult): string[] {
   if (result.openAccessPdfUrl) {
     lines.push(`   Open-access PDF: ${result.openAccessPdfUrl}`);
   }
-  if (result.snippet) {
-    lines.push(`   Snippet: ${truncate(result.snippet, 300)}`);
+  const summary = result.summary || result.snippet;
+  if (summary) {
+    lines.push(`   Summary: ${truncate(summary, 800)}`);
+  }
+  if (typeof result.rerankScore === "number") {
+    lines.push(
+      `   Search quality: ${result.rerankScore >= 1.5 ? "high" : "normal"} (${result.rerankScore.toFixed(1)}/3)`,
+    );
+  }
+  if (typeof result.authority === "number") {
+    const authorityLabel =
+      result.authority < 0
+        ? "unknown"
+        : result.authority >= 3
+          ? "high"
+          : "normal";
+    lines.push(
+      `   Authority: ${authorityLabel}${result.authority >= 0 ? ` (${result.authority}/4)` : ""}`,
+    );
   }
   if (result.contentExcerpt) {
     lines.push(
@@ -347,26 +371,31 @@ async function runProvider(
   return provider.search({ ...request, source: providerId });
 }
 
-export async function executeWebSearch(args: WebSearchArgs): Promise<string> {
-  return executeSearch(args, "web");
+export async function executeWebSearch(
+  args: WebSearchArgs,
+  originalQuestion?: string,
+): Promise<string> {
+  return executeSearch(args, "web", originalQuestion);
 }
 
 export async function executeScholarlySearch(
   args: ScholarlySearchArgs,
+  originalQuestion?: string,
 ): Promise<string> {
-  return executeSearch(args, "scholarly");
+  return executeSearch(args, "scholarly", originalQuestion);
 }
 
 async function executeSearch(
   args: WebSearchArgs | ScholarlySearchArgs,
   resultKind: "web" | "scholarly",
+  originalQuestion?: string,
 ): Promise<string> {
   const query = args.query.trim();
   if (!query) {
     return "Error: search query cannot be empty.";
   }
 
-  const request = normalizeRequest(args);
+  const request = normalizeRequest(args, originalQuestion);
   const { providerIds, reason } =
     resultKind === "scholarly"
       ? buildScholarlyProviderOrder(request)

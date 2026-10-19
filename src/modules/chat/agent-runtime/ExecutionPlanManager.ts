@@ -61,6 +61,8 @@ function getToolIntentTitle(toolName: string): string {
       return "Read paper evidence";
     case "web_search":
       return "Check information outside Zotero";
+    case "web_fetch":
+      return "Read a specific web page";
     case "search_scholarly_sources":
       return "Search scholarly sources";
     case "download":

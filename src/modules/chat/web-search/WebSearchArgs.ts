@@ -4,6 +4,7 @@ import {
   WEB_SEARCH_INTENTS,
   WEB_SEARCH_SOURCES,
   type ScholarlySearchArgs,
+  type WebFetchArgs,
   type WebSearchArgs,
 } from "../../../types/tool";
 
@@ -28,6 +29,8 @@ export function isValidWebSearchArgs(args: unknown): args is WebSearchArgs {
       typeof (args as WebSearchArgs).max_results === "number") &&
     (typeof (args as WebSearchArgs).include_content === "undefined" ||
       typeof (args as WebSearchArgs).include_content === "boolean") &&
+    (typeof (args as WebSearchArgs).language === "undefined" ||
+      typeof (args as WebSearchArgs).language === "string") &&
     (typeof (args as WebSearchArgs).year_from === "undefined" ||
       typeof (args as WebSearchArgs).year_from === "number") &&
     (typeof (args as WebSearchArgs).year_to === "undefined" ||
@@ -45,6 +48,17 @@ export function isValidWebSearchArgs(args: unknown): args is WebSearchArgs {
         (args as WebSearchArgs).domain_filter!.every(
           (domain) => typeof domain === "string",
         )))
+  );
+}
+
+export function isValidWebFetchArgs(args: unknown): args is WebFetchArgs {
+  return (
+    typeof args === "object" &&
+    args !== null &&
+    typeof (args as WebFetchArgs).url === "string" &&
+    (args as WebFetchArgs).url.trim().length > 0 &&
+    (typeof (args as WebFetchArgs).max_chars === "undefined" ||
+      typeof (args as WebFetchArgs).max_chars === "number")
   );
 }
 

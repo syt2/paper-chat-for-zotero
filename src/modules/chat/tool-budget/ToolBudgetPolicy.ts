@@ -14,6 +14,7 @@ import { normalizeAgentMaxPlanningIterations } from "../agent-runtime/IterationL
 const CURRENT_PAPER_TARGET = "__current_paper__";
 const MAX_FULL_TEXT_CEILING = 3;
 const MAX_WEB_SEARCH_CEILING = 8;
+const MAX_WEB_FETCH_CEILING = 5;
 export const HOSTED_WEB_SEARCH_RESULT_ID_PREFIX = "hosted-web-search:";
 const SEARCH_TOOL_NAMES = new Set<PaperToolName>([
   "web_search",
@@ -38,12 +39,15 @@ export interface ToolBudgetState {
     "web_search" | "search_scholarly_sources",
     string[]
   >;
+  webFetchCalls: number;
+  webFetchUrls: string[];
   narrowPaperTargets: Set<string>;
 }
 
 export interface ToolBudgetLimits {
   maxFullTextCallsPerTurn: number;
   maxWebSearchCallsPerTurn: number;
+  maxWebFetchCallsPerTurn?: number;
 }
 
 export function isSearchToolName(
@@ -76,6 +80,8 @@ export function createToolBudgetState(
       web_search: [],
       search_scholarly_sources: [],
     },
+    webFetchCalls: 0,
+    webFetchUrls: [],
     narrowPaperTargets: new Set<string>(),
   };
 
@@ -103,6 +109,14 @@ export function createToolBudgetState(
       }
       continue;
     }
+    if (toolName === "web_fetch") {
+      state.webFetchCalls += 1;
+      const url = normalizeWebFetchUrl(result.args?.url);
+      if (url) {
+        state.webFetchUrls.push(url);
+      }
+      continue;
+    }
     if (NARROW_PAPER_TOOLS.has(toolName)) {
       state.narrowPaperTargets.add(getPaperTargetKey(result.args));
     }
@@ -121,6 +135,10 @@ export function getToolBudgetLimits(maxIterations: number): ToolBudgetLimits {
     ),
     maxWebSearchCallsPerTurn: Math.min(
       MAX_WEB_SEARCH_CEILING,
+      Math.max(1, Math.floor(normalizedIterations / 3)),
+    ),
+    maxWebFetchCallsPerTurn: Math.min(
+      MAX_WEB_FETCH_CEILING,
       Math.max(1, Math.floor(normalizedIterations / 3)),
     ),
   };
@@ -229,7 +247,63 @@ export function applyToolBudgetPolicy(
     return null;
   }
 
+  if (toolName === "web_fetch") {
+    const url = normalizeWebFetchUrl(args?.url);
+    if (url && state.webFetchUrls.includes(url)) {
+      return createBudgetBlockedResult(toolCall, args, {
+        summary:
+          "Blocked web_fetch because this exact page was already fetched in this turn.",
+        cause:
+          "The same URL was already fetched in this user turn; fetching it again would duplicate page content and cost.",
+        suggestedFix:
+          "Use the page content already gathered in this turn, or fetch a different canonical URL.",
+        saferAlternative:
+          "Use web_search or Zotero evidence if the existing page content is insufficient.",
+        data: { tool: toolName, url, previousUrls: [...state.webFetchUrls] },
+      });
+    }
+    const limit = limits.maxWebFetchCallsPerTurn ?? MAX_WEB_FETCH_CEILING;
+    if (state.webFetchCalls >= limit) {
+      return createBudgetBlockedResult(toolCall, args, {
+        summary: `Blocked web_fetch because the turn fetch budget is exhausted.`,
+        cause: `Web Fetch may only run ${limit} times per user turn.`,
+        suggestedFix:
+          "Use the page content already gathered in this turn, or ask for a new user turn before fetching more pages.",
+        saferAlternative:
+          "Use web_search result summaries or Zotero evidence instead of opening more pages.",
+        data: {
+          tool: toolName,
+          url,
+          webFetchCalls: state.webFetchCalls,
+          limit,
+        },
+      });
+    }
+    state.webFetchCalls += 1;
+    if (url) {
+      state.webFetchUrls.push(url);
+    }
+    return null;
+  }
+
   return null;
+}
+
+function normalizeWebFetchUrl(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    const url = new URL(trimmed);
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return trimmed;
+  }
 }
 
 function createBudgetBlockedResult(

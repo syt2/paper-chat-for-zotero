@@ -1,6 +1,7 @@
 import { getAuthManager } from "../../auth";
 import { getPaperChatApiBaseUrl } from "../../providers/PaperChatUrls";
 import type {
+  WebFetchResult,
   WebSearchProvider,
   WebSearchRequest,
   WebSearchResponse,
@@ -9,6 +10,7 @@ import { requestHttp } from "./WebSearchHttp";
 import {
   buildDeepSeekSearchQuery,
   getDeepSeekSearchCount,
+  normalizeDeepSeekOriginalQuestion,
   parseDeepSeekSearchResults,
   type DeepSeekSearchResponse,
 } from "./DeepSeekSearchResult";
@@ -22,6 +24,8 @@ interface DeepSeekToolsSearchMessages {
   rejectedKey: string;
   insufficientQuota: string;
   missingEndpoint: string;
+  missingFetchEndpoint: string;
+  emptyContent: string;
   rateLimited: string;
   invalidJson: string;
 }
@@ -59,6 +63,9 @@ export class DeepSeekToolsSearchProvider implements WebSearchProvider {
       throw new Error(this.options.messages.missingKey);
     }
 
+    const originalQuestion = normalizeDeepSeekOriginalQuestion(
+      request.originalQuestion,
+    );
     const response = await requestHttp(
       `${this.options.getApiBaseUrl().replace(/\/+$/, "")}/tools/search`,
       {
@@ -73,6 +80,7 @@ export class DeepSeekToolsSearchProvider implements WebSearchProvider {
           query: buildDeepSeekSearchQuery(request),
           count: getDeepSeekSearchCount(request),
           need_content: request.includeContent,
+          ...(originalQuestion ? { ori_question: originalQuestion } : {}),
         }),
       },
     );
@@ -106,6 +114,67 @@ export class DeepSeekToolsSearchProvider implements WebSearchProvider {
       results: parseDeepSeekSearchResults(payload, request),
     };
   }
+
+  async fetchPage(url: string): Promise<WebFetchResult> {
+    const apiKey = this.options.getApiKey()?.trim();
+    if (!apiKey) {
+      throw new Error(this.options.messages.missingKey);
+    }
+
+    const response = await requestHttp(
+      `${this.options.getApiBaseUrl().replace(/\/+$/, "")}/tools/fetch`,
+      {
+        method: "POST",
+        timeoutMs: 30000,
+        accept: "application/json",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ url }),
+      },
+    );
+
+    if (response.status === 401 || response.status === 403) {
+      throw new Error(this.options.messages.rejectedKey);
+    }
+    if (response.status === 402) {
+      throw new Error(this.options.messages.insufficientQuota);
+    }
+    if (response.status === 404) {
+      throw new Error(this.options.messages.missingFetchEndpoint);
+    }
+    if (response.status === 429) {
+      throw new Error(this.options.messages.rateLimited);
+    }
+    if (response.status >= 400) {
+      throw new Error(readErrorMessage(response.status, response.body));
+    }
+
+    let payload: { title?: unknown; url?: unknown; content?: unknown };
+    try {
+      payload = JSON.parse(response.body) as typeof payload;
+    } catch {
+      throw new Error(this.options.messages.invalidJson);
+    }
+    const content =
+      typeof payload.content === "string" ? payload.content.trim() : "";
+    if (!content) {
+      throw new Error(this.options.messages.emptyContent);
+    }
+    return {
+      title:
+        typeof payload.title === "string" && payload.title.trim()
+          ? payload.title.trim()
+          : url,
+      url:
+        typeof payload.url === "string" && payload.url.trim()
+          ? payload.url.trim()
+          : url,
+      content,
+      contentType: "markdown",
+    };
+  }
 }
 
 const PAPERCHAT_MESSAGES: DeepSeekToolsSearchMessages = {
@@ -117,6 +186,10 @@ const PAPERCHAT_MESSAGES: DeepSeekToolsSearchMessages = {
     "PaperChat Search cannot be charged because the account quota is insufficient.",
   missingEndpoint:
     "This NewAPI build does not provide /v1/tools/search. Upgrade NewAPI to a build containing commit 6cf0d90 (2026-10-17) or later.",
+  missingFetchEndpoint:
+    "This NewAPI build does not provide /v1/tools/fetch. Upgrade NewAPI to a build containing commit 6cf0d90 (2026-10-17) or later.",
+  emptyContent:
+    "PaperChat Fetch returned no page content. The page may be empty, blocked, or unavailable.",
   rateLimited: "PaperChat Search is rate limited. Wait before retrying.",
   invalidJson: "PaperChat Search returned invalid JSON.",
 };
@@ -130,6 +203,10 @@ const OFFICIAL_DEEPSEEK_MESSAGES: DeepSeekToolsSearchMessages = {
     "DeepSeek Search cannot be billed because the DeepSeek account balance is insufficient.",
   missingEndpoint:
     "The configured DeepSeek API does not provide /v1/tools/search.",
+  missingFetchEndpoint:
+    "The configured DeepSeek API does not provide /v1/tools/fetch.",
+  emptyContent:
+    "DeepSeek Fetch returned no page content. The page may be empty, blocked, or unavailable.",
   rateLimited: "DeepSeek Search is rate limited. Wait before retrying.",
   invalidJson: "DeepSeek Search returned invalid JSON.",
 };
@@ -148,6 +225,26 @@ export function createOfficialDeepSeekSearchProvider(): DeepSeekToolsSearchProvi
   return new DeepSeekToolsSearchProvider({
     id: "deepseek",
     displayName: "DeepSeek Search",
+    getApiKey: getOfficialDeepSeekSearchApiKey,
+    getApiBaseUrl: getOfficialDeepSeekSearchBaseUrl,
+    messages: OFFICIAL_DEEPSEEK_MESSAGES,
+  });
+}
+
+export function createPaperChatFetchProvider(): DeepSeekToolsSearchProvider {
+  return new DeepSeekToolsSearchProvider({
+    id: "paperchat",
+    displayName: "PaperChat Fetch",
+    getApiKey: () => getAuthManager().getApiKey(),
+    getApiBaseUrl: getPaperChatApiBaseUrl,
+    messages: PAPERCHAT_MESSAGES,
+  });
+}
+
+export function createOfficialDeepSeekFetchProvider(): DeepSeekToolsSearchProvider {
+  return new DeepSeekToolsSearchProvider({
+    id: "deepseek",
+    displayName: "DeepSeek Fetch",
     getApiKey: getOfficialDeepSeekSearchApiKey,
     getApiBaseUrl: getOfficialDeepSeekSearchBaseUrl,
     messages: OFFICIAL_DEEPSEEK_MESSAGES,

@@ -424,6 +424,7 @@ function getReadOnlyNeighborTools(toolName: string): string[] {
     case "save_memory":
       return ["get_item_metadata", "get_item_notes", "search_notes"];
     case "web_search":
+    case "web_fetch":
       return ["search_items", "search_notes", "list_all_items"];
     default:
       return [];

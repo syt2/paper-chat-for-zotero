@@ -88,6 +88,13 @@ const TOOL_PERMISSION_DESCRIPTORS: Record<
       "Search external web content.",
     ),
   },
+  web_fetch: {
+    ...createDescriptor(
+      "web_fetch",
+      "network",
+      "Open a specific public web URL and read its Markdown content.",
+    ),
+  },
   search_scholarly_sources: {
     ...createDescriptor(
       "search_scholarly_sources",

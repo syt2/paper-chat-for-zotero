@@ -40,6 +40,8 @@ import type { PresentationLaunchAuthorization } from "../../presentation/Present
 import type { PresentationToolLaunchSession } from "../../presentation/PresentationToolLaunchSession";
 
 export interface ToolSchedulerExecutionContext {
+  /** Latest user request for service-search intent preservation. */
+  originalUserRequest?: string;
   presentationVisualReviewer?: PresentationVisualReviewer;
   presentationPlanner?: PresentationPlanner;
   /** Presentation-only progress channel. Other tools never observe it. */

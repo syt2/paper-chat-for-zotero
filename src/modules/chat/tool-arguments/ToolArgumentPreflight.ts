@@ -35,6 +35,12 @@ const TOOL_SPECIFIC_ALIASES: Record<string, Record<string, string>> = {
     seedDoi: "seed_doi",
     seedPaperId: "seed_paper_id",
   },
+  web_fetch: {
+    maxChars: "max_chars",
+    maxCharacters: "max_chars",
+    link: "url",
+    href: "url",
+  },
   search_scholarly_sources: {
     maxResults: "max_results",
     provider: "source",

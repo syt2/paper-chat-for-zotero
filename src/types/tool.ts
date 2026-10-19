@@ -321,6 +321,7 @@ export type PaperToolName =
   | "read_artifact"
   | "download"
   | "web_search"
+  | "web_fetch"
   | "search_scholarly_sources"
   | "get_paper_section"
   | "search_paper_content"
@@ -525,6 +526,7 @@ export interface WebSearchArgs {
   query: string;
   source?: WebSearchSource;
   intent?: WebSearchIntent;
+  language?: string;
   max_results?: number;
   domain_filter?: string[];
   include_content?: boolean;
@@ -534,6 +536,11 @@ export interface WebSearchArgs {
   seed_title?: string;
   seed_doi?: string;
   seed_paper_id?: string;
+}
+
+export interface WebFetchArgs {
+  url: string;
+  max_chars?: number;
 }
 
 export interface ScholarlySearchArgs {

@@ -81,7 +81,11 @@ export function filterSearchToolsForScope(params: {
     );
   }
   if (scope === "scholarly_only" || scope === "scholarly_then_web") {
-    return tools.filter((tool) => tool.function.name !== "web_search");
+    return tools.filter(
+      (tool) =>
+        tool.function.name !== "web_search" &&
+        tool.function.name !== "web_fetch",
+    );
   }
   if (!supportsHostedWebSearch) {
     return tools.filter(
@@ -102,11 +106,17 @@ export function getSearchToolPromptMode(
   if (toolNames.has("search_scholarly_sources")) {
     return toolNames.has("web_search") ? "split" : "scholarly_only";
   }
-  return toolNames.has("web_search") ? "unified" : "none";
+  return toolNames.has("web_search") || toolNames.has("web_fetch")
+    ? "unified"
+    : "none";
 }
 
 export function isExternalSearchToolName(toolName: string): boolean {
-  return toolName === "web_search" || toolName === "search_scholarly_sources";
+  return (
+    toolName === "web_search" ||
+    toolName === "web_fetch" ||
+    toolName === "search_scholarly_sources"
+  );
 }
 
 export function isSearchScopeControlledToolName(toolName: string): boolean {

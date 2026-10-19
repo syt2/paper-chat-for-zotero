@@ -7,6 +7,7 @@ import {
 } from "./WebSearchUtils";
 
 const MAX_QUERY_CHARACTERS = 128;
+const MAX_ORIGINAL_QUESTION_CHARACTERS = 128;
 const CONTENT_EXCERPT_LENGTH = 1200;
 
 export interface DeepSeekSearchResponse {
@@ -21,6 +22,21 @@ function truncateUnicode(value: string, maxLength: number): string {
   return Array.from(value).slice(0, maxLength).join("");
 }
 
+/**
+ * DeepSeek accepts ori_question only as a short 1-128 character hint. The
+ * latest user turn can be much longer, so keep a compact, whitespace-normalized
+ * prefix instead of sending an invalid request that would fall back to Bing.
+ */
+export function normalizeDeepSeekOriginalQuestion(
+  value?: string,
+): string | undefined {
+  const normalized = cleanText(value || "");
+  if (!normalized) {
+    return undefined;
+  }
+  return truncateUnicode(normalized, MAX_ORIGINAL_QUESTION_CHARACTERS);
+}
+
 export function buildDeepSeekSearchQuery(request: WebSearchRequest): string {
   const baseQuery = cleanText(buildSeedEnrichedQuery(request));
   const filters: string[] = [];
@@ -31,6 +47,12 @@ export function buildDeepSeekSearchQuery(request: WebSearchRequest): string {
         .filter((filter) => filter !== "site:")
         .join(" OR "),
     );
+  }
+  if (
+    request.language &&
+    /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$/.test(request.language)
+  ) {
+    filters.push(`lang:${request.language}`);
   }
   if (typeof request.yearFrom === "number") {
     filters.push(`after:${request.yearFrom}`);
@@ -60,6 +82,29 @@ function readString(
 ): string | undefined {
   const value = record[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readScore(
+  record: Record<string, unknown>,
+  key: string,
+  min: number,
+  max: number,
+): number | undefined {
+  const value = record[key];
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return Math.min(max, Math.max(min, value));
+}
+
+function readInteger(
+  record: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const value = record[key];
+  return typeof value === "number" && Number.isInteger(value)
+    ? value
+    : undefined;
 }
 
 function parseResultYear(value: string | undefined): number | undefined {
@@ -102,13 +147,21 @@ export function parseDeepSeekSearchResults(
       continue;
     }
 
+    const summary = cleanText(
+      readString(record, "summary") || readString(record, "snippet") || "",
+    );
     const content = readString(record, "content");
+    const rerankScore = readScore(record, "rerank_score", 0, 3);
+    const authority = readInteger(record, "authority");
     const result: WebSearchResult = {
       title,
       url,
-      snippet: cleanText(
-        readString(record, "summary") || readString(record, "snippet") || "",
-      ),
+      snippet: summary,
+      ...(summary ? { summary } : {}),
+      ...(rerankScore !== undefined ? { rerankScore } : {}),
+      ...(authority !== undefined && authority >= -1 && authority <= 4
+        ? { authority }
+        : {}),
       year: parseResultYear(readString(record, "date")),
       venue: readString(record, "site_name"),
     };
@@ -120,9 +173,45 @@ export function parseDeepSeekSearchResults(
       result.contentType = "webpage_excerpt";
     }
     results.push(result);
-    if (results.length >= request.maxResults) {
-      break;
-    }
   }
-  return results;
+
+  // DeepSeek already returns a ranked list, but keep the contract explicit:
+  // stable-sort by rerank_score, using authority only when both scores are
+  // known and the relevance scores are tied. Results without a score follow
+  // scored results while preserving their own relative order.
+  return results
+    .map((result, index) => ({ result, index }))
+    .sort((left, right) => {
+      const leftScore = left.result.rerankScore;
+      const rightScore = right.result.rerankScore;
+      if (leftScore !== undefined && rightScore === undefined) {
+        return -1;
+      }
+      if (leftScore === undefined && rightScore !== undefined) {
+        return 1;
+      }
+      if (
+        leftScore !== undefined &&
+        rightScore !== undefined &&
+        leftScore !== rightScore
+      ) {
+        return rightScore - leftScore;
+      }
+      const leftAuthority = left.result.authority;
+      const rightAuthority = right.result.authority;
+      if (
+        leftScore !== undefined &&
+        rightScore !== undefined &&
+        leftAuthority !== undefined &&
+        rightAuthority !== undefined &&
+        leftAuthority >= 0 &&
+        rightAuthority >= 0 &&
+        leftAuthority !== rightAuthority
+      ) {
+        return rightAuthority - leftAuthority;
+      }
+      return left.index - right.index;
+    })
+    .slice(0, request.maxResults)
+    .map(({ result }) => result);
 }

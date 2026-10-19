@@ -3,6 +3,8 @@ import {
   DeepSeekToolsSearchProvider,
   type DeepSeekToolsSearchProviderOptions,
 } from "../src/modules/chat/web-search/DeepSeekToolsSearchProvider.ts";
+import { parseDeepSeekSearchResults } from "../src/modules/chat/web-search/DeepSeekSearchResult.ts";
+import { normalizeWebFetchUrl } from "../src/modules/chat/web-search/WebFetchService.ts";
 import type { WebSearchRequest } from "../src/modules/chat/web-search/WebSearchProvider.ts";
 
 interface RecordedRequest {
@@ -91,6 +93,10 @@ const PAPERCHAT_MESSAGES = {
     "PaperChat Search cannot be charged because the account quota is insufficient.",
   missingEndpoint:
     "This NewAPI build does not provide /v1/tools/search. Upgrade NewAPI to a build containing commit 6cf0d90 (2026-10-17) or later.",
+  missingFetchEndpoint:
+    "This NewAPI build does not provide /v1/tools/fetch. Upgrade NewAPI to a build containing commit 6cf0d90 (2026-10-17) or later.",
+  emptyContent:
+    "PaperChat Fetch returned no page content. The page may be empty, blocked, or unavailable.",
   rateLimited: "PaperChat Search is rate limited. Wait before retrying.",
   invalidJson: "PaperChat Search returned invalid JSON.",
 };
@@ -151,6 +157,8 @@ describe("DeepSeek tools search provider", function () {
         domainFilter: ["example.com"],
         yearFrom: 2025,
         yearTo: 2026,
+        language: "en",
+        originalQuestion: "What changed in DeepSeek V4?",
       }),
     );
 
@@ -175,12 +183,140 @@ describe("DeepSeek tools search provider", function () {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          query: "DeepSeek V4 release site:example.com after:2025 before:2027",
+          query:
+            "DeepSeek V4 release site:example.com lang:en after:2025 before:2027",
           count: 5,
           need_content: true,
+          ori_question: "What changed in DeepSeek V4?",
         }),
       },
     ]);
+  });
+
+  it("keeps and ranks rerank_score and authority without dropping unknown authority", function () {
+    const results = parseDeepSeekSearchResults(
+      {
+        results: [
+          {
+            title: "Unranked",
+            url: "https://example.com/unranked",
+            summary: "No scores",
+          },
+          {
+            title: "High authority",
+            url: "https://example.com/high",
+            summary: "Official documentation",
+            rerank_score: 2.8,
+            authority: 4,
+          },
+          {
+            title: "Unknown authority",
+            url: "https://example.com/unknown",
+            summary: "Useful result",
+            rerank_score: 1.8,
+            authority: -1,
+          },
+          {
+            title: "Low quality",
+            url: "https://example.com/low",
+            summary: "Weak result",
+            rerank_score: 0.8,
+            authority: 1,
+          },
+        ],
+      },
+      request(),
+    );
+
+    assert.deepEqual(
+      results.map((result) => result.title),
+      ["High authority", "Unknown authority", "Low quality", "Unranked"],
+    );
+    assert.equal(results[0]?.rerankScore, 2.8);
+    assert.equal(results[0]?.authority, 4);
+    assert.equal(results[1]?.authority, -1);
+    assert.equal(results[0]?.summary, "Official documentation");
+  });
+
+  it("caps ori_question at the DeepSeek 128-character limit", async function () {
+    FakeXMLHttpRequest.responses.push({
+      status: 200,
+      statusText: "OK",
+      body: JSON.stringify({
+        results: [{ title: "Result", url: "https://example.com/" }],
+      }),
+    });
+
+    await createProvider().search(
+      request({ originalQuestion: "这是一个很长的用户问题".repeat(20) }),
+    );
+
+    const body = JSON.parse(FakeXMLHttpRequest.requests[0]?.body || "{}") as {
+      ori_question?: string;
+    };
+    assert.equal(Array.from(body.ori_question || "").length, 128);
+  });
+
+  it("fetches one URL as Markdown through /v1/tools/fetch", async function () {
+    FakeXMLHttpRequest.responses.push({
+      status: 200,
+      statusText: "OK",
+      body: JSON.stringify({
+        title: "Example Domain",
+        content: "# Example Domain\n\nThis domain is for use in examples.",
+      }),
+    });
+    const provider = createProvider();
+
+    const result = await provider.fetchPage("https://example.com/");
+
+    assert.equal(result.title, "Example Domain");
+    assert.equal(result.url, "https://example.com/");
+    assert.include(result.content, "# Example Domain");
+    assert.deepEqual(FakeXMLHttpRequest.requests, [
+      {
+        method: "POST",
+        url: "https://paperchat.example/v1/tools/fetch",
+        headers: {
+          Accept: "application/json",
+          Authorization: "Bearer sk-paperchat-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ url: "https://example.com/" }),
+      },
+    ]);
+  });
+
+  it("rejects an empty Fetch response instead of returning blank evidence", async function () {
+    FakeXMLHttpRequest.responses.push({
+      status: 200,
+      statusText: "OK",
+      body: JSON.stringify({ title: "Blocked", content: "" }),
+    });
+
+    let message = "";
+    try {
+      await createProvider().fetchPage("https://example.com/");
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    assert.include(message, "returned no page content");
+  });
+
+  it("blocks local and private Fetch targets", function () {
+    assert.throws(
+      () => normalizeWebFetchUrl("http://127.0.0.1/private"),
+      /private-network/,
+    );
+    assert.throws(
+      () => normalizeWebFetchUrl("http://169.254.169.254/latest/meta-data"),
+      /private-network/,
+    );
+    assert.throws(() => normalizeWebFetchUrl("file:///etc/passwd"), /http/);
+    assert.equal(
+      normalizeWebFetchUrl("https://example.com/article#section"),
+      "https://example.com/article",
+    );
   });
 
   it("calls the official DeepSeek search endpoint with the provider key", async function () {

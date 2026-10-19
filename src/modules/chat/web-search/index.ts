@@ -1,6 +1,12 @@
 export { executeScholarlySearch, executeWebSearch } from "./WebSearchService";
 export {
+  executeWebFetch,
+  isWebFetchAvailable,
+  normalizeWebFetchUrl,
+} from "./WebFetchService";
+export {
   isValidScholarlySearchArgs,
+  isValidWebFetchArgs,
   isValidWebSearchArgs,
 } from "./WebSearchArgs";
 export {
@@ -10,6 +16,7 @@ export {
 } from "./WebSearchRegistry";
 export type {
   WebSearchProvider,
+  WebFetchResult,
   WebSearchRequest,
   WebSearchResponse,
   WebSearchResult,

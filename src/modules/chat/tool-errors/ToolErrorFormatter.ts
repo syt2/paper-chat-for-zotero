@@ -134,7 +134,9 @@ function inferToolError(
           ? "Use the full-text result already gathered in this turn, or wait for a new user turn before requesting full text again."
           : "Use the existing search results, narrow the question, or wait for a new user turn before searching again.",
       saferAlternative:
-        toolName === "web_search" || toolName === "search_scholarly_sources"
+        toolName === "web_search" ||
+        toolName === "web_fetch" ||
+        toolName === "search_scholarly_sources"
           ? "Use Zotero library tools or synthesize from results already gathered in this turn."
           : "Use targeted section, page, metadata, notes, or annotation tools instead of full text.",
     };

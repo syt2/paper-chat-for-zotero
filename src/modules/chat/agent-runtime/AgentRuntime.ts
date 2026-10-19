@@ -1901,8 +1901,14 @@ export class AgentRuntime {
       presentationLaunchSession ||
       normalizedToolCalls.some(
         (toolCall) => toolCall.function.name === "presentation",
+      ) ||
+      normalizedToolCalls.some(
+        (toolCall) =>
+          toolCall.function.name === "web_search" ||
+          toolCall.function.name === "web_fetch",
       )
         ? {
+            originalUserRequest: latestUserRequest?.trim() || undefined,
             paperSource: {
               itemKey: currentItemKey || undefined,
               libraryID: currentItemLibraryID,

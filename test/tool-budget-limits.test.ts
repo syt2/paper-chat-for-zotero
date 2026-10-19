@@ -78,4 +78,39 @@ describe("ToolBudgetLimits", function () {
     const state = createToolBudgetState(previousResults);
     assert.equal(state.getFullTextCalls, 1);
   });
+
+  it("blocks repeated web_fetch URLs and caps fetches per turn", async function () {
+    const { applyToolBudgetPolicy, createToolBudgetState } =
+      await import("../src/modules/chat/tool-budget/ToolBudgetPolicy.ts");
+    const state = createToolBudgetState([]);
+    const limits = {
+      maxFullTextCallsPerTurn: 1,
+      maxWebSearchCallsPerTurn: 2,
+      maxWebFetchCallsPerTurn: 1,
+    };
+    const call = {
+      id: "fetch-1",
+      type: "function" as const,
+      function: {
+        name: "web_fetch",
+        arguments: JSON.stringify({ url: "https://example.com/a#one" }),
+      },
+    };
+
+    assert.isNull(applyToolBudgetPolicy(call, state, limits));
+    const duplicate = applyToolBudgetPolicy(
+      {
+        ...call,
+        id: "fetch-2",
+        function: {
+          ...call.function,
+          arguments: JSON.stringify({ url: "https://example.com/a#two" }),
+        },
+      },
+      state,
+      limits,
+    );
+    assert.equal(duplicate?.status, "failed");
+    assert.include(duplicate?.content || "", "already fetched");
+  });
 });

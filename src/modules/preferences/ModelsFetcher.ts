@@ -388,6 +388,12 @@ export function hasPaperchatServiceSearchModel(
   return (models ?? getPaperchatKeyModels()).includes("deepseek-search");
 }
 
+export function hasPaperchatServiceFetchModel(
+  models?: readonly string[],
+): boolean {
+  return (models ?? getPaperchatKeyModels()).includes("deepseek-fetch");
+}
+
 function getPricingModelName(
   item: Record<string, unknown>,
 ): string | undefined {
