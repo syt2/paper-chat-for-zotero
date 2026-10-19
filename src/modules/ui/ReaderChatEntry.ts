@@ -118,6 +118,9 @@ type FloatingSelectionEntry = {
 let floatingSelectionEntry: FloatingSelectionEntry | undefined;
 let closeSelectionTranslation: (() => void) | undefined;
 
+/** Long enough to avoid a passing pointer, short enough to feel immediate. */
+const TRANSLATION_HOVER_DELAY_MS = 600;
+
 type ReaderWithPdfWindow = ReaderLike & {
   _iframeWindow?: Window;
   _internalReader?: {
@@ -775,7 +778,14 @@ function showFloatingSelectionEntry(
       action();
     });
   };
+  let translationHoverTimer: ReturnType<typeof setTimeout> | undefined;
+  const cancelTranslationHover = () => {
+    if (translationHoverTimer === undefined) return;
+    clearTimeout(translationHoverTimer);
+    translationHoverTimer = undefined;
+  };
   const setExpanded = (expanded: boolean) => {
+    if (!expanded) cancelTranslationHover();
     if (entry.expanded === expanded) return;
     entry.expanded = expanded;
     toggle.setAttribute("aria-expanded", String(entry.expanded));
@@ -794,6 +804,23 @@ function showFloatingSelectionEntry(
   // Watch the whole menu so moving between its controls does not collapse it.
   button.addEventListener("mouseenter", () => setExpanded(true));
   button.addEventListener("mouseleave", () => setExpanded(false));
+  const openTranslation = () => {
+    cancelTranslationHover();
+    closeSelectionTranslation?.();
+    // Translation is a read-only side panel, so the entry stays put: the user
+    // can still comment, pin, or translate again without reselecting.
+    entry.translating = true;
+    setExpanded(true);
+    closeSelectionTranslation = showReaderSelectionTranslation(
+      doc,
+      entry.text,
+      entry.anchor,
+      entry.translationContext,
+      () => {
+        entry.translating = false;
+      },
+    );
+  };
   let currentOpacity = FLOATING_SELECTION_ENTRY_DIM_OPACITY;
   const setOpacityForPointer = (pointerX?: number, pointerY?: number) => {
     let nextOpacity = FLOATING_SELECTION_ENTRY_DIM_OPACITY;
@@ -832,6 +859,7 @@ function showFloatingSelectionEntry(
     removeFloatingSelectionEntry();
   };
   activate(comment, () => {
+    cancelTranslationHover();
     if (entry.closeCommentPopover) {
       entry.closeCommentPopover();
       return;
@@ -855,22 +883,23 @@ function showFloatingSelectionEntry(
       },
     );
   });
-  activate(translate, () => {
-    closeSelectionTranslation?.();
-    // Translation is a read-only side panel, so the entry stays put: the user
-    // can still comment, pin, or translate again without reselecting.
-    entry.translating = true;
-    setExpanded(true);
-    closeSelectionTranslation = showReaderSelectionTranslation(
-      doc,
-      entry.text,
-      entry.anchor,
-      entry.translationContext,
-      () => {
-        entry.translating = false;
-      },
-    );
+  activate(translate, openTranslation);
+  translate.addEventListener("mouseenter", () => {
+    if (entry.translating) return;
+    cancelTranslationHover();
+    translationHoverTimer = setTimeout(() => {
+      translationHoverTimer = undefined;
+      if (
+        floatingSelectionEntry !== entry ||
+        !entry.expanded ||
+        entry.translating
+      ) {
+        return;
+      }
+      openTranslation();
+    }, TRANSLATION_HOVER_DELAY_MS);
   });
+  translate.addEventListener("mouseleave", cancelTranslationHover);
   button.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -893,6 +922,7 @@ function showFloatingSelectionEntry(
   };
   doc.addEventListener("pointerdown", outside, true);
   entry.dispose = () => {
+    cancelTranslationHover();
     doc.removeEventListener("pointerdown", outside, true);
     doc.removeEventListener("pointermove", handlePointerMove, true);
     doc.documentElement.removeEventListener("pointerleave", handlePointerLeave);
