@@ -835,6 +835,7 @@ export function createMessageElement(
     },
     { class: "chat-bubble" },
   );
+  let deliveryState: HTMLElement | null = null;
 
   const contentAttrs: Record<string, string> = { class: "chat-content" };
   if (msg.role === "assistant" && msg.streamingState === "in_progress") {
@@ -1010,9 +1011,9 @@ export function createMessageElement(
       {
         display: "flex",
         alignItems: "center",
-        justifyContent: "flex-end",
+        flexShrink: "0",
         gap: "5px",
-        marginTop: "6px",
+        margin: "0",
         fontSize: chatFontSize(11),
         opacity: "0.72",
       },
@@ -1032,7 +1033,7 @@ export function createMessageElement(
     const label = createElement(doc, "span");
     label.textContent = getString("chat-message-sending");
     state.append(dot, label);
-    bubble.appendChild(state);
+    deliveryState = state;
   }
 
   if (msg.role === "assistant" && msg.streamingState === "interrupted") {
@@ -1093,7 +1094,12 @@ export function createMessageElement(
       );
       actions.appendChild(edit);
     }
+    if (deliveryState) {
+      actions.appendChild(deliveryState);
+    }
     wrapper.appendChild(actions);
+  } else if (deliveryState) {
+    wrapper.appendChild(deliveryState);
   }
 
   return wrapper;
