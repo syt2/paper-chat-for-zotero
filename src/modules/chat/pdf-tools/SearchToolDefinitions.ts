@@ -43,7 +43,7 @@ function createGeneralWebSearchDefinition(): ToolDefinition {
             type: "string",
             enum: [...WEB_SEARCH_INTENTS],
             description:
-              "Optional local routing intent. related and discover favor scholarly sources, biomedical favors biomedical literature, web favors general-web providers, and paper targets a known work. Hosted-search models may ignore this field.",
+              "Optional local routing intent. auto and web prefer service/general-web search; paper, related, biomedical, and discover keep scholarly sources first. Use paper/related explicitly for papers, authors, DOI, citations, or literature discovery. Hosted-search models may ignore this field.",
           },
           language: {
             type: "string",

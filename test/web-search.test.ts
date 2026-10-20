@@ -1,5 +1,6 @@
 import { assert } from "chai";
 import {
+  buildServiceSearchProviderOrder,
   executeScholarlySearch,
   executeWebSearch,
   getExplicitSourceProviderOrder,
@@ -724,6 +725,25 @@ describe("web search", function () {
       ["google_scholar"],
     );
     assert.deepEqual(getExplicitSourceProviderOrder("bing", null), ["bing"]);
+  });
+
+  it("puts service search first for auto and web while preserving scholarly intents", function () {
+    assert.deepEqual(
+      buildServiceSearchProviderOrder("auto", "paperchat").providerIds,
+      ["paperchat", "bing", "duckduckgo"],
+    );
+    assert.deepEqual(
+      buildServiceSearchProviderOrder("web", "deepseek").providerIds,
+      ["deepseek", "bing", "duckduckgo"],
+    );
+    assert.deepEqual(
+      buildServiceSearchProviderOrder("paper", "paperchat").providerIds,
+      ["google_scholar", "openalex", "paperchat", "duckduckgo"],
+    );
+    assert.deepEqual(
+      buildServiceSearchProviderOrder("discover", "paperchat").providerIds,
+      ["openalex", "google_scholar", "paperchat", "duckduckgo"],
+    );
   });
 
   it("recognizes the official DeepSeek search base URL", function () {

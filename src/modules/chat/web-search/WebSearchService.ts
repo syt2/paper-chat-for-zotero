@@ -161,6 +161,27 @@ export function getExplicitSourceProviderOrder(
     : [source];
 }
 
+export function buildServiceSearchProviderOrder(
+  intent: WebSearchIntent,
+  serviceSearchProvider: ServiceSearchProviderId,
+): { providerIds: WebSearchSource[]; reason: string } {
+  const serviceLabel = getServiceSearchLabel(serviceSearchProvider);
+  if (intent === "web" || intent === "auto") {
+    return {
+      providerIds: [serviceSearchProvider, "bing", "duckduckgo"],
+      reason: `${serviceLabel} prefers service search for general web and auto`,
+    };
+  }
+  const scholarlyFirst =
+    intent === "discover"
+      ? (["openalex", "google_scholar"] as const)
+      : (["google_scholar", "openalex"] as const);
+  return {
+    providerIds: [...scholarlyFirst, serviceSearchProvider, "duckduckgo"],
+    reason: `Keeps scholarly discovery first and falls back to ${serviceLabel}`,
+  };
+}
+
 function buildProviderOrder(
   request: WebSearchRequest,
   configuredProvider: WebSearchSource,
@@ -199,21 +220,10 @@ function buildProviderOrder(
   }
 
   if (serviceSearchProvider) {
-    const serviceLabel = getServiceSearchLabel(serviceSearchProvider);
-    if (request.intent === "web") {
-      return {
-        providerIds: [serviceSearchProvider, "bing", "duckduckgo"],
-        reason: `${serviceLabel} prefers service search for general web`,
-      };
-    }
-    const scholarlyFirst =
-      request.intent === "discover"
-        ? (["openalex", "google_scholar"] as const)
-        : (["google_scholar", "openalex"] as const);
-    return {
-      providerIds: [...scholarlyFirst, serviceSearchProvider, "duckduckgo"],
-      reason: `Keeps scholarly discovery first and falls back to ${serviceLabel}`,
-    };
+    return buildServiceSearchProviderOrder(
+      request.intent,
+      serviceSearchProvider,
+    );
   }
 
   if (request.intent === "web") {
