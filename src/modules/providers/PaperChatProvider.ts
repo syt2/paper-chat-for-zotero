@@ -26,6 +26,7 @@ import {
   AUTO_MODEL,
   AUTO_MODEL_SMART,
   getModelRatios,
+  getModelRoutingDefaults,
   getModelRoutingMeta,
   getSelectablePaperchatModels,
   resolveAutoModel,
@@ -164,6 +165,8 @@ export class PaperChatProvider implements ToolCallingProvider {
         getPref("reasoningEffort"),
       ),
       reasoningCapability: capabilities.reasoning,
+      handoffCompactionModel:
+        getModelRoutingDefaults().handoffCompactionModel || "deepseek-flash",
     };
   }
 

@@ -843,6 +843,131 @@ describe("OpenAIResponsesProvider", function () {
     assert.notProperty(replay, "status");
   });
 
+  it("compacts context once after deterministic replay recovery fails", async function () {
+    const requests: Array<{ url: string; body: Record<string, any> }> = [];
+    let responseCalls = 0;
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      const body = JSON.parse(String(init?.body));
+      requests.push({ url, body });
+      if (url.endsWith("/chat/completions")) {
+        assert.equal(body.model, "deepseek-flash");
+        return jsonResponse({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  goal: "Explain Table 2",
+                  constraints: ["keep the page number"],
+                  confirmed_facts: ["Table 2 has 42 participants"],
+                  tool_results: ["search_pdf returned Table 2"],
+                  open_questions: [],
+                  recent_context: ["The user asked for an explanation"],
+                }),
+              },
+            },
+          ],
+        });
+      }
+      responseCalls++;
+      if (responseCalls <= 2) {
+        return new Response(
+          JSON.stringify({
+            error: {
+              message:
+                "The `reasoning_text` in the thinking mode must be passed back to the API.",
+            },
+          }),
+          { status: 400, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return jsonResponse(
+        completedResponse("resp_handoff", "recovered", { store: false }),
+      );
+    }) as typeof fetch;
+
+    const provider = createProvider(
+      { sessionId: "session-handoff" },
+      { handoffCompactionModel: "deepseek-flash" },
+    );
+    const result = await provider.chatCompletionWithTools(
+      [message("u1", "user", "Explain Table 2")],
+      [],
+    );
+
+    assert.equal(result.content, "recovered");
+    assert.lengthOf(requests, 4);
+    assert.match(requests[2].url, /\/chat\/completions$/);
+    const handoff = requests[3];
+    assert.notProperty(handoff.body, "previous_response_id");
+    assert.match(handoff.body.prompt_cache_key, /_e1$/);
+    assert.isTrue(
+      handoff.body.input.some((item: Record<string, any>) =>
+        String(item.content).includes(
+          "[Context handoff from a previous model]",
+        ),
+      ),
+    );
+    assert.isTrue(
+      handoff.body.input.some((item: Record<string, any>) =>
+        String(item.content).includes("Table 2 has 42 participants"),
+      ),
+    );
+  });
+
+  it("compacts context overflow without a second full replay", async function () {
+    const urls: string[] = [];
+    let responseCalls = 0;
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.endsWith("/chat/completions")) {
+        return jsonResponse({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  goal: "Continue the task",
+                  confirmed_facts: ["The earlier context was compacted"],
+                }),
+              },
+            },
+          ],
+        });
+      }
+      responseCalls++;
+      if (responseCalls === 1) {
+        return new Response(
+          JSON.stringify({
+            error: { message: "maximum context length exceeded" },
+          }),
+          { status: 400, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return jsonResponse(
+        completedResponse("resp_context_handoff", "continued", {
+          store: false,
+        }),
+      );
+    }) as typeof fetch;
+
+    const provider = createProvider(
+      { sessionId: "session-context-handoff" },
+      { handoffCompactionModel: "deepseek-flash" },
+    );
+    const result = await provider.chatCompletionWithTools(
+      [message("u1", "user", "Continue")],
+      [],
+    );
+
+    assert.equal(result.content, "continued");
+    assert.equal(responseCalls, 2);
+    assert.equal(
+      urls.filter((url) => url.endsWith("/chat/completions")).length,
+      1,
+    );
+  });
+
   it("keeps isolated stateless model jobs out of the main Responses chain", async function () {
     const requestBodies: Array<Record<string, any>> = [];
     const responses = [

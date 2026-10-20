@@ -119,6 +119,8 @@ export interface ApiKeyProviderConfig extends BaseProviderConfig {
   reasoningEffort?: ReasoningEffort | "default";
   /** Runtime capability of the selected model. */
   reasoningCapability?: ModelReasoningCapability;
+  /** Dedicated text-only model used to compact context after a replay failure. */
+  handoffCompactionModel?: string;
   extraRequestBody?: Record<string, unknown>;
   modelExtraRequestBody?: Record<string, Record<string, unknown>>;
 }

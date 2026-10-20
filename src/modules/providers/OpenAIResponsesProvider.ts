@@ -26,6 +26,12 @@ import {
   isReasoningReplayRequiredError,
   shouldSuppressTemperatureForReasoning,
 } from "./reasoning-request";
+import {
+  boundHandoffReplayMessage,
+  createHandoffSummary,
+  isContextOverflowError,
+  isHandoffEligibleError,
+} from "./responses-recovery";
 import { normalizeToolCallingStopReason } from "./stopReason";
 import { stripOutputTruncationNotice } from "../chat/agent-runtime/messages";
 import { mergeContinuationText } from "../chat/agent-runtime/outputTruncationContinuation";
@@ -113,7 +119,14 @@ export interface ResponsesStreamHandlers {
 }
 
 const MAX_CONVERSATION_STATES = 128;
+const MAX_HANDOFF_CACHE_ENTRIES = 32;
+const HANDOFF_CACHE_TTL_MS = 60 * 60 * 1000;
 const conversationStates = new Map<string, ResponsesConversationState>();
+const conversationEpochs = new Map<string, number>();
+const handoffSummaryCache = new Map<
+  string,
+  { text: string; createdAt: number }
+>();
 
 function conversationKey(sessionId: string, modelId: string): string {
   return `${sessionId}\u0000${modelId}`;
@@ -121,6 +134,8 @@ function conversationKey(sessionId: string, modelId: string): string {
 
 export function resetOpenAIResponsesStateForTests(): void {
   conversationStates.clear();
+  conversationEpochs.clear();
+  handoffSummaryCache.clear();
 }
 
 /** Drop all cached Responses chains belonging to a deleted chat session. */
@@ -129,6 +144,16 @@ export function clearOpenAIResponsesStateForSession(sessionId: string): void {
   for (const key of conversationStates.keys()) {
     if (key.startsWith(prefix)) {
       conversationStates.delete(key);
+    }
+  }
+  for (const key of conversationEpochs.keys()) {
+    if (key.startsWith(prefix)) {
+      conversationEpochs.delete(key);
+    }
+  }
+  for (const key of handoffSummaryCache.keys()) {
+    if (key.startsWith(prefix)) {
+      handoffSummaryCache.delete(key);
     }
   }
 }
@@ -151,8 +176,10 @@ function hashText(value: string): string {
 export function createResponsesPromptCacheKey(
   sessionId: string,
   modelId: string,
+  epoch = 0,
 ): string {
-  return `paperchat_${hashText(sessionId)}_${hashText(modelId)}`;
+  const base = `paperchat_${hashText(sessionId)}_${hashText(modelId)}`;
+  return epoch > 0 ? `${base}_e${epoch}` : base;
 }
 
 function fingerprintMessage(message: ChatMessage): string {
@@ -1223,6 +1250,156 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     );
   }
 
+  private getConversationEpoch(): number {
+    const sessionId = this.runtimeOptions.sessionId;
+    return sessionId
+      ? (conversationEpochs.get(
+          conversationKey(sessionId, this._config.defaultModel),
+        ) ?? 0)
+      : 0;
+  }
+
+  private setConversationEpoch(epoch: number): void {
+    const sessionId = this.runtimeOptions.sessionId;
+    if (!sessionId) {
+      return;
+    }
+    conversationEpochs.set(
+      conversationKey(sessionId, this._config.defaultModel),
+      epoch,
+    );
+  }
+
+  private getHandoffCacheKey(
+    localMessages: ChatMessage[],
+    sourceEpoch: number,
+  ): string {
+    const sessionId = this.runtimeOptions.sessionId;
+    if (!sessionId) {
+      return "";
+    }
+    return [
+      sessionId,
+      String(sourceEpoch),
+      this._config.defaultModel,
+      hashText(stablePromptCacheStringify(localMessages)),
+    ].join("\u0000");
+  }
+
+  private getCachedHandoff(key: string): string | undefined {
+    if (!key) {
+      return undefined;
+    }
+    const cached = handoffSummaryCache.get(key);
+    if (!cached) {
+      return undefined;
+    }
+    if (Date.now() - cached.createdAt > HANDOFF_CACHE_TTL_MS) {
+      handoffSummaryCache.delete(key);
+      return undefined;
+    }
+    handoffSummaryCache.delete(key);
+    handoffSummaryCache.set(key, cached);
+    return cached.text;
+  }
+
+  private setCachedHandoff(key: string, text: string): void {
+    if (!key) {
+      return;
+    }
+    handoffSummaryCache.delete(key);
+    handoffSummaryCache.set(key, { text, createdAt: Date.now() });
+    while (handoffSummaryCache.size > MAX_HANDOFF_CACHE_ENTRIES) {
+      const oldest = handoffSummaryCache.keys().next().value as
+        | string
+        | undefined;
+      if (oldest === undefined) break;
+      handoffSummaryCache.delete(oldest);
+    }
+  }
+
+  private async tryHandoff(params: {
+    messages: ChatMessage[];
+    tools: ToolDefinition[] | undefined;
+    stream: boolean;
+    signal: AbortSignal | undefined;
+    options?: ToolCallingOptions;
+    pdfAttachment?: PdfAttachment;
+    sourceEpoch: number;
+  }): Promise<{ response: Response; plan: ResponsesRequestPlan } | null> {
+    const sessionId = this.runtimeOptions.sessionId;
+    if (!sessionId) {
+      return null;
+    }
+    const localMessages = this.prepareLocalMessages(params.messages);
+    const cacheKey = this.getHandoffCacheKey(localMessages, params.sourceEpoch);
+    let summary = this.getCachedHandoff(cacheKey);
+    if (!summary) {
+      const compacted = await createHandoffSummary(
+        this._config,
+        localMessages,
+        params.signal,
+      );
+      if (!compacted) {
+        return null;
+      }
+      summary = compacted;
+      this.setCachedHandoff(cacheKey, compacted);
+    }
+
+    const lastUser = [...localMessages]
+      .reverse()
+      .find((message) => message.role === "user" && !!message.content.trim());
+    const handoffInput: ResponsesInputItem[] = [
+      {
+        role: "user",
+        content: `[Context handoff from a previous model]\n${summary}\n\nContinue the task from this context.`,
+      },
+    ];
+    if (lastUser) {
+      handoffInput.push({
+        role: "user",
+        content: boundHandoffReplayMessage(lastUser.content),
+      });
+    }
+
+    const plan: ResponsesRequestPlan = {
+      mode: "stateless",
+      localMessages,
+      localDescriptors: describeMessages(localMessages),
+      fullInput: convertMessagesToResponsesInput(
+        localMessages,
+        params.pdfAttachment,
+      ),
+      requestInput: handoffInput,
+    };
+    const body = this.buildRequestBody(
+      plan,
+      params.tools,
+      params.stream,
+      params.options,
+    );
+    applyResponsesReasoningReplayFallback(body);
+    body.prompt_cache_key = createResponsesPromptCacheKey(
+      sessionId,
+      this._config.defaultModel,
+      params.sourceEpoch + 1,
+    );
+
+    const response = await fetch(`${this._config.baseUrl}/responses`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this._config.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: stablePromptCacheStringify(body),
+      signal: params.signal,
+    });
+    await this.validateResponse(response);
+    this.setConversationEpoch(params.sourceEpoch + 1);
+    return { response, plan };
+  }
+
   private prepareLocalMessages(messages: ChatMessage[]): ChatMessage[] {
     const filtered = sanitizeOpenAIToolCallMessages(
       this.filterMessages(messages),
@@ -1346,6 +1523,7 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
       body.prompt_cache_key = createResponsesPromptCacheKey(
         this.runtimeOptions.sessionId,
         this._config.defaultModel,
+        this.getConversationEpoch(),
       );
     }
     if (hasHostedWebSearch) {
@@ -1382,31 +1560,90 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
         signal,
       });
 
-    let response = await send();
+    const sendAndValidate = async (): Promise<Response> => {
+      const nextResponse = await send();
+      await this.validateResponse(nextResponse);
+      return nextResponse;
+    };
+
+    let response: Response | undefined;
+    let lastError: unknown;
     try {
-      await this.validateResponse(response);
+      response = await sendAndValidate();
     } catch (error) {
-      if (isReasoningReplayRequiredError(error)) {
-        ztoolkit.log(
-          "[Reasoning] Responses upstream requires replayed reasoning text; retrying with thinking disabled.",
-        );
-        applyResponsesReasoningReplayFallback(body);
-        response = await send();
-        await this.validateResponse(response);
-      } else if (
-        !plan.previousResponseId ||
-        !isInvalidPreviousResponseError(error)
-      ) {
-        throw error;
-      } else {
+      lastError = error;
+      if (isInvalidPreviousResponseError(error) && plan.previousResponseId) {
         this.clearConversationState();
         forceStateless = true;
         plan = this.buildRequestPlan(messages, pdfAttachment, true);
         body = this.buildRequestBody(plan, tools, stream, options);
-        response = await send();
-        await this.validateResponse(response);
+        try {
+          response = await sendAndValidate();
+          lastError = undefined;
+        } catch (retryError) {
+          lastError = retryError;
+        }
+      } else if (isHandoffEligibleError(error)) {
+        if (!isContextOverflowError(error)) {
+          // Keep the cheap deterministic repair ahead of any model-generated
+          // handoff: strip native reasoning items and disable thinking once.
+          if (isReasoningReplayRequiredError(error)) {
+            ztoolkit.log(
+              "[Reasoning] Responses upstream requires replayed reasoning text; retrying with thinking disabled.",
+            );
+          }
+          applyResponsesReasoningReplayFallback(body);
+          try {
+            response = await sendAndValidate();
+            lastError = undefined;
+          } catch (retryError) {
+            lastError = retryError;
+          }
+        }
+      } else {
+        throw error;
       }
     }
+
+    if (!response) {
+      if (lastError && isHandoffEligibleError(lastError)) {
+        const sourceEpoch = this.getConversationEpoch();
+        ztoolkit.log(
+          "[Handoff] Attempting context compression after a Responses replay failure.",
+        );
+        try {
+          const handoff = await this.tryHandoff({
+            messages,
+            tools,
+            stream,
+            signal,
+            options,
+            pdfAttachment,
+            sourceEpoch,
+          });
+          if (handoff) {
+            response = handoff.response;
+            plan = handoff.plan;
+            forceStateless = true;
+            lastError = undefined;
+            ztoolkit.log(
+              "[Handoff] Context compression succeeded; starting a new Responses epoch.",
+            );
+          }
+        } catch (handoffError) {
+          ztoolkit.log(
+            "[Handoff] Context compression request failed; keeping the original recovery path.",
+            handoffError,
+          );
+        }
+      }
+      if (!response) {
+        throw lastError instanceof Error
+          ? lastError
+          : new Error("Responses request failed");
+      }
+    }
+
     return { response, plan, forceStateless, isolatedStateless };
   }
 
