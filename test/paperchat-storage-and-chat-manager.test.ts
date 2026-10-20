@@ -3366,6 +3366,20 @@ describe("paperchat storage and chat manager", function () {
       };
 
       assert.isTrue(await manager.retryCurrentPaperChatFailure());
+      assert.deepEqual(
+        session.messages.map((message) => message.id),
+        ["user-1"],
+      );
+
+      // Keep the item-routing assertion independent from retry cleanup.
+      session.messages.push({
+        id: "error-2",
+        role: "error",
+        content: "failed again",
+        timestamp: 3,
+      });
+      session.lastRetryableUserMessageId = "user-1";
+      session.lastRetryableErrorMessageId = "error-2";
       assert.deepEqual(await manager.rerollCurrentPaperChatFailureAndRetry(), {
         previousModel: "m3",
         nextModel: "m4",
@@ -4054,6 +4068,9 @@ describe("paperchat storage and chat manager", function () {
       manager.paperChatRerollSessions = new Set();
       manager.init = async () => undefined;
       manager.getSessionItem = () => ({ id: 42 });
+      manager.sessionStorage = {
+        deleteMessage: async () => undefined,
+      };
       manager.sendMessage = async (
         content: string,
         options: Record<string, unknown>,
@@ -4064,6 +4081,10 @@ describe("paperchat storage and chat manager", function () {
 
       assert.isTrue(await manager.retryCurrentPaperChatFailure());
       assert.equal(session.resolvedModelId, "m3");
+      assert.deepEqual(
+        session.messages.map((message) => message.id),
+        ["user-1"],
+      );
       assert.deepEqual(sends, [
         {
           content: "retry this",
@@ -4362,6 +4383,11 @@ describe("paperchat storage and chat manager", function () {
         });
         return "notice-1";
       },
+      deleteErrorMessage: async (targetSession, errorMessageId) => {
+        targetSession.messages = targetSession.messages.filter(
+          (message) => message.id !== errorMessageId,
+        );
+      },
       rollbackReroute: async () => assert.fail("unexpected rollback"),
       resend: async ({ content, images, item, sourceUserMessageId }) => {
         sentMessages.push({
@@ -4395,7 +4421,7 @@ describe("paperchat storage and chat manager", function () {
     ]);
     assert.deepEqual(
       session.messages.map((message) => message.id),
-      ["system-1", "user-1", "assistant-1", "error-1", "notice-1"],
+      ["system-1", "user-1", "assistant-1", "notice-1"],
     );
   });
 

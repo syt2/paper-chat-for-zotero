@@ -17,10 +17,12 @@ export function selectChatMessagePresentations(
     if (
       message.apiOnly ||
       message.role !== "assistant" ||
-      message.streamingState !== "interrupted"
+      (message.streamingState !== "interrupted" &&
+        message.streamingState !== "in_progress")
     ) {
       continue;
     }
+    const isInterrupted = message.streamingState === "interrupted";
     const notices: ChatMessage[] = [];
     let nextIndex = index + 1;
     while (nextIndex < messages.length) {
@@ -39,8 +41,32 @@ export function selectChatMessagePresentations(
 
     const error = messages[nextIndex];
     if (error?.role === "error" && !error.apiOnly) {
-      attachedErrors.set(index, error);
-      attachedNotices.set(index, notices);
+      let followingIndex = nextIndex + 1;
+      let sawRetryNotice = false;
+      while (followingIndex < messages.length) {
+        const following = messages[followingIndex];
+        if (following.apiOnly) {
+          followingIndex++;
+          continue;
+        }
+        if (following.role === "system" && following.isSystemNotice) {
+          sawRetryNotice = true;
+          followingIndex++;
+          continue;
+        }
+        break;
+      }
+      const supersededByRetry =
+        messages[followingIndex]?.role === "assistant" &&
+        (messages[followingIndex]?.streamingState === "in_progress" ||
+          sawRetryNotice);
+      if (isInterrupted && !supersededByRetry) {
+        attachedErrors.set(index, error);
+        attachedNotices.set(index, notices);
+      }
+      // A retry resets the failed assistant to in_progress before the old
+      // error row is deleted. Keep that superseded error hidden until the
+      // attempt reaches a terminal state again.
       hiddenMessageIds.add(error.id);
       for (const notice of notices) {
         hiddenMessageIds.add(notice.id);

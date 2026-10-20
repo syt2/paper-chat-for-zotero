@@ -95,6 +95,10 @@ type RerollPaperChatFailureAndReplayOptions<TItem> = {
     session: ChatSession,
     content: string,
   ) => Promise<string>;
+  deleteErrorMessage?: (
+    session: ChatSession,
+    errorMessageId: string,
+  ) => Promise<void>;
   rollbackReroute: (
     reroute: PaperChatRerouteResult,
     noticeMessageId?: string,
@@ -116,6 +120,7 @@ export async function rerollPaperChatFailureAndReplay<TItem>(
     rerollTier,
     buildSystemNotice,
     insertSystemNotice,
+    deleteErrorMessage,
     rollbackReroute,
     resend,
     getItem,
@@ -153,20 +158,18 @@ export async function rerollPaperChatFailureAndReplay<TItem>(
   }
 
   let noticeMessageId: string | undefined;
+  let accepted = false;
   try {
     noticeMessageId = await insertSystemNotice(
       session,
       buildSystemNotice(reroute),
     );
-    const accepted = await resend({
+    accepted = await resend({
       content: userMessage.content,
       images: userMessage.images,
       item: getItem(session),
       sourceUserMessageId: userMessage.id,
     });
-    if (accepted) {
-      return reroute;
-    }
   } catch (error) {
     try {
       await rollbackReroute(reroute, noticeMessageId);
@@ -177,6 +180,11 @@ export async function rerollPaperChatFailureAndReplay<TItem>(
       );
     }
     throw error;
+  }
+
+  if (accepted) {
+    await deleteErrorMessage?.(session, errorMessage.id);
+    return reroute;
   }
 
   await rollbackReroute(reroute, noticeMessageId);

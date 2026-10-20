@@ -138,6 +138,10 @@ export interface PaperChatTierHost {
     session: ChatSession,
     content: string,
   ): Promise<ChatMessage>;
+  deleteErrorMessage(
+    session: ChatSession,
+    errorMessageId: string,
+  ): Promise<void>;
   sendMessage(
     content: string,
     options: PaperChatResendOptions,
@@ -384,7 +388,7 @@ export class PaperChatTierController {
 
     this.host.beginReroll(session.id);
     try {
-      return await this.host.sendMessage(userMessage.content, {
+      const accepted = await this.host.sendMessage(userMessage.content, {
         item: this.host.getSessionItem(session),
         images: userMessage.images,
         fromPaperChatReroll: true,
@@ -393,6 +397,10 @@ export class PaperChatTierController {
         targetSession: session,
         requireTargetSessionActive: true,
       });
+      if (accepted) {
+        await this.host.deleteErrorMessage(session, errorMessage.id);
+      }
+      return accepted;
     } finally {
       this.host.endReroll(session.id);
     }
@@ -431,6 +439,8 @@ export class PaperChatTierController {
           ),
         insertSystemNotice: async (targetSession, content) =>
           (await this.host.insertSystemNotice(targetSession, content)).id,
+        deleteErrorMessage: (targetSession, errorMessageId) =>
+          this.host.deleteErrorMessage(targetSession, errorMessageId),
         rollbackReroute: async (_reroute, noticeMessageId) => {
           const restoreState = (targetSession: ChatSession) => {
             targetSession.selectedTier = previousState.selectedTier;

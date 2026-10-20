@@ -1646,6 +1646,19 @@ export class ChatManager {
           ),
         insertSystemNotice: (session, content) =>
           this.insertSystemNotice(session, content),
+        deleteErrorMessage: async (session, messageId) => {
+          await this.sessionStorage.deleteMessage(session.id, messageId);
+          const target =
+            this.currentSession?.id === session.id
+              ? this.currentSession
+              : session;
+          target.messages = target.messages.filter(
+            (message) => message.id !== messageId,
+          );
+          if (this.isSessionActive(target)) {
+            this.onMessageUpdate?.(target.messages);
+          }
+        },
         sendMessage: (content, options) => this.sendMessage(content, options),
         getSessionItem: (session) => this.getSessionItem(session),
         notifyMessagesUpdated: (messages) => {
