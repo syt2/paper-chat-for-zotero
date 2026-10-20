@@ -1100,6 +1100,35 @@ describe("OpenAIResponsesProvider", function () {
     });
   });
 
+  it("does not inherit Responses state when a fork uses a new session id", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    const responses = [
+      completedResponse("resp_source", "source answer"),
+      completedResponse("resp_fork", "fork answer"),
+    ];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse(responses.shift()!);
+    }) as typeof fetch;
+
+    const source = createProvider({ sessionId: "session-source" });
+    await source.chatCompletion([message("u1", "user", "source question")]);
+
+    const fork = createProvider({ sessionId: "session-fork" });
+    await fork.chatCompletion([
+      message("fu1", "user", "source question"),
+      message("fa1", "assistant", "source answer"),
+      message("fu2", "user", "fork question"),
+    ]);
+
+    assert.notProperty(requestBodies[1], "previous_response_id");
+    assert.equal(requestBodies[1].input.length, 3);
+    assert.notEqual(
+      requestBodies[0].prompt_cache_key,
+      requestBodies[1].prompt_cache_key,
+    );
+  });
+
   it("isolates store-false transcripts across Responses model switches", async function () {
     const requestBodies: Array<Record<string, any>> = [];
     const rawAOutput = [
