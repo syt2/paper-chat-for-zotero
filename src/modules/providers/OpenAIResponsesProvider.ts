@@ -456,10 +456,26 @@ function convertMessagesToResponsesInput(
  * they reject when the same image_generation_call is replayed in input.
  * Other items, especially web search actions and encrypted reasoning, pass through.
  */
+function sanitizeReplayContentPart(part: unknown): unknown {
+  if (!part || typeof part !== "object" || Array.isArray(part)) {
+    return part;
+  }
+  const next = { ...(part as Record<string, unknown>) };
+  if ("logprobs" in next && !Array.isArray(next.logprobs)) {
+    delete next.logprobs;
+  }
+  if ("annotations" in next && !Array.isArray(next.annotations)) {
+    delete next.annotations;
+  }
+  return next;
+}
+
 function toReplayInputItem(item: ResponsesInputItem): ResponsesInputItem {
   // Some Responses-compatible gateways reject optional lifecycle status on
-  // replayed messages and tool items. It is output metadata, so omit it while
-  // retaining semantic fields such as phase and encrypted_content.
+  // replayed messages and tool items. Likewise, output-only logprobs and
+  // annotations can be null on another provider and are invalid input there.
+  // Omit them while retaining semantic fields such as phase and
+  // encrypted_content.
   if (
     item.type === "message" ||
     item.type === "reasoning" ||
@@ -468,6 +484,9 @@ function toReplayInputItem(item: ResponsesInputItem): ResponsesInputItem {
   ) {
     const input = { ...item };
     delete input.status;
+    if (Array.isArray(input.content)) {
+      input.content = input.content.map(sanitizeReplayContentPart);
+    }
     return input;
   }
   if (item.type !== "image_generation_call") return item;

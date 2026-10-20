@@ -791,6 +791,58 @@ describe("OpenAIResponsesProvider", function () {
     ]);
   });
 
+  it("sanitizes provider-specific output metadata when replaying a stateless transcript", async function () {
+    const requestBodies: Array<Record<string, any>> = [];
+    const responses = [
+      {
+        id: "resp_step_1",
+        status: "completed",
+        store: false,
+        output: [
+          {
+            type: "message",
+            role: "assistant",
+            status: "completed",
+            content: [
+              {
+                type: "output_text",
+                text: "hello",
+                annotations: null,
+                logprobs: null,
+              },
+            ],
+          },
+        ],
+      },
+      completedResponse("resp_gpt_2", "again", { store: false }),
+    ];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse(responses.shift()!);
+    }) as typeof fetch;
+
+    const provider = createProvider({
+      sessionId: "session-provider-metadata",
+    });
+    const user = message("u1", "user", "hi");
+    await provider.chatCompletionWithTools([user], []);
+    await provider.chatCompletionWithTools(
+      [
+        user,
+        message("a1", "assistant", "hello"),
+        message("u2", "user", "again"),
+      ],
+      [],
+    );
+
+    const replay = requestBodies[1].input.find(
+      (item: Record<string, any>) =>
+        item.type === "message" && item.role === "assistant",
+    );
+    assert.deepEqual(replay.content, [{ type: "output_text", text: "hello" }]);
+    assert.notProperty(replay, "status");
+  });
+
   it("keeps isolated stateless model jobs out of the main Responses chain", async function () {
     const requestBodies: Array<Record<string, any>> = [];
     const responses = [
