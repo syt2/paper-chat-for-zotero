@@ -49,5 +49,11 @@ describe("translation routing", function () {
       parseModelRoutingDefaults({ defaults: { translationModel: 1 } })
         .translationModel,
     );
+    assert.equal(
+      parseModelRoutingDefaults({
+        defaults: { handoffCompactionModel: " deepseek-flash " },
+      }).handoffCompactionModel,
+      "deepseek-flash",
+    );
   });
 });
