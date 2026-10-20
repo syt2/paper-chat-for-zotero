@@ -157,7 +157,7 @@ export function applyReasoningRequestOptions(
  * overflow) still surfaces to the user untouched.
  */
 const REASONING_REPLAY_REQUIRED_PATTERN =
-  /(?:reasoning_content|reasoning)\b[\s\S]{0,80}?(?:must be passed back|should be passed back|must be provided|is required|in the thinking mode)|thinking\b[\s\S]{0,120}?(?:must be passed back|should be passed back|must be provided|is required)/i;
+  /(?:reasoning(?:_content|_text)?|thinking)\b[\s\S]{0,80}?(?:must be passed back|should be passed back|must be provided|is required|in the thinking mode)|thinking\b[\s\S]{0,120}?(?:must be passed back|should be passed back|must be provided|is required)/i;
 
 export function isReasoningReplayRequiredError(error: unknown): boolean {
   if (!(error instanceof HttpResponseError)) {
@@ -178,4 +178,35 @@ export function applyReasoningReplayFallback(
 ): void {
   delete requestBody.reasoning_effort;
   requestBody.thinking = { type: "disabled" };
+}
+
+/**
+ * Responses requests have no flat reasoning_effort field. DeepSeek's Responses
+ * endpoint instead treats `reasoning.effort: "none"` as thinking disabled.
+ * Replayed reasoning items from another model are dropped at the same time:
+ * the new upstream cannot validate their encrypted reasoning, and the visible
+ * assistant messages already carry the conversation forward.
+ */
+export function applyResponsesReasoningReplayFallback(
+  requestBody: Record<string, unknown>,
+): void {
+  const reasoning =
+    requestBody.reasoning &&
+    typeof requestBody.reasoning === "object" &&
+    !Array.isArray(requestBody.reasoning)
+      ? (requestBody.reasoning as Record<string, unknown>)
+      : {};
+  requestBody.reasoning = { ...reasoning, effort: "none" };
+
+  if (Array.isArray(requestBody.input)) {
+    requestBody.input = requestBody.input.filter(
+      (item) =>
+        !(
+          item &&
+          typeof item === "object" &&
+          !Array.isArray(item) &&
+          (item as Record<string, unknown>).type === "reasoning"
+        ),
+    );
+  }
 }

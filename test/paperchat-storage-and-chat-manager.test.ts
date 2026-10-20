@@ -2701,9 +2701,7 @@ describe("paperchat storage and chat manager", function () {
 
       assert.match(requests[0].url, /\/responses$/);
       assert.isTrue(
-        requests[0].body.tools.some(
-          (tool: any) => tool.type === "web_search_preview",
-        ),
+        requests[0].body.tools.some((tool: any) => tool.type === "web_search"),
       );
       assert.isTrue(
         requests[0].body.tools.some(
@@ -2714,9 +2712,7 @@ describe("paperchat storage and chat manager", function () {
       );
       assert.match(requests[1].url, /\/responses$/);
       assert.isFalse(
-        requests[1].body.tools.some(
-          (tool: any) => tool.type === "web_search_preview",
-        ),
+        requests[1].body.tools.some((tool: any) => tool.type === "web_search"),
       );
       assert.isTrue(
         requests[1].body.tools.some(
@@ -2755,9 +2751,7 @@ describe("paperchat storage and chat manager", function () {
       );
       assert.match(requests[4].url, /\/responses$/);
       assert.isFalse(
-        requests[4].body.tools.some(
-          (tool: any) => tool.type === "web_search_preview",
-        ),
+        requests[4].body.tools.some((tool: any) => tool.type === "web_search"),
       );
       assert.isTrue(
         requests[4].body.tools.some(

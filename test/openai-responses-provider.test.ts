@@ -281,7 +281,7 @@ describe("OpenAIResponsesProvider", function () {
       requestBody.prompt_cache_key,
       createResponsesPromptCacheKey("session-1", "gpt-5.4"),
     );
-    assert.deepInclude(requestBody.tools, { type: "web_search_preview" });
+    assert.deepInclude(requestBody.tools, { type: "web_search" });
     assert.notProperty(requestBody, "max_tool_calls");
     assert.deepInclude(requestBody.tools, {
       type: "function",
@@ -301,7 +301,7 @@ describe("OpenAIResponsesProvider", function () {
     });
   });
 
-  it("uses DeepSeek's native web_search tool name for hosted search", async function () {
+  it("uses the current web_search tool name for hosted search", async function () {
     let requestBody: Record<string, any> = {};
     globalThis.fetch = (async (_input, init) => {
       requestBody = JSON.parse(String(init?.body));

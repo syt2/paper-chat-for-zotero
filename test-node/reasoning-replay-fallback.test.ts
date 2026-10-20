@@ -2,6 +2,7 @@ import { assert } from "chai";
 import { HttpResponseError } from "../src/modules/providers/HttpResponseError";
 import {
   applyReasoningReplayFallback,
+  applyResponsesReasoningReplayFallback,
   isReasoningReplayRequiredError,
 } from "../src/modules/providers/reasoning-request";
 
@@ -25,6 +26,14 @@ function httpError(status: number, body: string): HttpResponseError {
 describe("reasoning replay fallback", function () {
   it("recognises the upstream's replay requirement", function () {
     assert.isTrue(isReasoningReplayRequiredError(httpError(400, DEEPSEEK_400)));
+    assert.isTrue(
+      isReasoningReplayRequiredError(
+        httpError(
+          400,
+          "The `reasoning_text` in the thinking mode must be passed back to the API.",
+        ),
+      ),
+    );
     // Anthropic-style wording names the thinking block instead.
     assert.isTrue(
       isReasoningReplayRequiredError(
@@ -70,5 +79,30 @@ describe("reasoning replay fallback", function () {
     assert.equal(body.model, "gpt-5.6-terra");
     assert.equal(body.temperature, 0.7);
     assert.deepEqual(body.messages, [{ role: "user", content: "hi" }]);
+  });
+
+  it("disables thinking and drops foreign reasoning items for Responses", function () {
+    const body: Record<string, unknown> = {
+      model: "gpt-6-astra",
+      reasoning: { summary: "detailed" },
+      input: [
+        { role: "user", content: "hi" },
+        { type: "reasoning", id: "rs_1", encrypted_content: "openai-only" },
+        { role: "assistant", content: "hello" },
+        { role: "user", content: "again" },
+      ],
+    };
+
+    applyResponsesReasoningReplayFallback(body);
+
+    assert.deepEqual(body.reasoning, {
+      summary: "detailed",
+      effort: "none",
+    });
+    assert.deepEqual(body.input, [
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "hello" },
+      { role: "user", content: "again" },
+    ]);
   });
 });

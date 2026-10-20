@@ -22,6 +22,8 @@ import {
 } from "./prompt-cache-diagnostics";
 import {
   applyReasoningRequestOptions,
+  applyResponsesReasoningReplayFallback,
+  isReasoningReplayRequiredError,
   shouldSuppressTemperatureForReasoning,
 } from "./reasoning-request";
 import { normalizeToolCallingStopReason } from "./stopReason";
@@ -488,7 +490,7 @@ function omitResponseBackedContinuationOutput(
 function convertTools(
   tools: ToolDefinition[] | undefined,
   hostedWebSearch: boolean,
-  hostedToolType: "web_search" | "web_search_preview",
+  hostedToolType: "web_search",
 ): ResponsesInputItem[] {
   const converted: ResponsesInputItem[] = [];
   let addedHostedWebSearch = false;
@@ -511,15 +513,12 @@ function convertTools(
 }
 
 /**
- * NewAPI/DeepSeek expects the Responses tool name `web_search`; OpenAI uses
- * `web_search_preview`. A DeepSeek channel ignores the preview spelling.
+ * `web_search` is the current Responses tool. `web_search_preview` is the
+ * legacy spelling and lacks newer controls; every GPT route PaperChat serves
+ * accepts the current name.
  */
-export function getResponsesHostedWebSearchToolType(
-  model: string,
-): "web_search" | "web_search_preview" {
-  return /^deepseek(?:-|$)/i.test(model.trim())
-    ? "web_search"
-    : "web_search_preview";
+export function getResponsesHostedWebSearchToolType(): "web_search" {
+  return "web_search";
 }
 
 function extractToolCalls(response: ResponsesApiResponse): ToolCall[] {
@@ -1297,7 +1296,7 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     const convertedTools = convertTools(
       tools,
       this.runtimeOptions.hostedWebSearch === true,
-      getResponsesHostedWebSearchToolType(this._config.defaultModel),
+      getResponsesHostedWebSearchToolType(),
     );
     const hasHostedWebSearch = convertedTools.some(
       (tool) =>
@@ -1368,15 +1367,26 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     try {
       await this.validateResponse(response);
     } catch (error) {
-      if (!plan.previousResponseId || !isInvalidPreviousResponseError(error)) {
+      if (isReasoningReplayRequiredError(error)) {
+        ztoolkit.log(
+          "[Reasoning] Responses upstream requires replayed reasoning text; retrying with thinking disabled.",
+        );
+        applyResponsesReasoningReplayFallback(body);
+        response = await send();
+        await this.validateResponse(response);
+      } else if (
+        !plan.previousResponseId ||
+        !isInvalidPreviousResponseError(error)
+      ) {
         throw error;
+      } else {
+        this.clearConversationState();
+        forceStateless = true;
+        plan = this.buildRequestPlan(messages, pdfAttachment, true);
+        body = this.buildRequestBody(plan, tools, stream, options);
+        response = await send();
+        await this.validateResponse(response);
       }
-      this.clearConversationState();
-      forceStateless = true;
-      plan = this.buildRequestPlan(messages, pdfAttachment, true);
-      body = this.buildRequestBody(plan, tools, stream, options);
-      response = await send();
-      await this.validateResponse(response);
     }
     return { response, plan, forceStateless, isolatedStateless };
   }
