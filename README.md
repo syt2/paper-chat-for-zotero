@@ -6,7 +6,7 @@ Read, discuss, and organize research directly in Zotero, with a sidebar or float
 
 [English](README.md) | [简体中文](doc/README-zhCN.md)
 
-[![Zotero](https://img.shields.io/badge/Zotero-7–10-green?style=flat-square&logo=zotero&logoColor=CC2936)](https://www.zotero.org)
+[![Zotero](https://img.shields.io/badge/Zotero-7–11-green?style=flat-square&logo=zotero&logoColor=CC2936)](https://www.zotero.org)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg?style=flat-square)](LICENSE)
 
 [Download](https://github.com/syt2/paper-chat-for-zotero/releases/latest) · [Quick start](#quick-start) · [Report an issue](https://github.com/syt2/paper-chat-for-zotero/issues)
@@ -32,7 +32,7 @@ Conversations support streaming replies, Markdown, equations, syntax highlightin
 
 ## Installation
 
-Requires **Zotero 7–10**.
+Requires **Zotero 7–11**.
 
 1. Download `ai-paper-chat.xpi` from the [latest release](https://github.com/syt2/paper-chat-for-zotero/releases/latest).
 2. In Zotero, open **Tools → Plugins** (called **Add-ons** in some versions).

@@ -6,7 +6,7 @@
 
 [English](../README.md) | [简体中文](README-zhCN.md)
 
-[![Zotero](https://img.shields.io/badge/Zotero-7–10-green?style=flat-square&logo=zotero&logoColor=CC2936)](https://www.zotero.org)
+[![Zotero](https://img.shields.io/badge/Zotero-7–11-green?style=flat-square&logo=zotero&logoColor=CC2936)](https://www.zotero.org)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg?style=flat-square)](../LICENSE)
 
 [下载安装](https://github.com/syt2/paper-chat-for-zotero/releases/latest) · [快速开始](#快速开始) · [反馈问题](https://github.com/syt2/paper-chat-for-zotero/issues)
@@ -32,7 +32,7 @@
 
 ## 安装
 
-支持 **Zotero 7–10**。
+支持 **Zotero 7–11**。
 
 1. 从[最新版本](https://github.com/syt2/paper-chat-for-zotero/releases/latest)下载 `ai-paper-chat.xpi`。
 2. 在 Zotero 中打开 **工具 → 插件**（部分版本称为“附加组件”）。
