@@ -141,6 +141,9 @@ function isUnsupportedEmailDomainMessage(message: string): boolean {
     normalized.includes("email whitelist") ||
     normalized.includes("unsupported email") ||
     normalized.includes("email address domain") ||
+    normalized.includes(
+      "this email address is not allowed by the administrator's email policy",
+    ) ||
     normalized.includes("email address is not allowed") ||
     normalized.includes("email domain is not allowed") ||
     normalized.includes("domain not allowed") ||

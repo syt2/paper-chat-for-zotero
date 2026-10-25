@@ -206,6 +206,27 @@ describe("auth dialog second-factor interaction", function () {
     assert.isFalse(await dialog);
   });
 
+  it("translates NewAPI's administrator email-policy error", async function () {
+    AuthManager.prototype.register = async () => ({
+      success: false,
+      message:
+        "This email address is not allowed by the administrator's email policy.",
+    });
+    const dialog = showAuthDialog("register");
+    elements.get("auth-username")!.value = "user";
+    elements.get("auth-password")!.value = "password";
+    elements.get("auth-confirm-password")!.value = "password";
+    elements.get("auth-email")!.value = "user@gmail.com";
+    elements.get("auth-verification-code")!.value = "123456";
+    await elements.get("auth-submit-btn")!.fire("click");
+    assert.equal(
+      elements.get("auth-message")!.textContent,
+      "paperchat-auth-error-email-domain-not-allowed",
+    );
+    win.close();
+    assert.isFalse(await dialog);
+  });
+
   it("keeps one login attempt through wrong-code retry and Enter submission", async function () {
     let calls = 0;
     AuthManager.prototype.login = async (_username, _password, interaction) => {
