@@ -25,6 +25,7 @@ paperchat-auth-success = Success
 paperchat-auth-error-username-required = Username is required
 paperchat-auth-error-password-required = Password is required
 paperchat-auth-error-email-required = Email is required
+paperchat-auth-error-email-domain-not-allowed = This email address cannot be used for registration. Please try another email address.
 paperchat-auth-error-code-required = Verification code is required
 paperchat-auth-error-redeem-code-required = Redemption code is required
 paperchat-auth-error-password-mismatch = Passwords do not match

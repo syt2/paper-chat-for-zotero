@@ -128,6 +128,33 @@ function mapVerificationReason(error: unknown): string {
   return "unknown";
 }
 
+function isUnsupportedEmailDomainMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("邮箱域名") ||
+    normalized.includes("邮箱白名单") ||
+    normalized.includes("邮箱不支持") ||
+    normalized.includes("不支持该邮箱") ||
+    normalized.includes("域名不允许") ||
+    normalized.includes("不在白名单") ||
+    normalized.includes("email domain") ||
+    normalized.includes("email whitelist") ||
+    normalized.includes("unsupported email") ||
+    normalized.includes("email address domain") ||
+    normalized.includes("email address is not allowed") ||
+    normalized.includes("email domain is not allowed") ||
+    normalized.includes("domain not allowed") ||
+    normalized.includes("email is not allowed") ||
+    normalized.includes("allowed email domains")
+  );
+}
+
+function getRegistrationErrorMessage(message: string): string {
+  return isUnsupportedEmailDomainMessage(message)
+    ? getString("auth-error-email-domain-not-allowed")
+    : message;
+}
+
 function trackAuthCompleted(
   mode: DialogMode,
   success: boolean,
@@ -894,6 +921,9 @@ export async function showAuthDialog(
           // the bridge is configured, so an unconfigured or slow deployment never
           // shows a button that cannot work.
           let zoteroLoginAvailable = false;
+          // Keep the legacy form visible until the capability request returns;
+          // an unavailable/older endpoint is treated as unknown by AuthService.
+          let emailRegistrationAvailable = true;
           const messageDiv = requireAuthElement<HTMLElement>(
             doc,
             "auth-message",
@@ -976,7 +1006,13 @@ export async function showAuthDialog(
           }
 
           function updateUI() {
+            if (!emailRegistrationAvailable && currentMode === "register") {
+              currentMode = "login";
+            }
             const isRegister = currentMode === "register";
+            tabRegister.style.display = emailRegistrationAvailable
+              ? "flex"
+              : "none";
             // The button only makes sense while the API reports the bridge as
             // configured; it is hidden rather than failing on click. Zotero
             // creates the account when it does not exist yet, so both tabs get
@@ -1086,6 +1122,9 @@ export async function showAuthDialog(
 
           // 切换到注册
           tabRegister?.addEventListener("click", () => {
+            if (!emailRegistrationAvailable) {
+              return;
+            }
             if (currentMode === "register") {
               return;
             }
@@ -1262,13 +1301,24 @@ export async function showAuthDialog(
                 return;
               }
 
-              showMessage(result.message, true);
+              showMessage(
+                scene === "register"
+                  ? getRegistrationErrorMessage(result.message)
+                  : result.message,
+                true,
+              );
             } catch (error) {
               trackVerificationCodeSent(scene, false, error);
               showMessage(
-                error instanceof Error
-                  ? error.message
-                  : getString("auth-error-unknown"),
+                scene === "register"
+                  ? getRegistrationErrorMessage(
+                      error instanceof Error
+                        ? error.message
+                        : getString("auth-error-unknown"),
+                    )
+                  : error instanceof Error
+                    ? error.message
+                    : getString("auth-error-unknown"),
                 true,
               );
             } finally {
@@ -1410,7 +1460,11 @@ export async function showAuthDialog(
                 trackAuthCompleted(currentMode, false, result.message);
                 // 显示API返回的错误消息
                 const errorMsg =
-                  result.message || getString("auth-error-unknown");
+                  currentMode === "register"
+                    ? getRegistrationErrorMessage(
+                        result.message || getString("auth-error-unknown"),
+                      )
+                    : result.message || getString("auth-error-unknown");
                 ztoolkit.log("[AuthDialog] Login/Register failed:", errorMsg);
                 showMessage(errorMsg, true);
                 buttons.forEach(
@@ -1422,9 +1476,15 @@ export async function showAuthDialog(
                 return;
               trackAuthCompleted(currentMode, false, error);
               showMessage(
-                error instanceof Error
-                  ? error.message
-                  : getString("auth-error-unknown"),
+                currentMode === "register"
+                  ? getRegistrationErrorMessage(
+                      error instanceof Error
+                        ? error.message
+                        : getString("auth-error-unknown"),
+                    )
+                  : error instanceof Error
+                    ? error.message
+                    : getString("auth-error-unknown"),
                 true,
               );
               buttons.forEach(
@@ -1498,6 +1558,25 @@ export async function showAuthDialog(
               );
               if (settled) return;
               zoteroLoginAvailable = false;
+              updateUI();
+            });
+
+          getAuthManager()
+            .isEmailRegistrationAvailable()
+            .then((available) => {
+              if (settled) return;
+              emailRegistrationAvailable = available;
+              updateUI();
+            })
+            .catch((error) => {
+              ztoolkit.log(
+                "[AuthDialog] Email registration capability check failed:",
+                error,
+              );
+              // AuthService treats an unknown endpoint as compatible, but keep
+              // this fallback explicit in case a custom AuthManager throws.
+              if (settled) return;
+              emailRegistrationAvailable = true;
               updateUI();
             });
         } catch (error) {

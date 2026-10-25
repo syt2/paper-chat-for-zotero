@@ -25,6 +25,7 @@ paperchat-auth-success = 操作成功
 paperchat-auth-error-username-required = 请输入用户名
 paperchat-auth-error-password-required = 请输入密码
 paperchat-auth-error-email-required = 请输入邮箱
+paperchat-auth-error-email-domain-not-allowed = 当前邮箱不支持注册，请更换其他邮箱后重试
 paperchat-auth-error-code-required = 请输入验证码
 paperchat-auth-error-redeem-code-required = 请输入兑换码
 paperchat-auth-error-password-mismatch = 两次密码输入不一致

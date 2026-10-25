@@ -102,6 +102,12 @@ interface LoginResponseData extends DashboardAuthData {
   methods?: Array<{ method: string; available: boolean }>;
 }
 
+interface NewApiPublicStatus {
+  register_enabled?: boolean;
+  password_register_enabled?: boolean;
+  email_verification?: boolean;
+}
+
 interface ZoteroDeviceStartResponse {
   authorization_url: string;
   device_token: string;
@@ -312,6 +318,25 @@ export class AuthService {
     );
     if (result.error || result.status >= 400) return false;
     return result.data?.data?.enabled === true;
+  }
+
+  /** Returns whether NewAPI supports the plugin's email registration flow. */
+  async isEmailRegistrationAvailable(): Promise<boolean> {
+    const result = await this.request<ApiResponse<NewApiPublicStatus>>(
+      "GET",
+      `${new URL(this.baseUrl).origin}/api/status`,
+      { includeAuthentication: false, noCache: true },
+    );
+    const status = result.data?.data;
+    if (!result.error && result.status < 400 && status) {
+      return (
+        status.register_enabled === true &&
+        status.password_register_enabled === true &&
+        status.email_verification === true
+      );
+    }
+    // Keep compatibility with deployments that cannot expose /api/status.
+    return true;
   }
 
   hasAuthenticationState(): boolean {

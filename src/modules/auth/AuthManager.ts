@@ -687,6 +687,11 @@ export class AuthManager {
     };
   }
 
+  /** Returns whether the server supports the plugin's email registration flow. */
+  async isEmailRegistrationAvailable(): Promise<boolean> {
+    return this.authService.isEmailRegistrationAvailable();
+  }
+
   /**
    * 用户注册
    */
