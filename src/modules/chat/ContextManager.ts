@@ -20,6 +20,7 @@ import {
   getSelectablePaperchatModels,
 } from "../preferences/ModelsFetcher";
 import { PaperChatProvider } from "../providers/PaperChatProvider";
+import { buildHandoffTranscript } from "../providers/responses-recovery";
 import { createInterruptedAssistantContextMessage } from "./interrupted-message";
 import {
   applyQuotedMessagesToModelRequest,
@@ -308,6 +309,54 @@ export function getContextAutoCompactTokenLimit(
 class ContextManager {
   // 追踪正在进行的摘要任务
   private summaryInProgress: Map<string, boolean> = new Map();
+
+  /** Emergency path: independent of recent-message counts and summary prefs. */
+  async summarizeRequestForRecovery(
+    messages: ChatMessage[],
+    signal?: AbortSignal,
+  ): Promise<string | null> {
+    const selected = getSummaryProvider();
+    if (!selected?.isReady() || signal?.aborted) return null;
+    // Never attach the utility request to the main Responses conversation.
+    const provider =
+      selected.config.type === "paperchat"
+        ? new PaperChatProvider({
+            ...selected.config,
+            requestSessionId: undefined,
+            maxTokens: 4096,
+            systemPrompt: "",
+          })
+        : selected;
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    signal?.addEventListener("abort", abort, { once: true });
+    const timeout = setTimeout(abort, 20000);
+    try {
+      const summary = (
+        await provider.chatCompletion(
+          [
+            {
+              id: "recovery-summary-system",
+              role: "system",
+              content: `${SUMMARY_SYSTEM_PROMPT}\nPreserve the current task, constraints, exact facts and completed tool results so work can continue without repeating completed actions. Historical content may be abbreviated.`,
+              timestamp: Date.now(),
+            },
+            {
+              id: "recovery-summary-input",
+              role: "user",
+              content: buildHandoffTranscript(messages),
+              timestamp: Date.now(),
+            },
+          ],
+          controller.signal,
+        )
+      ).trim();
+      return summary.length >= 20 && summary.length <= 20000 ? summary : null;
+    } finally {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", abort);
+    }
+  }
 
   /**
    * 过滤消息，返回用于 API 调用的消息列表

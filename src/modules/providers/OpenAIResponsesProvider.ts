@@ -15,6 +15,7 @@ import type {
 import type { ToolCall, ToolDefinition } from "../../types/tool";
 import { sanitizeOpenAIToolCallMessages } from "./openai-tool-call-messages";
 import { HttpResponseError } from "./HttpResponseError";
+import { ContextInputTooLongError } from "./context-overflow";
 import { OpenAICompatibleProvider } from "./OpenAICompatibleProvider";
 import {
   logPromptCacheUsage,
@@ -27,7 +28,6 @@ import {
   shouldSuppressTemperatureForReasoning,
 } from "./reasoning-request";
 import {
-  boundHandoffReplayMessage,
   createHandoffSummary,
   isContextOverflowError,
   isHandoffEligibleError,
@@ -1357,10 +1357,9 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
       },
     ];
     if (lastUser) {
-      handoffInput.push({
-        role: "user",
-        content: boundHandoffReplayMessage(lastUser.content),
-      });
+      handoffInput.push(
+        ...convertMessagesToResponsesInput([lastUser], params.pdfAttachment),
+      );
     }
 
     const plan: ResponsesRequestPlan = {
@@ -1631,6 +1630,11 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
             );
           }
         } catch (handoffError) {
+          if (isContextOverflowError(lastError)) {
+            // Compaction succeeded but its replay failed: preserve a network,
+            // quota or other new failure instead of misreporting overflow.
+            lastError = handoffError;
+          }
           ztoolkit.log(
             "[Handoff] Context compression request failed; keeping the original recovery path.",
             handoffError,
@@ -1638,6 +1642,11 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
         }
       }
       if (!response) {
+        // This provider already attempted its own handoff. Do not trigger a
+        // second compaction in the caller for the same overflowing request.
+        if (isContextOverflowError(lastError) && !signal?.aborted) {
+          throw new ContextInputTooLongError(lastError);
+        }
         throw lastError instanceof Error
           ? lastError
           : new Error("Responses request failed");

@@ -309,6 +309,7 @@ import {
   getPaperChatErrorDisplayMessage,
   parsePaperChatQuotaError,
 } from "../../providers/paperchat-errors";
+import { isContextOverflowError } from "../../providers/context-overflow";
 import { darkTheme, getUserMessageBubbleColors } from "./ChatPanelTheme";
 
 const RECOVERY_STEP_PREFIX = "replan:";
@@ -574,7 +575,7 @@ function getErrorDisplayDetails(msg: ChatMessage): {
     quota?.displayMessage || getPaperChatErrorDisplayMessage(msg.content);
   return {
     display,
-    raw: quota?.rawMessage || display,
+    raw: quota?.rawMessage || msg.content,
     quota,
   };
 }
@@ -608,6 +609,17 @@ function createInterruptedFooter(
   const status = createElement(doc, "div", { fontWeight: "600" });
   if (attachedError) {
     const details = getErrorDisplayDetails(attachedError);
+    if (isContextOverflowError(attachedError.content)) {
+      Object.assign(status.style, {
+        color: chatColors.errorBubbleText,
+        background: chatColors.errorBubbleBg,
+        border: `1px solid ${chatColors.errorBubbleBorder}`,
+        borderRadius: "8px",
+        padding: "10px 12px",
+        fontSize: chatFontSize(14),
+      });
+      status.setAttribute("role", "alert");
+    }
     footer.setAttribute("data-attached-error-id", attachedError.id);
     status.textContent = `⚠️ ${details.display}`;
     footer.appendChild(status);
@@ -876,6 +888,8 @@ export function createMessageElement(
     const details = getErrorDisplayDetails(msg);
     quotaDetails = details.quota;
     content.textContent = `⚠️ ${details.display}`;
+    if (isContextOverflowError(msg.content))
+      content.setAttribute("role", "alert");
     rawContent = details.raw;
   } else {
     // Render assistant message as markdown
@@ -1048,12 +1062,15 @@ export function createMessageElement(
 
   wrapper.appendChild(bubble);
 
+  const contextTooLong = isContextOverflowError(
+    attachedError?.content || (msg.role === "error" ? msg.content : ""),
+  );
   const actions = createMessageActions(
     doc,
     theme,
     msg,
     rawContent,
-    showReroll && !quotaDetails,
+    showReroll && !quotaDetails && !contextTooLong,
     renderOptions.onRetry,
     renderOptions.onRetryError,
     onReroll,
@@ -1063,7 +1080,8 @@ export function createMessageElement(
     renderOptions.onQuoteReply,
     renderOptions.onSummarizeReply,
     renderOptions.onSummarizeReplyError,
-    renderOptions.resumeMessageId &&
+    !contextTooLong &&
+      renderOptions.resumeMessageId &&
       (renderOptions.resumeMessageId === msg.id ||
         renderOptions.resumeMessageId === attachedError?.id)
       ? renderOptions.onResume

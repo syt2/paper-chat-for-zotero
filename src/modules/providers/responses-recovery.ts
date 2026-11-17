@@ -3,6 +3,8 @@ import type { ApiKeyProviderConfig } from "../../types/provider";
 import { HttpResponseError } from "./HttpResponseError";
 import { OpenAICompatibleProvider } from "./OpenAICompatibleProvider";
 import { isReasoningReplayRequiredError } from "./reasoning-request";
+import { isContextOverflowError } from "./context-overflow";
+export { isContextOverflowError } from "./context-overflow";
 
 const DEFAULT_HANDOFF_COMPACTION_MODEL = "deepseek-flash";
 const HANDOFF_TIMEOUT_MS = 20_000;
@@ -15,9 +17,6 @@ const MAX_HANDOFF_LIST_ITEM_CHARS = 2_000;
 
 const NON_COMPRESSIBLE_ERROR_PATTERN =
   /unauthorized|invalid api key|permission denied|quota|billing|insufficient|rate limit|too many requests|model not found|does not exist|content policy|moderation|safety|blocked/i;
-
-const CONTEXT_OVERFLOW_PATTERN =
-  /context_length_exceeded|maximum context length|too many tokens|context window|exceeds? the (?:maximum|context)/i;
 
 const REPLAY_INCOMPATIBILITY_PATTERNS = [
   /input\[\d+\][\s\S]{0,140}(?:content|reasoning|logprobs|status|annotations)/i,
@@ -41,13 +40,6 @@ Return ONLY valid JSON with this shape:
 Preserve exact numbers, dates, DOIs, page numbers, URLs, user constraints, and unresolved tasks.
 Do not invent facts. Omit uncertain details. Do not include hidden reasoning or provider-specific metadata.`;
 
-export function isContextOverflowError(error: unknown): boolean {
-  return (
-    error instanceof HttpResponseError &&
-    CONTEXT_OVERFLOW_PATTERN.test(error.responseBody)
-  );
-}
-
 /**
  * Only history/protocol incompatibility is eligible for a model-generated
  * handoff. Authentication, quota, missing-model, and content-policy failures
@@ -63,7 +55,7 @@ export function isHandoffEligibleError(error: unknown): boolean {
   if (NON_COMPRESSIBLE_ERROR_PATTERN.test(error.responseBody)) {
     return false;
   }
-  if (CONTEXT_OVERFLOW_PATTERN.test(error.responseBody)) {
+  if (isContextOverflowError(error)) {
     return true;
   }
   if (isReasoningReplayRequiredError(error)) {

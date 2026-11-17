@@ -24,6 +24,7 @@ import {
   type PaperChatTier,
 } from "../providers/paperchat-tier-routing";
 import { isPaperChatQuotaError } from "../providers/paperchat-errors";
+import { isContextOverflowError } from "../providers/context-overflow";
 import { getPaperChatApiCapabilities } from "../providers/paperchat-routing-metadata";
 import {
   getModelRatios,
@@ -533,7 +534,10 @@ export class PaperChatTierController {
     }
 
     const isRetryablePaperChatFailure =
-      allowRetry && isPaperChatFailure && !isPaperChatQuotaError(error);
+      allowRetry &&
+      isPaperChatFailure &&
+      !isPaperChatQuotaError(error) &&
+      !isContextOverflowError(error);
 
     session.lastRetryableUserMessageId = isRetryablePaperChatFailure
       ? userMessageId

@@ -968,6 +968,94 @@ describe("OpenAIResponsesProvider", function () {
     );
   });
 
+  it("reports terminal overflow after one failed compression and preserves the current question and images", async function () {
+    const overflowBody =
+      "number of input tokens (1087050) has exceeded max_prompt_tokens (1048576) limit.";
+    for (const summaryFails of [true, false]) {
+      let summaries = 0;
+      const requests: Array<Record<string, any>> = [];
+      globalThis.fetch = (async (input, init) => {
+        if (String(input).endsWith("/chat/completions")) {
+          summaries++;
+          return summaryFails
+            ? new Response("unavailable", { status: 503 })
+            : jsonResponse({
+                choices: [
+                  {
+                    message: {
+                      content:
+                        "A useful summary of the earlier task and completed results.",
+                    },
+                  },
+                ],
+              });
+        }
+        requests.push(JSON.parse(String(init?.body)));
+        return new Response(
+          JSON.stringify({ error: { message: overflowBody } }),
+          { status: 400 },
+        );
+      }) as typeof fetch;
+      const provider = createProvider({
+        sessionId: `terminal-overflow-${summaryFails}`,
+      });
+      const current = {
+        ...message("u1", "user", "q".repeat(30000)),
+        images: [
+          { type: "base64" as const, data: "YQ==", mimeType: "image/png" },
+        ],
+      };
+      let caught: unknown;
+      try {
+        await provider.chatCompletionWithTools([current], []);
+      } catch (error) {
+        caught = error;
+      }
+      assert.equal((caught as Error).name, "ContextInputTooLongError");
+      assert.equal(summaries, 1);
+      assert.lengthOf(requests, summaryFails ? 1 : 2);
+      if (!summaryFails) {
+        const replay = JSON.stringify(requests[1].input);
+        assert.include(replay, current.content);
+        assert.include(replay, "data:image/png;base64,YQ==");
+      }
+    }
+  });
+
+  it("preserves a new network failure after Responses context compression", async function () {
+    let calls = 0;
+    globalThis.fetch = (async (input) => {
+      if (String(input).endsWith("/chat/completions")) {
+        return jsonResponse({
+          choices: [
+            {
+              message: {
+                content:
+                  "A useful summary of the task and its completed results.",
+              },
+            },
+          ],
+        });
+      }
+      calls++;
+      return calls === 1
+        ? new Response("maximum context length exceeded", { status: 400 })
+        : new Response("Gateway Timeout", { status: 504 });
+    }) as typeof fetch;
+    const provider = createProvider({ sessionId: "overflow-then-network" });
+    let caught: unknown;
+    try {
+      await provider.chatCompletionWithTools(
+        [message("u", "user", "Continue")],
+        [],
+      );
+    } catch (error) {
+      caught = error;
+    }
+    assert.equal((caught as any).status, 504);
+    assert.equal(calls, 2);
+  });
+
   it("keeps isolated stateless model jobs out of the main Responses chain", async function () {
     const requestBodies: Array<Record<string, any>> = [];
     const responses = [

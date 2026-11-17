@@ -44,6 +44,7 @@ import {
 } from "./SessionStorageService";
 import { PdfExtractor } from "./PdfExtractor";
 import { getContextManager } from "./ContextManager";
+import { createContextOverflowRecovery } from "../providers/context-overflow";
 import {
   generateAgentRuntimeContextPrompt,
   getPdfToolManager,
@@ -2817,6 +2818,20 @@ export class ChatManager {
         }
       };
 
+      const recoverContextOverflow = createContextOverflowRecovery({
+        signal: abortSignal,
+        checkActive: ensureSendingSessionTracked,
+        compact: async () => {
+          const compacted = await this.compactOverflowRequest(
+            messagesForApi,
+            sendingSession,
+            sessionRunId,
+            abortSignal,
+          );
+          if (compacted) resetAssistantForAttempt();
+          return compacted;
+        },
+      });
       // 传统模式：流式调用（可恢复错误使用同一 Provider/模型重试）
       try {
         await providerManager.executeWithRetry(
@@ -3017,7 +3032,7 @@ export class ChatManager {
               });
 
             try {
-              return await streamCurrentProvider();
+              return await recoverContextOverflow(streamCurrentProvider);
             } catch (error) {
               await checkpointQueue.catch(() => undefined);
               captureFailedAssistantSnapshot();
@@ -3042,7 +3057,7 @@ export class ChatManager {
               failedPaperChatModelId = reroute.nextModel;
               resetAssistantForAttempt();
               try {
-                return await streamCurrentProvider();
+                return await recoverContextOverflow(streamCurrentProvider);
               } catch (reroutedError) {
                 await checkpointQueue.catch(() => undefined);
                 captureFailedAssistantSnapshot();
@@ -3146,11 +3161,77 @@ export class ChatManager {
     }
   }
 
-  /**
-   * 使用 Tool Calling 发送消息
-   * 优先使用 provider 支持的流式模式，否则使用非流式模式。
-   * 每次模型请求独立重试，已完成的工具结果保留在当前上下文中。
-   */
+  /** Replace only model-facing history after an upstream context rejection. */
+  private async compactOverflowRequest(
+    messages: ChatMessage[],
+    session: ChatSession,
+    sessionRunId: number,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    this.ensureTrackedRun(session, sessionRunId);
+    const summary = await getContextManager().summarizeRequestForRecovery(
+      messages,
+      signal,
+    );
+    this.ensureTrackedRun(session, sessionRunId);
+    if (!summary || signal?.aborted) return false;
+    const lastUser = [...messages]
+      .reverse()
+      .find((message) => message.role === "user");
+    if (!lastUser) return false;
+    const summaryMessage: ChatMessage = {
+      id: `context-overflow-summary-${Date.now()}`,
+      role: "system",
+      content: `[Previous conversation summary]: ${summary}`,
+      timestamp: Date.now(),
+    };
+    const compacted = [
+      ...messages.filter(
+        (message) =>
+          message.role === "system" &&
+          message.id !== "context-summary" &&
+          !message.id.startsWith("context-overflow-summary-"),
+      ),
+      summaryMessage,
+      lastUser,
+    ];
+    // Keep the live array: tool loops hold this same reference. Do not rewrite
+    // stored user messages, attachments, or completed tool execution records.
+    messages.splice(0, messages.length, ...compacted);
+    const boundary = session.messages.findIndex(
+      (message) => message.id === lastUser.id,
+    );
+    if (boundary >= 0) clearOpenAIResponsesStateForSession(session.id);
+    if (boundary > 0) {
+      const covered = session.messages
+        .slice(0, boundary)
+        .filter(
+          (message) =>
+            ["user", "assistant", "tool"].includes(message.role) ||
+            message.apiOnly,
+        );
+      session.contextSummary = {
+        id: summaryMessage.id,
+        content: summary,
+        coveredMessageIds: [
+          ...new Set([
+            ...(session.contextSummary?.coveredMessageIds || []),
+            ...covered.map((message) => message.id),
+          ]),
+        ],
+        createdAt: summaryMessage.timestamp,
+        messageCountAtCreation: covered.length,
+      };
+      await this.sessionStorage.updateSessionMeta(session);
+    }
+    await this.insertSystemNotice(
+      session,
+      getString("chat-context-overflow-compressed"),
+    );
+    return true;
+  }
+
+  /** Tool requests retry in place without re-executing completed tools. */
   private async sendMessageWithToolCalling(
     _provider: ToolCallingProvider,
     messagesForApi: ChatMessage[],
@@ -3490,9 +3571,26 @@ export class ChatManager {
           : buildRuntimeSystemPrompt(currentMessages, session, runtimeState);
       };
 
+      const recoverContextOverflow = createContextOverflowRecovery({
+        signal: abortSignal,
+        checkActive: ensureSendingSessionTracked,
+        shouldRecover: (error) =>
+          !(
+            error instanceof Error &&
+            (error as RetryGuardedError)[SUPPRESS_AUTOMATIC_RETRY] === true
+          ),
+        compact: () =>
+          this.compactOverflowRequest(
+            attemptMessagesWithContext,
+            sendingSession,
+            sessionRunId,
+            abortSignal,
+          ),
+      });
       const executeProviderRequest = async <T>(
         operation: () => Promise<T>,
         onProviderRerouted?: () => void,
+        requestMessages?: ChatMessage[],
       ): Promise<T> => {
         const runOperationWithHostedSearchGuard = async (): Promise<T> => {
           ensureSendingSessionTracked();
@@ -3516,11 +3614,27 @@ export class ChatManager {
           }
         };
 
+        // Isolated planner/reviewer calls have their own input; never compact
+        // the main chat in response to a failure in one of those jobs.
+        const runWithContextRecovery = () =>
+          recoverContextOverflow(
+            runOperationWithHostedSearchGuard,
+            requestMessages
+              ? () =>
+                  this.compactOverflowRequest(
+                    requestMessages,
+                    sendingSession,
+                    sessionRunId,
+                    abortSignal,
+                  )
+              : undefined,
+          );
+
         return providerManager.executeWithRetry(
           currentProvider,
           async () => {
             try {
-              return await runOperationWithHostedSearchGuard();
+              return await runWithContextRecovery();
             } catch (error) {
               if (
                 error instanceof Error &&
@@ -3552,7 +3666,7 @@ export class ChatManager {
               refreshSearchToolsForCurrentModel();
               syncModelSpecificRequestContext();
               onProviderRerouted?.();
-              return runOperationWithHostedSearchGuard();
+              return runWithContextRecovery();
             }
           },
           this.createProviderRetryOptions(abortSignal),

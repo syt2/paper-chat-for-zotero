@@ -1,4 +1,5 @@
 import { getString } from "../../utils/locale";
+import { isContextOverflowError } from "./context-overflow";
 
 export interface PaperChatQuotaErrorDetails {
   displayMessage: string;
@@ -85,6 +86,8 @@ export function parsePaperChatModelUnavailableError(
 }
 
 export function getPaperChatErrorDisplayMessage(raw: string): string {
+  if (isContextOverflowError(raw))
+    return getString("chat-error-context-too-long");
   const unavailable = parsePaperChatModelUnavailableError(raw);
   if (unavailable) {
     return unavailable.model

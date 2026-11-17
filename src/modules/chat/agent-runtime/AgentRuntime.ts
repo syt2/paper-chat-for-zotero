@@ -174,6 +174,7 @@ interface HostedWebSearchDisplayState {
 type ProviderRequestExecutor = <T>(
   operation: () => Promise<T>,
   onProviderRerouted?: () => void,
+  requestMessages?: ChatMessage[],
 ) => Promise<T>;
 
 const executeProviderRequestOnce: ProviderRequestExecutor = (operation) =>
@@ -2914,11 +2915,14 @@ export class AgentRuntime {
             timestamp: Date.now(),
           },
         ];
-        const result = await executeProviderRequest(() =>
-          provider.chatCompletionWithTools(messages, undefined, abortSignal, {
-            toolChoice: "none",
-            stateless: true,
-          }),
+        const result = await executeProviderRequest(
+          () =>
+            provider.chatCompletionWithTools(messages, undefined, abortSignal, {
+              toolChoice: "none",
+              stateless: true,
+            }),
+          undefined,
+          messages,
         );
         onUsage?.(result.tokenUsage);
         if (result.suppressedToolCall || result.toolCalls?.length) {
@@ -2975,11 +2979,14 @@ export class AgentRuntime {
             timestamp: Date.now(),
           },
         ];
-        const result = await executeProviderRequest(() =>
-          provider.chatCompletionWithTools(messages, undefined, abortSignal, {
-            toolChoice: "none",
-            stateless: true,
-          }),
+        const result = await executeProviderRequest(
+          () =>
+            provider.chatCompletionWithTools(messages, undefined, abortSignal, {
+              toolChoice: "none",
+              stateless: true,
+            }),
+          undefined,
+          messages,
         );
         onUsage?.(result.tokenUsage);
         if (result.suppressedToolCall || result.toolCalls?.length) {

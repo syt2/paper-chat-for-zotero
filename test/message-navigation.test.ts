@@ -1,3 +1,4 @@
+import { chatFontSize } from "../src/modules/ui/chat-panel/ChatPanelTypography.ts";
 import { assert } from "chai";
 import type { ChatMessage } from "../src/modules/chat/index.ts";
 import { providerSupportsToolCalling } from "../src/modules/providers/provider-capabilities.ts";
@@ -1441,6 +1442,36 @@ describe("chat message exact navigation", function () {
       options,
     ) as unknown as FakeElement;
     assert.isEmpty(older.querySelectorAll(".resume-reply-btn"));
+  });
+
+  it("makes context overflow prominent and suppresses resume and reroll actions", function () {
+    const doc = new FakeDocument();
+    const error = message("overflow", {
+      role: "error",
+      content: "CONTEXT_INPUT_TOO_LONG",
+    });
+    const rendered = createMessageElement(
+      doc as unknown as Document,
+      message("partial", {
+        role: "assistant",
+        content: "partial",
+        streamingState: "interrupted",
+      }),
+      darkTheme,
+      true,
+      true,
+      () => {},
+      undefined,
+      { resumeMessageId: error.id, onResume: () => {}, onRetry: () => {} },
+      error,
+    ) as unknown as FakeElement;
+    const alert = rendered.querySelector('[role="alert"]');
+    assert.isNotNull(alert);
+    assert.include(alert!.textContent, "chat-error-context-too-long");
+    assert.equal(alert!.style.fontSize, chatFontSize(14));
+    assert.isEmpty(rendered.querySelectorAll(".resume-reply-btn"));
+    assert.isEmpty(rendered.querySelectorAll(".retry-btn"));
+    assert.isEmpty(rendered.querySelectorAll(".reroll-btn"));
   });
 
   it("renders sent text attachments alongside compact clickable images", function () {

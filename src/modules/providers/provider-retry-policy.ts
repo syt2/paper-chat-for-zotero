@@ -1,5 +1,6 @@
 import { getErrorMessage } from "../../utils/common";
 import { getHttpResponseStatus } from "./HttpResponseError";
+import { isContextOverflowError } from "./context-overflow";
 
 export const PROVIDER_REQUEST_MAX_ATTEMPTS = 4;
 export const PROVIDER_RETRY_BACKOFF_BASE_MS = 2000;
@@ -37,6 +38,7 @@ const RETRYABLE_UNSTRUCTURED_ERROR_PATTERNS = [
 ];
 
 export function isRetryableProviderError(error: unknown): boolean {
+  if (isContextOverflowError(error)) return false;
   const errorMessage = getErrorMessage(error);
   const httpStatus = getHttpResponseStatus(error);
 

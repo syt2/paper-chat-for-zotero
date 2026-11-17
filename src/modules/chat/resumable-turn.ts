@@ -1,4 +1,5 @@
 import type { ChatMessage } from "../../types/chat";
+import { isContextOverflowError } from "../providers/context-overflow";
 
 /** Only the latest user turn can resume; hidden tool messages are context. */
 export function getResumableTurn(messages: readonly ChatMessage[]): {
@@ -23,7 +24,10 @@ export function getResumableTurn(messages: readonly ChatMessage[]): {
   let errorMessage: ChatMessage | undefined;
   for (let index = visible.length - 1; index >= 0; index--) {
     const message = visible[index];
-    if (message.role === "error") errorMessage ??= message;
+    if (message.role === "error") {
+      if (isContextOverflowError(message.content)) return null;
+      errorMessage ??= message;
+    }
     if (message.role === "assistant") {
       if (message.streamingState === "in_progress") return null;
       if (message.streamingState === "interrupted")
