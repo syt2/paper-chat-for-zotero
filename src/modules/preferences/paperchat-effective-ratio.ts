@@ -71,10 +71,19 @@ function intersectGroups(groups: string[], allowed: Set<string>): string[] {
 function getLowestGroupRatio(
   groups: string[],
   groupRatios: Record<string, number>,
+  requireKnownRatios = false,
 ): number | undefined {
   let lowest: number | undefined;
   for (const group of groups) {
+    // A missing billing ratio is safe to default for legacy routing, but must
+    // not be presented to the user as a confirmed discount.
+    if (requireKnownRatios && !(group in groupRatios)) {
+      return undefined;
+    }
     const ratio = groupRatios[group] ?? 1;
+    if (requireKnownRatios && ratio < 0) {
+      return undefined;
+    }
     if (!Number.isFinite(ratio)) {
       continue;
     }
@@ -89,19 +98,17 @@ function roundRatio(value: number): number {
   return Number(value.toFixed(4));
 }
 
-export function getEffectivePricingModelRatio(
-  item: Record<string, unknown>,
-  context: {
-    groupRatio?: unknown;
-    usableGroup?: unknown;
-    autoGroups?: unknown;
-  } = {},
-): number | undefined {
-  const modelRatio = getPricingModelRatio(item);
-  if (modelRatio === undefined) {
-    return undefined;
-  }
+interface PricingGroupContext {
+  groupRatio?: unknown;
+  usableGroup?: unknown;
+  autoGroups?: unknown;
+}
 
+function resolvePricingModelGroupRatio(
+  item: Record<string, unknown>,
+  context: PricingGroupContext,
+  requireKnownRatios: boolean,
+): number | undefined {
   const usableGroups = toStringSet(context.usableGroup);
   const autoGroups = toStringSet(context.autoGroups);
   const groupRatios = toNumberMap(context.groupRatio);
@@ -115,6 +122,29 @@ export function getEffectivePricingModelRatio(
     candidateGroups = intersectGroups(modelGroups, usableGroups);
   }
 
-  const selectedGroupRatio = getLowestGroupRatio(candidateGroups, groupRatios);
+  return getLowestGroupRatio(candidateGroups, groupRatios, requireKnownRatios);
+}
+
+/** The group multiplier alone, for comparison with the model's standard price. */
+export function getPricingModelGroupRatio(
+  item: Record<string, unknown>,
+  context: PricingGroupContext = {},
+): number | undefined {
+  return resolvePricingModelGroupRatio(item, context, true);
+}
+
+export function getEffectivePricingModelRatio(
+  item: Record<string, unknown>,
+  context: PricingGroupContext = {},
+): number | undefined {
+  const modelRatio = getPricingModelRatio(item);
+  if (modelRatio === undefined) {
+    return undefined;
+  }
+  const selectedGroupRatio = resolvePricingModelGroupRatio(
+    item,
+    context,
+    false,
+  );
   return roundRatio(modelRatio * (selectedGroupRatio ?? 1));
 }

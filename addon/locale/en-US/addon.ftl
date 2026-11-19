@@ -195,6 +195,7 @@ paperchat-chat-error-model-unavailable-unknown = The current model is unavailabl
 paperchat-chat-error-context-too-long = The conversation or attachments exceed the model's input limit. Automatic compression could not resolve this. Please start a new conversation.
 paperchat-chat-context-overflow-compressed = The context was too long and has been compressed. Retrying this request.
 paperchat-chat-switch-model-help = More capable models usually consume tokens faster. Choose a model that fits your task complexity.
+paperchat-chat-model-group-ratio-help = { $ratio }× the official API price.
 paperchat-chat-select-model = Select Model
 paperchat-chat-reasoning-label = Reasoning
 paperchat-chat-reasoning-default = Default

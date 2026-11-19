@@ -10,6 +10,7 @@ import {
   copyToClipboard,
   createElement,
   createHelpTooltip,
+  createModelGroupRatioBadge,
 } from "./ChatPanelBuilder";
 import { darkTheme, getCurrentTheme } from "./ChatPanelTheme";
 import {
@@ -40,6 +41,7 @@ import { showChatPanelToast } from "./ChatPanelToast";
 import {
   getPaperchatKeyModels,
   getModelRatios,
+  getModelGroupRatios,
   getModelRoutingMeta,
   getSelectablePaperchatModels,
   getUpgradeOnlyPaperchatModels,
@@ -3505,12 +3507,22 @@ function populateModelDropdown(
             modelItem.appendChild(check);
           }
           const modelName = createElement(doc, "span", {
+            flex: "1",
+            minWidth: "0",
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
           });
           modelName.textContent = model;
           modelItem.appendChild(modelName);
+          const ratioBadge = createModelGroupRatioBadge(
+            doc,
+            getModelGroupRatios()[model],
+            theme,
+          );
+          if (ratioBadge) {
+            modelItem.appendChild(ratioBadge);
+          }
           modelItem.addEventListener("mouseenter", () => {
             if (!isCurrentModel) {
               modelItem.style.background = theme.dropdownItemHoverBg;

@@ -195,6 +195,7 @@ paperchat-chat-error-model-unavailable-unknown = 当前模型不可用，请使�
 paperchat-chat-error-context-too-long = 对话或附件过长，超过模型输入上限。自动压缩未能解决，请新建对话。
 paperchat-chat-context-overflow-compressed = 上下文过长，已自动压缩，正在重试本次请求。
 paperchat-chat-switch-model-help = 模型能力越强，消耗 Token 的速度通常也越快。请根据任务复杂度选择合适的模型。
+paperchat-chat-model-group-ratio-help = 官方 API 价格的 { $ratio } 倍。
 paperchat-chat-select-model = 选择模型
 paperchat-chat-reasoning-label = 思考
 paperchat-chat-reasoning-default = 默认

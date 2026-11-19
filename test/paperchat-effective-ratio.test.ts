@@ -1,7 +1,54 @@
 import { assert } from "chai";
-import { getEffectivePricingModelRatio } from "../src/modules/preferences/paperchat-effective-ratio.ts";
+import {
+  getEffectivePricingModelRatio,
+  getPricingModelGroupRatio,
+} from "../src/modules/preferences/paperchat-effective-ratio.ts";
 
 describe("paperchat effective pricing ratio", function () {
+  it("separates a group discount from the model's billing multiplier", function () {
+    const item = { model_ratio: 10, enable_groups: ["standard", "discount"] };
+    const context = {
+      autoGroups: ["standard", "discount"],
+      usableGroup: { standard: "Standard", discount: "Discount" },
+      groupRatio: { standard: 1, discount: "0.6" },
+    };
+    assert.equal(getEffectivePricingModelRatio(item, context), 6);
+    assert.equal(getPricingModelGroupRatio(item, context), 0.6);
+  });
+
+  it("does not invent a displayed discount from missing or invalid group data", function () {
+    const item = { model_ratio: 2, enable_groups: ["default"] };
+    assert.isUndefined(getPricingModelGroupRatio(item));
+    for (const raw of [undefined, "bad", -0.6, Infinity]) {
+      const context = {
+        usableGroup: { default: "Default" },
+        groupRatio: { default: raw },
+      };
+      assert.isUndefined(getPricingModelGroupRatio(item, context));
+    }
+    assert.equal(
+      getEffectivePricingModelRatio(item, {
+        usableGroup: { default: "Default" },
+      }),
+      2,
+    );
+  });
+
+  it("keeps free, standard and premium group multipliers", function () {
+    for (const ratio of [0, 1, 1.5]) {
+      assert.equal(
+        getPricingModelGroupRatio(
+          { EnableGroup: ["all"] },
+          {
+            usableGroup: { default: "Default" },
+            groupRatio: { default: ratio },
+          },
+        ),
+        ratio,
+      );
+    }
+  });
+
   it("prefers enabled auto groups and picks the lowest group ratio", function () {
     const ratio = getEffectivePricingModelRatio(
       {

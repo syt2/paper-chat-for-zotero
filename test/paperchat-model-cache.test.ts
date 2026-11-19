@@ -8,6 +8,8 @@ import {
   clearPaperchatModelCaches,
   ensurePaperchatRoutingCacheVersion,
   fetchPaperchatRoutingMeta,
+  fetchPaperchatRatios,
+  getModelGroupRatios,
   getModelRatios,
   getModelRoutingDefaults,
   getModelRoutingMeta,
@@ -17,6 +19,7 @@ import {
   hasPaperchatServiceSearchModel,
   loadCachedRatios,
 } from "../src/modules/preferences/ModelsFetcher";
+import { getAuthManager } from "../src/modules/auth/AuthManager";
 import {
   PAPERCHAT_CLIENT_CAPS_HEADER,
   PAPERCHAT_CLIENT_HEADER,
@@ -38,6 +41,7 @@ describe("PaperChat model cache", function () {
     prefStore = new Map([
       [`${PREFS_PREFIX}paperchatModelsCache`, '["model-a"]'],
       [`${PREFS_PREFIX}paperchatRatiosCache`, '{"model-a":2}'],
+      [`${PREFS_PREFIX}paperchatGroupRatiosCache`, '{"model-a":0.6}'],
       [
         `${PREFS_PREFIX}paperchatRoutingConfigCache`,
         '{"model-a":{"upstreamModelId":"upstream-a"}}',
@@ -449,6 +453,7 @@ describe("PaperChat model cache", function () {
   it("clears persisted and in-memory model metadata", function () {
     loadCachedRatios();
     assert.deepEqual(getModelRatios(), { "model-a": 2 });
+    assert.deepEqual(getModelGroupRatios(), { "model-a": 0.6 });
     assert.hasAllKeys(getModelRoutingMeta(), ["model-a"]);
     assert.deepEqual(getModelRoutingDefaults(), {
       contextSummaryModel: "model-a",
@@ -457,9 +462,11 @@ describe("PaperChat model cache", function () {
     clearPaperchatModelCaches();
 
     assert.deepEqual(getModelRatios(), {});
+    assert.deepEqual(getModelGroupRatios(), {});
     assert.deepEqual(getModelRoutingMeta(), {});
     assert.equal(prefStore.get(`${PREFS_PREFIX}paperchatModelsCache`), "");
     assert.equal(prefStore.get(`${PREFS_PREFIX}paperchatRatiosCache`), "");
+    assert.equal(prefStore.get(`${PREFS_PREFIX}paperchatGroupRatiosCache`), "");
     assert.equal(
       prefStore.get(`${PREFS_PREFIX}paperchatRoutingConfigCache`),
       "",
@@ -468,6 +475,56 @@ describe("PaperChat model cache", function () {
       prefStore.get(`${PREFS_PREFIX}paperchatRoutingDefaultsCache`),
       "",
     );
+  });
+
+  it("hides unavailable group discounts instead of using the legacy ratio cache", function () {
+    for (const cached of [
+      "",
+      "not json",
+      "null",
+      "[]",
+      '{"bad":-1,"string":"0.6"}',
+    ]) {
+      prefStore.set(`${PREFS_PREFIX}paperchatGroupRatiosCache`, cached);
+      loadCachedRatios();
+      assert.deepEqual(getModelGroupRatios(), {});
+      assert.deepEqual(getModelRatios(), { "model-a": 2 });
+    }
+  });
+
+  it("fetches and caches group discounts independently from model billing ratios", async function () {
+    const manager = getAuthManager();
+    const originalGetPricing = manager.getPricing;
+    manager.getPricing = async () => ({
+      success: true,
+      data: [
+        { model_name: "model-a", model_ratio: 10, enable_groups: ["discount"] },
+        {
+          model_name: "fixed-price",
+          model_ratio: 1,
+          quota_type: 1,
+          enable_groups: ["discount"],
+        },
+        { model_name: "unknown", model_ratio: 2, enable_groups: ["other"] },
+      ],
+      usable_group: { discount: "Discount" },
+      auto_groups: ["discount"],
+      group_ratio: { discount: 0.6 },
+    });
+    try {
+      await fetchPaperchatRatios();
+      assert.equal(getModelRatios()["model-a"], 6);
+      assert.deepEqual(getModelGroupRatios(), { "model-a": 0.6 });
+      assert.equal(
+        prefStore.get(`${PREFS_PREFIX}paperchatGroupRatiosCache`),
+        '{"model-a":0.6}',
+      );
+      manager.getPricing = async () => ({ success: true, data: [] });
+      await fetchPaperchatRatios();
+      assert.deepEqual(getModelGroupRatios(), {});
+    } finally {
+      manager.getPricing = originalGetPricing;
+    }
   });
 
   it("ignores routing metadata returned by the previous environment", async function () {

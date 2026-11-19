@@ -188,6 +188,7 @@ export type FluentMessageId =
   | 'paperchat-chat-message-token-usage-output'
   | 'paperchat-chat-message-token-usage-title'
   | 'paperchat-chat-message-token-usage-total'
+  | 'paperchat-chat-model-group-ratio-help'
   | 'paperchat-chat-model-rerouted'
   | 'paperchat-chat-model-unavailable-switched'
   | 'paperchat-chat-more-actions'

@@ -123,6 +123,55 @@ export function createHelpTooltip(
   return anchor;
 }
 
+/** A confirmed group multiplier, separate from the model's billing ratio. */
+export function createModelGroupRatioBadge(
+  doc: Document,
+  ratio: number | undefined,
+  theme: ThemeColors,
+): HTMLElement | null {
+  if (ratio === undefined || !Number.isFinite(ratio) || ratio < 0) {
+    return null;
+  }
+  const badge = createElement(
+    doc,
+    "span",
+    {
+      display: "inline-flex",
+      alignItems: "center",
+      gap: "4px",
+      marginLeft: "auto",
+      flexShrink: "0",
+      color: theme.textSecondary,
+      fontSize: chatFontSize(11),
+      whiteSpace: "nowrap",
+    },
+    { class: "chat-model-group-ratio" },
+  );
+  const value = createElement(doc, "span");
+  value.textContent = `${ratio}×`;
+  const help = createHelpTooltip(
+    doc,
+    getString("chat-model-group-ratio-help", {
+      args: { ratio: String(ratio) },
+    }),
+    theme,
+  );
+  help.style.flexShrink = "0";
+  help.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  help.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  });
+  badge.appendChild(value);
+  badge.appendChild(help);
+  return badge;
+}
+
 export function createChatContainer(
   doc: Document,
   theme: ThemeColors,

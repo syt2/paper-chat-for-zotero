@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { assert } from "chai";
-import { createChatContainer } from "../src/modules/ui/chat-panel/ChatPanelBuilder.ts";
+import {
+  createChatContainer,
+  createModelGroupRatioBadge,
+} from "../src/modules/ui/chat-panel/ChatPanelBuilder.ts";
 import {
   applyThemeToContainer,
   darkTheme,
@@ -157,6 +160,29 @@ describe("chat panel presentation toolbar entry", function () {
     runtime.addon = previousAddon;
     runtime.Zotero = previousZotero;
     runtime.ztoolkit = previousToolkit;
+  });
+
+  it("shows the group multiplier with a localized official-price explanation", function () {
+    runtime.addon.data.locale.current.formatMessagesSync = (requests: any[]) =>
+      requests.map(({ id, args }) => ({
+        value: args?.ratio ? `官方 API 价格的 ${args.ratio} 倍。` : id,
+        attributes: null,
+      }));
+    const doc = new FakeDocument() as unknown as Document;
+    const badge = createModelGroupRatioBadge(doc, 0.6, lightTheme)!;
+    const children = (badge as unknown as FakeElement).children;
+    assert.equal(children[0].textContent, "0.6×");
+    assert.equal(
+      children[1].getAttribute("aria-label"),
+      "官方 API 价格的 0.6 倍。",
+    );
+    assert.equal(children[1].getAttribute("tabindex"), "0");
+    assert.equal(children[1].children[0].getAttribute("role"), "tooltip");
+    for (const ratio of [undefined, -1, NaN, Infinity]) {
+      assert.isNull(createModelGroupRatioBadge(doc, ratio, lightTheme));
+    }
+    assert.isNotNull(createModelGroupRatioBadge(doc, 0, lightTheme));
+    assert.isNotNull(createModelGroupRatioBadge(doc, 1.5, lightTheme));
   });
 
   it("keeps login clickable to raise the pending dialog without duplicating completion or errors", async function () {

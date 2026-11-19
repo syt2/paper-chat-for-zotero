@@ -23,7 +23,10 @@ import {
   type PaperChatModelRoutingDefaults,
 } from "../providers/paperchat-routing-metadata";
 import { getDeclaredUpgradeModels } from "./paperchat-upgrade-models";
-import { getEffectivePricingModelRatio } from "./paperchat-effective-ratio";
+import {
+  getEffectivePricingModelRatio,
+  getPricingModelGroupRatio,
+} from "./paperchat-effective-ratio";
 import {
   getPaperChatClientHeaders,
   getPaperChatClientQuery,
@@ -32,6 +35,7 @@ import {
 
 // Store model ratios for PaperChat
 let paperchatModelRatios: Record<string, number> = {};
+let paperchatModelGroupRatios: Record<string, number> = {};
 let paperchatModelRoutingMeta: Record<string, PaperChatModelRoutingMeta> = {};
 let paperchatModelRoutingDefaults: PaperChatModelRoutingDefaults = {};
 let paperchatModelCacheGeneration = 0;
@@ -53,6 +57,11 @@ export function isAutoModel(model: string): boolean {
  */
 export function getModelRatios(): Record<string, number> {
   return paperchatModelRatios;
+}
+
+/** Display-only group discounts; model routing uses getModelRatios(). */
+export function getModelGroupRatios(): Record<string, number> {
+  return paperchatModelGroupRatios;
 }
 
 export function getModelRoutingMeta(): Record<
@@ -187,11 +196,13 @@ export function getPaperchatModelCacheGeneration(): number {
 export function clearPaperchatModelCaches(): void {
   paperchatModelCacheGeneration += 1;
   paperchatModelRatios = {};
+  paperchatModelGroupRatios = {};
   paperchatModelRoutingMeta = {};
   paperchatModelRoutingDefaults = {};
   setPref("paperchatModelsCache", "");
   setPref("paperchatChatModelsCache", "");
   setPref("paperchatRatiosCache", "");
+  setPref("paperchatGroupRatiosCache", "");
   setPref("paperchatRoutingConfigCache", "");
   setPref("paperchatRoutingDefaultsCache", "");
   setPref("paperchatEmbeddingConfigCache", "");
@@ -272,6 +283,22 @@ export function resolveAutoModelSmart(
  */
 export function loadCachedRatios(): void {
   paperchatModelRatios = {};
+  paperchatModelGroupRatios = {};
+  try {
+    const parsed: unknown = JSON.parse(
+      getPref("paperchatGroupRatiosCache") || "{}",
+    );
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      paperchatModelGroupRatios = Object.fromEntries(
+        Object.entries(parsed).filter(
+          ([, ratio]) =>
+            typeof ratio === "number" && Number.isFinite(ratio) && ratio >= 0,
+        ),
+      );
+    }
+  } catch {
+    // Older clients did not cache group discounts. Never use model ratios here.
+  }
   const cached = getPref("paperchatRatiosCache") as string;
   if (cached) {
     try {
@@ -431,21 +458,36 @@ export async function fetchPaperchatRatios(): Promise<void> {
       // user-scoped usable groups, auto groups, and group ratios, so PaperChat
       // can route by the user's estimated real cost instead of raw model_ratio.
       paperchatModelRatios = {};
+      paperchatModelGroupRatios = {};
+      const groupContext = {
+        groupRatio: result.group_ratio,
+        usableGroup: result.usable_group,
+        autoGroups: result.auto_groups,
+      };
       for (const item of result.data) {
         const modelName = getPricingModelName(item);
-        const ratio = getEffectivePricingModelRatio(item, {
-          groupRatio: result.group_ratio,
-          usableGroup: result.usable_group,
-          autoGroups: result.auto_groups,
-        });
-        if (!modelName || ratio === undefined) {
+        if (!modelName) {
           continue;
         }
-
-        paperchatModelRatios[modelName] = ratio;
+        const ratio = getEffectivePricingModelRatio(item, groupContext);
+        if (ratio !== undefined) {
+          paperchatModelRatios[modelName] = ratio;
+        }
+        // Fixed-price requests do not use the model's token-price baseline.
+        if ((item.quota_type ?? item.QuotaType) === 1) {
+          continue;
+        }
+        const groupRatio = getPricingModelGroupRatio(item, groupContext);
+        if (groupRatio !== undefined) {
+          paperchatModelGroupRatios[modelName] = groupRatio;
+        }
       }
       // Cache ratios to prefs.
       setPref("paperchatRatiosCache", JSON.stringify(paperchatModelRatios));
+      setPref(
+        "paperchatGroupRatiosCache",
+        JSON.stringify(paperchatModelGroupRatios),
+      );
       ztoolkit.log(
         "[Preferences] Loaded effective ratios for",
         Object.keys(paperchatModelRatios).length,

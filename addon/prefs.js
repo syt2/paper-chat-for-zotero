@@ -20,6 +20,7 @@ pref("userSubscriptionJson", "");
 pref("paperchatModelsCache", "");
 pref("paperchatChatModelsCache", "");
 pref("paperchatRatiosCache", "");
+pref("paperchatGroupRatiosCache", "");
 pref("paperchatRoutingConfigCache", "");
 pref("paperchatRoutingDefaultsCache", "");
 pref("paperchatEmbeddingConfigCache", "");
