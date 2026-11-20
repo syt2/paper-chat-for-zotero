@@ -2551,7 +2551,9 @@ describe("paperchat storage and chat manager", function () {
         { role: "user", content: "second" },
       ]);
       assert.match(requests[2].url, /\/chat\/completions$/);
+      assert.equal(requests[2].body.model, "chatModel");
       assert.match(requests[3].url, /\/responses$/);
+      assert.equal(requests[3].body.model, "responseModel");
       assert.notProperty(requests[3].body, "previous_response_id");
       assert.lengthOf(requests[3].body.input as unknown[], 7);
     } finally {
@@ -7117,15 +7119,17 @@ describe("paperchat storage and chat manager", function () {
       ],
     };
     const errors = [
-      new Error('API Error: 503 - {"error":{"code":"model_not_found"}}'),
+      new Error(
+        'API Error: 500 - {"error":{"message":"分组 auto 下模型 m1 的可用渠道不存在（retry）"}}',
+      ),
       new Error("timeout"),
       new Error('API Error: 503 - {"error":{"code":"model_not_found"}}'),
     ];
-    let streamCalls = 0;
+    const attemptedModels: string[] = [];
     let repairCalls = 0;
     let currentModel = "m1";
     const provider = {
-      config: { id: "paperchat" },
+      config: { id: "paperchat", resolvedModelOverride: "m1" },
       getName: () => "PaperChat",
       isReady: () => true,
       updateConfig: (config: Record<string, unknown>) => {
@@ -7135,8 +7139,8 @@ describe("paperchat storage and chat manager", function () {
         _messages: ChatMessage[],
         callbacks: { onError: (error: Error) => void },
       ) => {
-        const error = errors[streamCalls];
-        streamCalls += 1;
+        const error = errors[attemptedModels.length];
+        attemptedModels.push(provider.config.resolvedModelOverride);
         callbacks.onError(error || new Error("unexpected extra replay"));
       },
     };
@@ -7207,7 +7211,7 @@ describe("paperchat storage and chat manager", function () {
       };
 
       assert.isTrue(await manager.sendMessage("answer this"));
-      assert.equal(streamCalls, 3);
+      assert.deepEqual(attemptedModels, ["m1", "m2", "m2"]);
       assert.equal(repairCalls, 1);
       assert.equal(session.resolvedModelId, "m2");
       assert.equal(session.messages.at(-1)?.role, "error");

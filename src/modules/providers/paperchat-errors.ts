@@ -57,7 +57,7 @@ export function parsePaperChatError(raw: string): PaperChatParsedError {
 
 function extractUnavailableModelName(raw: string): string | null {
   const patterns = [
-    /下模型\s*["“]?([^"”\s，,（）()]+)["”]?\s*无可用渠道/i,
+    /下模型\s*["“]?([^"”\s，,（）()]+)["”]?\s*(?:无可用渠道|的可用渠道不存在)/i,
     /model\s+["“]?([^"”\s，,（）()]+)["”]?\s+(?:has no available channel|no available channel)/i,
   ];
   for (const pattern of patterns) {
@@ -69,20 +69,18 @@ function extractUnavailableModelName(raw: string): string | null {
   return null;
 }
 
+export function isPaperChatChannelUnavailable(message: string): boolean {
+  return /无可用渠道|的可用渠道不存在|no available channel/i.test(message);
+}
+
 export function parsePaperChatModelUnavailableError(
   raw: string,
 ): PaperChatModelUnavailableErrorDetails | null {
   const { message } = parsePaperChatError(raw);
   const combined = `${raw}\n${message}`;
-  if (
-    !combined.includes("无可用渠道") &&
-    !/no available channel/i.test(combined)
-  ) {
-    return null;
-  }
-  return {
-    model: extractUnavailableModelName(combined),
-  };
+  return isPaperChatChannelUnavailable(combined)
+    ? { model: extractUnavailableModelName(combined) }
+    : null;
 }
 
 export function getPaperChatErrorDisplayMessage(raw: string): string {

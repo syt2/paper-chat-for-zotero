@@ -1,4 +1,7 @@
-import { parsePaperChatError } from "./paperchat-errors";
+import {
+  isPaperChatChannelUnavailable,
+  parsePaperChatError,
+} from "./paperchat-errors";
 import {
   buildRoutingWeights,
   deriveRoutingMetaTierPools,
@@ -381,7 +384,7 @@ export function isPaperChatModelHardFailure(error: Error): boolean {
     code === "unsupported_model" ||
     normalized.includes("model not found") ||
     normalized.includes("unsupported model") ||
-    normalized.includes("无可用渠道")
+    isPaperChatChannelUnavailable(normalized)
   );
 }
 

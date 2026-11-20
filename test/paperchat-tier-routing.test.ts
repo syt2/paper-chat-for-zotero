@@ -543,6 +543,13 @@ describe("paperchat tier routing", function () {
         ),
       ),
     );
+    assert.isTrue(
+      isPaperChatModelHardFailure(
+        new Error(
+          "API Error: 500 - 分组 auto 下模型 inkling-2-small-promo 的可用渠道不存在（retry）",
+        ),
+      ),
+    );
     assert.isFalse(
       isPaperChatModelHardFailure(
         new Error("API Error: 429 - rate limit exceeded"),
@@ -578,6 +585,12 @@ describe("paperchat tier routing", function () {
         'API Error: 503 - {"error":{"code":"model_not_found","message":"分组 default 下模型 test-model 无可用渠道（distributor）"}}',
       ),
       { model: "test-model" },
+    );
+    assert.deepEqual(
+      parsePaperChatModelUnavailableError(
+        "分组 auto 下模型 inkling-2-small-promo 的可用渠道不存在（retry） (request id: test-request)",
+      ),
+      { model: "inkling-2-small-promo" },
     );
     assert.isNull(
       parsePaperChatModelUnavailableError(
