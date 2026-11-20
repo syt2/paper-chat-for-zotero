@@ -165,6 +165,23 @@ describe("chat selection comment", function () {
     f.flush();
     assert.equal(button!.style.left, "604px");
     assert.equal(button!.style.top, "286px");
+    f.doc.dispatch("pointerdown", {
+      target: button,
+      clientX: 604,
+      clientY: 300,
+    });
+    f.flush();
+    assert.equal(
+      button!.style.visibility,
+      "visible",
+      "pressing the comment action must not enter text-selection mode",
+    );
+    f.doc.dispatch("pointerup", {
+      target: button,
+      clientX: 604,
+      clientY: 300,
+    });
+    f.flush();
     button!.dispatch("click");
     const dialog = f.root.children.find((node) => node.tagName === "section");
     assert.exists(dialog, "the comment action must open the comment editor");

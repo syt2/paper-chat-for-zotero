@@ -489,7 +489,12 @@ export function setupChatSelectionComment(history: HTMLElement): () => void {
     }
     schedule();
   };
-  const onPointerDown = () => {
+  const isCommentButtonTarget = (event: Event): boolean => {
+    const target = event.target as Node | null;
+    return !!button && !!target && button.contains(target);
+  };
+  const onPointerDown = (event: Event) => {
+    if (isCommentButtonTarget(event)) return;
     if (!pointerSelecting) {
       pointerSelecting = true;
       selectionChangedDuringPointer = false;
@@ -497,7 +502,8 @@ export function setupChatSelectionComment(history: HTMLElement): () => void {
     }
     schedule();
   };
-  const onMouseDown = () => {
+  const onMouseDown = (event: Event) => {
+    if (isCommentButtonTarget(event)) return;
     if (!pointerSelecting) {
       pointerSelecting = true;
       selectionChangedDuringPointer = false;
