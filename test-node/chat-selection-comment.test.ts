@@ -202,6 +202,24 @@ describe("chat selection comment", function () {
     assert.deepEqual(f.root.children, [f.history]);
   });
 
+  it("follows the selected text after scrolling", function () {
+    const f = fixture();
+    const dispose = setupChatSelectionComment(f.history as any);
+    f.doc.dispatch("pointerdown");
+    f.doc.dispatch("selectionchange");
+    f.doc.dispatch("pointerup", { clientX: 400, clientY: 400 });
+    f.flush();
+    const button = f.root.children.find((node) => node.tagName === "button");
+    assert.exists(button);
+    assert.equal(button!.style.left, "404px");
+    assert.equal(button!.style.top, "386px");
+    f.history.dispatch("scroll");
+    f.flush();
+    assert.equal(button!.style.left, "1072px");
+    assert.equal(button!.style.top, "164px");
+    dispose();
+  });
+
   it("ignores selections in an editable field and removes stale actions", function () {
     const f = fixture();
     const dispose = setupChatSelectionComment(f.history as any);

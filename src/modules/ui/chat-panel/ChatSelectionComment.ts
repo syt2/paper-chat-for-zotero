@@ -375,6 +375,7 @@ export function setupChatSelectionComment(history: HTMLElement): () => void {
   let frame: number | undefined;
   let pointerSelecting = false;
   let selectionChangedDuringPointer = false;
+  let positionBySelection = true;
   let releasePointer: { x: number; y: number } | undefined;
 
   const remove = () => {
@@ -389,6 +390,7 @@ export function setupChatSelectionComment(history: HTMLElement): () => void {
     selectionText = "";
     anchor = null;
     selectionChangedDuringPointer = false;
+    positionBySelection = true;
     releasePointer = undefined;
   };
   const refresh = () => {
@@ -465,9 +467,10 @@ export function setupChatSelectionComment(history: HTMLElement): () => void {
     anchor = nextAnchor;
     if (releasePointer && selectionChangedDuringPointer) {
       positionButtonAtPointer(button, releasePointer.x, releasePointer.y);
+      positionBySelection = false;
       releasePointer = undefined;
       selectionChangedDuringPointer = false;
-    } else if (!button.style.left || !button.style.top) {
+    } else if (positionBySelection || !button.style.left || !button.style.top) {
       positionButton(button, nextAnchor);
     }
     if (closePopover) {
@@ -487,6 +490,11 @@ export function setupChatSelectionComment(history: HTMLElement): () => void {
       const currentText = selection?.text ?? "";
       if (currentText !== selectionText) {
         selectionChangedDuringPointer = true;
+      }
+    } else {
+      const selection = getSelection(history);
+      if (selection?.text !== selectionText) {
+        positionBySelection = true;
       }
     }
     schedule();
@@ -547,7 +555,10 @@ export function setupChatSelectionComment(history: HTMLElement): () => void {
     }
     schedule();
   };
-  const onScroll = () => schedule();
+  const onScroll = () => {
+    positionBySelection = true;
+    schedule();
+  };
   doc.addEventListener("selectionchange", onSelectionChange);
   doc.defaultView?.addEventListener("selectionchange", onSelectionChange);
   doc.addEventListener("pointerdown", onPointerDown, true);
