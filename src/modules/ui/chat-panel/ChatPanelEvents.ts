@@ -128,6 +128,7 @@ import {
   type QueuedTurn,
   type TurnRunResult,
 } from "./SessionTurnQueue";
+import { setupChatSelectionComment } from "./ChatSelectionComment";
 
 // Import getActiveReaderItem from the manager module to avoid circular dependency
 // This is set by ChatPanelManager during initialization
@@ -927,6 +928,7 @@ export function setupEventHandlers(context: ChatPanelContext): () => void {
   });
 
   if (chatHistory) {
+    disposers.push(setupChatSelectionComment(chatHistory));
     // Images can finish loading after a tab-switch render has scrolled to the
     // bottom. Capture load events because image loads do not bubble.
     chatHistory.addEventListener(
