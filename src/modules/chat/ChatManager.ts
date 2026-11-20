@@ -184,6 +184,7 @@ type RetryGuardedError = Error & {
 type InternalSendMessageOptions = SendMessageOptions & {
   item?: Zotero.Item | null;
   fromPaperChatReroll?: boolean;
+  replayPaperChatModelId?: string;
   resumeFailedTurn?: boolean;
   reuseUserMessageId?: string;
   editLastUserMessage?: boolean;
@@ -2245,8 +2246,10 @@ export class ChatManager {
         providerManager.getActiveProviderId() === "paperchat" &&
         provider?.config.type === "paperchat"
       ) {
+        // A reroll has already selected and announced the model for this replay.
         const resolvedModelId =
-          await this.ensurePaperChatModelResolved(sendingSession);
+          options.replayPaperChatModelId ??
+          (await this.ensurePaperChatModelResolved(sendingSession));
         const currentRequestImages =
           options.images ?? reusedUserMessage?.images;
         const requestRequiresVision =

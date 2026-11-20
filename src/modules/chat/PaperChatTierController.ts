@@ -108,6 +108,8 @@ export interface PaperChatResendOptions {
   item?: Zotero.Item | null;
   images?: ChatMessage["images"];
   fromPaperChatReroll: boolean;
+  replayPaperChatModelId?: string;
+  requiredProviderId?: "paperchat";
   resumeFailedTurn: boolean;
   reuseUserMessageId: string;
   targetSession: ChatSession;
@@ -499,13 +501,15 @@ export class PaperChatTierController {
             throw rollbackError;
           }
         },
-        resend: ({ content, images, item, sourceUserMessageId }) =>
+        resend: ({ content, images, item, sourceUserMessageId, modelId }) =>
           this.host.sendMessage(content, {
             item,
             images,
             fromPaperChatReroll: true,
             resumeFailedTurn: true,
             reuseUserMessageId: sourceUserMessageId,
+            replayPaperChatModelId: modelId,
+            requiredProviderId: "paperchat",
             targetSession: session,
             requireTargetSessionActive: true,
           }),

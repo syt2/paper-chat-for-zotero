@@ -4305,6 +4305,78 @@ describe("paperchat storage and chat manager", function () {
     }
   });
 
+  it("sends the announced replacement even when the failed model is the manual tier default", async function () {
+    const models = ["inkling-2-small-promo", "hy4-flash"];
+    const tier = "paperchat-promo";
+    prefStore.set(`${PREFS_PREFIX}.apiKey`, "test-key");
+    prefStore.set(`${PREFS_PREFIX}.userId`, 1);
+    prefStore.set(`${PREFS_PREFIX}.username`, "tester");
+    prefStore.set(
+      `${PREFS_PREFIX}.paperchatModelsCache`,
+      JSON.stringify(models),
+    );
+    prefStore.set(
+      `${PREFS_PREFIX}.paperchatRoutingConfigCache`,
+      JSON.stringify(
+        Object.fromEntries(models.map((id) => [id, { tierCode: 0 }])),
+      ),
+    );
+    prefStore.set(
+      `${PREFS_PREFIX}.paperchatTierState`,
+      JSON.stringify({
+        selectedTier: tier,
+        tiers: { [tier]: { mode: "manual", modelId: models[0] } },
+      }),
+    );
+    loadCachedRatios();
+    getProviderManager().updateProviderConfig("paperchat", {
+      availableModels: models,
+    });
+    const manager = createRunActivityManager();
+    manager.init = async () => undefined;
+    manager.paperChatRerollSessions = new Set();
+    manager.currentSession = {
+      id: "replay-manual-default",
+      selectedTier: tier,
+      resolvedModelId: models[0],
+      messages: [
+        { id: "u", role: "user", content: "hi", timestamp: 1 },
+        { id: "e", role: "error", content: "model unavailable", timestamp: 2 },
+      ],
+      lastRetryableUserMessageId: "u",
+      lastRetryableErrorMessageId: "e",
+    };
+    manager.sessionStorage = {
+      insertMessage: async () => undefined,
+      updateSessionMeta: async () => undefined,
+      deleteMessage: async () => undefined,
+    };
+    manager.paperChatRetry = {
+      buildReroutedNotice: (_tier: string, _old: string, next: string) => next,
+    };
+    manager.sendMessageWithToolCalling = async (
+      provider: PaperChatProvider,
+      messages: ChatMessage[],
+    ) => {
+      await provider.chatCompletionWithTools(messages);
+      return true;
+    };
+    const originalFetch = globalThis.fetch;
+    const requestedModels: string[] = [];
+    globalThis.fetch = async (_url, init) => {
+      requestedModels.push(JSON.parse(String(init?.body)).model);
+      return Response.json({ choices: [{ message: { content: "ok" } }] });
+    };
+    try {
+      const reroute = await manager.rerollCurrentPaperChatFailureAndRetry();
+      assert.equal(reroute?.nextModel, models[1]);
+      assert.deepEqual(requestedModels, [models[1]]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearPaperchatModelCaches();
+    }
+  });
+
   it("replays the original prompt after rerolling within the same tier", async function () {
     const notices: string[] = [];
     const sentMessages: Array<{

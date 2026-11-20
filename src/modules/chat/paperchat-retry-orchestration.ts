@@ -108,6 +108,7 @@ type RerollPaperChatFailureAndReplayOptions<TItem> = {
     images?: ImageAttachment[];
     item: TItem;
     sourceUserMessageId: string;
+    modelId: string;
   }) => Promise<boolean>;
   getItem: (session: ChatSession) => TItem;
 };
@@ -169,6 +170,7 @@ export async function rerollPaperChatFailureAndReplay<TItem>(
       images: userMessage.images,
       item: getItem(session),
       sourceUserMessageId: userMessage.id,
+      modelId: reroute.nextModel,
     });
   } catch (error) {
     try {
