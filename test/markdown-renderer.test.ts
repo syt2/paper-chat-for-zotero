@@ -1160,6 +1160,31 @@ Missing label should not be parsed.
     assert.isUndefined(fragments[0].url);
   });
 
+  it("keeps source cards compact without a colored rail", function () {
+    const originalZotero = (globalThis as { Zotero?: unknown }).Zotero;
+    (globalThis as { Zotero?: unknown }).Zotero = {
+      getMainWindow: () => null,
+    };
+    const doc = new FakeDocument();
+    const root = new FakeElement(doc, "div");
+    try {
+      renderMarkdownToElement(
+        root as unknown as HTMLElement,
+        `<source-group label="Paper" type="paper">\n- First\n- Second\n</source-group>`,
+      );
+      const card = root.children[0];
+      const body = card?.children[1];
+      const list = body?.children.find((child) => child.tagName === "ul");
+      assert.equal(card?.style.borderLeft, undefined);
+      assert.equal(body?.style.padding, "8px 10px 10px");
+      assert.equal(list?.tagName, "ul");
+      assert.equal(list?.style.paddingLeft, "20px");
+      assert.equal(list?.style.margin, "6px 0");
+    } finally {
+      (globalThis as { Zotero?: unknown }).Zotero = originalZotero;
+    }
+  });
+
   it("renders only source groups with actions as single-line clickable headers", async function () {
     const originalZotero = (globalThis as { Zotero?: unknown }).Zotero;
     (globalThis as { Zotero?: unknown }).Zotero = {
@@ -1203,7 +1228,7 @@ Missing label should not be parsed.
       assert.equal(label?.style.overflow, "hidden");
       assert.equal(label?.style.textOverflow, "ellipsis");
       assert.equal(header?.style.boxSizing, "border-box");
-      assert.equal(header?.style.padding, "16px 10px");
+      assert.equal(header?.style.padding, "12px 10px");
 
       header?.dispatch("click");
       await Promise.resolve();

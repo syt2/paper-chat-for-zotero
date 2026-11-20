@@ -1342,7 +1342,6 @@ function renderSourceGroupCard(
   const card = doc.createElementNS(HTML_NS, "div") as HTMLElement;
   card.style.margin = "10px 0";
   card.style.border = `1px solid ${colors.cardBorder}`;
-  card.style.borderLeft = `3px solid ${palette.accent}`;
   card.style.borderRadius = "10px";
   card.style.background = colors.cardBg;
   card.style.overflow = "hidden";
@@ -1356,7 +1355,7 @@ function renderSourceGroupCard(
   header.style.gap = "8px";
   header.style.width = "100%";
   header.style.boxSizing = "border-box";
-  header.style.padding = "16px 10px";
+  header.style.padding = "12px 10px";
   header.style.background = colors.headerBg;
   header.style.borderBottom = `1px solid ${colors.cardBorder}`;
   header.style.borderTop = "none";
@@ -1438,12 +1437,30 @@ function renderSourceGroupCard(
   card.appendChild(header);
 
   const body = doc.createElementNS(HTML_NS, "div") as HTMLElement;
-  body.style.padding = "10px 12px";
+  body.style.padding = "8px 10px 10px";
   body.style.color = colors.bodyText;
   renderMarkdownFragment(doc, body, group.content, {
     ...options,
     sourceGroupContext: group,
   });
+
+  // Markdown lists use a generous browser default indent. Keep source cards
+  // compact so the passage aligns with the header instead of drifting inward.
+  const compactSourceGroupLists = (node: HTMLElement): void => {
+    for (const child of Array.from(node.childNodes)) {
+      if (!child || child.nodeType !== child.ELEMENT_NODE) {
+        continue;
+      }
+      const element = child as HTMLElement;
+      const tagName = element.tagName.toLowerCase();
+      if (tagName === "ul" || tagName === "ol") {
+        element.style.margin = "6px 0";
+        element.style.paddingLeft = "20px";
+      }
+      compactSourceGroupLists(element);
+    }
+  };
+  compactSourceGroupLists(body);
   card.appendChild(body);
 
   parent.appendChild(card);
