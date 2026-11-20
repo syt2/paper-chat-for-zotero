@@ -178,10 +178,16 @@ describe("chat selection comment", function () {
     );
     f.doc.dispatch("pointerup", {
       target: button,
-      clientX: 604,
-      clientY: 300,
+      clientX: 900,
+      clientY: 700,
     });
     f.flush();
+    assert.equal(
+      button!.style.left,
+      "604px",
+      "clicking the comment action must not reposition it",
+    );
+    assert.equal(button!.style.top, "286px");
     button!.dispatch("click");
     const dialog = f.root.children.find((node) => node.tagName === "section");
     assert.exists(dialog, "the comment action must open the comment editor");

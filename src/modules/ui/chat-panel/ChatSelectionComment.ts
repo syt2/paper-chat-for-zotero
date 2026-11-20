@@ -465,6 +465,8 @@ export function setupChatSelectionComment(history: HTMLElement): () => void {
     anchor = nextAnchor;
     if (releasePointer && selectionChangedDuringPointer) {
       positionButtonAtPointer(button, releasePointer.x, releasePointer.y);
+      releasePointer = undefined;
+      selectionChangedDuringPointer = false;
     } else if (!button.style.left || !button.style.top) {
       positionButton(button, nextAnchor);
     }
@@ -512,6 +514,11 @@ export function setupChatSelectionComment(history: HTMLElement): () => void {
     schedule();
   };
   const onPointerUp = (event: Event) => {
+    if (isCommentButtonTarget(event)) {
+      pointerSelecting = false;
+      schedule();
+      return;
+    }
     pointerSelecting = false;
     const pointer = event as PointerEvent;
     if (
@@ -524,6 +531,11 @@ export function setupChatSelectionComment(history: HTMLElement): () => void {
     schedule();
   };
   const onMouseUp = (event: Event) => {
+    if (isCommentButtonTarget(event)) {
+      pointerSelecting = false;
+      schedule();
+      return;
+    }
     pointerSelecting = false;
     const mouse = event as MouseEvent;
     if (
