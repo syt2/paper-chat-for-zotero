@@ -374,6 +374,7 @@ export function setupChatSelectionComment(history: HTMLElement): () => void {
   let anchor: SelectionAnchor | null = null;
   let frame: number | undefined;
   let pointerSelecting = false;
+  let selectionChangedDuringPointer = false;
   let releasePointer: { x: number; y: number } | undefined;
 
   const remove = () => {
@@ -387,12 +388,13 @@ export function setupChatSelectionComment(history: HTMLElement): () => void {
     button = null;
     selectionText = "";
     anchor = null;
+    selectionChangedDuringPointer = false;
     releasePointer = undefined;
   };
   const refresh = () => {
     frame = undefined;
     if (pointerSelecting) {
-      if (!closePopover) remove();
+      if (button && !closePopover) button.style.visibility = "hidden";
       return;
     }
     const selection = getSelection(history);
@@ -458,11 +460,12 @@ export function setupChatSelectionComment(history: HTMLElement): () => void {
       });
       overlayRoot.append(button);
     }
+    button.style.visibility = "visible";
     selectionText = selection.text;
     anchor = nextAnchor;
-    if (releasePointer) {
+    if (releasePointer && selectionChangedDuringPointer) {
       positionButtonAtPointer(button, releasePointer.x, releasePointer.y);
-    } else {
+    } else if (!button.style.left || !button.style.top) {
       positionButton(button, nextAnchor);
     }
     if (closePopover) {
@@ -476,21 +479,40 @@ export function setupChatSelectionComment(history: HTMLElement): () => void {
     if (frame !== undefined) return;
     frame = doc.defaultView?.requestAnimationFrame(refresh) ?? 0;
   };
-  const onSelectionChange = () => schedule();
+  const onSelectionChange = () => {
+    if (pointerSelecting) {
+      const selection = getSelection(history);
+      const currentText = selection?.text ?? "";
+      if (currentText !== selectionText) {
+        selectionChangedDuringPointer = true;
+      }
+    }
+    schedule();
+  };
   const onPointerDown = () => {
-    pointerSelecting = true;
-    releasePointer = undefined;
+    if (!pointerSelecting) {
+      pointerSelecting = true;
+      selectionChangedDuringPointer = false;
+      releasePointer = undefined;
+    }
     schedule();
   };
   const onMouseDown = () => {
-    pointerSelecting = true;
-    releasePointer = undefined;
+    if (!pointerSelecting) {
+      pointerSelecting = true;
+      selectionChangedDuringPointer = false;
+      releasePointer = undefined;
+    }
     schedule();
   };
   const onPointerUp = (event: Event) => {
     pointerSelecting = false;
     const pointer = event as PointerEvent;
-    if (Number.isFinite(pointer.clientX) && Number.isFinite(pointer.clientY)) {
+    if (
+      selectionChangedDuringPointer &&
+      Number.isFinite(pointer.clientX) &&
+      Number.isFinite(pointer.clientY)
+    ) {
       releasePointer = { x: pointer.clientX, y: pointer.clientY };
     }
     schedule();
@@ -498,7 +520,11 @@ export function setupChatSelectionComment(history: HTMLElement): () => void {
   const onMouseUp = (event: Event) => {
     pointerSelecting = false;
     const mouse = event as MouseEvent;
-    if (Number.isFinite(mouse.clientX) && Number.isFinite(mouse.clientY)) {
+    if (
+      selectionChangedDuringPointer &&
+      Number.isFinite(mouse.clientX) &&
+      Number.isFinite(mouse.clientY)
+    ) {
       releasePointer = { x: mouse.clientX, y: mouse.clientY };
     }
     schedule();

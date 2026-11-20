@@ -88,17 +88,28 @@ function fixture() {
       { left: 900, right: 1100, top: 200, bottom: 220, width: 200, height: 20 },
     ],
   };
+  let selectedText = "Selected chat passage";
   const selection = {
     isCollapsed: false,
     rangeCount: 1,
     getRangeAt: () => range,
-    toString: () => "Selected chat passage",
+    toString: () => selectedText,
   };
   doc.getSelection = () => selection;
   const flush = () => {
     while (frames.length) frames.shift()!();
   };
-  return { doc, root, history, content, selection, flush };
+  return {
+    doc,
+    root,
+    history,
+    content,
+    selection,
+    flush,
+    setSelectedText: (value: string) => {
+      selectedText = value;
+    },
+  };
 }
 
 describe("chat selection comment", function () {
@@ -134,10 +145,33 @@ describe("chat selection comment", function () {
     assert.equal(button!.children.length, 1);
     assert.equal(button!.style.left, "404px");
     assert.equal(button!.style.top, "386px");
+    f.doc.dispatch("pointerdown", { clientX: 800, clientY: 700 });
+    f.flush();
+    assert.equal(button!.style.visibility, "hidden");
+    f.doc.dispatch("pointerup", { clientX: 800, clientY: 700 });
+    f.flush();
+    assert.equal(button!.style.visibility, "visible");
+    assert.equal(
+      button!.style.left,
+      "404px",
+      "a click outside the selection must not move the action",
+    );
+    assert.equal(button!.style.top, "386px");
+    f.setSelectedText("A different selected chat passage");
+    f.doc.dispatch("pointerdown");
+    f.doc.dispatch("selectionchange");
+    f.flush();
+    f.doc.dispatch("pointerup", { clientX: 600, clientY: 300 });
+    f.flush();
+    assert.equal(button!.style.left, "604px");
+    assert.equal(button!.style.top, "286px");
     button!.dispatch("click");
     const dialog = f.root.children.find((node) => node.tagName === "section");
     assert.exists(dialog, "the comment action must open the comment editor");
-    assert.equal(dialog!.children[0].textContent, "Selected chat passage");
+    assert.equal(
+      dialog!.children[0].textContent,
+      "A different selected chat passage",
+    );
     assert.equal(dialog!.children[1].tagName, "textarea");
     dialog!.children[2].children[0].dispatch("click");
     assert.notInclude(f.root.children, dialog);
