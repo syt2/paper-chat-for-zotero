@@ -334,7 +334,7 @@ describe("PaperChat user auth preferences", function () {
     );
   });
 
-  it("falls back to Token quota when no subscription products exist", function () {
+  it("shows quota products without an empty subscription tab", function () {
     const products = [
       {
         sku: "quota_500k",
@@ -350,20 +350,60 @@ describe("PaperChat user auth preferences", function () {
     );
     const tabs = picker.children.find(
       (child: any) => child.id === "paperchat-product-tabs",
-    ).children;
+    );
     const quotaGrid = picker.children.find(
       (child: any) => child.id === "paperchat-product-grid-quota",
     );
 
     assert.equal(getInitialPaperChatProduct(products)?.sku, "quota_500k");
-    assert.isTrue(tabs[0].properties.disabled);
-    assert.equal(tabs[0].attributes["aria-selected"], "false");
-    assert.equal(tabs[1].attributes["aria-selected"], "true");
+    assert.isUndefined(tabs);
     assert.equal(quotaGrid.styles.display, "grid");
     assert.equal(quotaGrid.children[0].attributes["aria-pressed"], "true");
     assert.equal(
       quotaGrid.children[0].children[0].children[1].properties.textContent,
       "永久有效期",
     );
+  });
+
+  it("shows subscription products without an empty quota tab", function () {
+    const products = [
+      {
+        sku: "newapi_subscription_plan_7",
+        name: "Pro Monthly",
+        money: "39.00",
+        description: "Monthly subscription",
+        quotaLabel: "1M / month",
+      },
+      {
+        sku: "newapi_subscription_plan_8",
+        name: "Pro Yearly",
+        money: "399.00",
+        description: "Yearly subscription",
+        quotaLabel: "1M / month",
+      },
+    ];
+    const children = buildProductPurchaseChildren(products) as any[];
+    const picker = children.find(
+      (child) => child.id === "paperchat-product-picker",
+    );
+    const tabs = picker.children.find(
+      (child: any) => child.id === "paperchat-product-tabs",
+    );
+    const subscriptionGrid = picker.children.find(
+      (child: any) => child.id === "paperchat-product-grid-subscription",
+    );
+    const quotaGrid = picker.children.find(
+      (child: any) => child.id === "paperchat-product-grid-quota",
+    );
+
+    assert.isUndefined(tabs);
+    assert.equal(subscriptionGrid.styles.display, "grid");
+    assert.equal(subscriptionGrid.children.length, 2);
+    assert.equal(
+      subscriptionGrid.children[0].attributes["aria-pressed"],
+      "true",
+    );
+    assert.equal(quotaGrid.styles.display, "none");
+    assert.deepEqual(quotaGrid.children, []);
   });
 });

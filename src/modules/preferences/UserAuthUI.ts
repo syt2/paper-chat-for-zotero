@@ -816,6 +816,8 @@ export function buildProductPurchaseChildren(
   const initialCategory: PaperChatProductCategory = selectedProduct
     ? getProductCategory(selectedProduct)
     : "subscription";
+  const showProductTabs =
+    quotaProducts.length > 0 && subscriptionProducts.length > 0;
   const children: TagElementProps[] = [
     {
       tag: "div",
@@ -845,37 +847,41 @@ export function buildProductPurchaseChildren(
         gap: "12px",
       },
       children: [
-        {
-          tag: "div",
-          id: "paperchat-product-tabs",
-          attributes: {
-            role: "tablist",
-          },
-          styles: {
-            display: "grid",
-            gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-            gap: "6px",
-            padding: "4px",
-            border: "1px solid var(--paperchat-purchase-border)",
-            borderRadius: "8px",
-            background: "var(--paperchat-purchase-tab-bg)",
-            boxSizing: "border-box",
-          },
-          children: [
-            buildProductTab(
-              "subscription",
-              "订阅计划",
-              subscriptionProducts.length,
-              initialCategory === "subscription",
-            ),
-            buildProductTab(
-              "quota",
-              "Token 额度",
-              quotaProducts.length,
-              initialCategory === "quota",
-            ),
-          ],
-        },
+        ...(showProductTabs
+          ? [
+              {
+                tag: "div",
+                id: "paperchat-product-tabs",
+                attributes: {
+                  role: "tablist",
+                },
+                styles: {
+                  display: "grid",
+                  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                  gap: "6px",
+                  padding: "4px",
+                  border: "1px solid var(--paperchat-purchase-border)",
+                  borderRadius: "8px",
+                  background: "var(--paperchat-purchase-tab-bg)",
+                  boxSizing: "border-box",
+                },
+                children: [
+                  buildProductTab(
+                    "subscription",
+                    "订阅计划",
+                    subscriptionProducts.length,
+                    initialCategory === "subscription",
+                  ),
+                  buildProductTab(
+                    "quota",
+                    "Token 额度",
+                    quotaProducts.length,
+                    initialCategory === "quota",
+                  ),
+                ],
+              } satisfies TagElementProps,
+            ]
+          : []),
         {
           tag: "div",
           id: "paperchat-product-grid-subscription",
